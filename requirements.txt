@@ -1,0 +1,37 @@
+# Core dependencies for the agentic system
+
+# Observation Layer
+selenium>=4.15.0
+webdriver-manager>=4.0.0
+pywinauto>=0.6.8
+Pillow>=10.0.0
+mss>=9.0.0  # Fast cross-platform screenshots
+
+# Hands Layer
+pyautogui>=0.9.54
+pynput>=1.7.6  # Keyboard/mouse monitoring
+
+# Brain Layer (LLM clients)
+openai>=1.0.0
+anthropic>=0.7.0
+httpx>=0.25.0
+
+# Vision/OCR Layer
+pytesseract>=0.3.10  # Tesseract OCR wrapper
+
+# Platform Bridge
+fastapi>=0.104.0
+uvicorn>=0.24.0
+websockets>=12.0
+pydantic>=2.5.0
+
+# Utilities
+python-dotenv>=1.0.0
+loguru>=0.7.0
+numpy>=1.24.0
+textual>=0.55.0
+
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
