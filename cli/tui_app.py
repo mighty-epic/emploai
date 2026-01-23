@@ -66,17 +66,57 @@ MODEL_CONFIGS = {
     "claude-haiku-4": {"provider": "anthropic", "id": "claude-haiku-4-20250514", "context": 200000},
 }
 
-MODEL_ALIASES = {
-    "claude-sonnet-4-5": "claude-sonnet-4.5",
-    "claude-opus-4-5": "claude-opus-4.5",
-    "claude-haiku-4-5": "claude-haiku-4.5",
-    "claude-sonnet-4-5-20250929": "claude-sonnet-4.5",
-    "claude-opus-4-5-20250929": "claude-opus-4.5",
-    "claude-haiku-4-5-20251001": "claude-haiku-4.5",
-    "claude-sonnet-4-20250514": "claude-sonnet-4",
-    "claude-opus-4-20250514": "claude-opus-4",
-    "claude-haiku-4-20250514": "claude-haiku-4",
+# =============================================================================
+# AGENT MODE SYSTEM
+# =============================================================================
+# Defines how CLI Agent and Task Agent interact
+# - manual: Completely isolated agents, no context sharing
+# - semi: Partial sync via intelligent summaries between agents  
+# - auto: Unified agent with merged capabilities (CLI + Task tools)
+
+AGENT_MODES = ["manual", "semi", "auto"]
+DEFAULT_AGENT_MODE = "manual"
+
+# Mode display colors (for TUI)
+AGENT_MODE_COLORS = {
+    "manual": "#a855f7",  # Purple
+    "semi": "#3b82f6",    # Blue  
+    "auto": "#22c55e",    # Green
 }
+
+AGENT_MODE_LABELS = {
+    "manual": "[MANUAL]",
+    "semi": "[SEMI]",
+    "auto": "[AUTO]",
+}
+
+# =============================================================================
+# MODEL VARIANT SYSTEM
+# =============================================================================
+# Variants are model-specific thinking/inference modes
+# Each model has its own supported variants with a default
+
+MODEL_VARIANTS = {
+    # Anthropic Claude - supports extended thinking
+    "claude-sonnet-4.5": {"variants": ["standard", "thinking"], "default": "standard"},
+    "claude-opus-4.5": {"variants": ["standard", "thinking"], "default": "standard"},
+    "claude-haiku-4.5": {"variants": ["standard"], "default": "standard"},  # Haiku doesn't support thinking
+    "claude-sonnet-4": {"variants": ["standard", "thinking"], "default": "standard"},
+    "claude-opus-4": {"variants": ["standard", "thinking"], "default": "standard"},
+    "claude-haiku-4": {"variants": ["standard"], "default": "standard"},
+    # OpenAI GPT - standard only for now
+    "gpt-5": {"variants": ["standard"], "default": "standard"},
+    "gpt-5.1": {"variants": ["standard"], "default": "standard"},
+    "gpt-5.2": {"variants": ["standard"], "default": "standard"},
+    "gpt-4.1": {"variants": ["standard"], "default": "standard"},
+    "gpt-4o": {"variants": ["standard"], "default": "standard"},
+    "gpt-4o-mini": {"variants": ["standard"], "default": "standard"},
+}
+
+# Dedicated Task Agent model (for semi/auto modes)
+TASK_AGENT_MODEL = "gemini-3-pro"  # Will be added when Gemini API keys are configured
+TASK_AGENT_CONTEXT = 1000000  # 1M context for Gemini 3 Pro
+
 
 AVAILABLE_MODELS = list(MODEL_CONFIGS.keys())
 MODEL_CONTEXT_SIZES = {name: config["context"] for name, config in MODEL_CONFIGS.items()}
@@ -88,6 +128,8 @@ SLASH_COMMANDS = [
     "clear",
     "history",
     "model",
+    "variant",
+    "mode",
     "context",
     "reset",
     "pwd",
@@ -110,7 +152,7 @@ SLASH_COMMANDS = [
     "continue",
 ]
 
-SLASH_SUGGESTION_LIMIT = 12
+SLASH_SUGGESTION_LIMIT = 10
 
 
 @dataclass
@@ -586,6 +628,16 @@ class ChatProcessor:
         self.total_tokens_used = 0
         self.max_tokens = MODEL_CONTEXT_SIZES.get(self.current_model, 128000)
 
+        # Agent Mode: manual | semi | auto
+        self.agent_mode = DEFAULT_AGENT_MODE
+        
+        # Model Variant: per-model thinking/inference level
+        self.current_variant = self._get_default_variant(self.current_model)
+        
+        # Context summary for semi mode (shared between agents)
+        self._cli_context_summary = ""
+        self._task_context_summary = ""
+
         # LLM client
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.anthropic = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -599,6 +651,72 @@ class ChatProcessor:
 
         # Single agent (Active)
         self.single_agent = SingleAgent(logger=self.detail_log)
+    
+    def _get_default_variant(self, model: str) -> str:
+        """Get the default variant for a model."""
+        variant_info = MODEL_VARIANTS.get(model, {"default": "standard"})
+        return variant_info.get("default", "standard")
+    
+    def _get_available_variants(self, model: str) -> List[str]:
+        """Get available variants for a model."""
+        variant_info = MODEL_VARIANTS.get(model, {"variants": ["standard"]})
+        return variant_info.get("variants", ["standard"])
+    
+    def set_variant(self, variant: str) -> bool:
+        """Set the current variant if valid for the current model."""
+        available = self._get_available_variants(self.current_model)
+        if variant in available:
+            self.current_variant = variant
+            return True
+        return False
+    
+    def cycle_agent_mode(self) -> str:
+        """Cycle through agent modes: manual -> semi -> auto -> manual."""
+        current_idx = AGENT_MODES.index(self.agent_mode)
+        next_idx = (current_idx + 1) % len(AGENT_MODES)
+        self.agent_mode = AGENT_MODES[next_idx]
+        return self.agent_mode
+    
+    def _generate_context_summary(self, history: List[ChatMessage], max_tokens: int = 500) -> str:
+        """Generate an intelligent summary of chat history for context sharing."""
+        if not history:
+            return ""
+        
+        # Build a simple summary from recent messages
+        recent = history[-10:]  # Last 10 messages
+        summary_parts = []
+        for msg in recent:
+            role_prefix = "User" if msg.role == "user" else "Assistant"
+            # Truncate long messages
+            content = msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
+            summary_parts.append(f"{role_prefix}: {content}")
+        
+        return "\n".join(summary_parts)
+    
+    def get_context_for_task_agent(self) -> str:
+        """Get context to inject into Task Agent based on agent mode."""
+        if self.agent_mode == "manual":
+            return ""  # No context sharing
+        elif self.agent_mode == "semi":
+            # Return summarized context
+            return self._generate_context_summary(self.chat_history)
+        else:  # auto
+            # Return full history (subject to context limits)
+            full_context = []
+            for msg in self.chat_history[-20:]:
+                full_context.append(f"[{msg.role}]: {msg.content}")
+            return "\n".join(full_context)
+    
+    def cycle_variant(self) -> str:
+        """Cycle through available variants for the current model."""
+        available = self._get_available_variants(self.current_model)
+        if len(available) <= 1:
+            return self.current_variant  # No other variants available
+        
+        current_idx = available.index(self.current_variant) if self.current_variant in available else 0
+        next_idx = (current_idx + 1) % len(available)
+        self.current_variant = available[next_idx]
+        return self.current_variant
 
     def _begin_stream(self) -> None:
         self._stream_buffer = ""
@@ -675,7 +793,7 @@ class ChatProcessor:
             for msg in self.chat_history[-20:]:  # Keep last 20 messages for context
                 messages.append({"role": msg.role, "content": msg.content})
 
-            model_key = MODEL_ALIASES.get(self.current_model, self.current_model)
+            model_key = self.current_model
             model_config = MODEL_CONFIGS.get(model_key)
             if not model_config:
                 return CommandResult(False, f"Unknown model: {self.current_model}.")
@@ -772,6 +890,8 @@ class ChatProcessor:
             "clear": self._clear,
             "history": self._history,
             "model": self._model,
+            "variant": self._variant,
+            "mode": self._mode,
             "context": self._context,
             "reset": self._reset_chat,
             "pwd": self._pwd,
@@ -814,10 +934,17 @@ class ChatProcessor:
             "  /clear                        Clear the log",
             "  /history                      Show command history",
             "",
-            "MODEL COMMANDS:",
+            "MODEL & AGENT COMMANDS:",
             "  /model                        Open model selector",
+            "  /variant [name]               Show/set model variant (standard, thinking)",
+            "  /mode [name]                  Show/set agent mode (manual, semi, auto)",
             "  /context                      Show context usage",
             "  /reset                        Reset chat history",
+            "",
+            "AGENT MODES:",
+            "  manual  - CLI and Task agents are independent",
+            "  semi    - Agents share summarized context",
+            "  auto    - Unified agent with merged capabilities",
             "",
             "FILE COMMANDS:",
             "  /pwd                          Show workspace root",
@@ -868,11 +995,61 @@ class ChatProcessor:
                 return CommandResult(False, f"Unknown model: {new_model}.")
             self.current_model = new_model
             self.max_tokens = MODEL_CONTEXT_SIZES.get(new_model, 128000)
+            # Sync variant when model changes
+            available = self._get_available_variants(new_model)
+            if self.current_variant not in available:
+                self.current_variant = self._get_default_variant(new_model)
             self.update_status()
             return CommandResult(True, f"Switched to model: {self.current_model}")
 
         self.open_model_picker()
         return CommandResult(True, "")
+    
+    def _variant(self, args: list[str]) -> CommandResult:
+        """Show or set the current model variant."""
+        available = self._get_available_variants(self.current_model)
+        
+        if not args:
+            # Show current variant and available options
+            lines = [
+                f"Current variant: {self.current_variant}",
+                f"Available for {self.current_model}: {', '.join(available)}"
+            ]
+            return CommandResult(True, "\n".join(lines))
+        
+        new_variant = args[0].lower()
+        if new_variant not in available:
+            return CommandResult(False, f"Variant '{new_variant}' not available for {self.current_model}. Available: {', '.join(available)}")
+        
+        self.current_variant = new_variant
+        self.update_status()
+        return CommandResult(True, f"Switched to variant: {self.current_variant}")
+    
+    def _mode(self, args: list[str]) -> CommandResult:
+        """Show or set the agent mode."""
+        if not args:
+            # Show current mode and available options
+            mode_label = AGENT_MODE_LABELS.get(self.agent_mode, self.agent_mode)
+            lines = [
+                f"Current agent mode: {mode_label}",
+                "",
+                "Available modes:",
+                "  manual - CLI and Task agents are completely independent",
+                "  semi   - Agents share summarized context (bidirectional)",
+                "  auto   - Unified agent with merged CLI + Task capabilities",
+                "",
+                "Use Tab to cycle through modes or /mode <name> to set directly."
+            ]
+            return CommandResult(True, "\n".join(lines))
+        
+        new_mode = args[0].lower()
+        if new_mode not in AGENT_MODES:
+            return CommandResult(False, f"Unknown mode: {new_mode}. Available: {', '.join(AGENT_MODES)}")
+        
+        self.agent_mode = new_mode
+        self.update_status()
+        mode_label = AGENT_MODE_LABELS.get(self.agent_mode, self.agent_mode)
+        return CommandResult(True, f"Agent mode set to: {mode_label}")
 
     def _context(self, args: list[str]) -> CommandResult:
         pct = self.get_context_percentage()
@@ -1238,7 +1415,16 @@ class AgentShellApp(App):
     }
     """
 
-    BINDINGS = [("ctrl+c", "quit", "Quit")]
+    BINDINGS = [
+        ("ctrl+c", "quit", "Quit"),
+        ("ctrl+p", "open_model_picker", "Model"),
+        ("ctrl+t", "cycle_variant", "Variant"),
+        ("tab", "noop", "Agent Mode"),
+    ]
+    
+    def action_noop(self) -> None:
+        """Placeholder for bindings handled elsewhere (like tab in on_key)."""
+        pass
 
     def __init__(self) -> None:
         super().__init__()
@@ -1273,7 +1459,7 @@ class AgentShellApp(App):
         yield self.command_input
         self.status_bar = Static("", id="status_bar")
         yield self.status_bar
-        yield Footer()
+        # No Footer - using status_bar for hints instead
 
     def on_mount(self) -> None:
         # Hide agent details by default
@@ -1421,12 +1607,18 @@ class AgentShellApp(App):
             model = self.processor.current_model
             provider = self._get_model_provider(model)
             dual_agent = self.processor.dual_agent
-            context_tokens = self.processor.total_tokens_used
-            context_max = self.processor.max_tokens
-            context_pct = self.processor.get_context_percentage()
-            context_info = f"{context_tokens:,}/{context_max:,} ({context_pct:.1f}%)"
             
-            # Build status line 1: Model info and running state
+            # Get agent mode and variant info
+            agent_mode = self.processor.agent_mode
+            # Capitalize mode for display (Manual, Semi, Auto)
+            mode_display = agent_mode.capitalize()
+            mode_color = AGENT_MODE_COLORS.get(agent_mode, "#a855f7")
+            
+            variant = self.processor.current_variant
+            # Variant in amber color (#fbbf24)
+            variant_display = f" · [#fbbf24]{variant}[/#fbbf24]" if variant else ""
+            
+            # Build status line 1: Mode  Model Provider · variant
             if dual_agent.is_running or dual_agent.is_paused:
                 if dual_agent.is_paused:
                     status_icon = "⏸"
@@ -1439,23 +1631,23 @@ class AgentShellApp(App):
                 elapsed = ""
                 if dual_agent.start_time:
                     elapsed_seconds = time.time() - dual_agent.start_time
-                    elapsed = f" · {self._format_elapsed_time(elapsed_seconds)}"
+                    elapsed = f" {self._format_elapsed_time(elapsed_seconds)}"
                 
-                line1 = f"{status_icon} {status_text}{elapsed} · {model} {provider} · {context_info}"
+                line1 = f"[{mode_color}]{mode_display}[/{mode_color}]  [bold]{model}[/bold] {provider}{variant_display}  {status_icon} {status_text}{elapsed}"
             else:
-                line1 = f"{model} {provider} · {context_info}"
+                line1 = f"[{mode_color}]{mode_display}[/{mode_color}]  [bold]{model}[/bold] {provider}{variant_display}"
             
-            # Build status line 2: Shortcuts
+            # Build status line 2: Keyboard shortcuts (right-aligned style)
             if dual_agent.is_running:
                 if dual_agent.is_paused:
-                    line2 = "esc cancel · /continue resume · Type to chat with Memory Agent"
+                    line2 = "[dim]ctrl+t[/dim] variants  [dim]tab[/dim] agents  [dim]esc[/dim] cancel  [dim]/continue[/dim] resume"
                 elif dual_agent.pause_requested:
-                    line2 = "Pausing... · esc cancel"
+                    line2 = "[dim]ctrl+t[/dim] variants  [dim]tab[/dim] agents  [dim]esc[/dim] cancel"
                 else:
-                    line2 = "esc pause · esc (after pause) cancel"
+                    line2 = "[dim]ctrl+t[/dim] variants  [dim]tab[/dim] agents  [dim]esc[/dim] pause"
             else:
                 # Regular CLI or idle
-                line2 = "esc esc  interrupt"
+                line2 = "[dim]ctrl+t[/dim] variants  [dim]tab[/dim] agents  [dim]ctrl+p[/dim] commands"
             
             self.status_bar.update(f"{line1}\n{line2}")
         
@@ -1493,12 +1685,32 @@ class AgentShellApp(App):
         def on_select(model: str) -> None:
             if not self.processor:
                 return
+            old_model = self.processor.current_model
             self.processor.current_model = model
             self.processor.max_tokens = MODEL_CONTEXT_SIZES.get(model, 128000)
+            
+            # Sync variant: if current variant isn't supported, use new model's default
+            available_variants = self.processor._get_available_variants(model)
+            if self.processor.current_variant not in available_variants:
+                self.processor.current_variant = self.processor._get_default_variant(model)
+                self._log(f"Variant reset to '{self.processor.current_variant}' (not supported by {model})")
+            
             self._update_status()
             self._log(f"Switched to model: {model}")
 
         self.push_screen(ModelSelectScreen(AVAILABLE_MODELS, self.processor.current_model, on_select))
+    
+    def action_open_model_picker(self) -> None:
+        """Action handler for ctrl+p keybinding."""
+        self._open_model_picker()
+    
+    def action_cycle_variant(self) -> None:
+        """Action handler for ctrl+t keybinding - cycle through variants."""
+        if self.processor:
+            available = self.processor._get_available_variants(self.processor.current_model)
+            if len(available) > 1:
+                self.processor.cycle_variant()
+                self._update_status()
 
     def _handle_input(self, input_text: str) -> None:
         if not self.processor:
@@ -1573,6 +1785,15 @@ class AgentShellApp(App):
             self._handle_input(input_text)
 
     def on_key(self, event: events.Key) -> None:
+        # Handle Tab key - cycle agent modes (override default focus behavior)
+        if event.key == "tab":
+            if self.processor:
+                self.processor.cycle_agent_mode()
+                self._update_status()
+            event.stop()  # Prevent default tab focus behavior
+            event.prevent_default()
+            return
+        
         # Handle Escape key
         if event.key == "escape":
             # Case 1: Dual Agent is running or paused

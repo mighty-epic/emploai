@@ -10,6 +10,30 @@
 
 <!-- Agents: Add your entries below this line -->
 
+## [DONE] Task: Implement Agent Mode & Model Variant Architecture
+- **Started**: 2026-01-23 20:30
+- **Completed**: 2026-01-23 20:40
+- **Files**:
+  - cli/tui_app.py
+  - WORK_IN_PROGRESS.md
+- **Status**: Completed
+- **Notes**: Full implementation of the unified agentic system:
+  - **Agent Mode System**: Added tri-state mode (`manual`/`semi`/`auto`) controlling CLI-Task agent interaction
+    - `manual`: Completely isolated agents, no context sharing
+    - `semi`: Partial sync via intelligent summaries between agents
+    - `auto`: Unified agent with merged capabilities
+  - **Model Variant System**: Per-model thinking/inference variants
+    - Claude models: `standard` and `thinking` variants
+    - GPT models: `standard` variant
+    - Automatic variant sync when switching models
+  - **Visual Dashboard**: Updated status bar with:
+    - Agent mode display with color coding (Purple/Blue/Green)
+    - Variant display (shows when not "standard")
+    - Context-aware control hints
+  - **Tab Key Override**: Tab cycles agent modes (doesn't change focus)
+  - **Ctrl+P Binding**: Opens model picker directly
+  - **Slash Commands**: Added `/variant` and `/mode` commands
+
 ## [DONE] Task: Update CLI model list and contexts
 - **Started**: 2026-01-22 23:26
 - **Completed**: 2026-01-22 23:27
