@@ -1,1 +1,0 @@
-# Hands layer tests

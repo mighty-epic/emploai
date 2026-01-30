@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import math
+
 from textual import events, on
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
-from textual.widgets import Collapsible, Label, Static, TextArea
+from textual.widgets import Collapsible, Label, Static, TextArea, Markdown
 
 
 class LoadingIndicator(Static):
@@ -45,6 +47,103 @@ class LoadingIndicator(Static):
     
     # Alias for compatibility with existing code
     update_snake = update_wave
+
+
+class LogArea(TextArea):
+    """Read-only log widget that auto-copies selections."""
+
+    def __init__(self, *args, follow_cursor: bool = True, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._last_copied = ""
+        self._pause_autoscroll = False
+        self._drag_autoscroll_step = 2
+        self._drag_autoscroll_margin = 1
+        self._follow_cursor = follow_cursor
+
+    def append_log(self, message: str) -> None:
+        # Always append at the very end regardless of cursor position
+        last_line = max(self.document.line_count - 1, 0)
+        end_location = (
+            last_line,
+            len(self.document.lines[last_line]) if self.document.lines else 0,
+        )
+        scroll_end = self._follow_cursor and not self._pause_autoscroll
+        
+        # Unlock, insert, then relock if needed
+        was_read_only = self.read_only
+        self.read_only = False
+        try:
+            self.insert(message, location=end_location, scroll_end=scroll_end)
+        finally:
+            self.read_only = was_read_only
+
+        if self._follow_cursor:
+            # Move cursor to end to avoid users typing in the middle
+            self.move_cursor(end_location)
+
+    def _copy_selection(self) -> None:
+        selected_text = getattr(self, "selected_text", "")
+        if not selected_text or selected_text == self._last_copied:
+            return
+        self._last_copied = selected_text
+        app = self.app
+        if hasattr(app, "copy_to_clipboard"):
+            app.copy_to_clipboard(selected_text)
+        elif hasattr(app, "set_clipboard"):
+            app.set_clipboard(selected_text)
+        elif hasattr(app, "clipboard"):
+            try:
+                app.clipboard = selected_text
+            except Exception:
+                return
+        if hasattr(app, "notify"):
+            app.notify("Copied selection to clipboard", timeout=2)
+        else:
+            fallback_log = getattr(app, "_log", None)
+            if callable(fallback_log):
+                fallback_log("[clipboard] Copied selection")
+
+    def _refocus_input(self) -> None:
+        app = self.app
+        command_input = getattr(app, "command_input", None)
+        if command_input:
+            command_input.focus()
+
+    def _handle_drag_autoscroll(self, event: events.MouseMove) -> None:
+        if not self._pause_autoscroll:
+            return
+        region = self.content_region
+        if not region.contains(event.x, event.y):
+            return
+        offset_y = event.y - region.y
+        if offset_y <= self._drag_autoscroll_margin:
+            # Scroll up (negative relative y)
+            self.scroll_relative(y=-self._drag_autoscroll_step)
+        elif offset_y >= region.height - 1 - self._drag_autoscroll_margin:
+            # Scroll down (positive relative y)
+            self.scroll_relative(y=self._drag_autoscroll_step)
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        handler = getattr(super(), "on_mouse_down", None)
+        if callable(handler):
+            handler(event)
+        self._pause_autoscroll = True
+
+    def on_mouse_move(self, event: events.MouseMove) -> None:
+        self._handle_drag_autoscroll(event)
+        handler = getattr(super(), "on_mouse_move", None)
+        if callable(handler):
+            handler(event)
+
+    def on_mouse_up(self, event: events.MouseUp) -> None:
+        handler = getattr(super(), "on_mouse_up", None)
+        if callable(handler):
+            handler(event)
+        self._pause_autoscroll = False
+        self._copy_selection()
+        # Refocus input logic: only refocus if it exists
+        if hasattr(self.app, "command_input") and self.app.command_input:
+            self.app.command_input.focus()
 
 
 class ChatLog(Vertical):
@@ -98,6 +197,7 @@ class TextMessageBlock(MessageBlock):
         self.role = role
         self.model = model
         self.timestamp = timestamp
+        self.text_area = None
 
     def compose(self) -> ComposeResult:
         if self.role == "user":
@@ -105,11 +205,10 @@ class TextMessageBlock(MessageBlock):
         elif self.role == "assistant":
             self.add_class("assistant-message")
 
-        # Use a LogArea for selectable text
-        self.text_area = LogArea(self.content, id="message_text")
-        self.text_area.read_only = True
-        self.text_area.show_line_numbers = False
-        yield self.text_area
+        # Use Markdown for message content to support native terminal selection (Shift+Select)
+        # and better formatting.
+        self.content_widget = Markdown(self.content, id="message_text")
+        yield self.content_widget
         
         # Add metadata footer for assistant messages
         if self.role == "assistant":
@@ -122,7 +221,7 @@ class TextMessageBlock(MessageBlock):
             meta_text += f" • {self.timestamp}"
         return meta_text
 
-    def update_metadata(self, model: str = None, timestamp: str = None) -> None:
+    def update_metadata(self, model: str = "", timestamp: str = "") -> None:
         if model:
             self.model = model
         if timestamp:
@@ -131,21 +230,15 @@ class TextMessageBlock(MessageBlock):
             self.metadata_label.update(self.get_meta_text())
 
     def on_mount(self) -> None:
-        self._update_height()
+        pass
 
-    def _update_height(self) -> None:
-        # Calculate height based on lines, minimum 1
-        # Add buffer for metadata if present
-        extra_lines = 1 if self.role == "assistant" else 0
-        lines = self.text_area.document.line_count
-        self.text_area.styles.height = max(lines, 1)
-        # The container height is auto, but text_area needs explicit height to not collapse or scroll internally
+    def on_resize(self, event: events.Resize) -> None:
+        pass
 
     def append_text(self, text: str) -> None:
         self.content += text
-        # LogArea handles the insertion nicely
-        self.text_area.append_log(text)
-        self._update_height()
+        if hasattr(self, "content_widget"):
+             self.content_widget.update(self.content)
 
 
 class TaskBlock(MessageBlock):
@@ -209,91 +302,15 @@ class TaskBlock(MessageBlock):
         self.scroll_end()
 
 
-class LogArea(TextArea):
-    """Read-only log widget that auto-copies selections."""
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self._last_copied = ""
-        self._pause_autoscroll = False
-        self._drag_autoscroll_step = 2
-        self._drag_autoscroll_margin = 1
-
-    def append_log(self, message: str) -> None:
-        # Always append at the very end regardless of cursor position
-        last_line = max(self.document.line_count - 1, 0)
-        end_location = (
-            last_line,
-            len(self.document.lines[last_line]) if self.document.lines else 0,
-        )
-        if self._pause_autoscroll:
-            self.insert(message, location=end_location, scroll_end=False)
-        else:
-            self.insert(message, location=end_location)
-        # Move cursor to end to avoid users typing in the middle
-        self.move_cursor(end_location)
-
-    def _copy_selection(self) -> None:
-        selected_text = getattr(self, "selected_text", "")
-        if not selected_text or selected_text == self._last_copied:
-            return
-        self._last_copied = selected_text
-        app = self.app
-        if hasattr(app, "copy_to_clipboard"):
-            app.copy_to_clipboard(selected_text)
-        elif hasattr(app, "set_clipboard"):
-            app.set_clipboard(selected_text)
-        elif hasattr(app, "clipboard"):
-            try:
-                app.clipboard = selected_text
-            except Exception:
-                return
-        if hasattr(app, "notify"):
-            app.notify("Copied selection to clipboard", timeout=2)
-        else:
-            fallback_log = getattr(app, "_log", None)
-            if callable(fallback_log):
-                fallback_log("[clipboard] Copied selection")
-
-    def _refocus_input(self) -> None:
-        app = self.app
-        command_input = getattr(app, "command_input", None)
-        if command_input:
-            command_input.focus()
-
-    def _handle_drag_autoscroll(self, event: events.MouseMove) -> None:
-        if not self._pause_autoscroll:
-            return
-        region = self.content_region
-        if not region.contains(event.x, event.y):
-            return
-        offset_y = event.y - region.y
-        if offset_y <= self._drag_autoscroll_margin:
-            self.action_scroll_up(self._drag_autoscroll_step)
-        elif offset_y >= region.height - 1 - self._drag_autoscroll_margin:
-            self.action_scroll_down(self._drag_autoscroll_step)
-
-    def on_mouse_down(self, event: events.MouseDown) -> None:
-        self._pause_autoscroll = True
-
-    def on_mouse_move(self, event: events.MouseMove) -> None:
-        self._handle_drag_autoscroll(event)
-
-    def on_mouse_up(self, event: events.MouseUp) -> None:
-        self._pause_autoscroll = False
-        self._copy_selection()
-        # Refocus input logic: only refocus if it exists
-        if hasattr(self.app, "command_input") and self.app.command_input:
-            self.app.command_input.focus()
-
-
 class SuggestionItem(Label):
     """A clickable suggestion item."""
 
-    def __init__(self, text: str, callback) -> None:
+    def __init__(self, text: str, callback, is_top: bool = False) -> None:
         super().__init__(text, classes="suggestion-item")
         self.callback = callback
         self.suggestion_text = text
+        if is_top:
+            self.add_class("top-suggestion")
 
     def on_click(self) -> None:
         self.callback(self.suggestion_text)
@@ -320,16 +337,27 @@ class SlashSuggestionBar(VerticalScroll):
         background: $accent;
         color: black;
     }
+
+    .top-suggestion {
+        background: #333;
+        border-right: wide $accent;
+        color: #fff;
+    }
     """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.top_suggestion: str | None = None
 
     def update_suggestions(self, suggestions: list[str], callback) -> None:
         self.remove_children()
+        self.top_suggestion = None
         
         if not suggestions:
             self.display = False
             return
             
         self.display = True
-        for suggestion in suggestions:
-            self.mount(SuggestionItem(suggestion, callback))
-
+        self.top_suggestion = suggestions[0]
+        for i, suggestion in enumerate(suggestions):
+            self.mount(SuggestionItem(suggestion, callback, is_top=(i == 0)))

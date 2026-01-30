@@ -80,10 +80,18 @@ MODEL_CONFIGS = {
     "gemini-2.0-flash": {"provider": "google", "id": "gemini-2.0-flash-exp", "context": 1000000},
     "gemini-1.5-pro": {"provider": "google", "id": "gemini-1.5-pro", "context": 2000000},
     # xAI
-    "grok-4.1": {"provider": "xai", "id": "grok-4.1", "context": 2000000},
-    "grok-4": {"provider": "xai", "id": "grok-4", "context": 2000000},
-    "grok-3": {"provider": "xai", "id": "grok-3", "context": 1000000},
-    "grok-2": {"provider": "xai", "id": "grok-2-1212", "context": 128000},
+    # xAI
+    "grok-4.1-fast-reasoning": {"provider": "xai", "id": "grok-4-1-fast-reasoning", "context": 2000000, "reasoning": True},
+    "grok-4.1-fast-non-reasoning": {"provider": "xai", "id": "grok-4-1-fast-non-reasoning", "context": 2000000},
+    "grok-code-fast-1": {"provider": "xai", "id": "grok-code-fast-1", "context": 256000},
+    "grok-4-fast-reasoning": {"provider": "xai", "id": "grok-4-fast-reasoning", "context": 2000000, "reasoning": True},
+    "grok-4-fast-non-reasoning": {"provider": "xai", "id": "grok-4-fast-non-reasoning", "context": 2000000},
+    "grok-4-0709": {"provider": "xai", "id": "grok-4-0709", "context": 256000},
+    "grok-3-mini": {"provider": "xai", "id": "grok-3-mini", "context": 131072},
+    "grok-3": {"provider": "xai", "id": "grok-3", "context": 131072},
+    "grok-2-vision-1212": {"provider": "xai", "id": "grok-2-vision-1212", "context": 32768},
+    "grok-2": {"provider": "xai", "id": "grok-2-latest", "context": 128000},
+    "grok-beta": {"provider": "xai", "id": "grok-beta", "context": 128000},
     # DeepSeek
     "deepseek-chat": {"provider": "deepseek", "id": "deepseek-chat", "context": 64000},
     "deepseek-reasoner": {"provider": "deepseek", "id": "deepseek-reasoner", "context": 64000, "reasoning": True},
@@ -149,10 +157,17 @@ MODEL_VARIANTS = {
     "gemini-2.0-flash": {"variants": ["standard"], "default": "standard"},
     "gemini-1.5-pro": {"variants": ["standard"], "default": "standard"},
     # xAI
-    "grok-4.1": {"variants": ["standard"], "default": "standard"},
-    "grok-4": {"variants": ["standard"], "default": "standard"},
+    "grok-4.1-fast-reasoning": {"variants": ["low", "medium", "high"], "default": "medium"},
+    "grok-4.1-fast-non-reasoning": {"variants": ["standard"], "default": "standard"},
+    "grok-code-fast-1": {"variants": ["standard"], "default": "standard"},
+    "grok-4-fast-reasoning": {"variants": ["low", "medium", "high"], "default": "medium"},
+    "grok-4-fast-non-reasoning": {"variants": ["standard"], "default": "standard"},
+    "grok-4-0709": {"variants": ["standard"], "default": "standard"},
+    "grok-3-mini": {"variants": ["standard"], "default": "standard"},
     "grok-3": {"variants": ["standard"], "default": "standard"},
+    "grok-2-vision-1212": {"variants": ["standard"], "default": "standard"},
     "grok-2": {"variants": ["standard"], "default": "standard"},
+    "grok-beta": {"variants": ["standard"], "default": "standard"},
     # DeepSeek
     "deepseek-chat": {"variants": ["standard"], "default": "standard"},
     "deepseek-reasoner": {"variants": ["standard"], "default": "standard"},
@@ -206,6 +221,20 @@ SLASH_COMMANDS = [
 ]
 
 SLASH_SUGGESTION_LIMIT = 100
+
+COMMAND_PRIORITIES = {
+    "task": 1,
+    "model": 2,
+    "mode": 3,
+    "help": 4,
+    "clear": 5,
+    "session": 6,
+    "continue": 7,
+    "exit": 8,
+    "ls": 9,
+    "cat": 10,
+    "edit": 11,
+}
 
 
 @dataclass

@@ -8,6 +8,48 @@
 
 ## Active Work
 
+## [DONE] Task: Fix LogArea mouse handler crash
+- **Started**: 2026-01-29 00:35
+- **Completed**: 2026-01-29 00:35
+- **Files**:
+  - cli/tui_widgets.py
+  - WORK_IN_PROGRESS.md
+- **Status**: Completed
+- **Notes**: Guard base mouse handlers to avoid AttributeError on Textual versions lacking on_mouse_move.
+
+## [DONE] Task: Fix drag selection across lines
+- **Started**: 2026-01-28 11:17
+- **Completed**: 2026-01-28 11:18
+- **Files**:
+  - cli/tui_widgets.py
+  - WORK_IN_PROGRESS.md
+- **Status**: Completed
+- **Notes**: Restore TextArea mouse selection while preserving auto-copy/autoscroll.
+
+## [DONE] Task: Fix first assistant message layout
+- **Started**: 2026-01-27 10:35
+- **Completed**: 2026-01-27 10:55
+- **Files**:
+  - cli/tui_widgets.py
+  - cli/tui_app.py
+  - WORK_IN_PROGRESS.md
+- **Status**: Completed
+- **Notes**: Stop leading blank lines, reduce internal scrolling in message blocks, and reflow height on resize.
+
+## [DONE] Task: Phase out testing layers
+- **Started**: 2026-01-27 10:00
+- **Completed**: 2026-01-27 10:20
+- **Files**:
+  - README.md
+  - agents.md
+  - run_tests.py
+  - observation_testing/*
+  - hands_testing/*
+  - platform_testing/*
+  - WORK_IN_PROGRESS.md
+- **Status**: Completed
+- **Notes**: Removed references and deleted deprecated testing layer folders.
+
 ## [DONE] Task: Update Gemini and xAI Models
 - **Started**: 2026-01-24 18:40
 - **Completed**: 2026-01-24 18:45

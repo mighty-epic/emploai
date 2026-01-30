@@ -15,6 +15,7 @@ from cli.tui_constants import (
     MODEL_CONTEXT_SIZES,
     SLASH_COMMANDS,
     SLASH_SUGGESTION_LIMIT,
+    COMMAND_PRIORITIES,
 )
 
 
@@ -117,12 +118,33 @@ class AgentShellActionsMixin:
     def _get_slash_suggestions(self, input_text: str) -> list[str]:
         if not input_text.startswith("/"):
             return []
-        partial = input_text[1:]
+            
+        partial = input_text[1:].lower()
         if not partial:
-            commands = sorted(SLASH_COMMANDS)
-        else:
-            commands = sorted(cmd for cmd in SLASH_COMMANDS if cmd.startswith(partial))
-        return [f"/{command}" for command in commands[:SLASH_SUGGESTION_LIMIT]]
+            # Sort by priority then alphabetically
+            commands = sorted(SLASH_COMMANDS, key=lambda c: (COMMAND_PRIORITIES.get(c, 999), c))
+            return [f"/{cmd}" for cmd in commands[:SLASH_SUGGESTION_LIMIT]]
+
+        matches = []
+        for cmd in SLASH_COMMANDS:
+            cmd_lower = cmd.lower()
+            if partial == cmd_lower:
+                score = 0
+            elif cmd_lower.startswith(partial):
+                score = 10
+            elif partial in cmd_lower:
+                score = 20
+            else:
+                continue
+                
+            # Apply priority boost (lowers score)
+            priority = COMMAND_PRIORITIES.get(cmd, 999)
+            matches.append((score, priority, cmd))
+
+        # Sort matches by score (type of match), then explicit priority, then name
+        matches.sort()
+        
+        return [f"/{m[2]}" for m in matches[:SLASH_SUGGESTION_LIMIT]]
 
     def _open_editor(self, path: Path, content: str) -> None:
         def save_callback(text: str) -> None:

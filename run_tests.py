@@ -4,9 +4,8 @@ Runs all tests for the agentic system.
 
 Usage:
   python run_tests.py              # Run all tests
-  python run_tests.py observation  # Run observation tests only
   python run_tests.py brain        # Run brain tests only
-  python run_tests.py hands        # Run hands tests only
+  python run_tests.py llm          # Run LLM tests only
   python run_tests.py integration  # Run integration tests only
 """
 
@@ -31,17 +30,9 @@ def main():
     args = sys.argv[1:] if len(sys.argv) > 1 else ["all"]
     
     tests = {
-        "observation": [
-            ("observation_testing.tests.test_selenium_live", "Selenium Observer"),
-            ("observation_testing.tests.test_pywinauto_live", "pywinauto Observer"),
-            ("observation_testing.tests.test_vision_observer", "Vision Observer (Tesseract)"),
-        ],
         "brain": [
             ("brain_testing.tests.test_mad_decomposition", "MAD Decomposition"),
             ("brain_testing.tests.test_maker_voting", "MAKER Voting"),
-        ],
-        "hands": [
-            ("hands_testing.tests.test_actions_live", "Action Execution"),
         ],
         "llm": [
             ("brain_testing.tests.test_llm_orchestrator", "LLM Orchestrator"),

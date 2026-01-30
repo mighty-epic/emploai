@@ -158,10 +158,7 @@ Do not give several options. Give the best option and do not attempt several fix
 ## Project Context
 
 This is the **Unified Agentic System** codebase—an AI-driven automation system with:
-- **Observation Layer** (`observation_testing/`): Screen state parsing
 - **Brain Layer** (`brain_testing/`): Decision-making with MAD/MAKER
-- **Hands Layer** (`hands_testing/`): Action execution
-- **Platform Layer** (`platform_testing/`): Tauri desktop app
 - **Agent Core** (`agent/`): Unified and dual-agent implementations
 - **CLI** (`cli/`): Command-line interface and TUI
 

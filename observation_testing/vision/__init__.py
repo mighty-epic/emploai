@@ -1,1 +1,0 @@
-# Vision-based observation module

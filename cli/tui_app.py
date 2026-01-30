@@ -145,6 +145,8 @@ class ChatProcessor:
             
             provider = model_config["provider"]
             self.interrupted = False
+            # Start tracking the turn time for coalescing blocks
+            self._turn_start_time = time.time()
             self._begin_stream()
             assistant_message = ""
 
@@ -172,9 +174,9 @@ class ChatProcessor:
             # --- AUTO MODE: MERGED TOOLS ---
             extra_tools = None
             custom_prompt = None
-            if self.processor.agent_mode == "auto":
+            if self.agent_mode == "auto":
                 # Get tools from the Task Agent (SingleAgent)
-                if hasattr(self.processor.single_agent, "tools"):
+                if hasattr(self.single_agent, "tools"):
                     # SingleAgent.tools is a dict of name: function
                     # We need the OpenAI-style tool definitions (AGENT_TOOLS in agent.py)
                     from single_agent.agent import AGENT_TOOLS
@@ -187,14 +189,14 @@ class ChatProcessor:
                 model_id=model_config["id"],
                 client=client,
                 messages=messages,
-                tool_executor=self.processor.tool_executor,
+                tool_executor=self.tool_executor,
                 callbacks={
-                    "log": self._log,
-                    "log_inline": self._log_inline,
+                    "log": self.detail_log,  # Route tool logs to details pane to keep chat clean
+                    "log_inline": self.log_inline,
                     "append_stream": self._append_stream,
                     "begin_stream": self._begin_stream,
                     "finish_stream": self._finish_stream,
-                    "update_status": self._update_status,
+                    "update_status": self.update_status,
                 },
                 variant=self.current_variant,
                 extra_tools=extra_tools,
@@ -214,6 +216,9 @@ class ChatProcessor:
 
             # Update status bar
             self.update_status()
+            
+            # Reset turn timer
+            self._turn_start_time = None
 
             return CommandResult(True, "")
 
@@ -305,7 +310,8 @@ class AgentShellApp(AgentShellActionsMixin, AgentShellInputMixin, App):
     }
 
     #message_text {
-        background: transparent;
+        background: #111111;
+        color: #ffffff;
         border: none;
         padding: 0 1;
         width: 100%;
@@ -468,10 +474,25 @@ class AgentShellApp(AgentShellActionsMixin, AgentShellInputMixin, App):
             return
         self.processor._stream_buffer = ""
         self.processor._streaming_response = True
-        self._stream_start_time = time.time() # Track runtime
+        now = time.time()
+        self._stream_start_time = now # Track chunk runtime
+        self.processor._stream_start_time = now
+        
+        # Check if we can coalesce into the existing assistant block
+        children = self.chat_log.children
+        last_is_assistant = children and isinstance(children[-1], TextMessageBlock) and children[-1].role == "assistant"
+        
+        # If we are in an active turn and the last block is ours, just append a newline separator if needed
+        if self._turn_start_time and last_is_assistant:
+            # We are continuing the same response (e.g. after a tool call)
+            # Add a separator for clarity between chunks
+            # self._append_stream("\n\n") 
+            self.esc_pressed = False
+            return
+
         # Start a new block for the assistant
         model = self.processor.current_model
-        self.esc_pressed = False # Reset on start
+        self.esc_pressed = False 
         self._log("", role="assistant", model=model, timestamp="...")
 
     def _append_stream(self, text: str) -> None:
@@ -479,6 +500,10 @@ class AgentShellApp(AgentShellActionsMixin, AgentShellInputMixin, App):
             return
         if not text:
             return
+        if not self.processor._stream_buffer:
+            text = text.lstrip("\n")
+            if not text:
+                return
         self.processor._stream_buffer += text
         self._log_inline(text)
 
@@ -486,16 +511,20 @@ class AgentShellApp(AgentShellActionsMixin, AgentShellInputMixin, App):
         if not self.processor:
             return ""
         if self.processor._streaming_response:
-            # self._log_inline("\n") # Not strictly needed if blocks separate
             self.processor._streaming_response = False
             
-            # Update last message with final runtime
-            elapsed = time.time() - self._stream_start_time
+            # Update last message with runtime
+            # If we are in a turn, use the total turn time. Otherwise use chunk time.
+            start_time = self._turn_start_time if self._turn_start_time else self._stream_start_time
+            elapsed = time.time() - start_time
             runtime_str = f"{elapsed:.1f}s"
             
-            children = self.chat_log.children
-            if children and isinstance(children[-1], TextMessageBlock):
-                children[-1].update_metadata(timestamp=runtime_str)
+            def update_last_msg():
+                children = self.chat_log.children
+                if children and isinstance(children[-1], TextMessageBlock):
+                    children[-1].update_metadata(timestamp=runtime_str)
+            
+            self.call_from_thread(update_last_msg)
 
         self.esc_pressed = False # Reset on finish
         return self.processor._stream_buffer
@@ -513,6 +542,9 @@ class AgentShellApp(AgentShellActionsMixin, AgentShellInputMixin, App):
         
         # Escape detection state
         self.esc_pressed = False
+        
+        # Turn state tracking for coalescing outputs
+        self._turn_start_time: Optional[float] = None
         
         # Status update timer
         self._status_timer: Optional[object] = None
@@ -593,10 +625,18 @@ class AgentShellApp(AgentShellActionsMixin, AgentShellInputMixin, App):
         self._update_slash_suggestions(event.value)
 
     def _submit_input(self, input_text: str) -> None:
-        self._update_slash_suggestions("")
         if not input_text:
             return
 
+        # FEATURE: Auto-complete to top suggestion on Enter for slash commands
+        if input_text.startswith("/") and self.slash_suggestions and self.slash_suggestions.top_suggestion:
+            top = self.slash_suggestions.top_suggestion
+            # Only auto-complete if the input is a prefix of the suggestion
+            if top.startswith(input_text):
+                input_text = top
+
+        self._update_slash_suggestions("")
+        
         if self.processor:
             self.processor.history.append(input_text)
             self.processor.history_index = len(self.processor.history)
