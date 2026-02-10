@@ -18,7 +18,7 @@ def main():
     print("="*50 + "\n")
     
     # Initialize
-    agent = SingleAgent(model="gemini-3-flash-preview")
+    agent = SingleAgent(model="gemini-2.0-flash")
     
     client = OpenAI(
         api_key=os.getenv("GEMINI_API_KEY"),
@@ -49,7 +49,7 @@ def main():
         while True:
             try:
                 response = client.chat.completions.create(
-                    model="gemini-3-flash-preview",
+                    model="gemini-2.0-flash",
                     messages=messages,
                     tools=AGENT_TOOLS,
                     max_tokens=2000

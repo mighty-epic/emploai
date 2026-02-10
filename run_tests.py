@@ -31,13 +31,13 @@ def main():
     
     tests = {
         "brain": [
-            ("brain_testing.tests.test_mad_decomposition", "MAD Decomposition"),
-            ("brain_testing.tests.test_maker_voting", "MAKER Voting"),
+            ("tests.brain_testing.tests.test_mad_decomposition", "MAD Decomposition"),
+            ("tests.brain_testing.tests.test_maker_voting", "MAKER Voting"),
         ],
         "llm": [
-            ("brain_testing.tests.test_llm_orchestrator", "LLM Orchestrator"),
-            ("brain_testing.tests.test_llm_micro_agents", "LLM Micro-Agents"),
-            ("brain_testing.tests.test_llm_e2e_flow", "LLM E2E Flow"),
+            ("tests.brain_testing.tests.test_llm_orchestrator", "LLM Orchestrator"),
+            ("tests.brain_testing.tests.test_llm_micro_agents", "LLM Micro-Agents"),
+            ("tests.brain_testing.tests.test_llm_e2e_flow", "LLM E2E Flow"),
         ],
         "integration": [
             ("tests.test_integration_obs_brain", "Observation + Brain"),

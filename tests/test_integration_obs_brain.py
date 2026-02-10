@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.schemas.observation import ElementDescriptor, BoundingBox, ObservationSnapshot
 from shared.schemas.actions import AtomicAction, ActionType, ActionTarget
-from brain_testing.tests.test_mad_decomposition import MADDecomposer
+from tests.brain_testing.tests.test_mad_decomposition import MADDecomposer
 import time
 
 

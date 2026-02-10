@@ -85,7 +85,7 @@ AGENT_TOOLS = [
     {"type": "function", "function": {"name": "close_window", "description": "Close a window by title.", "parameters": {"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]}}},
     
     # --- INPUT TOOLS (Desktop) ---
-    {"type": "function", "function": {"name": "click", "description": "Click at screen coordinates or on text found via OCR.", "parameters": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}, "text": {"type": "string", "description": "Text to find and click on (alternative to x,y)"}}}}},
+    {"type": "function", "function": {"name": "click", "description": "Click at screen coordinates. Use ocr_screen first to find coordinates of text.", "parameters": {"type": "object", "properties": {"x": {"type": "integer", "description": "X coordinate on screen"}, "y": {"type": "integer", "description": "Y coordinate on screen"}}, "required": ["x", "y"]}}},
     {"type": "function", "function": {"name": "right_click", "description": "Right-click at screen coordinates.", "parameters": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}, "required": ["x", "y"]}}},
     {"type": "function", "function": {"name": "double_click", "description": "Double-click at screen coordinates.", "parameters": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}, "required": ["x", "y"]}}},
     {"type": "function", "function": {"name": "type_text", "description": "Type text using keyboard.", "parameters": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}},
@@ -115,12 +115,16 @@ YOUR TOOLS:
 
 VISION:
 - describe_screen: Takes a screenshot and uses AI vision to describe what's visible
-- ocr_screen: Extracts all readable text from the screen using OCR
+- ocr_screen: Extracts all readable text from the screen with coordinates for each element
+   * Underlying Mechanics: Captures screen image (mss), runs Tesseract OCR, returns bounding boxes.
 
 BROWSER (Selenium-controlled Chrome):
 - open_browser: Opens Chrome and navigates to a URL
+   * Underlying Mechanics: Launches a new chromedriver session.
 - observe_browser: Returns the page title, URL, and list of clickable elements
+   * Underlying Mechanics: Scans DOM for visible interactive elements.
 - browser_click: Clicks an element by its text or CSS selector
+   * Underlying Mechanics: Locates element in DOM and triggers click (virtual event).
 - browser_type: Types text into the currently focused input field
 - browser_press_key: Presses a key (enter, tab, escape, etc)
 - browser_scroll: Scrolls the page up or down
@@ -131,17 +135,22 @@ BROWSER (Selenium-controlled Chrome):
 
 DESKTOP:
 - open_app: Opens an application using Win+R run dialog
+   * Underlying Mechanics: Executes OS 'Run' command.
 - observe_desktop: Lists all open windows and which one is active
+   * Underlying Mechanics: Queries Windows API for window list.
 - focus_window: Brings a window to the front by its title
+   * Underlying Mechanics: Sends OS command to set foreground window.
 - minimize_window: Minimizes a window by its title
 - maximize_window: Maximizes a window by its title
 - close_window: Closes a window by its title
 
-INPUT:
+INPUT (Physical Simulation):
 - click: Clicks at x,y coordinates on screen
+   * Underlying Mechanics: Moves physical mouse cursor and clicks (pyautogui). Requires precise coordinates.
 - right_click: Right-clicks at x,y coordinates
 - double_click: Double-clicks at x,y coordinates
 - type_text: Types text using the keyboard
+   * Underlying Mechanics: Simulates physical keystrokes on the active window.
 - press_key: Presses a single key (enter, tab, f1, etc)
 - hotkey: Presses a key combination (ctrl+c, alt+tab, etc)
 - scroll: Scrolls up or down at the current mouse position
@@ -154,12 +163,41 @@ CLIPBOARD:
 UTILITY:
 - wait: Pauses for a specified number of seconds
 
-OBSERVATION HINTS:
-- When working in the browser, use observe_browser to see page elements
-- When working on the desktop, use observe_desktop to see open windows
-- Use describe_screen as a visual verification method (to confirm what happened)
-- If you can't find or click something, use ocr_screen to see all text on screen
-- IMPORTANT: describe_screen and ocr_screen capture whatever is currently visible. Make sure the correct window is focused first, or you'll see the wrong content.
+BEST PRACTICES:
+
+1. OBSERVE BEFORE WAITING:
+   - Before using wait(), first use an observation tool (observe_desktop, observe_browser, or describe_screen)
+   - This confirms whether the wait is actually needed (e.g., page still loading, animation in progress)
+   - Never wait blindly without knowing the current state
+
+2. FINDING BUTTONS/ELEMENTS TO CLICK:
+   - First use describe_screen to understand what's on screen and identify the text/label on the button
+   - Then use ocr_screen to get the exact coordinates of that text
+   - ocr_screen returns elements with x,y center coordinates - use these with click(x, y)
+   - Example workflow: describe_screen → "I see a blue 'Submit' button" → ocr_screen → find "Submit" with x=500, y=300 → click(500, 300)
+
+3. OBSERVATION PRIORITY:
+   - For browser: use observe_browser first (it gives element selectors)
+   - For desktop apps: use observe_desktop to see windows, then ocr_screen for text positions
+   - Use describe_screen when you need visual context (colors, layout, images)
+   - IMPORTANT: Focus the correct window before using vision/OCR tools
+   
+4. OBSERVATION HINTS:
+   - If OCR doesn't capture something that observe_browser or observe_desktop captured, you may need to scroll or change tab/webpage
+
+5. HANDLING INTERRUPTIONS:
+   If you see a message prefixed with [USER INTERRUPT], the user has sent a new message while you were working:
+   - Stop your current action immediately
+   - Read and respond to their new message
+   - If they say "stop" or similar, confirm you've stopped and summarize what you completed
+   - If they give new instructions, acknowledge and start working on those instead
+   - If they ask a question, answer it directly
+
+6. PREFER KEYBOARD SHORTCUTS:
+   - Use hotkey() and press_key() when possible instead of clicking
+   - If you've described the screen and see an element is already selected/highlighted, just press Enter instead of OCR + click
+   - Use system shortcuts (Ctrl+S, Alt+F4, F1-F12 keys, etc.) when they can accomplish the task faster
+   - This is more reliable and faster than finding coordinates and clicking
 
 Be helpful and conversational. Confirm what you did after completing actions."""
 
@@ -169,7 +207,7 @@ Be helpful and conversational. Confirm what you did after completing actions."""
 # ============================================================
 
 class SingleAgent:
-    def __init__(self, model: str = "gemini-3-flash-preview", screenshot_dir: str = "single_agent/screenshots", logger: Optional[Callable[[str], None]] = None):
+    def __init__(self, model: str = "gemini-2.0-flash", screenshot_dir: str = "single_agent/screenshots", logger: Optional[Callable[[str], None]] = None):
         self.model = model
         self.logger = logger
         self.screenshot_dir = Path(screenshot_dir)
@@ -178,16 +216,44 @@ class SingleAgent:
         self.driver = None
         self.messages = []
         
-        # Pause/Resume state
+        # Pause/Resume/Stop state
         self.is_paused = False
+        self.should_stop = False
         self.current_task = None
         self._turns_used = 0
-        
-        # Setup client
-        self.client = OpenAI(
-            api_key=os.getenv("GEMINI_API_KEY"),
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
-        )
+
+        # Mapping for unified ToolExecutor
+        self.tools = {
+            "describe_screen": self._describe_screen,
+            "ocr_screen": self._ocr_screen,
+            "observe_browser": self._observe_browser,
+            "observe_desktop": self._observe_desktop,
+            "open_browser": self._open_browser,
+            "browser_click": self._browser_click,
+            "browser_type": self._browser_type,
+            "browser_press_key": self._browser_press_key,
+            "browser_scroll": self._browser_scroll,
+            "switch_tab": self._switch_tab,
+            "close_tab": self._close_tab,
+            "go_back": self._go_back,
+            "go_forward": self._go_forward,
+            "open_app": self._open_app,
+            "focus_window": self._focus_window,
+            "minimize_window": self._minimize_window,
+            "maximize_window": self._maximize_window,
+            "close_window": self._close_window,
+            "click": self._click,
+            "right_click": self._right_click,
+            "double_click": self._double_click,
+            "type_text": self._type_text,
+            "press_key": self._press_key,
+            "hotkey": self._hotkey,
+            "scroll": self._scroll,
+            "drag_and_drop": self._drag_and_drop,
+            "get_clipboard": self._get_clipboard,
+            "set_clipboard": self._set_clipboard,
+            "wait": self._wait,
+        }
 
     def _log(self, message: str):
         """Log message to console or custom logger."""
@@ -197,97 +263,13 @@ class SingleAgent:
             print(message)
     
     def pause(self):
-        """Request the agent to pause after the current turn."""
+        """Request the agent to pause."""
         self.is_paused = True
-        self._log("[PAUSE REQUESTED]")
     
-    def run(self, task: str, max_turns: int = 20) -> str:
-        """Execute a task with the agent."""
-        self._log(f"\n[TASK] {task}")
-        
-        # Fresh start
-        self.is_paused = False
-        self.current_task = task
-        self._turns_used = 0
-        
-        self.messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Task: {task}"}
-        ]
-        
-        return self._run_loop(max_turns)
-    
-    def continue_task(self, max_turns: int = 20) -> str:
-        """Continue a paused task."""
-        if not self.current_task:
-            return "No task to continue."
-        
-        self._log(f"\n[RESUMING] {self.current_task}")
-        self.is_paused = False
-        
-        # Add resume message to context
-        self.messages.append({
-            "role": "user", 
-            "content": "Continue the task from where you left off."
-        })
-        
-        return self._run_loop(max_turns)
-    
-    def _run_loop(self, max_turns: int) -> str:
-        """Internal loop that runs until complete, paused, or max turns."""
-        for turn in range(max_turns):
-            # Check for pause request
-            if self.is_paused:
-                self._log(f"[PAUSED] at turn {self._turns_used + turn + 1}")
-                return f"Task paused after {self._turns_used + turn} turns. Use /continue to resume."
-            
-            self._log(f"\n--- Turn {self._turns_used + turn + 1} ---")
-            
-            try:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=self.messages,
-                    tools=AGENT_TOOLS,
-                    max_tokens=2000
-                )
-                
-                message = response.choices[0].message
-                
-                # Check if task is complete (no tool calls)
-                if not message.tool_calls:
-                    self._log(f"[COMPLETE] {message.content}")
-                    self.current_task = None  # Clear task on completion
-                    return message.content or "Task completed."
-                
-                # Execute tool calls
-                self.messages.append(message)
-                tool_results = []
-                
-                for tool_call in message.tool_calls:
-                    func_name = tool_call.function.name
-                    args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
-                    
-                    self._log(f"  [TOOL] {func_name}({args})")
-                    result = self._execute_tool(func_name, args)
-                    self._log(f"  [RESULT] {str(result)[:200]}...")
-                    
-                    tool_results.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": json.dumps(result) if isinstance(result, dict) else str(result)
-                    })
-                
-                self.messages.extend(tool_results)
-                
-            except Exception as e:
-                self._log(f"[ERROR] {e}")
-                self.messages.append({"role": "user", "content": f"Error occurred: {e}. Please try a different approach."})
-        
-        self._turns_used += max_turns
-        last_msg = self.messages[-1]
-        content = last_msg.get("content", "") if isinstance(last_msg, dict) else getattr(last_msg, "content", "")
-        return f"{content or 'Task stopped'} (Max turns reached)"
-    
+    def stop(self):
+        """Request the agent to stop."""
+        self.should_stop = True
+
     def _execute_tool(self, name: str, args: Dict) -> Any:
         """Route and execute tool calls."""
         try:
@@ -341,7 +323,13 @@ class SingleAgent:
     # ============================================================
     
     def _describe_screen(self, question: Optional[str] = None) -> Dict:
-        """Use AI vision to describe the screen."""
+        """
+        Capture the screen for visual analysis.
+        The primary model will use the captured image to answer your question.
+        """
+        if not TESSERACT_AVAILABLE:
+            return {"error": "Vision tools not available (missing mss/PIL/pytesseract)"}
+            
         try:
             with mss.mss() as sct:
                 screenshot = sct.grab(sct.monitors[1])
@@ -352,31 +340,60 @@ class SingleAgent:
                 with open(path, "rb") as f:
                     base64_image = base64.b64encode(f.read()).decode('utf-8')
                 
-                prompt = question or "Describe this screen in detail. What applications are open? What elements are visible?"
-                
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}}
-                    ]}],
-                    max_tokens=500
-                )
-                
-                return {"description": response.choices[0].message.content}
+                return {
+                    "image_captured": True,
+                    "image_base64": base64_image,
+                    "description": "Screenshot captured successfully. Looking at the screen now.",
+                    "question": question or "What is on the screen?"
+                }
         except Exception as e:
             return {"error": str(e)}
     
     def _ocr_screen(self) -> Dict:
-        """OCR the entire screen."""
+        """OCR the entire screen. Returns text with bounding box coordinates."""
         if not TESSERACT_AVAILABLE:
             return {"error": "Tesseract not available"}
         try:
             with mss.mss() as sct:
                 screenshot = sct.grab(sct.monitors[1])
                 img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
-                text = pytesseract.image_to_string(img)
-                return {"text": text[:3000]}
+                
+                # Get detailed OCR data with coordinates
+                data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+                
+                elements = []
+                n_boxes = len(data['text'])
+                for i in range(n_boxes):
+                    text = data['text'][i].strip()
+                    confidence = int(data['conf'][i])
+                    
+                    # Only include words with confidence > 30 and non-empty text
+                    if text and confidence > 30:
+                        x = data['left'][i]
+                        y = data['top'][i]
+                        w = data['width'][i]
+                        h = data['height'][i]
+                        # Calculate center point for clicking
+                        center_x = x + w // 2
+                        center_y = y + h // 2
+                        
+                        elements.append({
+                            "text": text,
+                            "x": center_x,
+                            "y": center_y,
+                            "bounds": {"left": x, "top": y, "width": w, "height": h},
+                            "confidence": confidence
+                        })
+                
+                # Also return plain text for easy reading
+                unfiltered_text = pytesseract.image_to_string(img)
+                
+                return {
+                    "elements": elements[:2000],  # Limit to 2000 elements (10x increase)
+                    "unfiltered_text": unfiltered_text[:30000], # 30k chars (10x increase)
+                    "plain_text": unfiltered_text[:30000], # Keep legacy key/limit at 10x
+                    "total_elements": len(elements)
+                }
         except Exception as e:
             return {"error": str(e)}
     
@@ -679,22 +696,18 @@ class SingleAgent:
     # INPUT TOOL IMPLEMENTATIONS
     # ============================================================
     
-    def _click(self, x: Optional[int], y: Optional[int], text: Optional[str]) -> Dict:
-        """Click at coordinates or on text."""
+    def _click(self, x: Optional[int], y: Optional[int], text: Optional[str] = None) -> Dict:
+        """Click at screen coordinates."""
         if not PYAUTOGUI_AVAILABLE:
             return {"error": "PyAutoGUI not available"}
+        if x is None or y is None:
+            return {"error": "You must provide x and y coordinates. Use ocr_screen first to find the coordinates of text you want to click."}
         try:
-            if x is not None and y is not None:
-                pyautogui.click(x, y)
-                return {"success": True, "clicked": f"({x}, {y})"}
-            elif text:
-                # Use OCR to find text position
-                location = pyautogui.locateOnScreen(text)
-                if location:
-                    pyautogui.click(location)
-                    return {"success": True, "clicked": text}
-                return {"error": f"Text not found: {text}"}
-            return {"error": "Provide either x,y coordinates or text to find"}
+            # Move to position first, then click (more reliable)
+            pyautogui.moveTo(x, y, duration=0.1)
+            time.sleep(0.05)  # Small delay for stability
+            pyautogui.click()
+            return {"success": True, "clicked": f"({x}, {y})"}
         except Exception as e:
             return {"error": str(e)}
     
@@ -702,15 +715,25 @@ class SingleAgent:
         """Right-click at coordinates."""
         if not PYAUTOGUI_AVAILABLE:
             return {"error": "PyAutoGUI not available"}
-        pyautogui.rightClick(x, y)
-        return {"success": True, "right_clicked": f"({x}, {y})"}
+        try:
+            pyautogui.moveTo(x, y, duration=0.1)
+            time.sleep(0.05)
+            pyautogui.rightClick()
+            return {"success": True, "right_clicked": f"({x}, {y})"}
+        except Exception as e:
+            return {"error": str(e)}
     
     def _double_click(self, x: int, y: int) -> Dict:
         """Double-click at coordinates."""
         if not PYAUTOGUI_AVAILABLE:
             return {"error": "PyAutoGUI not available"}
-        pyautogui.doubleClick(x, y)
-        return {"success": True, "double_clicked": f"({x}, {y})"}
+        try:
+            pyautogui.moveTo(x, y, duration=0.1)
+            time.sleep(0.05)
+            pyautogui.doubleClick()
+            return {"success": True, "double_clicked": f"({x}, {y})"}
+        except Exception as e:
+            return {"error": str(e)}
     
     def _type_text(self, text: str) -> Dict:
         """Type text."""

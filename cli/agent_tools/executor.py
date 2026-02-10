@@ -10,46 +10,94 @@ import shutil
 from cli.config_manager import get_config_manager
 
 class ToolExecutor:
-    def __init__(self, workspace_path: Path, confirm_callback=None, single_agent=None):
+    def __init__(self, workspace_path: Path, confirm_callback=None, single_agent=None, check_interruption=None, get_interrupt_message=None, clear_interrupt=None, skill_registry=None, active_skills=None):
         self.workspace_path = workspace_path.resolve()
         # confirm_callback: Callable[[str], bool] to ask user for permission
         self.confirm_callback = confirm_callback
+        # check_interruption: Callable[[], bool] to check if execution should be interrupted
+        self.check_interruption = check_interruption
+        # get_interrupt_message: Callable[[], Optional[str]] to get the message that caused interruption
+        self.get_interrupt_message = get_interrupt_message
+        # clear_interrupt: Callable[[], None] to reset the interrupt flag after handling
+        self.clear_interrupt = clear_interrupt
         self.config_manager = get_config_manager()
         self.single_agent = single_agent
+        self.skill_registry = skill_registry
+        self.active_skills = active_skills if active_skills is not None else []
         # Track background processes (stub for now)
         self.processes = {}
 
     def _is_safe_path(self, path_str: str) -> bool:
-        """Check if a path is within the workspace (unless setting 1.B is on)."""
-        # Respect workspace_restriction setting (True = 1.A, False = 1.B)
-        if not self.config_manager.get_workspace_restriction():
-            return True # 1.B: System-wide access allowed
-            
-        try:
-            p = Path(path_str).resolve()
-            # If path is relative, make it absolute relative to workspace
-            if not Path(path_str).is_absolute():
-                p = (self.workspace_path / path_str).resolve()
-            
-            return str(p).startswith(str(self.workspace_path))
-        except Exception:
-            return False
+        """
+        Check if a path is within the workspace.
+        
+        NOTE: Directory lock removed. Agent can move freely across codebase.
+        """
+        # Allow all paths - no workspace restriction
+        return True
 
     def _resolve_path(self, path_str: str) -> Path:
-        """Resolve a path safely."""
+        """Resolve a path. No workspace restriction - agent can navigate freely."""
         p = Path(path_str)
         if not p.is_absolute():
             p = (self.workspace_path / p).resolve()
         else:
             p = p.resolve()
-            
-        if not self._is_safe_path(str(p)):
-            raise PermissionError(f"Access denied: {path_str} is outside workspace.")
         return p
+
+    def _validate_required_params(self, tool_name: str, args: Dict[str, Any]) -> tuple[bool, str]:
+        """
+        Validate that required parameters are present for specific tools.
+        Returns: (is_valid, error_message)
+        """
+        required_params = {
+            "write_file": ["path", "content"],
+            "append_file": ["path", "content"],
+            "edit_file": ["path", "old_content", "new_content"],
+        }
+        
+        if tool_name not in required_params:
+            return True, ""  # No special validation
+        
+        required = required_params[tool_name]
+        missing = []
+        empty = []
+        
+        for param in required:
+            if param not in args:
+                missing.append(param)
+            elif not args[param] or (isinstance(args[param], str) and not args[param].strip()):
+                empty.append(param)
+        
+        if missing or empty:
+            msg = f"write_file REQUIRES both 'path' and 'content' parameters.\n"
+            if missing:
+                msg += f"Missing: {', '.join(missing)}\n"
+            if empty:
+                msg += f"Empty/None: {', '.join(empty)}\n"
+            msg += f"You provided: {list(args.keys())}"
+            return False, msg
+        
+        return True, ""
 
     def execute(self, name: str, args: Dict[str, Any]) -> Any:
         """Dispatcher for tool execution."""
         try:
+            # Check for interruption before executing (optional callback)
+            if self.check_interruption and self.check_interruption():
+                return {"interrupted": True, "message": "Execution interrupted by user"}
+            
+            # Validate required parameters first
+            is_valid, error_msg = self._validate_required_params(name, args)
+            if not is_valid:
+                return {
+                    "error": error_msg,
+                    "error_type": "missing_required_parameter",
+                    "tool_name": name,
+                    "provided_params": list(args.keys()),
+                    "retry": True
+                }
+            
             # 1. Check for CLI-specific tool
             method = getattr(self, f"tool_{name}", None)
             if method:
@@ -64,6 +112,14 @@ class ToolExecutor:
             return {"error": f"Unknown tool: {name}"}
         except PermissionError as e:
             return {"error": str(e)}
+        except ValueError as e:
+            # Parameter validation errors from the tool function
+            return {
+                "error": str(e),
+                "error_type": "validation_error",
+                "tool_name": name,
+                "retry": True
+            }
         except Exception as e:
             return {"error": f"Execution failed: {str(e)}"}
 
@@ -87,13 +143,71 @@ class ToolExecutor:
         return {"content": content, "lines": len(lines)}
 
     def tool_write_file(self, path: str, content: str) -> Dict[str, Any]:
+        """
+        Create or overwrite a file with the specified content.
+        
+        Args:
+            path: File path to create/overwrite (required)
+            content: File content to write (required - must not be empty)
+        
+        Raises:
+            ValueError: If path or content is missing/empty
+        
+        Returns:
+            Dict with success status and file size
+        """
+        # Validate required parameters (strict matching)
+        if not path or not isinstance(path, str) or not path.strip():
+            raise ValueError("write_file: 'path' parameter is REQUIRED and must not be empty")
+        
+        if not content or not isinstance(content, str):
+            raise ValueError(
+                f"write_file: 'content' parameter is REQUIRED and must be a non-empty string.\n"
+                f"You provided path='{path}' but content is missing.\n"
+                f"Call write_file with both path AND the actual file content you want to write."
+            )
+        
         p = self._resolve_path(path)
         # Ensure parent directory exists
         p.parent.mkdir(parents=True, exist_ok=True)
         
         with open(p, 'w', encoding='utf-8') as f:
             f.write(content)
-        return {"success": True, "path": path, "size": len(content)}
+        return {"success": True, "path": str(p.relative_to(self.workspace_path)), "size": len(content)}
+
+    def tool_append_file(self, path: str, content: str) -> Dict[str, Any]:
+        """
+        Append content to the end of an existing file.
+        
+        Args:
+            path: Path to the file to append to (required)
+            content: Content to append (required - must not be empty)
+        
+        Raises:
+            ValueError: If path or content is missing/empty
+            FileNotFoundError: If file doesn't exist
+        """
+        # Validate required parameters
+        if not path or not isinstance(path, str) or not path.strip():
+            raise ValueError("append_file: 'path' parameter is REQUIRED and must not be empty")
+        
+        if not content or not isinstance(content, str):
+            raise ValueError(
+                f"append_file: 'content' parameter is REQUIRED and must be a non-empty string.\n"
+                f"You provided path='{path}' but content is missing.\n"
+                f"Call append_file with both path AND the content you want to append."
+            )
+        
+        p = self._resolve_path(path)
+        if not p.is_file():
+            raise FileNotFoundError(f"File not found: {path}. Use write_file first to create the file.")
+        
+        with open(p, 'a', encoding='utf-8') as f:
+            f.write(content)
+        
+        # Get new file size
+        total_size = p.stat().st_size
+        return {"success": True, "path": str(p.relative_to(self.workspace_path)), "appended": len(content), "total_size": total_size}
 
     def tool_edit_file(self, path: str, old_content: str, new_content: str) -> Dict[str, Any]:
         p = self._resolve_path(path)
@@ -111,6 +225,24 @@ class ToolExecutor:
             f.write(updated_content)
             
         return {"success": True, "message": "File updated successfully."}
+
+    def tool_change_directory(self, path: str) -> Dict[str, Any]:
+        """Update the base workspace path for the executor."""
+        new_path = self._resolve_path(path)
+        if not new_path.exists():
+            return {"error": f"Directory not found: {path}"}
+        if not new_path.is_dir():
+            return {"error": f"Path is not a directory: {path}"}
+        
+        old_path = self.workspace_path
+        self.workspace_path = new_path.resolve()
+        
+        return {
+            "success": True, 
+            "old_workspace": str(old_path),
+            "new_workspace": str(self.workspace_path),
+            "message": f"Base workspace updated to {self.workspace_path}"
+        }
 
     def tool_list_dir(self, path: str = ".") -> Dict[str, Any]:
         resolve_p = self._resolve_path(path)
@@ -159,9 +291,67 @@ class ToolExecutor:
                 
         return {"matches": matches}
 
+    def tool_pull_skill(self, skill_name: str) -> Dict[str, Any]:
+        """Load a specific skill's full instructions and tools into context."""
+        if not self.skill_registry:
+            return {"error": "Skill registry not initialized in this session."}
+            
+        skill = self.skill_registry.loader.get_skill(skill_name)
+        if not skill:
+            # Try searching by description keywords if exact name fails
+            matches = self.skill_registry.loader.search_skills(skill_name)
+            if matches:
+                 return {"error": f"Skill '{skill_name}' not found. Did you mean: {', '.join([s.name for s in matches])}?"}
+            return {"error": f"Skill '{skill_name}' not found in registry."}
+            
+        if not self.skill_registry.gating.is_available(skill_name):
+            reason = self.skill_registry.gating.get_unavailable_reason(skill_name)
+            return {"error": f"Skill '{skill_name}' is gated and unavailable: {reason}"}
+            
+        context = self.skill_registry.loader.get_skill_context(skill_name)
+        
+        # PERSISTENCE: Mark skill as active in this session
+        if skill_name not in self.active_skills:
+            self.active_skills.append(skill_name)
+            
+        return {
+            "success": True, 
+            "skill_name": skill_name, 
+            "instructions": context,
+            "message": f"Skill '{skill_name}' loaded. Follow the provided instructions and standards for this task."
+        }
+
     # --- TERMINAL TOOLS ---
 
-    def tool_run_command(self, command: str) -> Dict[str, Any]:
+    async def _async_run_command(self, command: str, work_dir: Path, timeout: int = 30) -> Dict[str, Any]:
+        """Internal async runner for commands (not yet used by sync execute)."""
+        import asyncio
+        process = await asyncio.create_subprocess_shell(
+            command,
+            cwd=work_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        try:
+            # Simple wait with timeout - interruption handling would go here in an async loop
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+            return {
+                "stdout": stdout.decode(),
+                "stderr": stderr.decode(),
+                "exit_code": process.returncode
+            }
+        except asyncio.TimeoutError:
+            process.kill()
+            return {"error": f"Command timed out after {timeout} seconds."}
+
+    def tool_run_command(self, command: str, cwd: str = None) -> Dict[str, Any]:
+        # Resolve working directory (default to workspace)
+        if cwd:
+            work_dir = self._resolve_path(cwd)
+        else:
+            work_dir = self.workspace_path
+        
         # Check if confirmation is required
         needs_confirmation = self.config_manager.get_command_confirmation()
         
@@ -177,24 +367,46 @@ class ToolExecutor:
             if not approved:
                 return {"error": "User rejected command execution."}
         
-        # Simple blocking execution for now
-        # In a real app, you'd want this to be async or backgrounded
+        # Interruption-aware execution using Popen
         try:
-            result = subprocess.run(
+            import time
+            process = subprocess.Popen(
                 command,
                 shell=True,
-                cwd=self.workspace_path,
-                capture_output=True,
-                text=True,
-                timeout=30 # Safety timeout
+                cwd=work_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
             )
+            
+            start_time = time.time()
+            timeout = 600 # Increased safety timeout to 10 minutes
+            
+            while process.poll() is None:
+                # Check for interruption flag
+                if self.check_interruption and self.check_interruption():
+                    process.terminate()
+                    return {
+                        "error": "Command terminated by user interruption.",
+                        "interrupted": True,
+                        "stdout": "Command was terminated before completion."
+                    }
+                
+                # Check for timeout
+                if time.time() - start_time > timeout:
+                    process.kill()
+                    return {"error": f"Command timed out after {timeout} seconds."}
+                
+                time.sleep(0.1) # Poll every 100ms
+            
+            stdout, stderr = process.communicate()
             return {
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "exit_code": result.returncode
+                "stdout": stdout,
+                "stderr": stderr,
+                "exit_code": process.returncode
             }
-        except subprocess.TimeoutExpired:
-            return {"error": "Command timed out after 30 seconds."}
+        except Exception as e:
+            return {"error": f"Execution failed: {str(e)}"}
 
     # --- WEB TOOLS ---
 

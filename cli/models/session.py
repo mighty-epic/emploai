@@ -55,6 +55,7 @@ class Session:
     agent_mode: str = "manual"
     chat_history: List[Dict[str, Any]] = field(default_factory=list)
     task_history: List[Dict[str, Any]] = field(default_factory=list)
+    active_skills: List[str] = field(default_factory=list)
     
     def __post_init__(self):
         if not self.updated_at:
@@ -73,6 +74,7 @@ class Session:
             "agent_mode": self.agent_mode,
             "chat_history": self.chat_history,
             "task_history": self.task_history,
+            "active_skills": self.active_skills,
         }
     
     @classmethod
@@ -89,6 +91,7 @@ class Session:
             agent_mode=data.get("agent_mode", "manual"),
             chat_history=data.get("chat_history", []),
             task_history=data.get("task_history", []),
+            active_skills=data.get("active_skills", []),
         )
     
     def to_summary(self) -> SessionSummary:

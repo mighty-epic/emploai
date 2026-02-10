@@ -27,6 +27,7 @@ from cli.tui_constants import (
 )
 from single_agent.agent import SingleAgent
 from cli.agent_tools.executor import ToolExecutor
+from skills import get_skill_registry
 
 
 def initialize(
@@ -55,22 +56,48 @@ def initialize(
     processor.history = []
     processor.history_index = 0
 
-    # Session and Config managers
+    # Session, Config, and Memory managers
+    from shared.memory import get_memory_manager
     processor.session_manager = SessionManager()
     processor.config_manager = get_config_manager()
+    processor.memory_manager = get_memory_manager(base_path)
 
     # Load or create session
     processor.session = None
     
-    # Always create a new session on startup, don't load the last one
-    # This ensures a fresh start every time the CLI is loaded
-    processor.session = processor.session_manager.create_session(
-        workspace=base_path,
-    )
-    processor.chat_history = []
-    processor.current_model = "claude-haiku-4.5"
-    processor.current_variant = get_default_variant(processor, processor.current_model)
-    processor.agent_mode = DEFAULT_AGENT_MODE
+    # Try to resume the last active session
+    last_session_id = processor.session_manager.get_current_session_id()
+    if last_session_id:
+        try:
+            processor.session = processor.session_manager.load_session(last_session_id)
+            # Restore state from session
+            processor.chat_history = [
+                ChatMessage(
+                    role=msg.get("role", "user"),
+                    content=msg.get("content", ""),
+                    timestamp=msg.get("timestamp", datetime.now().timestamp()),
+                )
+                for msg in processor.session.chat_history
+            ]
+            processor.current_model = processor.session.model
+            processor.current_variant = processor.session.variant
+            processor.agent_mode = processor.session.agent_mode
+            processor.active_skills = getattr(processor.session, "active_skills", [])
+        except Exception:
+            # Fallback to new session if load fails
+            processor.session = processor.session_manager.create_session(workspace=base_path)
+    else:
+        # Fresh start if no previous session
+        processor.session = processor.session_manager.create_session(workspace=base_path)
+
+    if not processor.session:
+         # Final fallback
+         processor.session = processor.session_manager.create_session(workspace=base_path)
+
+    processor.current_model = processor.session.model
+    processor.current_variant = processor.session.variant
+    processor.agent_mode = processor.session.agent_mode
+    processor.active_skills = getattr(processor.session, "active_skills", [])
 
     processor.total_tokens_used = 0
     processor.max_tokens = MODEL_CONTEXT_SIZES.get(processor.current_model, 128000)
@@ -111,8 +138,16 @@ def initialize(
     # Single agent (Active)
     processor.single_agent = SingleAgent(logger=processor.detail_log)
     
+    # Initialize Skill Registry
+    processor.skill_registry = get_skill_registry()
+    
     # Unified Tool Executor for CLI Agent
-    processor.tool_executor = ToolExecutor(base_path, single_agent=processor.single_agent)
+    processor.tool_executor = ToolExecutor(
+        base_path, 
+        single_agent=processor.single_agent,
+        skill_registry=processor.skill_registry,
+        active_skills=processor.active_skills
+    )
 
 
 def get_default_variant(processor, model: str) -> str:
@@ -163,6 +198,7 @@ def auto_save_session(processor) -> None:
     processor.session.model = processor.current_model
     processor.session.variant = processor.current_variant
     processor.session.agent_mode = processor.agent_mode
+    processor.session.active_skills = processor.active_skills
 
     # Save to disk
     processor.session_manager.save_session(processor.session)
@@ -204,6 +240,7 @@ def switch_session(processor, session_id: str) -> bool:
             )
             for msg in processor.session.chat_history
         ]
+        processor.active_skills = processor.session.active_skills
         return True
     except Exception:
         return False

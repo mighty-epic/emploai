@@ -8,6 +8,367 @@
 
 ## Active Work
 
+## [DONE] Task: Beta tester distribution - BETA_MODE + Setup README
+- **Started**: 2026-02-10 22:31:00
+- **Completed**: 2026-02-10 22:35:00
+- **Files**:
+  - emploai/telegram_bot/telegram_agent.py
+  - emploai/telegram_bot/SETUP.md (new)
+  - emploai/.env.example
+- **Status**: Complete
+- **Notes**: Added BETA_MODE env var to restrict Anthropic models to Claude Haiku only. Created comprehensive setup README for beta testers.
+
+## [ACTIVE] Task: Add mobile-developer skill from ai-dev-standards
+- **Started**: 2026-02-06 16:24:00
+- **Files**:
+  - emploai/skills/
+- **Status**: In Progress
+- **Notes**: Using npx skills add to pull specialized mobile development standards and workflows.
+
+## [DONE] Task: Implement Direct Vision and remove Middle-Man model calls
+- **Started**: 2026-02-05 17:00:00
+- **Completed**: 2026-02-05 17:15:00
+- **Files**:
+  - emploai/cli/agent_tools/loop.py
+  - emploai/single_agent/agent.py
+  - emploai/single_agent/refined_agent.py
+  - emploai/telegram_bot/telegram_unified_agent.py
+- **Status**: Completed
+- **Notes**: Refactored vision tools to return raw image data. Updated run_tool_loop to inject images directly into the primary model's conversation. Removed all internal secondary LLM calls.
+
+## [DONE] Task: Fix Gemini model 'NOT_FOUND' error in vision tools
+- **Started**: 2026-02-05 16:40:00
+- **Completed**: 2026-02-05 16:55:00
+- **Files**:
+  - emploai/single_agent/agent.py
+  - emploai/cli/tui_constants.py
+  - emploai/single_agent/refined_agent.py
+  - emploai/single_agent/chat.py
+- **Status**: Completed
+- **Notes**: Replaced 'gemini-2.0-flash-exp' with 'gemini-2.0-flash' to fix model expiration issues in vision/screenshot tools.
+
+## [DONE] Task: Unify Auto Mode and remove Gemini delegation
+- **Started**: 2026-02-05 16:10:00
+- **Completed**: 2026-02-05 16:20:00
+- **Files**:
+  - emploai/cli/tui_constants.py
+  - emploai/cli/agent_tools/orchestrator.py
+  - emploai/cli/agent_tools/definitions.py
+- **Status**: Completed
+- **Notes**: Simplified Auto Mode to use a single user-selected model. Removed dual-agent/delegation prompts and deprecated the DualModelOrchestrator.
+
+## [DONE] Task: Scan and understand telegram_agent implementation
+- **Started**: 2026-02-05 15:35:00
+- **Completed**: 2026-02-05 15:55:00
+- **Files**:
+  - emploai/telegram_bot/telegram_agent.py
+  - emploai/telegram_bot/telegram_unified_agent.py
+  - emploai/telegram_bot/telegram_session_state.py
+  - emploai/telegram_bot/telegram_message_handlers.py
+  - emploai/telegram_bot/telegram_chat_flow.py
+  - emploai/telegram_bot/telegram_task_flow.py
+- **Status**: Completed
+- **Notes**: Initial scan of the refactored telegram bot structure.
+
+
+
+- **Started**: 2026-02-04 22:50:00
+- **Completed**: 2026-02-04 23:05:00
+- **Files**:
+  - emploai/telegram_bot/telegram_agent.py (lines ~190-246)
+  - emploai/telegram_bot/telegram_app.py (new)
+- **Status**: Completed
+- **Notes**: Moved post_init + bot setup/handler registration into a dedicated app runner module and wired imports.
+
+## [DONE] Task: Extract Telegram callback handler
+- **Started**: 2026-02-04 21:45:00
+- **Completed**: 2026-02-04 21:55:00
+- **Files**:
+  - emploai/telegram_bot/telegram_agent.py (lines ~690-915)
+  - emploai/telegram_bot/telegram_callback_handlers.py (new)
+- **Status**: Completed
+- **Notes**: Extracted button_callback into a builder module.
+
+## [DONE] Task: Consolidate Telegram refactor modules
+- **Started**: 2026-02-04 22:00:00
+- **Completed**: 2026-02-04 22:10:00
+- **Files**:
+  - emploai/telegram_bot/telegram_agent.py
+  - emploai/telegram_bot/telegram_commands_utility.py
+  - emploai/telegram_bot/telegram_commands_tasks.py
+  - emploai/telegram_bot/telegram_task_commands.py
+  - emploai/telegram_bot/telegram_agent_new_methods.py
+  - emploai/telegram_bot/telegram_agent.py.backup
+  - emploai/WORK_IN_PROGRESS.md
+- **Status**: Completed
+- **Notes**: Removed duplicate task command module/imports and cleaned legacy backup/refactor artifacts.
+
+## [DONE] Task: Extract Telegram utility commands
+- **Started**: 2026-02-04 21:25:00
+- **Completed**: 2026-02-04 21:40:00
+- **Files**:
+  - emploai/telegram_bot/telegram_agent.py (lines ~656-1120)
+  - emploai/telegram_bot/telegram_commands_utility.py (new)
+- **Status**: Completed
+- **Notes**: Extracted monitor/analytics/history/files/forget/setup/memory/memory_update/config/heartbeat commands into a builder module.
+
+## [DONE] Task: Fix agent interruption logic
+- **Started**: 2026-02-04 22:50:00
+- **Completed**: 2026-02-04 23:15:00
+- **Files**:
+  - emploai/cli/agent_tools/loop.py
+  - emploai/cli/agent_tools/executor.py
+  - emploai/shared/unified_agent.py
+  - emploai/telegram_bot/telegram_session_state.py
+  - emploai/telegram_bot/telegram_message_handlers.py
+  - emploai/telegram_bot/telegram_chat_flow.py
+  - emploai/telegram_bot/telegram_task_flow.py
+  - emploai/telegram_bot/telegram_callback_handlers.py
+- **Status**: Completed
+- **Notes**: Implemented 4 critical fixes: API Protocol Suicide, Subprocess Deafness, Incomplete Thought Hallucination, and Thread-Safety Race Conditions.
+
+## [DONE] Task: Extract Telegram session state
+- **Started**: 2026-02-04 21:35:00
+- **Completed**: 2026-02-04 21:45:00
+- **Files**:
+  - emploai/telegram_bot/telegram_agent.py (lines ~132-477)
+  - emploai/telegram_bot/telegram_session_state.py (new)
+- **Status**: Completed
+- **Notes**: Moved TelegramSession + user_sessions/get_session/track_command_usage into a dedicated module.
+
+## [DONE] Task: Extract Telegram skills commands
+- **Started**: 2026-02-04 21:05:00
+- **Completed**: 2026-02-04 21:15:00
+- **Files**:
+  - emploai/telegram_bot/telegram_agent.py (lines ~542-655)
+  - emploai/telegram_bot/telegram_commands_skills.py (new)
+- **Status**: Completed
+- **Notes**: Extracted skills_command, skill_command, and skilltest_command into a builder module.
+
+## [DONE] Task: Extract Telegram session/status commands
+- **Started**: 2026-02-04 20:45:00
+- **Completed**: 2026-02-04 20:55:00
+- **Files**:
+  - emploai/telegram_bot/telegram_agent.py (lines ~525-628)
+  - emploai/telegram_bot/telegram_commands_session.py (new)
+- **Status**: Completed
+- **Notes**: Extracted session/reset/context/security command handlers into a builder module.
+
+## [DONE] Task: Extract Telegram chat flow
+- **Started**: 2026-02-04 20:40:00
+- **Completed**: 2026-02-04 20:55:00
+- **Files**:
+  - emploai/telegram_bot/telegram_agent.py (lines ~1130-1530)
+  - emploai/telegram_bot/telegram_chat_flow.py (new)
+- **Status**: Completed
+- **Notes**: Moved run_chat_flow into a dedicated module and wired import usage.
+
+## [DONE] Task: Extract Telegram task commands
+- **Started**: 2026-02-04 20:15:00
+- **Completed**: 2026-02-04 20:30:00
+- **Files**:
+  - emploai/telegram_bot/telegram_agent.py (lines ~501-860)
+  - emploai/telegram_bot/telegram_commands_tasks.py (new)
+- **Status**: Completed
+- **Notes**: Extracted task/scheduling commands into a builder module.
+  - Functions: task_command, continue_command, pause_command, stop_command,
+    spawn_command, subagents_command, schedule_command, jobs_command,
+    job_remove_command, headless_command.
+
+## [DONE] Task: Extract Telegram message handlers
+- **Started**: 2026-02-04 20:25:00
+- **Completed**: 2026-02-04 20:35:00
+- **Files**:
+  - emploai/telegram_bot/telegram_agent.py (lines ~1757-1912)
+  - emploai/telegram_bot/telegram_message_handlers.py (new)
+- **Status**: Completed
+- **Notes**: Moved handle_message, handle_message_edit, handle_file_upload, handle_document, handle_photo into a builder module.
+
+## [DONE] Task: Cleanup emploai directory
+- **Started**: 2026-02-04 19:37:00
+- **Completed**: 2026-02-04 19:50:00
+- **Files**:
+  - emploai/ (directory structure)
+  - emploai/telegram_bot/
+  - emploai/tests/brain_testing/
+- **Status**: Completed
+- **Notes**: 
+  - Moved documentation to `docs/guides/` and `agent_data/`.
+  - Moved `brain_testing` to `tests/brain_testing/`.
+  - Moved all `telegram_*` files to `telegram_bot/`.
+  - Moved core bot logic (`security.py`, `hooks.py`, etc.) to `bot_core/`.
+  - Created `bot_core/__init__.py` and updated all imports.
+  - Updated `shared/context_loader.py` to support `agent_data/` folder for a cleaner workspace.
+  - Moved tests and skills assets to their respective folders.
+  - Root directory now contains only essential config and entry points.
+
+## [ACTIVE] Task: Run decision making tests in emploai
+- **Started**: 2026-02-04 19:55:00
+- **Files**:
+  - emploai/test_decision_making_gpt5.py
+- **Status**: In Progress
+- **Notes**: Running the test script to verify model decision making between CLI and Automation tools.
+
+## [DONE] Task: Extract Telegram task control commands
+- **Started**: 2026-02-04 20:05:00
+- **Completed**: 2026-02-04 20:15:00
+- **Files**:
+  - emploai/telegram_bot/telegram_agent.py (lines ~501-629)
+  - emploai/telegram_bot/telegram_task_commands.py (new)
+- **Status**: Completed
+- **Notes**: Moved task/continue/pause/stop command handlers into a dedicated module and wired via a builder.
+
+## [DONE] Task: Extract Telegram task flow runner
+- **Started**: 2026-02-04 19:45:00
+- **Completed**: 2026-02-04 19:50:00
+- **Files**:
+  - emploai/telegram_bot/telegram_agent.py
+  - emploai/telegram_bot/telegram_task_flow.py (new)
+- **Status**: Completed
+- **Notes**: Extracted `run_task_flow` (lines ~824-885) into its own module and wired import.
+
+## [DONE] Task: Extract core Telegram command handlers
+- **Started**: 2026-02-04 19:35:00
+- **Completed**: 2026-02-04 19:45:00
+- **Files**:
+  - emploai/telegram_bot/telegram_agent.py (lines ~742-1071)
+  - emploai/telegram_bot/telegram_commands_core.py (new)
+- **Status**: Completed
+- **Notes**: Moved start/help/mode/variant/model/models/settings/workspace command handlers into a dedicated module and wired via a builder.
+
+## [DONE] Task: Extract Telegram safe messaging helpers
+- **Started**: 2026-02-04 19:25:00
+- **Completed**: 2026-02-04 19:30:00
+- **Files**:
+  - emploai/telegram_bot/telegram_agent.py (lines ~9-70, ~671-739)
+  - emploai/telegram_bot/telegram_messaging.py (new)
+- **Status**: Completed
+- **Notes**: Split safe_reply/safe_edit_message/safe_edit/safe_send into a dedicated module and wire imports.
+
+## [DONE] Task: Refactor Telegram unified agent tools
+- **Started**: 2026-02-04 18:20:00
+- **Completed**: 2026-02-04 18:30:00
+- **Files**:
+  - emploai/telegram_bot/telegram_agent.py
+  - emploai/telegram_bot/telegram_unified_agent.py (new)
+- **Status**: Completed
+- **Notes**: Extract lines ~450-647 from `telegram_agent.py` into a dedicated module.
+  - Functions: create_unified_agent_for_task, _execute_read_file, _execute_write_file,
+    _execute_edit_file, _execute_list_files, _execute_command, _execute_web_search,
+    _execute_fetch_url, _execute_browser_navigate, _execute_browser_click,
+    _execute_browser_type, _execute_browser_screenshot, _execute_search_memory,
+    _execute_update_memory.
+
+## [DONE] Task: Create comprehensive tool test suite with GPT-5.2
+- **Started**: 2026-02-04 17:45:00
+- **Completed**: 2026-02-04 18:15:00
+- **Files**:
+  - emploai/test_tools_gpt5.py
+  - emploai/telegram_bot/telegram_agent.py
+- **Status**: Completed
+- **Notes**: 
+  - Created `emploai/test_tools_gpt5.py` which validates CLI and Automation tools.
+  - Verified `read_file`, `write_file`, `list_dir`, `run_command`, etc.
+  - Verified `describe_screen`, `open_browser`, `browser_click` (mock/call verification).
+  - Updated `telegram_agent.py` "Auto" mode to dynamically use the selected model (e.g. `gpt-5.2`) instead of hardcoded Claude.
+  - Confirmed `gpt-5.2` successfully calls Generic/Automation tools in the unified loop.
+
+## [DONE] Task: Refactor Telegram Agent to use OpenAI Tool Loop Only
+- **Started**: 2026-02-04 17:35:00
+- **Completed**: 2026-02-04 17:40:00
+- **Files**:
+  - emploai/telegram_agent.py
+  - emploai/cli/agent_tools/loop.py
+- **Status**: Completed
+- **Notes**: 
+  - Removed Anthropic and Response API loops from `cli/agent_tools/loop.py`.
+  - Consolidated on OpenAI-compatible streaming loop for all providers.
+  - Fixed issue where tool outputs weren't being added to context (Write File tool now works).
+  - Improved interruption handling by checking during streaming.
+  - Set default model to `gpt-5.2` in `telegram_agent.py`.
+
+## [ABANDONED] Task: Close telegram_agent UX gaps vs moltbot
+- **Started**: 2026-02-04T01:18:23+02:00
+- **Files**:
+  - emploai/telegram_agent.py
+  - emploai/skills/__init__.py
+  - emploai/hooks.py
+  - emploai/ui_helpers.py
+  - emploai/file_processor.py
+  - emploai/analytics.py
+  - emploai/skills/skill-creator/SKILL.md
+  - emploai/skills/file-ops/SKILL.md
+  - emploai/skills/web-search/SKILL.md
+  - emploai/WORK_IN_PROGRESS.md
+- **Status**: In Progress
+- **Notes**: Add skill trigger feedback, auto-reply/monitoring mode, file/media handling, inline action UI, thinking visualization, analytics, session visualization, command UX, conversation edit/delete handling, wizard UI, and skill testing mode.
+
+## [DONE] Task: Integrate Moltbot Clone into Telegram Agent
+- **Started**: 2026-02-04
+- **Completed**: 2026-02-04
+- **Files**: 
+  - emploai/single_agent/browser_tool.py (new)
+  - emploai/single_agent/cron_scheduler.py (new)
+  - emploai/single_agent/spawn_tool.py (new)
+  - emploai/single_agent/refined_agent.py (new)
+  - emploai/telegram_agent.py (updated)
+- **Status**: Completed
+- **Notes**: Fully integrated Moltbot clone features into Telegram agent per implementation_plan.md:
+  - Created 4 new modules with full Moltbot architecture:
+    * browser_tool.py: Selenium wrapper with ARIA snapshots, headless/headed mode via HEADLESS env var
+    * cron_scheduler.py: Recurring task scheduler with jobs.json persistence
+    * spawn_tool.py: Parallel sub-agent spawning ("Parallel Researcher" flow)
+    * refined_agent.py: Main agent with safe execution (sanitized errors), context compression, all tools
+  - Updated telegram_agent.py with full Moltbot integration:
+    * RefinedAgent replaces SingleAgent for /task command (with fallback)
+    * Added /spawn command for parallel sub-agents with background execution
+    * Added /subagents command to list spawned agents and their status
+    * Added /schedule command for cron job creation (natural language parsing)
+    * Added /jobs and /job_remove for job management
+    * Added /headless toggle for browser mode switching
+    * Implemented announcement callbacks for spawn tool completion notifications
+    * Implemented cron scheduler callbacks for automated job execution
+    * Updated help text with all new Moltbot features
+    * Updated bot command menu with 5 new commands
+    * Maintained backward compatibility with legacy SingleAgent
+
+## [DONE] Task: Implement Moltbot Clone Features
+- **Started**: 2026-02-04
+- **Completed**: 2026-02-04
+- **Files**: 
+  - emploai/single_agent/browser_tool.py (new)
+  - emploai/single_agent/cron_scheduler.py (new)
+  - emploai/single_agent/spawn_tool.py (new)
+  - emploai/single_agent/refined_agent.py (new)
+- **Status**: Completed
+- **Notes**: Implemented Moltbot clone features per implementation_plan.md:
+  - Browser tool with ARIA snapshots (headless/headed mode via HEADLESS env var)
+  - Cron scheduler for recurring tasks with jobs.json persistence
+  - Sub-agent spawning capability for parallel research
+  - RefinedAgent with safe execution (sanitized errors), context compression, and all new tools integrated
+
+## [DONE] Task: Fix Auto Mode tool split and test click tools
+- **Started**: 2026-02-02 23:26
+- **Completed**: 2026-02-02 23:38
+- **Files**: tests/verify_click_tools.py, cli/agent_tools/orchestrator.py, cli/tui_constants.py
+- **Status**: Completed
+- **Notes**: 
+  - Created click verification tests.
+  - Fixed orchestrator tool split: CLI model only sees CLI tools + delegate_automation.
+  - Automation model (Gemini) only sees browser/desktop/vision tools.
+  - Added delegate_automation meta-tool for proper handoff.
+  - Added auto-return to CLI namespace after automation completes.
+  - Updated UNIFIED_AGENT_PROMPT to explain Brain/Hands dual-agent architecture.
+  - Added AUTOMATION_AGENT_PROMPT for Gemini (Hands) with tool awareness rules.
+  - Orchestrator now uses namespace-specific system prompts.
+
+## [DONE] Task: Update OCR truncation and data in telegram agent
+- **Started**: 2026-02-02 20:00
+- **Completed**: 2026-02-02 20:05
+- **Files**: single_agent/agent.py, telegram_agent.py
+- **Status**: Completed
+- **Notes**: Increased truncation limits 10x (2k elements, 30k chars). Added `unfiltered_text`. Updated log previews.
+
 ## [DONE] Task: Fix LogArea mouse handler crash
 - **Started**: 2026-01-29 00:35
 - **Completed**: 2026-01-29 00:35

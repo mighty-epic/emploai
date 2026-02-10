@@ -181,7 +181,13 @@ class ChatProcessor:
                     # We need the OpenAI-style tool definitions (AGENT_TOOLS in agent.py)
                     from single_agent.agent import AGENT_TOOLS
                     extra_tools = AGENT_TOOLS
-                    custom_prompt = UNIFIED_AGENT_PROMPT
+                    
+                    # Build custom prompt with skills index
+                    skills_index = ""
+                    if hasattr(self, "skill_registry") and self.skill_registry:
+                        skills_index = f"\n\n{self.skill_registry.get_skills_index()}"
+                    
+                    custom_prompt = UNIFIED_AGENT_PROMPT + skills_index
 
             # Call the unified tool loop
             result = run_tool_loop(

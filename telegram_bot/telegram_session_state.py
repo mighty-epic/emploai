@@ -1,0 +1,457 @@
+"""Telegram session state and helpers."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import time
+import datetime
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from telegram.constants import ParseMode
+from telegram.ext import Application
+
+from cli.config_manager import get_config_manager
+from cli.session_manager import SessionManager
+from cli.agent_tools.executor import ToolExecutor
+from cli.tui_constants import MODEL_CONFIGS, MODEL_VARIANTS
+from single_agent.agent import SingleAgent
+from single_agent.refined_agent import RefinedAgent, create_refined_agent
+from single_agent.cron_scheduler import get_scheduler
+from single_agent.spawn_tool import get_spawn_tool
+
+from bot_core.analytics import get_analytics_tracker, AnalyticsTracker
+from bot_core.file_processor import get_file_processor, FileProcessor
+from bot_core.hooks import get_hook_manager, HookManager
+from skills import get_skill_registry, SkillRegistry
+
+from shared import (
+    ContextLoader, get_context_loader,
+    HeartbeatManager,
+    LiveConfig, get_live_config,
+    MemoryManager, get_memory_manager,
+    SessionContext, get_session_registry,
+    EnhancedSkillsManager, enhance_skill_registry,
+    UnifiedAgent,
+)
+
+from openai import OpenAI
+from anthropic import Anthropic
+try:
+    import google.generativeai as genai
+    HAS_GEMINI = True
+except ImportError:
+    HAS_GEMINI = False
+
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TelegramSession:
+    """Holds per-user state for the Telegram bot."""
+    user_id: int
+    current_model: str = "gpt-5.2"
+    current_variant: str = "standard"
+    agent_mode: str = "manual"  # Changed from auto - allow model switching
+    max_turns: int = 100
+    chat_history: List[Dict] = field(default_factory=list)
+
+    # Agents (Legacy SingleAgent for backwards compatibility)
+    single_agent: Optional[SingleAgent] = None
+    tool_executor: Optional[ToolExecutor] = None
+
+    # Moltbot Clone - RefinedAgent with all new features
+    refined_agent: Optional[RefinedAgent] = None
+    spawn_tool: Optional[Any] = None
+    cron_scheduler: Optional[Any] = None
+
+    # Managers
+    session_manager: Optional[SessionManager] = None
+    config_manager: Optional[Any] = None
+    skill_registry: Optional[SkillRegistry] = None
+    hook_manager: Optional[HookManager] = None
+    file_processor: Optional[FileProcessor] = None
+    analytics_tracker: Optional[AnalyticsTracker] = None
+
+    # NEW: Moltbot-style managers
+    memory_manager: Optional[MemoryManager] = None
+    context_loader: Optional[ContextLoader] = None
+    heartbeat_manager: Optional[HeartbeatManager] = None
+    session_context: Optional[SessionContext] = None
+    live_config: Optional[LiveConfig] = None
+    enhanced_skills: Optional[EnhancedSkillsManager] = None
+
+    # NEW: Unified agent (replaces fragmented agents)
+    unified_agent: Optional[UnifiedAgent] = None
+
+    # LLM Clients
+    openai_client: Optional[OpenAI] = None
+    anthropic_client: Optional[Anthropic] = None
+    xai_client: Optional[OpenAI] = None
+    deepseek_client: Optional[OpenAI] = None
+    openrouter_client: Optional[OpenAI] = None
+
+    # Telegram context
+    _app: Optional[Application] = None
+    _loop: Optional[asyncio.AbstractEventLoop] = None
+
+    # CLI Agent interruption
+    is_processing: bool = False
+    should_interrupt: bool = False
+    interrupt_message: Optional[str] = None  # The message that caused the interruption
+    current_task_id: int = 0  # Unique ID for current task, to detect abandoned tasks
+
+    # Auto-reply / monitoring
+    auto_reply_enabled: bool = True
+    auto_reply_notice_sent: bool = False
+    show_skill_notifications: bool = True
+
+    # File handling
+    pending_files: List[Dict[str, Any]] = field(default_factory=list)
+
+    # Conversation tracking
+    last_user_message: Optional[str] = None
+    last_task_text: Optional[str] = None
+    message_id_map: Dict[int, int] = field(default_factory=dict)
+    active_skills: List[str] = field(default_factory=list)
+
+    # Wizard state
+    wizard_state: Dict[str, Any] = field(default_factory=dict)
+
+    # Thread safety
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    workspace: Path = field(default_factory=lambda: Path.cwd())
+
+    def __post_init__(self):
+        # Isolation: Ensure each user has their own dedicated data and workspace directory
+        user_data_path = Path.home() / ".agentshell" / f"user_{self.user_id}"
+        user_data_path.mkdir(parents=True, exist_ok=True)
+        
+        # If workspace is still default (cwd), move it to user-specific storage
+        if self.workspace == Path.cwd():
+            self.workspace = user_data_path / "workspace"
+            self.workspace.mkdir(parents=True, exist_ok=True)
+
+        # Initialize session context
+        session_registry = get_session_registry()
+        self.session_context = session_registry.get_or_create_main_session(self.user_id)
+
+        # Initialize memory manager with user-isolated workspace
+        self.memory_manager = get_memory_manager(self.workspace)
+
+        # Initialize context loader
+        self.context_loader = get_context_loader(self.workspace)
+        self.context_loader.initialize_workspace()  # Create default files
+
+        # Initialize live config
+        self.live_config = get_live_config(self.workspace / "config.json")
+        self.live_config.import_from_env()  # Load from env vars
+
+        # Initialize existing managers - isolation by user_id
+        user_base_path = Path.home() / ".agentshell" / f"user_{self.user_id}"
+        self.session_manager = SessionManager(base_path=user_base_path)
+        
+        # Always create a new session on bot/session initialization as requested.
+        # This ensures a fresh start whenever the agent is "loaded".
+        # Old sessions can still be loaded via /session if needed.
+        self.session = self.session_manager.create_session(
+            workspace=self.workspace,
+            name=f"Session {datetime.datetime.now().strftime('%H:%M')}"
+        )
+        self.session_manager.set_current_session(self.session.id)
+        self.load_session_by_id(self.session.id)
+        
+        self.config_manager = get_config_manager()
+        # Initialize skills and hooks systems
+        self.skill_registry = get_skill_registry()
+        self.hook_manager = get_hook_manager()
+        self.file_processor = get_file_processor()
+        self.analytics_tracker = get_analytics_tracker()
+
+        # Enhance skills
+        self.enhanced_skills = enhance_skill_registry(self.skill_registry)
+
+        self._init_clients()
+
+        def path_confirm_callback(msg: str) -> bool:
+            """Allow all path/command adjustments silently without user friction."""
+            return True
+
+        self.tool_executor = ToolExecutor(
+            self.workspace,
+            confirm_callback=path_confirm_callback,
+            check_interruption=lambda: self.should_interrupt,
+            get_interrupt_message=lambda: self.interrupt_message,
+            clear_interrupt=self._clear_interrupt,
+            skill_registry=self.skill_registry,
+            active_skills=self.active_skills
+        )
+
+    def _clear_interrupt(self):
+        """Reset interrupt flags after the message has been processed."""
+        self.should_interrupt = False
+        self.interrupt_message = None
+
+    def _init_clients(self):
+        """Initialize LLM clients from config/env."""
+        openai_key = self.config_manager.get_api_key("openai") or os.getenv("OPENAI_API_KEY")
+        anthropic_key = self.config_manager.get_api_key("anthropic") or os.getenv("ANTHROPIC_API_KEY")
+        xai_key = self.config_manager.get_api_key("xai") or os.getenv("XAI_API_KEY")
+        deepseek_key = self.config_manager.get_api_key("deepseek") or os.getenv("DEEPSEEK_API_KEY")
+        openrouter_key = self.config_manager.get_api_key("openrouter") or os.getenv("OPENROUTER_API_KEY")
+        google_key = self.config_manager.get_api_key("google") or os.getenv("GOOGLE_API_KEY")
+
+        self.openai_client = OpenAI(api_key=openai_key) if openai_key else None
+        self.anthropic_client = Anthropic(api_key=anthropic_key) if anthropic_key else None
+        self.xai_client = OpenAI(api_key=xai_key, base_url="https://api.x.ai/v1") if xai_key else None
+        self.deepseek_client = OpenAI(api_key=deepseek_key, base_url="https://api.deepseek.com") if deepseek_key else None
+        self.openrouter_client = OpenAI(api_key=openrouter_key, base_url="https://openrouter.ai/api/v1") if openrouter_key else None
+        
+        if HAS_GEMINI and google_key:
+            genai.configure(api_key=google_key)
+            self.google_client = genai
+        else:
+            self.google_client = None
+
+    def get_available_variants(self) -> List[str]:
+        """Get available variants for current model."""
+        variant_info = MODEL_VARIANTS.get(self.current_model, {"variants": ["standard"]})
+        return variant_info.get("variants", ["standard"])
+
+    def get_client_for_model(self):
+        """Get the appropriate LLM client for the current model."""
+        config = MODEL_CONFIGS.get(self.current_model, {})
+        provider = config.get("provider", "anthropic")
+
+        if provider == "openai":
+            return self.openai_client, provider
+        if provider == "anthropic":
+            return self.anthropic_client, provider
+        if provider == "xai":
+            return self.xai_client, provider
+        if provider == "deepseek":
+            return self.deepseek_client, provider
+        if provider == "openrouter":
+            return self.openrouter_client, provider
+        if provider == "google":
+            return self.google_client, provider
+        return self.anthropic_client, "anthropic"
+
+    def save_session(self):
+        """Save current TelegramSession state to the SessionManager."""
+        if not self.session_manager:
+            return
+
+        # Get the current session object from manager or create/use current
+        current_id = self.session_manager.get_current_session_id()
+        session_obj = None
+        
+        if current_id:
+            try:
+                session_obj = self.session_manager.load_session(current_id)
+            except ValueError:
+                pass
+        
+        if not session_obj:
+            session_obj = self.session_manager.create_session(
+                model=self.current_model,
+                variant=self.current_variant,
+                agent_mode=self.agent_mode,
+                workspace=self.workspace
+            )
+
+        # Update session with current runtime state
+        session_obj.chat_history = self.chat_history
+        session_obj.model = self.current_model
+        session_obj.variant = self.current_variant
+        session_obj.agent_mode = self.agent_mode
+        session_obj.active_skills = self.active_skills
+
+        # Save to disk
+        self.session_manager.save_session(session_obj)
+
+    def load_session_by_id(self, session_id: str):
+        """Load session state from disk into this TelegramSession."""
+        if not self.session_manager:
+            return
+
+        session_obj = self.session_manager.load_session(session_id)
+
+        # Sync to runtime state
+        self.chat_history = session_obj.chat_history
+        self.current_model = session_obj.model
+        self.current_variant = session_obj.variant
+        self.agent_mode = session_obj.agent_mode
+        self.active_skills = session_obj.active_skills
+
+        # Clear specific agent histories to avoid context leaks
+        if self.single_agent:
+            self.single_agent.messages = []
+        if self.refined_agent:
+            self.refined_agent.messages = []
+        if self.unified_agent:
+            self.unified_agent.conversation_history = []
+
+    def _summarize_history(self, history: List[Dict], max_messages: int = 10) -> str:
+        """Simple history summarizer for context sharing."""
+        if not history:
+            return ""
+
+        subset = history[-max_messages:]
+        lines = []
+        for msg in subset:
+            role = msg.get("role", "user").capitalize()
+            content = msg.get("content", "")
+            if len(content) > 150:
+                content = content[:150] + "..."
+            lines.append(f"{role}: {content}")
+
+        return "\n".join(lines)
+
+    def init_single_agent(self, app: Application, loop: asyncio.AbstractEventLoop):
+        """Initialize SingleAgent with Telegram logger bridge."""
+        self._app = app
+        self._loop = loop
+
+        def logger_func(text: str):
+            print(f"[AGENT] {text}")
+            if self._app and self._loop:
+                asyncio.run_coroutine_threadsafe(
+                    self._send_log(text), self._loop
+                )
+
+        self.single_agent = SingleAgent(logger=logger_func)
+        if self.tool_executor:
+            self.tool_executor.single_agent = self.single_agent
+
+        self._init_refined_agent(app, loop, logger_func)
+
+    def _init_refined_agent(self, app: Application, loop: asyncio.AbstractEventLoop, logger_func):
+        """Initialize RefinedAgent with spawn tool and cron scheduler."""
+
+        def announcement_callback(text: str):
+            """Send announcement to user via Telegram."""
+            if self._app and self.user_id:
+                try:
+                    announcement_text = text[:4000] if len(text) > 4000 else text
+                    asyncio.run_coroutine_threadsafe(
+                        self._app.bot.send_message(
+                            chat_id=self.user_id,
+                            text=announcement_text,
+                            parse_mode=ParseMode.MARKDOWN,
+                        ),
+                        loop,
+                    )
+                except Exception as exc:
+                    print(f"[ANNOUNCE ERROR] {exc}")
+
+        def spawn_callback(job_id: str, prompt: str):
+            """Callback for cron scheduler to spawn agents."""
+            print(f"[CRON] Spawning agent for job {job_id}: {prompt[:50]}...")
+            if self.refined_agent and self.refined_agent.spawn_tool:
+                asyncio.run_coroutine_threadsafe(
+                    self.refined_agent.spawn_tool.spawn(
+                        prompt=prompt,
+                        headless=True,
+                        max_turns=50,
+                        announce_on_complete=True,
+                    ),
+                    loop,
+                )
+
+        self.cron_scheduler = get_scheduler(
+            job_store="jobs.json",
+            spawn_callback=spawn_callback,
+            announcement_callback=announcement_callback,
+        )
+
+        self.spawn_tool = get_spawn_tool(
+            agent_factory=lambda headless=True: create_refined_agent(
+                headless=headless,
+                logger=logger_func,
+            ),
+            announcement_callback=announcement_callback,
+        )
+
+        self.refined_agent = RefinedAgent(
+            model="claude-sonnet-4-5-20250929",
+            headless=True,
+            logger=logger_func,
+            spawn_tool=self.spawn_tool,
+            cron_scheduler=self.cron_scheduler,
+        )
+
+    async def _send_log(self, message: str):
+        """Send agent log to Telegram and print detailed log to console."""
+        if "[TOOL]" in message:
+            logger.info(f"🔨 {message.strip()}")
+        elif "[RESULT]" in message:
+            clean_result = message.replace("[RESULT]", "").strip()
+            if len(clean_result) > 500:
+                logger.info(f"✅ RESULT: {clean_result[:500]}... (truncated)")
+            else:
+                logger.info(f"✅ RESULT: {clean_result}")
+        elif "[ERROR]" in message:
+            logger.error(f"❌ {message.strip()}")
+        elif "Turn" in message:
+            logger.info(f"🔄 {message.strip()}")
+        elif "[COMPLETE]" in message:
+            logger.info(f"🏁 {message.strip()}")
+        elif "[STOPPED]" in message:
+            logger.warning(f"🛑 {message.strip()}")
+        elif "[PAUSED]" in message:
+            logger.warning(f"⏸️ {message.strip()}")
+        else:
+            logger.info(f"🤖 {message.strip()}")
+
+        if not self._app:
+            return
+
+        if "Turn" in message:
+            text = f"🔄 {message.strip()}"
+        elif "[TOOL]" in message:
+            text = f"🛠️ `{message.strip()}`"
+        elif "[RESULT]" in message:
+            clean = message.replace("[RESULT]", "").strip()
+            if len(clean) > 2000:
+                clean = clean[:2000] + "..."
+            text = f"✅ `{clean}`"
+        elif "[ERROR]" in message:
+            text = f"❌ {message}"
+        elif "[COMPLETE]" in message:
+            text = f"🏁 {message.replace('[COMPLETE]', '').strip()}"
+        else:
+            text = message
+
+        try:
+            await self._app.bot.send_message(
+                chat_id=self.user_id,
+                text=text,
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        except Exception:
+            try:
+                await self._app.bot.send_message(chat_id=self.user_id, text=text)
+            except Exception:
+                pass
+
+
+user_sessions: Dict[int, TelegramSession] = {}
+
+
+def get_session(user_id: int) -> TelegramSession:
+    """Get or create session for a user."""
+    if user_id not in user_sessions:
+        user_sessions[user_id] = TelegramSession(user_id=user_id)
+    return user_sessions[user_id]
+
+
+def track_command_usage(session: TelegramSession, command: str) -> None:
+    """Track command usage for analytics."""
+    if session.analytics_tracker:
+        session.analytics_tracker.track_command(session.user_id, command)
