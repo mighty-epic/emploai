@@ -26,6 +26,7 @@ from single_agent.spawn_tool import get_spawn_tool
 from bot_core.analytics import get_analytics_tracker, AnalyticsTracker
 from bot_core.file_processor import get_file_processor, FileProcessor
 from bot_core.hooks import get_hook_manager, HookManager
+from bot_core.system_info import get_system_info
 from skills import get_skill_registry, SkillRegistry
 
 from shared import (
@@ -99,6 +100,9 @@ class TelegramSession:
     _app: Optional[Application] = None
     _loop: Optional[asyncio.AbstractEventLoop] = None
 
+    # Environment
+    system_info: str = field(default_factory=get_system_info)
+
     # CLI Agent interruption
     is_processing: bool = False
     should_interrupt: bool = False
@@ -109,6 +113,9 @@ class TelegramSession:
     auto_reply_enabled: bool = True
     auto_reply_notice_sent: bool = False
     show_skill_notifications: bool = True
+
+    # Verbose tool logging to Telegram
+    verbose_mode: bool = False
 
     # File handling
     pending_files: List[Dict[str, Any]] = field(default_factory=list)
@@ -127,14 +134,17 @@ class TelegramSession:
 
     workspace: Path = field(default_factory=lambda: Path.cwd())
 
+    # Session auto-rename: tracks which message-count thresholds have fired
+    _session_rename_checkpoints: set = field(default_factory=set)
+
     def __post_init__(self):
         # Isolation: Ensure each user has their own dedicated data and workspace directory
         user_data_path = Path.home() / ".agentshell" / f"user_{self.user_id}"
         user_data_path.mkdir(parents=True, exist_ok=True)
         
-        # If workspace is still default (cwd), move it to user-specific storage
+        # If workspace is still default (cwd), move it to user-specific storage in Documents
         if self.workspace == Path.cwd():
-            self.workspace = user_data_path / "workspace"
+            self.workspace = Path.home() / "Documents" / "EmploAI" / f"user_{self.user_id}"
             self.workspace.mkdir(parents=True, exist_ok=True)
 
         # Initialize session context
@@ -312,6 +322,88 @@ class TelegramSession:
             lines.append(f"{role}: {content}")
 
         return "\n".join(lines)
+
+    def auto_rename_session(self):
+        """Generate a short session name from conversation history using the cheapest LLM.
+        Fires at message counts 3 and 20, then never again for this session."""
+        # Count user+assistant messages (skip system, tool, etc.)
+        msg_count = sum(
+            1 for m in self.chat_history
+            if m.get("role") in ("user", "assistant")
+        )
+
+        # Determine which checkpoint we're at
+        checkpoint = None
+        if msg_count >= 3 and 3 not in self._session_rename_checkpoints:
+            checkpoint = 3
+        elif msg_count >= 20 and 20 not in self._session_rename_checkpoints:
+            checkpoint = 20
+
+        if checkpoint is None:
+            return
+
+        self._session_rename_checkpoints.add(checkpoint)
+
+        # Build a compact conversation snippet for the summarizer
+        snippet_msgs = self.chat_history[-min(msg_count, 10):]
+        snippet_lines = []
+        for m in snippet_msgs:
+            role = m.get("role", "user")
+            content = str(m.get("content", ""))
+            if len(content) > 200:
+                content = content[:200] + "..."
+            snippet_lines.append(f"{role}: {content}")
+        snippet = "\n".join(snippet_lines)
+
+        prompt_messages = [
+            {"role": "system", "content": (
+                "Generate a very short session title (3-6 words max) that summarizes "
+                "what this conversation is about. Return ONLY the title, nothing else. "
+                "No quotes, no punctuation, no explanation."
+            )},
+            {"role": "user", "content": snippet},
+        ]
+
+        # Pick the cheapest available client
+        new_name = None
+        try:
+            if self.openai_client:
+                resp = self.openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=prompt_messages,
+                    max_tokens=20,
+                )
+                new_name = resp.choices[0].message.content.strip()
+            elif self.anthropic_client:
+                resp = self.anthropic_client.messages.create(
+                    model="claude-haiku-4-20250514",
+                    max_tokens=20,
+                    system=prompt_messages[0]["content"],
+                    messages=[{"role": "user", "content": snippet}],
+                )
+                new_name = resp.content[0].text.strip()
+            elif self.deepseek_client:
+                resp = self.deepseek_client.chat.completions.create(
+                    model="deepseek-chat",
+                    messages=prompt_messages,
+                    max_tokens=20,
+                )
+                new_name = resp.choices[0].message.content.strip()
+        except Exception as exc:
+            logger.warning(f"[AUTO-RENAME] Failed to generate session name: {exc}")
+            return
+
+        if not new_name or len(new_name) > 60:
+            return
+
+        # Apply the new name
+        try:
+            current_id = self.session_manager.get_current_session_id()
+            if current_id:
+                self.session_manager.rename_session(current_id, new_name)
+                logger.info(f"[AUTO-RENAME] Session renamed to: {new_name}")
+        except Exception as exc:
+            logger.warning(f"[AUTO-RENAME] Failed to rename session: {exc}")
 
     def init_single_agent(self, app: Application, loop: asyncio.AbstractEventLoop):
         """Initialize SingleAgent with Telegram logger bridge."""

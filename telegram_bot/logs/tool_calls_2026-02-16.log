@@ -1,0 +1,6370 @@
+14:21:46 | CALL | describe_screen | {}
+14:21:46 | RESULT | describe_screen | ✅ SUCCESS (279ms)
+{
+  "image_captured": true,
+  "image_base64": "[BASE64 DATA - 515472 chars]",
+  "description": "Screenshot captured successfully. Looking at the screen now.",
+  "question": "What is on the screen?"
+}
+14:21:46 | --------------------------------------------------------------------------------
+14:21:46 | CALL | observe_desktop | {}
+14:21:46 | RESULT | observe_desktop | ✅ SUCCESS (385ms)
+{
+  "windows": [
+    {
+      "title": "Taskbar",
+      "is_active": false
+    },
+    {
+      "title": "powerful-project-collection - Antigravity - chat.py",
+      "is_active": true
+    },
+    {
+      "title": "Tradio Terminal - Google Chrome",
+      "is_active": false
+    },
+    {
+      "title": "Update and restart ChatGPT now?",
+      "is_active": false
+    },
+    {
+      "title": "Chrome Remote Desktop - Remote Access - Chrome Remote Desktop",
+      "is_active": false
+    },
+    {
+      "title": "WhatsApp",
+      "is_active": false
+    },
+    {
+      "title": "Program Manager",
+      "is_active": false
+    }
+  ]
+}
+14:21:46 | --------------------------------------------------------------------------------
+14:22:15 | CALL | focus_window | {
+  "title": "Chrome"
+}
+14:22:15 | RESULT | focus_window | ✅ SUCCESS (74ms)
+{
+  "success": true,
+  "focused": "Tradio Terminal - Google Chrome",
+  "total_matches": 2
+}
+14:22:15 | --------------------------------------------------------------------------------
+14:22:17 | CALL | describe_screen | {}
+14:22:17 | RESULT | describe_screen | ✅ SUCCESS (195ms)
+{
+  "image_captured": true,
+  "image_base64": "[BASE64 DATA - 329356 chars]",
+  "description": "Screenshot captured successfully. Looking at the screen now.",
+  "question": "What is on the screen?"
+}
+14:22:17 | --------------------------------------------------------------------------------
+14:23:15 | CALL | focus_window | {
+  "title": "Visual Studio Code"
+}
+14:23:15 | RESULT | focus_window | ❌ ERROR (56ms)
+{
+  "error": "No window found matching 'Visual Studio Code'"
+}
+14:23:15 | --------------------------------------------------------------------------------
+14:23:16 | CALL | observe_desktop | {}
+14:23:16 | RESULT | observe_desktop | ✅ SUCCESS (252ms)
+{
+  "windows": [
+    {
+      "title": "Taskbar",
+      "is_active": false
+    },
+    {
+      "title": "Tradio Terminal - Google Chrome",
+      "is_active": true
+    },
+    {
+      "title": "powerful-project-collection - Antigravity - chat.py",
+      "is_active": false
+    },
+    {
+      "title": "Update and restart ChatGPT now?",
+      "is_active": false
+    },
+    {
+      "title": "Chrome Remote Desktop - Remote Access - Chrome Remote Desktop",
+      "is_active": false
+    },
+    {
+      "title": "WhatsApp",
+      "is_active": false
+    },
+    {
+      "title": "Program Manager",
+      "is_active": false
+    }
+  ]
+}
+14:23:16 | --------------------------------------------------------------------------------
+14:23:18 | CALL | focus_window | {
+  "title": "powerful-project-collection - Antigravity - chat.py"
+}
+14:23:18 | RESULT | focus_window | ✅ SUCCESS (86ms)
+{
+  "success": true,
+  "focused": "powerful-project-collection - Antigravity - chat.py",
+  "total_matches": 1
+}
+14:23:18 | --------------------------------------------------------------------------------
+14:23:19 | CALL | describe_screen | {
+  "question": "What are the 2 terminals showing? What's the financial advisor doing?"
+}
+14:23:19 | RESULT | describe_screen | ✅ SUCCESS (162ms)
+{
+  "image_captured": true,
+  "image_base64": "[BASE64 DATA - 470964 chars]",
+  "description": "Screenshot captured successfully. Looking at the screen now.",
+  "question": "What are the 2 terminals showing? What's the financial advisor doing?"
+}
+14:23:19 | --------------------------------------------------------------------------------
+14:25:45 | CALL | list_dir | {
+  "path": "."
+}
+14:25:45 | RESULT | list_dir | ✅ SUCCESS (1ms)
+{
+  "items": [
+    {
+      "name": "agent_data",
+      "type": "directory",
+      "size": null
+    },
+    {
+      "name": "memory",
+      "type": "directory",
+      "size": null
+    },
+    {
+      "name": "MEMORY.md",
+      "type": "file",
+      "size": 283
+    }
+  ]
+}
+14:25:45 | --------------------------------------------------------------------------------
+14:25:46 | CALL | find_files | {
+  "pattern": "tradio"
+}
+14:25:46 | RESULT | find_files | ✅ SUCCESS (1ms)
+{
+  "files": []
+}
+14:25:46 | --------------------------------------------------------------------------------
+14:25:48 | CALL | run_command | {
+  "command": "find ~ -maxdepth 4 -type d -name \"*tradio*\" 2>/dev/null"
+}
+14:25:48 | RESULT | run_command | ✅ SUCCESS (111ms)
+{
+  "stdout": "",
+  "stderr": "The system cannot find the path specified.\n",
+  "exit_code": 1
+}
+14:25:48 | --------------------------------------------------------------------------------
+14:25:49 | CALL | run_command | {
+  "command": "ls -la"
+}
+14:25:49 | RESULT | run_command | ✅ SUCCESS (109ms)
+{
+  "stdout": "",
+  "stderr": "'ls' is not recognized as an internal or external command,\noperable program or batch file.\n",
+  "exit_code": 1
+}
+14:25:49 | --------------------------------------------------------------------------------
+14:25:50 | CALL | run_command | {
+  "command": "dir"
+}
+14:25:50 | RESULT | run_command | ✅ SUCCESS (111ms)
+{
+  "stdout": " Volume in drive C has no label.\n Volume Serial Number is 2893-33BC\n\n Directory of C:\\Users\\Magsihim_AI\\.agentshell\\user_8562474049\\workspace\n\n02/06/2026  04:58 PM    <DIR>          .\n02/06/2026  04:58 PM    <DIR>          ..\n02/06/2026  04:58 PM    <DIR>          agent_data\n02/16/2026  02:21 PM    <DIR>          memory\n02/06/2026  04:58 PM               283 MEMORY.md\n               1 File(s)            283 bytes\n               4 Dir(s)  13,176,172,544 bytes free\n",
+  "stderr": "",
+  "exit_code": 0
+}
+14:25:50 | --------------------------------------------------------------------------------
+14:25:52 | CALL | run_command | {
+  "command": "dir /s /b tradio 2>nul | findstr /i tradio"
+}
+14:25:52 | RESULT | run_command | ✅ SUCCESS (110ms)
+{
+  "stdout": "",
+  "stderr": "",
+  "exit_code": 1
+}
+14:25:52 | --------------------------------------------------------------------------------
+14:25:54 | CALL | focus_window | {
+  "title": "Chrome"
+}
+14:25:54 | RESULT | focus_window | ✅ SUCCESS (64ms)
+{
+  "success": true,
+  "focused": "Tradio Terminal - Google Chrome",
+  "total_matches": 2
+}
+14:25:54 | --------------------------------------------------------------------------------
+14:25:56 | CALL | describe_screen | {
+  "question": "What's on the screen right now? Can I see the financial advisor dashboard?"
+}
+14:25:56 | RESULT | describe_screen | ✅ SUCCESS (316ms)
+{
+  "image_captured": true,
+  "image_base64": "[BASE64 DATA - 320504 chars]",
+  "description": "Screenshot captured successfully. Looking at the screen now.",
+  "question": "What's on the screen right now? Can I see the financial advisor dashboard?"
+}
+14:25:56 | --------------------------------------------------------------------------------
+14:25:59 | CALL | ocr_screen | {}
+14:26:02 | RESULT | ocr_screen | ✅ SUCCESS (2888ms)
+{
+  "elements": [
+    {
+      "text": "De",
+      "x": 741,
+      "y": 20,
+      "bounds": {
+        "left": 722,
+        "top": 16,
+        "width": 39,
+        "height": 9
+      },
+      "confidence": 67
+    },
+    {
+      "text": "x",
+      "x": 759,
+      "y": 20,
+      "bounds": {
+        "left": 753,
+        "top": 6,
+        "width": 12,
+        "height": 28
+      },
+      "confidence": 74
+    },
+    {
+      "text": "@",
+      "x": 794,
+      "y": 20,
+      "bounds": {
+        "left": 787,
+        "top": 12,
+        "width": 14,
+        "height": 16
+      },
+      "confidence": 88
+    },
+    {
+      "text": "x",
+      "x": 821,
+      "y": 20,
+      "bounds": {
+        "left": 815,
+        "top": 16,
+        "width": 12,
+        "height": 9
+      },
+      "confidence": 54
+    },
+    {
+      "text": "x",
+      "x": 847,
+      "y": 20,
+      "bounds": {
+        "left": 843,
+        "top": 16,
+        "width": 8,
+        "height": 8
+      },
+      "confidence": 95
+    },
+    {
+      "text": "&",
+      "x": 882,
+      "y": 20,
+      "bounds": {
+        "left": 877,
+        "top": 14,
+        "width": 10,
+        "height": 12
+      },
+      "confidence": 36
+    },
+    {
+      "text": "Tok",
+      "x": 909,
+      "y": 20,
+      "bounds": {
+        "left": 901,
+        "top": 16,
+        "width": 17,
+        "height": 9
+      },
+      "confidence": 93
+    },
+    {
+      "text": "x",
+      "x": 937,
+      "y": 20,
+      "bounds": {
+        "left": 933,
+        "top": 16,
+        "width": 8,
+        "height": 8
+      },
+      "confidence": 80
+    },
+    {
+      "text": "<S",
+      "x": 974,
+      "y": 19,
+      "bounds": {
+        "left": 967,
+        "top": 13,
+        "width": 15,
+        "height": 13
+      },
+      "confidence": 63
+    },
+    {
+      "text": "Credits",
+      "x": 1009,
+      "y": 20,
+      "bounds": {
+        "left": 991,
+        "top": 16,
+        "width": 36,
+        "height": 9
+      },
+      "confidence": 85
+    },
+    {
+      "text": "%",
+      "x": 1064,
+      "y": 20,
+      "bounds": {
+        "left": 1059,
+        "top": 14,
+        "width": 11,
+        "height": 12
+      },
+      "confidence": 73
+    },
+    {
+      "text": "Usage",
+      "x": 1097,
+      "y": 22,
+      "bounds": {
+        "left": 1081,
+        "top": 16,
+        "width": 32,
+        "height": 12
+      },
+      "confidence": 79
+    },
+    {
+      "text": "|",
+      "x": 1225,
+      "y": 20,
+      "bounds": {
+        "left": 1221,
+        "top": 4,
+        "width": 9,
+        "height": 32
+      },
+      "confidence": 85
+    },
+    {
+      "text": "4",
+      "x": 1242,
+      "y": 20,
+      "bounds": {
+        "left": 1239,
+        "top": 17,
+        "width": 6,
+        "height": 6
+      },
+      "confidence": 68
+    },
+    {
+      "text": "The",
+      "x": 1276,
+      "y": 22,
+      "bounds": {
+        "left": 1258,
+        "top": 16,
+        "width": 36,
+        "height": 12
+      },
+      "confidence": 38
+    },
+    {
+      "text": "Ag",
+      "x": 1289,
+      "y": 20,
+      "bounds": {
+        "left": 1282,
+        "top": 4,
+        "width": 14,
+        "height": 32
+      },
+      "confidence": 38
+    },
+    {
+      "text": "ui",
+      "x": 1450,
+      "y": 21,
+      "bounds": {
+        "left": 1446,
+        "top": 19,
+        "width": 8,
+        "height": 5
+      },
+      "confidence": 49
+    },
+    {
+      "text": "Tra:",
+      "x": 1474,
+      "y": 20,
+      "bounds": {
+        "left": 1466,
+        "top": 16,
+        "width": 17,
+        "height": 9
+      },
+      "confidence": 35
+    },
+    {
+      "text": "x",
+      "x": 1501,
+      "y": 20,
+      "bounds": {
+        "left": 1497,
+        "top": 16,
+        "width": 8,
+        "height": 8
+      },
+      "confidence": 73
+    },
+    {
+      "text": "O",
+      "x": 1539,
+      "y": 20,
+      "bounds": {
+        "left": 1531,
+        "top": 12,
+        "width": 16,
+        "height": 16
+      },
+      "confidence": 77
+    },
+    {
+      "text": "4",
+      "x": 1628,
+      "y": 20,
+      "bounds": {
+        "left": 1623,
+        "top": 15,
+        "width": 10,
+        "height": 10
+      },
+      "confidence": 78
+    },
+    {
+      "text": "|",
+      "x": 1699,
+      "y": 20,
+      "bounds": {
+        "left": 1696,
+        "top": 6,
+        "width": 7,
+        "height": 28
+      },
+      "confidence": 77
+    },
+    {
+      "text": "+",
+      "x": 1715,
+      "y": 20,
+      "bounds": {
+        "left": 1710,
+        "top": 15,
+        "width": 10,
+        "height": 10
+      },
+      "confidence": 77
+    },
+    {
+      "text": "-",
+      "x": 1805,
+      "y": 19,
+      "bounds": {
+        "left": 1800,
+        "top": 19,
+        "width": 10,
+        "height": 1
+      },
+      "confidence": 88
+    },
+    {
+      "text": "a",
+      "x": 1851,
+      "y": 20,
+      "bounds": {
+        "left": 1846,
+        "top": 15,
+        "width": 10,
+        "height": 10
+      },
+      "confidence": 65
+    },
+    {
+      "text": "x",
+      "x": 1897,
+      "y": 20,
+      "bounds": {
+        "left": 1892,
+        "top": 15,
+        "width": 10,
+        "height": 10
+      },
+      "confidence": 92
+    },
+    {
+      "text": "\u20ac",
+      "x": 22,
+      "y": 63,
+      "bounds": {
+        "left": 16,
+        "top": 57,
+        "width": 12,
+        "height": 12
+      },
+      "confidence": 92
+    },
+    {
+      "text": ">",
+      "x": 57,
+      "y": 63,
+      "bounds": {
+        "left": 52,
+        "top": 58,
+        "width": 11,
+        "height": 10
+      },
+      "confidence": 85
+    },
+    {
+      "text": "G",
+      "x": 94,
+      "y": 63,
+      "bounds": {
+        "left": 88,
+        "top": 57,
+        "width": 12,
+        "height": 12
+      },
+      "confidence": 85
+    },
+    {
+      "text": "AM",
+      "x": 130,
+      "y": 63,
+      "bounds": {
+        "left": 124,
+        "top": 56,
+        "width": 12,
+        "height": 14
+      },
+      "confidence": 57
+    },
+    {
+      "text": "@",
+      "x": 167,
+      "y": 64,
+      "bounds": {
+        "left": 161,
+        "top": 50,
+        "width": 12,
+        "height": 28
+      },
+      "confidence": 57
+    },
+    {
+      "text": "localhost:8050/chat",
+      "x": 253,
+      "y": 64,
+      "bounds": {
+        "left": 193,
+        "top": 58,
+        "width": 120,
+        "height": 12
+      },
+      "confidence": 32
+    },
+    {
+      "text": "tops",
+      "x": 49,
+      "y": 98,
+      "bounds": {
+        "left": 34,
+        "top": 76,
+        "width": 30,
+        "height": 45
+      },
+      "confidence": 48
+    },
+    {
+      "text": "m0",
+      "x": 208,
+      "y": 98,
+      "bounds": {
+        "left": 195,
+        "top": 76,
+        "width": 27,
+        "height": 45
+      },
+      "confidence": 58
+    },
+    {
+      "text": "se",
+      "x": 345,
+      "y": 98,
+      "bounds": {
+        "left": 334,
+        "top": 76,
+        "width": 23,
+        "height": 45
+      },
+      "confidence": 35
+    },
+    {
+      "text": "tis",
+      "x": 375,
+      "y": 98,
+      "bounds": {
+        "left": 360,
+        "top": 76,
+        "width": 31,
+        "height": 45
+      },
+      "confidence": 46
+    },
+    {
+      "text": "omat",
+      "x": 417,
+      "y": 101,
+      "bounds": {
+        "left": 402,
+        "top": 95,
+        "width": 30,
+        "height": 12
+      },
+      "confidence": 43
+    },
+    {
+      "text": "(mop)",
+      "x": 482,
+      "y": 98,
+      "bounds": {
+        "left": 446,
+        "top": 76,
+        "width": 72,
+        "height": 45
+      },
+      "confidence": 50
+    },
+    {
+      "text": "(Resa)",
+      "x": 549,
+      "y": 98,
+      "bounds": {
+        "left": 525,
+        "top": 76,
+        "width": 49,
+        "height": 45
+      },
+      "confidence": 46
+    },
+    {
+      "text": "(work)",
+      "x": 602,
+      "y": 98,
+      "bounds": {
+        "left": 581,
+        "top": 76,
+        "width": 42,
+        "height": 45
+      },
+      "confidence": 42
+    },
+    {
+      "text": "ENTER",
+      "x": 108,
+      "y": 576,
+      "bounds": {
+        "left": 90,
+        "top": 572,
+        "width": 37,
+        "height": 9
+      },
+      "confidence": 62
+    },
+    {
+      "text": "COMMAND",
+      "x": 163,
+      "y": 576,
+      "bounds": {
+        "left": 137,
+        "top": 572,
+        "width": 53,
+        "height": 9
+      },
+      "confidence": 94
+    },
+    {
+      "text": ">",
+      "x": 203,
+      "y": 577,
+      "bounds": {
+        "left": 201,
+        "top": 573,
+        "width": 5,
+        "height": 8
+      },
+      "confidence": 96
+    },
+    {
+      "text": "@",
+      "x": 72,
+      "y": 689,
+      "bounds": {
+        "left": 68,
+        "top": 684,
+        "width": 8,
+        "height": 11
+      },
+      "confidence": 78
+    },
+    {
+      "text": "SENTINEL_INTELLIGENCE",
+      "x": 187,
+      "y": 689,
+      "bounds": {
+        "left": 85,
+        "top": 685,
+        "width": 204,
+        "height": 9
+      },
+      "confidence": 90
+    },
+    {
+      "text": "PULSE",
+      "x": 270,
+      "y": 689,
+      "bounds": {
+        "left": 250,
+        "top": 675,
+        "width": 41,
+        "height": 28
+      },
+      "confidence": 89
+    },
+    {
+      "text": "@",
+      "x": 305,
+      "y": 689,
+      "bounds": {
+        "left": 302,
+        "top": 686,
+        "width": 7,
+        "height": 7
+      },
+      "confidence": 64
+    },
+    {
+      "text": "[1425]",
+      "x": 83,
+      "y": 764,
+      "bounds": {
+        "left": 70,
+        "top": 759,
+        "width": 27,
+        "height": 10
+      },
+      "confidence": 76
+    },
+    {
+      "text": "ASGN",
+      "x": 123,
+      "y": 763,
+      "bounds": {
+        "left": 108,
+        "top": 759,
+        "width": 30,
+        "height": 8
+      },
+      "confidence": 91
+    },
+    {
+      "text": "ASGN",
+      "x": 271,
+      "y": 762,
+      "bounds": {
+        "left": 260,
+        "top": 748,
+        "width": 23,
+        "height": 28
+      },
+      "confidence": 73
+    },
+    {
+      "text": "Ine",
+      "x": 294,
+      "y": 763,
+      "bounds": {
+        "left": 287,
+        "top": 760,
+        "width": 15,
+        "height": 7
+      },
+      "confidence": 81
+    },
+    {
+      "text": "(ASGN)",
+      "x": 322,
+      "y": 764,
+      "bounds": {
+        "left": 306,
+        "top": 759,
+        "width": 33,
+        "height": 10
+      },
+      "confidence": 88
+    },
+    {
+      "text": "Misses",
+      "x": 358,
+      "y": 762,
+      "bounds": {
+        "left": 343,
+        "top": 748,
+        "width": 31,
+        "height": 28
+      },
+      "confidence": 80
+    },
+    {
+      "text": "Q\u00e9",
+      "x": 382,
+      "y": 762,
+      "bounds": {
+        "left": 378,
+        "top": 748,
+        "width": 8,
+        "height": 28
+      },
+      "confidence": 40
+    },
+    {
+      "text": "Earnings",
+      "x": 411,
+      "y": 762,
+      "bounds": {
+        "left": 392,
+        "top": 748,
+        "width": 38,
+        "height": 28
+      },
+      "confidence": 79
+    },
+    {
+      "text": "Estimates",
+      "x": 457,
+      "y": 762,
+      "bounds": {
+        "left": 435,
+        "top": 748,
+        "width": 44,
+        "height": 28
+      },
+      "confidence": 83
+    },
+    {
+      "text": "\u2018SCOREZ]",
+      "x": 169,
+      "y": 796,
+      "bounds": {
+        "left": 152,
+        "top": 793,
+        "width": 34,
+        "height": 7
+      },
+      "confidence": 31
+    },
+    {
+      "text": "\u2014",
+      "x": 234,
+      "y": 796,
+      "bounds": {
+        "left": 231,
+        "top": 796,
+        "width": 7,
+        "height": 1
+      },
+      "confidence": 75
+    },
+    {
+      "text": "Why",
+      "x": 254,
+      "y": 797,
+      "bounds": {
+        "left": 246,
+        "top": 792,
+        "width": 17,
+        "height": 10
+      },
+      "confidence": 93
+    },
+    {
+      "text": "ASGN",
+      "x": 280,
+      "y": 795,
+      "bounds": {
+        "left": 269,
+        "top": 781,
+        "width": 22,
+        "height": 28
+      },
+      "confidence": 81
+    },
+    {
+      "text": "(ASGN)",
+      "x": 312,
+      "y": 797,
+      "bounds": {
+        "left": 296,
+        "top": 792,
+        "width": 33,
+        "height": 10
+      },
+      "confidence": 78
+    },
+    {
+      "text": "Stock",
+      "x": 345,
+      "y": 796,
+      "bounds": {
+        "left": 333,
+        "top": 792,
+        "width": 24,
+        "height": 8
+      },
+      "confidence": 96
+    },
+    {
+      "text": "Ie",
+      "x": 364,
+      "y": 796,
+      "bounds": {
+        "left": 361,
+        "top": 793,
+        "width": 7,
+        "height": 7
+      },
+      "confidence": 64
+    },
+    {
+      "text": "Trading",
+      "x": 387,
+      "y": 797,
+      "bounds": {
+        "left": 371,
+        "top": 792,
+        "width": 33,
+        "height": 10
+      },
+      "confidence": 82
+    },
+    {
+      "text": "Up",
+      "x": 414,
+      "y": 797,
+      "bounds": {
+        "left": 409,
+        "top": 793,
+        "width": 10,
+        "height": 9
+      },
+      "confidence": 96
+    },
+    {
+      "text": "Today",
+      "x": 435,
+      "y": 797,
+      "bounds": {
+        "left": 422,
+        "top": 792,
+        "width": 27,
+        "height": 10
+      },
+      "confidence": 95
+    },
+    {
+      "text": "\u2018SCORE",
+      "x": 163,
+      "y": 828,
+      "bounds": {
+        "left": 148,
+        "top": 814,
+        "width": 31,
+        "height": 28
+      },
+      "confidence": 54
+    },
+    {
+      "text": "OTHER",
+      "x": 241,
+      "y": 829,
+      "bounds": {
+        "left": 229,
+        "top": 826,
+        "width": 25,
+        "height": 6
+      },
+      "confidence": 69
+    },
+    {
+      "text": "Why",
+      "x": 285,
+      "y": 828,
+      "bounds": {
+        "left": 276,
+        "top": 814,
+        "width": 19,
+        "height": 28
+      },
+      "confidence": 93
+    },
+    {
+      "text": "ASGN",
+      "x": 312,
+      "y": 828,
+      "bounds": {
+        "left": 302,
+        "top": 825,
+        "width": 21,
+        "height": 7
+      },
+      "confidence": 92
+    },
+    {
+      "text": "(ASGN)",
+      "x": 411,
+      "y": 828,
+      "bounds": {
+        "left": 397,
+        "top": 814,
+        "width": 29,
+        "height": 28
+      },
+      "confidence": 92
+    },
+    {
+      "text": "Stock",
+      "x": 444,
+      "y": 828,
+      "bounds": {
+        "left": 432,
+        "top": 814,
+        "width": 24,
+        "height": 28
+      },
+      "confidence": 95
+    },
+    {
+      "text": "Is",
+      "x": 463,
+      "y": 828,
+      "bounds": {
+        "left": 460,
+        "top": 825,
+        "width": 7,
+        "height": 7
+      },
+      "confidence": 90
+    },
+    {
+      "text": "Down",
+      "x": 483,
+      "y": 828,
+      "bounds": {
+        "left": 472,
+        "top": 814,
+        "width": 22,
+        "height": 28
+      },
+      "confidence": 96
+    },
+    {
+      "text": "5.82%",
+      "x": 512,
+      "y": 828,
+      "bounds": {
+        "left": 500,
+        "top": 814,
+        "width": 25,
+        "height": 28
+      },
+      "confidence": 79
+    },
+    {
+      "text": "\u2018SCORE",
+      "x": 169,
+      "y": 861,
+      "bounds": {
+        "left": 153,
+        "top": 858,
+        "width": 33,
+        "height": 7
+      },
+      "confidence": 55
+    },
+    {
+      "text": "(aw2)]",
+      "x": 204,
+      "y": 861,
+      "bounds": {
+        "left": 191,
+        "top": 858,
+        "width": 27,
+        "height": 7
+      },
+      "confidence": 63
+    },
+    {
+      "text": "\u2014",
+      "x": 266,
+      "y": 861,
+      "bounds": {
+        "left": 263,
+        "top": 861,
+        "width": 7,
+        "height": 1
+      },
+      "confidence": 80
+    },
+    {
+      "text": "First",
+      "x": 285,
+      "y": 861,
+      "bounds": {
+        "left": 274,
+        "top": 847,
+        "width": 22,
+        "height": 28
+      },
+      "confidence": 66
+    },
+    {
+      "text": "Week",
+      "x": 312,
+      "y": 861,
+      "bounds": {
+        "left": 303,
+        "top": 847,
+        "width": 19,
+        "height": 28
+      },
+      "confidence": 73
+    },
+    {
+      "text": "of",
+      "x": 331,
+      "y": 861,
+      "bounds": {
+        "left": 327,
+        "top": 857,
+        "width": 9,
+        "height": 8
+      },
+      "confidence": 94
+    },
+    {
+      "text": "February",
+      "x": 359,
+      "y": 861,
+      "bounds": {
+        "left": 340,
+        "top": 847,
+        "width": 38,
+        "height": 28
+      },
+      "confidence": 77
+    },
+    {
+      "text": "2026",
+      "x": 391,
+      "y": 861,
+      "bounds": {
+        "left": 382,
+        "top": 847,
+        "width": 19,
+        "height": 28
+      },
+      "confidence": 96
+    },
+    {
+      "text": "Options",
+      "x": 423,
+      "y": 861,
+      "bounds": {
+        "left": 408,
+        "top": 847,
+        "width": 31,
+        "height": 28
+      },
+      "confidence": 93
+    },
+    {
+      "text": "Trading",
+      "x": 460,
+      "y": 862,
+      "bounds": {
+        "left": 445,
+        "top": 857,
+        "width": 31,
+        "height": 10
+      },
+      "confidence": 95
+    },
+    {
+      "text": "For",
+      "x": 487,
+      "y": 861,
+      "bounds": {
+        "left": 480,
+        "top": 858,
+        "width": 15,
+        "height": 7
+      },
+      "confidence": 91
+    },
+    {
+      "text": "Arrowhead",
+      "x": 522,
+      "y": 861,
+      "bounds": {
+        "left": 499,
+        "top": 847,
+        "width": 47,
+        "height": 28
+      },
+      "confidence": 38
+    },
+    {
+      "text": "(ARWR)",
+      "x": 645,
+      "y": 861,
+      "bounds": {
+        "left": 629,
+        "top": 847,
+        "width": 33,
+        "height": 28
+      },
+      "confidence": 88
+    },
+    {
+      "text": "THER",
+      "x": 243,
+      "y": 894,
+      "bounds": {
+        "left": 231,
+        "top": 891,
+        "width": 25,
+        "height": 6
+      },
+      "confidence": 43
+    },
+    {
+      "text": "\u2014",
+      "x": 266,
+      "y": 893,
+      "bounds": {
+        "left": 263,
+        "top": 893,
+        "width": 7,
+        "height": 1
+      },
+      "confidence": 89
+    },
+    {
+      "text": "Firat",
+      "x": 286,
+      "y": 893,
+      "bounds": {
+        "left": 277,
+        "top": 890,
+        "width": 19,
+        "height": 7
+      },
+      "confidence": 77
+    },
+    {
+      "text": "Waek",
+      "x": 311,
+      "y": 893,
+      "bounds": {
+        "left": 299,
+        "top": 889,
+        "width": 24,
+        "height": 8
+      },
+      "confidence": 68
+    },
+    {
+      "text": "of",
+      "x": 331,
+      "y": 893,
+      "bounds": {
+        "left": 327,
+        "top": 889,
+        "width": 9,
+        "height": 8
+      },
+      "confidence": 92
+    },
+    {
+      "text": "ARWR",
+      "x": 353,
+      "y": 892,
+      "bounds": {
+        "left": 341,
+        "top": 878,
+        "width": 24,
+        "height": 28
+      },
+      "confidence": 92
+    },
+    {
+      "text": "January",
+      "x": 387,
+      "y": 894,
+      "bounds": {
+        "left": 369,
+        "top": 890,
+        "width": 36,
+        "height": 9
+      },
+      "confidence": 78
+    },
+    {
+      "text": "2026",
+      "x": 419,
+      "y": 893,
+      "bounds": {
+        "left": 408,
+        "top": 890,
+        "width": 22,
+        "height": 7
+      },
+      "confidence": 96
+    },
+    {
+      "text": "Options",
+      "x": 451,
+      "y": 894,
+      "bounds": {
+        "left": 434,
+        "top": 890,
+        "width": 34,
+        "height": 9
+      },
+      "confidence": 93
+    },
+    {
+      "text": "Trading",
+      "x": 487,
+      "y": 892,
+      "bounds": {
+        "left": 471,
+        "top": 878,
+        "width": 33,
+        "height": 28
+      },
+      "confidence": 95
+    },
+    {
+      "text": "[1425]",
+      "x": 83,
+      "y": 1003,
+      "bounds": {
+        "left": 70,
+        "top": 998,
+        "width": 27,
+        "height": 10
+      },
+      "confidence": 87
+    },
+    {
+      "text": "APTW",
+      "x": 123,
+      "y": 1002,
+      "bounds": {
+        "left": 108,
+        "top": 998,
+        "width": 30,
+        "height": 8
+      },
+      "confidence": 55
+    },
+    {
+      "text": "ANALYSTRATING",
+      "x": 260,
+      "y": 1003,
+      "bounds": {
+        "left": 228,
+        "top": 1000,
+        "width": 65,
+        "height": 6
+      },
+      "confidence": 59
+    },
+    {
+      "text": "\u2014",
+      "x": 303,
+      "y": 1002,
+      "bounds": {
+        "left": 300,
+        "top": 1002,
+        "width": 7,
+        "height": 1
+      },
+      "confidence": 91
+    },
+    {
+      "text": "Here's",
+      "x": 327,
+      "y": 1002,
+      "bounds": {
+        "left": 314,
+        "top": 988,
+        "width": 27,
+        "height": 28
+      },
+      "confidence": 89
+    },
+    {
+      "text": "why",
+      "x": 354,
+      "y": 1002,
+      "bounds": {
+        "left": 348,
+        "top": 988,
+        "width": 12,
+        "height": 28
+      },
+      "confidence": 93
+    },
+    {
+      "text": "Aptiv",
+      "x": 377,
+      "y": 1002,
+      "bounds": {
+        "left": 367,
+        "top": 988,
+        "width": 20,
+        "height": 28
+      },
+      "confidence": 77
+    },
+    {
+      "text": "PLC",
+      "x": 399,
+      "y": 1002,
+      "bounds": {
+        "left": 392,
+        "top": 999,
+        "width": 15,
+        "height": 7
+      },
+      "confidence": 70
+    },
+    {
+      "text": "(APTV)",
+      "x": 426,
+      "y": 1002,
+      "bounds": {
+        "left": 411,
+        "top": 988,
+        "width": 31,
+        "height": 28
+      },
+      "confidence": 55
+    },
+    {
+      "text": "isa",
+      "x": 454,
+      "y": 1003,
+      "bounds": {
+        "left": 447,
+        "top": 1001,
+        "width": 14,
+        "height": 5
+      },
+      "confidence": 56
+    },
+    {
+      "text": "strong",
+      "x": 478,
+      "y": 1002,
+      "bounds": {
+        "left": 465,
+        "top": 988,
+        "width": 26,
+        "height": 28
+      },
+      "confidence": 91
+    },
+    {
+      "text": "growth",
+      "x": 511,
+      "y": 1002,
+      "bounds": {
+        "left": 497,
+        "top": 988,
+        "width": 29,
+        "height": 28
+      },
+      "confidence": 94
+    },
+    {
+      "text": "stock",
+      "x": 543,
+      "y": 1002,
+      "bounds": {
+        "left": 532,
+        "top": 988,
+        "width": 23,
+        "height": 28
+      },
+      "confidence": 93
+    },
+    {
+      "text": "Q",
+      "x": 76,
+      "y": 1056,
+      "bounds": {
+        "left": 69,
+        "top": 1049,
+        "width": 14,
+        "height": 15
+      },
+      "confidence": 86
+    },
+    {
+      "text": "Search",
+      "x": 114,
+      "y": 1056,
+      "bounds": {
+        "left": 94,
+        "top": 1051,
+        "width": 41,
+        "height": 10
+      },
+      "confidence": 95
+    },
+    {
+      "text": "New",
+      "x": 715,
+      "y": 100,
+      "bounds": {
+        "left": 703,
+        "top": 94,
+        "width": 24,
+        "height": 12
+      },
+      "confidence": 83
+    },
+    {
+      "text": "folder",
+      "x": 749,
+      "y": 101,
+      "bounds": {
+        "left": 733,
+        "top": 89,
+        "width": 33,
+        "height": 24
+      },
+      "confidence": 96
+    },
+    {
+      "text": "@er,sore",
+      "x": 677,
+      "y": 1057,
+      "bounds": {
+        "left": 553,
+        "top": 1039,
+        "width": 249,
+        "height": 36
+      },
+      "confidence": 41
+    },
+    {
+      "text": "[sysTEM",
+      "x": 1009,
+      "y": 620,
+      "bounds": {
+        "left": 987,
+        "top": 615,
+        "width": 44,
+        "height": 10
+      },
+      "confidence": 58
+    },
+    {
+      "text": "PURGE]",
+      "x": 1053,
+      "y": 620,
+      "bounds": {
+        "left": 1035,
+        "top": 615,
+        "width": 36,
+        "height": 10
+      },
+      "confidence": 95
+    },
+    {
+      "text": "Q*",
+      "x": 1436,
+      "y": 63,
+      "bounds": {
+        "left": 1413,
+        "top": 56,
+        "width": 46,
+        "height": 14
+      },
+      "confidence": 50
+    },
+    {
+      "text": "@",
+      "x": 1864,
+      "y": 64,
+      "bounds": {
+        "left": 1852,
+        "top": 49,
+        "width": 25,
+        "height": 31
+      },
+      "confidence": 74
+    },
+    {
+      "text": "WORKSPACE",
+      "x": 1463,
+      "y": 192,
+      "bounds": {
+        "left": 1406,
+        "top": 186,
+        "width": 114,
+        "height": 13
+      },
+      "confidence": 96
+    },
+    {
+      "text": "IDLE",
+      "x": 1549,
+      "y": 192,
+      "bounds": {
+        "left": 1529,
+        "top": 186,
+        "width": 40,
+        "height": 13
+      },
+      "confidence": 96
+    },
+    {
+      "text": "\u00ae",
+      "x": 1138,
+      "y": 577,
+      "bounds": {
+        "left": 1133,
+        "top": 572,
+        "width": 10,
+        "height": 10
+      },
+      "confidence": 46
+    },
+    {
+      "text": "PINNED",
+      "x": 1174,
+      "y": 577,
+      "bounds": {
+        "left": 1151,
+        "top": 573,
+        "width": 46,
+        "height": 8
+      },
+      "confidence": 96
+    },
+    {
+      "text": "INTELLIGENCE",
+      "x": 1247,
+      "y": 577,
+      "bounds": {
+        "left": 1203,
+        "top": 573,
+        "width": 89,
+        "height": 8
+      },
+      "confidence": 96
+    },
+    {
+      "text": "Bo",
+      "x": 1283,
+      "y": 619,
+      "bounds": {
+        "left": 1273,
+        "top": 615,
+        "width": 21,
+        "height": 9
+      },
+      "confidence": 33
+    },
+    {
+      "text": "2:25PM",
+      "x": 1879,
+      "y": 1048,
+      "bounds": {
+        "left": 1858,
+        "top": 1044,
+        "width": 42,
+        "height": 8
+      },
+      "confidence": 65
+    },
+    {
+      "text": "2/6/2026",
+      "x": 1873,
+      "y": 1065,
+      "bounds": {
+        "left": 1846,
+        "top": 1060,
+        "width": 55,
+        "height": 10
+      },
+      "confidence": 81
+    },
+    {
+      "text": ">",
+      "x": 1697,
+      "y": 1056,
+      "bounds": {
+        "left": 1692,
+        "top": 1053,
+        "width": 10,
+        "height": 6
+      },
+      "confidence": 96
+    },
+    {
+      "text": "enc",
+      "x": 1735,
+      "y": 1057,
+      "bounds": {
+        "left": 1724,
+        "top": 1053,
+        "width": 22,
+        "height": 8
+      },
+      "confidence": 47
+    },
+    {
+      "text": "@",
+      "x": 1771,
+      "y": 1055,
+      "bounds": {
+        "left": 1766,
+        "top": 1050,
+        "width": 10,
+        "height": 11
+      },
+      "confidence": 31
+    },
+    {
+      "text": "x",
+      "x": 1798,
+      "y": 1056,
+      "bounds": {
+        "left": 1792,
+        "top": 1050,
+        "width": 12,
+        "height": 12
+      },
+      "confidence": 67
+    },
+    {
+      "text": "i",
+      "x": 1821,
+      "y": 1054,
+      "bounds": {
+        "left": 1813,
+        "top": 1048,
+        "width": 16,
+        "height": 13
+      },
+      "confidence": 51
+    }
+  ],
+  "unfiltered_text": "De x\n\n@ x x\n\n& Tok x\n\n<S Credits\n\n% Usage\n\nWorse | 4 The Ag ui Tra: x\n\nO oaitys\n\n4 eitandy | + - a x\n\n\u20ac > G AM @ localhost:8050/chat\n\n{ tops (GEEESTESHE) m0 (WPiprovdon) se tis omat (mop) (Resa) (work) $8\n\nENTER COMMAND >\n\n@ SENTINEL_INTELLIGENCE PULSE @\n\n[1425] ASGN [SCORES] Exnwncs \u00a5 ASGN Ine (ASGN) Misses Q\u00e9 Earnings Estimates\n\n\u2018SCOREZ] oT4ER \u2014 Why ASGN (ASGN) Stock Ie Trading Up Today\n\u2018SCORE (faved) OTHER Y Why ASGN Incorporated (ASGN) Stock Is Down 5.82%\n\n\u2018SCORE (aw2)] oT\u00a5En \u2014 First Week of February 2026 Options Trading For Arrowhead Pharmaceuticals (ARWR)\n\n\u2018SCORE (aw)\n\nTHER \u2014 Firat Waek of ARWR January 2026 Options Trading\n\n[1425] APTW [SCORE (rev) ANALYSTRATING \u2014 Here's why Aptiv PLC (APTV) isa strong growth stock\n\nMmoeSonnr\n\nQ Search\n\n(\u00a9 New folder\n\n@er,sore\n\n[sysTEM PURGE]\n\nQ* aA OD FRE @\n\nWORKSPACE IDLE\n\n\u00ae PINNED INTELLIGENCE\n\nBo\n\n2:25PM\n2/6/2026\n\n>\n\nenc @ x i\n",
+  "plain_text": "De x\n\n@ x x\n\n& Tok x\n\n<S Credits\n\n% Usage\n\nWorse | 4 The Ag ui Tra: x\n\nO oaitys\n\n4 eitandy | + - a x\n\n\u20ac > G AM @ localhost:8050/chat\n\n{ tops (GEEESTESHE) m0 (WPiprovdon) se tis omat (mop) (Resa) (work) $8\n\nENTER COMMAND >\n\n@ SENTINEL_INTELLIGENCE PULSE @\n\n[1425] ASGN [SCORES] Exnwncs \u00a5 ASGN Ine (ASGN) Misses Q\u00e9 Earnings Estimates\n\n\u2018SCOREZ] oT4ER \u2014 Why ASGN (ASGN) Stock Ie Trading Up Today\n\u2018SCORE (faved) OTHER Y Why ASGN Incorporated (ASGN) Stock Is Down 5.82%\n\n\u2018SCORE (aw2)] oT\u00a5En \u2014 First Week of February 2026 Options Trading For Arrowhead Pharmaceuticals (ARWR)\n\n\u2018SCORE (aw)\n\nTHER \u2014 Firat Waek of ARWR January 2026 Options Trading\n\n[1425] APTW [SCORE (rev) ANALYSTRATING \u2014 Here's why Aptiv PLC (APTV) isa strong growth stock\n\nMmoeSonnr\n\nQ Search\n\n(\u00a9 New folder\n\n@er,sore\n\n[sysTEM PURGE]\n\nQ* aA OD FRE @\n\nWORKSPACE IDLE\n\n\u00ae PINNED INTELLIGENCE\n\nBo\n\n2:25PM\n2/6/2026\n\n>\n\nenc @ x i\n",
+  "total_elements": 133
+}
+14:26:02 | --------------------------------------------------------------------------------
+14:26:04 | CALL | click | {
+  "x": 390,
+  "y": 577
+}
+14:26:04 | RESULT | click | ✅ SUCCESS (264ms)
+{
+  "success": true,
+  "clicked": "(390, 577)"
+}
+14:26:04 | --------------------------------------------------------------------------------
+14:26:06 | CALL | type_text | {
+  "text": "What's your analysis on NVIDIA (NVDA)? Should I buy, sell, or hold?"
+}
+14:26:07 | RESULT | type_text | ✅ SUCCESS (1522ms)
+{
+  "success": true,
+  "typed": "What's your analysis on NVIDIA (NVDA)? Should I buy, sell, or hold?"
+}
+14:26:07 | --------------------------------------------------------------------------------
+14:26:09 | CALL | click | {
+  "x": "764, 576"
+}
+14:26:09 | RESULT | click | ❌ ERROR (0ms)
+{
+  "error": "Execution failed: SingleAgent._click() missing 1 required positional argument: 'y'"
+}
+14:26:09 | --------------------------------------------------------------------------------
+14:26:10 | CALL | ocr_screen | {}
+14:26:12 | RESULT | ocr_screen | ✅ SUCCESS (1826ms)
+{
+  "elements": [
+    {
+      "text": "<",
+      "x": 974,
+      "y": 19,
+      "bounds": {
+        "left": 967,
+        "top": 13,
+        "width": 15,
+        "height": 13
+      },
+      "confidence": 74
+    },
+    {
+      "text": "Credits",
+      "x": 1009,
+      "y": 20,
+      "bounds": {
+        "left": 991,
+        "top": 16,
+        "width": 36,
+        "height": 9
+      },
+      "confidence": 55
+    },
+    {
+      "text": "|",
+      "x": 1048,
+      "y": 19,
+      "bounds": {
+        "left": 1043,
+        "top": 3,
+        "width": 11,
+        "height": 32
+      },
+      "confidence": 57
+    },
+    {
+      "text": "%",
+      "x": 1064,
+      "y": 20,
+      "bounds": {
+        "left": 1059,
+        "top": 14,
+        "width": 11,
+        "height": 12
+      },
+      "confidence": 57
+    },
+    {
+      "text": "Usage)",
+      "x": 1097,
+      "y": 22,
+      "bounds": {
+        "left": 1081,
+        "top": 16,
+        "width": 32,
+        "height": 12
+      },
+      "confidence": 41
+    },
+    {
+      "text": "Worksp",
+      "x": 1186,
+      "y": 22,
+      "bounds": {
+        "left": 1169,
+        "top": 16,
+        "width": 35,
+        "height": 12
+      },
+      "confidence": 79
+    },
+    {
+      "text": "|",
+      "x": 1225,
+      "y": 19,
+      "bounds": {
+        "left": 1221,
+        "top": 3,
+        "width": 9,
+        "height": 32
+      },
+      "confidence": 63
+    },
+    {
+      "text": "4",
+      "x": 1242,
+      "y": 20,
+      "bounds": {
+        "left": 1239,
+        "top": 17,
+        "width": 6,
+        "height": 6
+      },
+      "confidence": 57
+    },
+    {
+      "text": "The",
+      "x": 1276,
+      "y": 22,
+      "bounds": {
+        "left": 1258,
+        "top": 16,
+        "width": 36,
+        "height": 12
+      },
+      "confidence": 80
+    },
+    {
+      "text": "Ag",
+      "x": 1290,
+      "y": 19,
+      "bounds": {
+        "left": 1283,
+        "top": 3,
+        "width": 14,
+        "height": 32
+      },
+      "confidence": 80
+    },
+    {
+      "text": "ai",
+      "x": 1450,
+      "y": 21,
+      "bounds": {
+        "left": 1446,
+        "top": 19,
+        "width": 8,
+        "height": 5
+      },
+      "confidence": 69
+    },
+    {
+      "text": "Up",
+      "x": 1475,
+      "y": 22,
+      "bounds": {
+        "left": 1467,
+        "top": 16,
+        "width": 16,
+        "height": 12
+      },
+      "confidence": 75
+    },
+    {
+      "text": "\u00a9",
+      "x": 1536,
+      "y": 20,
+      "bounds": {
+        "left": 1532,
+        "top": 12,
+        "width": 8,
+        "height": 16
+      },
+      "confidence": 54
+    },
+    {
+      "text": "4",
+      "x": 1628,
+      "y": 20,
+      "bounds": {
+        "left": 1623,
+        "top": 15,
+        "width": 10,
+        "height": 10
+      },
+      "confidence": 74
+    },
+    {
+      "text": "eitandy",
+      "x": 1661,
+      "y": 20,
+      "bounds": {
+        "left": 1644,
+        "top": 16,
+        "width": 35,
+        "height": 9
+      },
+      "confidence": 77
+    },
+    {
+      "text": "|",
+      "x": 1700,
+      "y": 20,
+      "bounds": {
+        "left": 1697,
+        "top": 8,
+        "width": 6,
+        "height": 24
+      },
+      "confidence": 92
+    },
+    {
+      "text": "+",
+      "x": 1715,
+      "y": 20,
+      "bounds": {
+        "left": 1710,
+        "top": 15,
+        "width": 10,
+        "height": 10
+      },
+      "confidence": 92
+    },
+    {
+      "text": "-",
+      "x": 1805,
+      "y": 19,
+      "bounds": {
+        "left": 1800,
+        "top": 19,
+        "width": 10,
+        "height": 1
+      },
+      "confidence": 44
+    },
+    {
+      "text": "a",
+      "x": 1851,
+      "y": 20,
+      "bounds": {
+        "left": 1846,
+        "top": 15,
+        "width": 10,
+        "height": 10
+      },
+      "confidence": 95
+    },
+    {
+      "text": "x",
+      "x": 1897,
+      "y": 20,
+      "bounds": {
+        "left": 1892,
+        "top": 15,
+        "width": 10,
+        "height": 10
+      },
+      "confidence": 92
+    },
+    {
+      "text": "\u20ac",
+      "x": 22,
+      "y": 63,
+      "bounds": {
+        "left": 16,
+        "top": 57,
+        "width": 12,
+        "height": 12
+      },
+      "confidence": 92
+    },
+    {
+      "text": ">",
+      "x": 57,
+      "y": 63,
+      "bounds": {
+        "left": 52,
+        "top": 58,
+        "width": 11,
+        "height": 10
+      },
+      "confidence": 85
+    },
+    {
+      "text": "G",
+      "x": 94,
+      "y": 63,
+      "bounds": {
+        "left": 88,
+        "top": 57,
+        "width": 12,
+        "height": 12
+      },
+      "confidence": 85
+    },
+    {
+      "text": "AM",
+      "x": 130,
+      "y": 63,
+      "bounds": {
+        "left": 124,
+        "top": 56,
+        "width": 12,
+        "height": 14
+      },
+      "confidence": 57
+    },
+    {
+      "text": "@",
+      "x": 167,
+      "y": 64,
+      "bounds": {
+        "left": 161,
+        "top": 50,
+        "width": 12,
+        "height": 28
+      },
+      "confidence": 57
+    },
+    {
+      "text": "localhost:8050/chat",
+      "x": 253,
+      "y": 64,
+      "bounds": {
+        "left": 193,
+        "top": 58,
+        "width": 120,
+        "height": 12
+      },
+      "confidence": 32
+    },
+    {
+      "text": "tops",
+      "x": 49,
+      "y": 98,
+      "bounds": {
+        "left": 34,
+        "top": 76,
+        "width": 30,
+        "height": 45
+      },
+      "confidence": 48
+    },
+    {
+      "text": "m0",
+      "x": 208,
+      "y": 98,
+      "bounds": {
+        "left": 195,
+        "top": 76,
+        "width": 27,
+        "height": 45
+      },
+      "confidence": 58
+    },
+    {
+      "text": "se",
+      "x": 345,
+      "y": 98,
+      "bounds": {
+        "left": 334,
+        "top": 76,
+        "width": 23,
+        "height": 45
+      },
+      "confidence": 35
+    },
+    {
+      "text": "tis",
+      "x": 375,
+      "y": 98,
+      "bounds": {
+        "left": 360,
+        "top": 76,
+        "width": 31,
+        "height": 45
+      },
+      "confidence": 46
+    },
+    {
+      "text": "omat",
+      "x": 417,
+      "y": 101,
+      "bounds": {
+        "left": 402,
+        "top": 95,
+        "width": 30,
+        "height": 12
+      },
+      "confidence": 43
+    },
+    {
+      "text": "(mop)",
+      "x": 482,
+      "y": 98,
+      "bounds": {
+        "left": 446,
+        "top": 76,
+        "width": 72,
+        "height": 45
+      },
+      "confidence": 50
+    },
+    {
+      "text": "(Resa)",
+      "x": 549,
+      "y": 98,
+      "bounds": {
+        "left": 525,
+        "top": 76,
+        "width": 49,
+        "height": 45
+      },
+      "confidence": 46
+    },
+    {
+      "text": "(work)",
+      "x": 602,
+      "y": 98,
+      "bounds": {
+        "left": 581,
+        "top": 76,
+        "width": 42,
+        "height": 45
+      },
+      "confidence": 42
+    },
+    {
+      "text": "What's",
+      "x": 111,
+      "y": 576,
+      "bounds": {
+        "left": 88,
+        "top": 571,
+        "width": 47,
+        "height": 10
+      },
+      "confidence": 49
+    },
+    {
+      "text": "your",
+      "x": 159,
+      "y": 579,
+      "bounds": {
+        "left": 144,
+        "top": 574,
+        "width": 31,
+        "height": 10
+      },
+      "confidence": 95
+    },
+    {
+      "text": "analysis",
+      "x": 215,
+      "y": 577,
+      "bounds": {
+        "left": 184,
+        "top": 571,
+        "width": 62,
+        "height": 13
+      },
+      "confidence": 93
+    },
+    {
+      "text": "on",
+      "x": 262,
+      "y": 577,
+      "bounds": {
+        "left": 255,
+        "top": 574,
+        "width": 15,
+        "height": 7
+      },
+      "confidence": 93
+    },
+    {
+      "text": "NVIDIA",
+      "x": 302,
+      "y": 576,
+      "bounds": {
+        "left": 279,
+        "top": 572,
+        "width": 47,
+        "height": 9
+      },
+      "confidence": 93
+    },
+    {
+      "text": "(NVDA)?",
+      "x": 361,
+      "y": 577,
+      "bounds": {
+        "left": 335,
+        "top": 571,
+        "width": 53,
+        "height": 13
+      },
+      "confidence": 92
+    },
+    {
+      "text": "Should",
+      "x": 420,
+      "y": 576,
+      "bounds": {
+        "left": 397,
+        "top": 571,
+        "width": 46,
+        "height": 10
+      },
+      "confidence": 95
+    },
+    {
+      "text": "I",
+      "x": 456,
+      "y": 576,
+      "bounds": {
+        "left": 453,
+        "top": 572,
+        "width": 6,
+        "height": 9
+      },
+      "confidence": 93
+    },
+    {
+      "text": "buy,",
+      "x": 483,
+      "y": 577,
+      "bounds": {
+        "left": 469,
+        "top": 571,
+        "width": 28,
+        "height": 13
+      },
+      "confidence": 96
+    },
+    {
+      "text": "sell,",
+      "x": 527,
+      "y": 577,
+      "bounds": {
+        "left": 509,
+        "top": 571,
+        "width": 36,
+        "height": 12
+      },
+      "confidence": 92
+    },
+    {
+      "text": "or",
+      "x": 563,
+      "y": 577,
+      "bounds": {
+        "left": 556,
+        "top": 574,
+        "width": 15,
+        "height": 7
+      },
+      "confidence": 88
+    },
+    {
+      "text": "hold?|",
+      "x": 599,
+      "y": 576,
+      "bounds": {
+        "left": 580,
+        "top": 568,
+        "width": 39,
+        "height": 17
+      },
+      "confidence": 61
+    },
+    {
+      "text": "@",
+      "x": 72,
+      "y": 689,
+      "bounds": {
+        "left": 68,
+        "top": 684,
+        "width": 8,
+        "height": 11
+      },
+      "confidence": 78
+    },
+    {
+      "text": "SENTINEL_INTELLIGENCE",
+      "x": 187,
+      "y": 689,
+      "bounds": {
+        "left": 85,
+        "top": 685,
+        "width": 204,
+        "height": 9
+      },
+      "confidence": 90
+    },
+    {
+      "text": "PULSE",
+      "x": 270,
+      "y": 689,
+      "bounds": {
+        "left": 250,
+        "top": 675,
+        "width": 41,
+        "height": 28
+      },
+      "confidence": 89
+    },
+    {
+      "text": "@",
+      "x": 305,
+      "y": 689,
+      "bounds": {
+        "left": 302,
+        "top": 686,
+        "width": 7,
+        "height": 7
+      },
+      "confidence": 64
+    },
+    {
+      "text": "[1426]",
+      "x": 83,
+      "y": 764,
+      "bounds": {
+        "left": 70,
+        "top": 759,
+        "width": 27,
+        "height": 10
+      },
+      "confidence": 72
+    },
+    {
+      "text": "ans",
+      "x": 207,
+      "y": 764,
+      "bounds": {
+        "left": 199,
+        "top": 761,
+        "width": 16,
+        "height": 6
+      },
+      "confidence": 78
+    },
+    {
+      "text": "RATING",
+      "x": 250,
+      "y": 764,
+      "bounds": {
+        "left": 237,
+        "top": 761,
+        "width": 27,
+        "height": 6
+      },
+      "confidence": 83
+    },
+    {
+      "text": "\u2014",
+      "x": 274,
+      "y": 763,
+      "bounds": {
+        "left": 271,
+        "top": 763,
+        "width": 7,
+        "height": 1
+      },
+      "confidence": 90
+    },
+    {
+      "text": "Assessing",
+      "x": 308,
+      "y": 764,
+      "bounds": {
+        "left": 285,
+        "top": 760,
+        "width": 46,
+        "height": 9
+      },
+      "confidence": 92
+    },
+    {
+      "text": "ASML",
+      "x": 347,
+      "y": 763,
+      "bounds": {
+        "left": 335,
+        "top": 760,
+        "width": 24,
+        "height": 7
+      },
+      "confidence": 96
+    },
+    {
+      "text": "Holding",
+      "x": 381,
+      "y": 763,
+      "bounds": {
+        "left": 366,
+        "top": 749,
+        "width": 31,
+        "height": 28
+      },
+      "confidence": 93
+    },
+    {
+      "text": "(NasdaqGS:ASML)",
+      "x": 443,
+      "y": 764,
+      "bounds": {
+        "left": 402,
+        "top": 759,
+        "width": 83,
+        "height": 10
+      },
+      "confidence": 68
+    },
+    {
+      "text": "After",
+      "x": 500,
+      "y": 763,
+      "bounds": {
+        "left": 489,
+        "top": 759,
+        "width": 22,
+        "height": 8
+      },
+      "confidence": 95
+    },
+    {
+      "text": "Srong",
+      "x": 528,
+      "y": 764,
+      "bounds": {
+        "left": 514,
+        "top": 760,
+        "width": 29,
+        "height": 9
+      },
+      "confidence": 64
+    },
+    {
+      "text": "AL-Driven",
+      "x": 566,
+      "y": 763,
+      "bounds": {
+        "left": 546,
+        "top": 760,
+        "width": 40,
+        "height": 7
+      },
+      "confidence": 36
+    },
+    {
+      "text": "Share",
+      "x": 602,
+      "y": 763,
+      "bounds": {
+        "left": 590,
+        "top": 759,
+        "width": 25,
+        "height": 8
+      },
+      "confidence": 96
+    },
+    {
+      "text": "Price",
+      "x": 629,
+      "y": 763,
+      "bounds": {
+        "left": 618,
+        "top": 760,
+        "width": 22,
+        "height": 7
+      },
+      "confidence": 62
+    },
+    {
+      "text": "Surge",
+      "x": 656,
+      "y": 764,
+      "bounds": {
+        "left": 644,
+        "top": 760,
+        "width": 25,
+        "height": 9
+      },
+      "confidence": 96
+    },
+    {
+      "text": "\u2018SCORE",
+      "x": 168,
+      "y": 796,
+      "bounds": {
+        "left": 152,
+        "top": 793,
+        "width": 33,
+        "height": 7
+      },
+      "confidence": 69
+    },
+    {
+      "text": "RATING",
+      "x": 280,
+      "y": 795,
+      "bounds": {
+        "left": 266,
+        "top": 781,
+        "width": 28,
+        "height": 28
+      },
+      "confidence": 65
+    },
+    {
+      "text": "\u2014",
+      "x": 304,
+      "y": 796,
+      "bounds": {
+        "left": 301,
+        "top": 796,
+        "width": 7,
+        "height": 1
+      },
+      "confidence": 85
+    },
+    {
+      "text": "Prediction:",
+      "x": 337,
+      "y": 796,
+      "bounds": {
+        "left": 315,
+        "top": 792,
+        "width": 45,
+        "height": 8
+      },
+      "confidence": 86
+    },
+    {
+      "text": "ASMLs",
+      "x": 381,
+      "y": 796,
+      "bounds": {
+        "left": 366,
+        "top": 793,
+        "width": 31,
+        "height": 7
+      },
+      "confidence": 67
+    },
+    {
+      "text": "Stock",
+      "x": 414,
+      "y": 795,
+      "bounds": {
+        "left": 402,
+        "top": 781,
+        "width": 24,
+        "height": 28
+      },
+      "confidence": 96
+    },
+    {
+      "text": "Price",
+      "x": 440,
+      "y": 795,
+      "bounds": {
+        "left": 430,
+        "top": 781,
+        "width": 21,
+        "height": 28
+      },
+      "confidence": 84
+    },
+    {
+      "text": "Will",
+      "x": 463,
+      "y": 795,
+      "bounds": {
+        "left": 456,
+        "top": 781,
+        "width": 14,
+        "height": 28
+      },
+      "confidence": 64
+    },
+    {
+      "text": "it",
+      "x": 481,
+      "y": 796,
+      "bounds": {
+        "left": 477,
+        "top": 793,
+        "width": 9,
+        "height": 7
+      },
+      "confidence": 64
+    },
+    {
+      "text": "62.000",
+      "x": 505,
+      "y": 795,
+      "bounds": {
+        "left": 493,
+        "top": 781,
+        "width": 24,
+        "height": 28
+      },
+      "confidence": 39
+    },
+    {
+      "text": "by",
+      "x": 526,
+      "y": 797,
+      "bounds": {
+        "left": 522,
+        "top": 792,
+        "width": 9,
+        "height": 10
+      },
+      "confidence": 90
+    },
+    {
+      "text": "Thi",
+      "x": 543,
+      "y": 796,
+      "bounds": {
+        "left": 535,
+        "top": 792,
+        "width": 17,
+        "height": 8
+      },
+      "confidence": 68
+    },
+    {
+      "text": "Time",
+      "x": 568,
+      "y": 796,
+      "bounds": {
+        "left": 558,
+        "top": 793,
+        "width": 21,
+        "height": 7
+      },
+      "confidence": 94
+    },
+    {
+      "text": "ASGN",
+      "x": 272,
+      "y": 828,
+      "bounds": {
+        "left": 260,
+        "top": 825,
+        "width": 24,
+        "height": 7
+      },
+      "confidence": 75
+    },
+    {
+      "text": "Inc",
+      "x": 296,
+      "y": 828,
+      "bounds": {
+        "left": 290,
+        "top": 825,
+        "width": 12,
+        "height": 7
+      },
+      "confidence": 73
+    },
+    {
+      "text": "(ASGN)",
+      "x": 322,
+      "y": 829,
+      "bounds": {
+        "left": 306,
+        "top": 824,
+        "width": 33,
+        "height": 10
+      },
+      "confidence": 79
+    },
+    {
+      "text": "Misses",
+      "x": 359,
+      "y": 828,
+      "bounds": {
+        "left": 344,
+        "top": 814,
+        "width": 30,
+        "height": 28
+      },
+      "confidence": 94
+    },
+    {
+      "text": "QA",
+      "x": 382,
+      "y": 828,
+      "bounds": {
+        "left": 378,
+        "top": 814,
+        "width": 8,
+        "height": 28
+      },
+      "confidence": 36
+    },
+    {
+      "text": "Earnings",
+      "x": 412,
+      "y": 829,
+      "bounds": {
+        "left": 393,
+        "top": 825,
+        "width": 38,
+        "height": 9
+      },
+      "confidence": 86
+    },
+    {
+      "text": "Estimates",
+      "x": 457,
+      "y": 828,
+      "bounds": {
+        "left": 435,
+        "top": 825,
+        "width": 44,
+        "height": 7
+      },
+      "confidence": 85
+    },
+    {
+      "text": "\u2014",
+      "x": 234,
+      "y": 861,
+      "bounds": {
+        "left": 231,
+        "top": 861,
+        "width": 7,
+        "height": 1
+      },
+      "confidence": 82
+    },
+    {
+      "text": "Why",
+      "x": 254,
+      "y": 862,
+      "bounds": {
+        "left": 246,
+        "top": 857,
+        "width": 17,
+        "height": 10
+      },
+      "confidence": 93
+    },
+    {
+      "text": "ASGN",
+      "x": 280,
+      "y": 861,
+      "bounds": {
+        "left": 269,
+        "top": 847,
+        "width": 22,
+        "height": 28
+      },
+      "confidence": 88
+    },
+    {
+      "text": "(ASGN)",
+      "x": 312,
+      "y": 862,
+      "bounds": {
+        "left": 296,
+        "top": 857,
+        "width": 33,
+        "height": 10
+      },
+      "confidence": 88
+    },
+    {
+      "text": "Stock",
+      "x": 345,
+      "y": 861,
+      "bounds": {
+        "left": 333,
+        "top": 857,
+        "width": 24,
+        "height": 8
+      },
+      "confidence": 88
+    },
+    {
+      "text": "Is",
+      "x": 364,
+      "y": 861,
+      "bounds": {
+        "left": 361,
+        "top": 858,
+        "width": 7,
+        "height": 7
+      },
+      "confidence": 72
+    },
+    {
+      "text": "Trading",
+      "x": 387,
+      "y": 862,
+      "bounds": {
+        "left": 371,
+        "top": 857,
+        "width": 33,
+        "height": 10
+      },
+      "confidence": 80
+    },
+    {
+      "text": "Up",
+      "x": 414,
+      "y": 862,
+      "bounds": {
+        "left": 409,
+        "top": 858,
+        "width": 10,
+        "height": 9
+      },
+      "confidence": 96
+    },
+    {
+      "text": "Today",
+      "x": 435,
+      "y": 862,
+      "bounds": {
+        "left": 422,
+        "top": 857,
+        "width": 27,
+        "height": 10
+      },
+      "confidence": 76
+    },
+    {
+      "text": "SCORE",
+      "x": 168,
+      "y": 894,
+      "bounds": {
+        "left": 152,
+        "top": 891,
+        "width": 33,
+        "height": 7
+      },
+      "confidence": 81
+    },
+    {
+      "text": "(awe).",
+      "x": 202,
+      "y": 894,
+      "bounds": {
+        "left": 189,
+        "top": 891,
+        "width": 27,
+        "height": 7
+      },
+      "confidence": 64
+    },
+    {
+      "text": "\u00a5",
+      "x": 266,
+      "y": 893,
+      "bounds": {
+        "left": 262,
+        "top": 890,
+        "width": 8,
+        "height": 7
+      },
+      "confidence": 52
+    },
+    {
+      "text": "Why",
+      "x": 285,
+      "y": 894,
+      "bounds": {
+        "left": 276,
+        "top": 889,
+        "width": 19,
+        "height": 10
+      },
+      "confidence": 93
+    },
+    {
+      "text": "ASGN",
+      "x": 311,
+      "y": 893,
+      "bounds": {
+        "left": 298,
+        "top": 890,
+        "width": 26,
+        "height": 7
+      },
+      "confidence": 91
+    },
+    {
+      "text": "(ASGN)",
+      "x": 410,
+      "y": 893,
+      "bounds": {
+        "left": 395,
+        "top": 879,
+        "width": 31,
+        "height": 28
+      },
+      "confidence": 91
+    },
+    {
+      "text": "Stock",
+      "x": 443,
+      "y": 893,
+      "bounds": {
+        "left": 431,
+        "top": 889,
+        "width": 25,
+        "height": 8
+      },
+      "confidence": 95
+    },
+    {
+      "text": "Is",
+      "x": 463,
+      "y": 893,
+      "bounds": {
+        "left": 460,
+        "top": 890,
+        "width": 7,
+        "height": 7
+      },
+      "confidence": 90
+    },
+    {
+      "text": "Down",
+      "x": 482,
+      "y": 893,
+      "bounds": {
+        "left": 470,
+        "top": 890,
+        "width": 25,
+        "height": 7
+      },
+      "confidence": 96
+    },
+    {
+      "text": "5.82%",
+      "x": 512,
+      "y": 893,
+      "bounds": {
+        "left": 499,
+        "top": 890,
+        "width": 26,
+        "height": 7
+      },
+      "confidence": 80
+    },
+    {
+      "text": "\u2018SCORE",
+      "x": 169,
+      "y": 927,
+      "bounds": {
+        "left": 153,
+        "top": 924,
+        "width": 33,
+        "height": 7
+      },
+      "confidence": 60
+    },
+    {
+      "text": "OTHER",
+      "x": 243,
+      "y": 927,
+      "bounds": {
+        "left": 231,
+        "top": 924,
+        "width": 25,
+        "height": 6
+      },
+      "confidence": 80
+    },
+    {
+      "text": "\u2014",
+      "x": 266,
+      "y": 926,
+      "bounds": {
+        "left": 263,
+        "top": 926,
+        "width": 7,
+        "height": 1
+      },
+      "confidence": 83
+    },
+    {
+      "text": "First",
+      "x": 285,
+      "y": 926,
+      "bounds": {
+        "left": 274,
+        "top": 912,
+        "width": 22,
+        "height": 28
+      },
+      "confidence": 85
+    },
+    {
+      "text": "Week",
+      "x": 312,
+      "y": 926,
+      "bounds": {
+        "left": 303,
+        "top": 912,
+        "width": 19,
+        "height": 28
+      },
+      "confidence": 69
+    },
+    {
+      "text": "of",
+      "x": 331,
+      "y": 926,
+      "bounds": {
+        "left": 326,
+        "top": 912,
+        "width": 10,
+        "height": 28
+      },
+      "confidence": 89
+    },
+    {
+      "text": "February",
+      "x": 359,
+      "y": 926,
+      "bounds": {
+        "left": 340,
+        "top": 912,
+        "width": 38,
+        "height": 28
+      },
+      "confidence": 81
+    },
+    {
+      "text": "2026",
+      "x": 391,
+      "y": 926,
+      "bounds": {
+        "left": 382,
+        "top": 912,
+        "width": 19,
+        "height": 28
+      },
+      "confidence": 96
+    },
+    {
+      "text": "Options",
+      "x": 423,
+      "y": 926,
+      "bounds": {
+        "left": 408,
+        "top": 912,
+        "width": 31,
+        "height": 28
+      },
+      "confidence": 95
+    },
+    {
+      "text": "Trading",
+      "x": 460,
+      "y": 927,
+      "bounds": {
+        "left": 445,
+        "top": 922,
+        "width": 31,
+        "height": 10
+      },
+      "confidence": 94
+    },
+    {
+      "text": "For",
+      "x": 487,
+      "y": 926,
+      "bounds": {
+        "left": 480,
+        "top": 923,
+        "width": 15,
+        "height": 7
+      },
+      "confidence": 79
+    },
+    {
+      "text": "Arrowhead",
+      "x": 522,
+      "y": 926,
+      "bounds": {
+        "left": 499,
+        "top": 912,
+        "width": 47,
+        "height": 28
+      },
+      "confidence": 45
+    },
+    {
+      "text": "(ARWR)",
+      "x": 645,
+      "y": 926,
+      "bounds": {
+        "left": 629,
+        "top": 912,
+        "width": 33,
+        "height": 28
+      },
+      "confidence": 78
+    },
+    {
+      "text": "\u2018SCORE",
+      "x": 169,
+      "y": 959,
+      "bounds": {
+        "left": 153,
+        "top": 956,
+        "width": 33,
+        "height": 7
+      },
+      "confidence": 42
+    },
+    {
+      "text": "OTHER",
+      "x": 243,
+      "y": 960,
+      "bounds": {
+        "left": 231,
+        "top": 957,
+        "width": 25,
+        "height": 6
+      },
+      "confidence": 57
+    },
+    {
+      "text": "\u2014",
+      "x": 266,
+      "y": 959,
+      "bounds": {
+        "left": 263,
+        "top": 959,
+        "width": 7,
+        "height": 1
+      },
+      "confidence": 85
+    },
+    {
+      "text": "First",
+      "x": 286,
+      "y": 958,
+      "bounds": {
+        "left": 277,
+        "top": 944,
+        "width": 19,
+        "height": 28
+      },
+      "confidence": 74
+    },
+    {
+      "text": "Week",
+      "x": 312,
+      "y": 958,
+      "bounds": {
+        "left": 303,
+        "top": 944,
+        "width": 19,
+        "height": 28
+      },
+      "confidence": 91
+    },
+    {
+      "text": "of",
+      "x": 332,
+      "y": 958,
+      "bounds": {
+        "left": 328,
+        "top": 944,
+        "width": 8,
+        "height": 28
+      },
+      "confidence": 92
+    },
+    {
+      "text": "ARWR",
+      "x": 354,
+      "y": 958,
+      "bounds": {
+        "left": 342,
+        "top": 944,
+        "width": 24,
+        "height": 28
+      },
+      "confidence": 92
+    },
+    {
+      "text": "January",
+      "x": 387,
+      "y": 960,
+      "bounds": {
+        "left": 370,
+        "top": 956,
+        "width": 35,
+        "height": 9
+      },
+      "confidence": 91
+    },
+    {
+      "text": "2026",
+      "x": 419,
+      "y": 959,
+      "bounds": {
+        "left": 410,
+        "top": 956,
+        "width": 19,
+        "height": 7
+      },
+      "confidence": 78
+    },
+    {
+      "text": "Options",
+      "x": 451,
+      "y": 960,
+      "bounds": {
+        "left": 436,
+        "top": 956,
+        "width": 31,
+        "height": 9
+      },
+      "confidence": 86
+    },
+    {
+      "text": "Trading",
+      "x": 487,
+      "y": 960,
+      "bounds": {
+        "left": 471,
+        "top": 955,
+        "width": 33,
+        "height": 10
+      },
+      "confidence": 89
+    },
+    {
+      "text": "New",
+      "x": 715,
+      "y": 100,
+      "bounds": {
+        "left": 703,
+        "top": 94,
+        "width": 24,
+        "height": 12
+      },
+      "confidence": 83
+    },
+    {
+      "text": "folder",
+      "x": 749,
+      "y": 101,
+      "bounds": {
+        "left": 733,
+        "top": 89,
+        "width": 33,
+        "height": 24
+      },
+      "confidence": 96
+    },
+    {
+      "text": "@",
+      "x": 1862,
+      "y": 63,
+      "bounds": {
+        "left": 1852,
+        "top": 53,
+        "width": 20,
+        "height": 20
+      },
+      "confidence": 79
+    },
+    {
+      "text": "WORKSPACE",
+      "x": 1463,
+      "y": 192,
+      "bounds": {
+        "left": 1406,
+        "top": 186,
+        "width": 114,
+        "height": 13
+      },
+      "confidence": 96
+    },
+    {
+      "text": "IDLE",
+      "x": 1549,
+      "y": 192,
+      "bounds": {
+        "left": 1529,
+        "top": 186,
+        "width": 40,
+        "height": 13
+      },
+      "confidence": 96
+    },
+    {
+      "text": "[sysTEM",
+      "x": 1009,
+      "y": 620,
+      "bounds": {
+        "left": 987,
+        "top": 615,
+        "width": 44,
+        "height": 10
+      },
+      "confidence": 58
+    },
+    {
+      "text": "PURGE]",
+      "x": 1053,
+      "y": 620,
+      "bounds": {
+        "left": 1035,
+        "top": 615,
+        "width": 36,
+        "height": 10
+      },
+      "confidence": 95
+    },
+    {
+      "text": "2:26",
+      "x": 1869,
+      "y": 1048,
+      "bounds": {
+        "left": 1858,
+        "top": 1044,
+        "width": 22,
+        "height": 8
+      },
+      "confidence": 81
+    },
+    {
+      "text": "PM",
+      "x": 1892,
+      "y": 1048,
+      "bounds": {
+        "left": 1884,
+        "top": 1044,
+        "width": 16,
+        "height": 8
+      },
+      "confidence": 81
+    },
+    {
+      "text": "2/6/2026",
+      "x": 1873,
+      "y": 1065,
+      "bounds": {
+        "left": 1846,
+        "top": 1060,
+        "width": 55,
+        "height": 10
+      },
+      "confidence": 77
+    },
+    {
+      "text": ">",
+      "x": 1697,
+      "y": 1056,
+      "bounds": {
+        "left": 1692,
+        "top": 1053,
+        "width": 10,
+        "height": 6
+      },
+      "confidence": 96
+    },
+    {
+      "text": "enc",
+      "x": 1735,
+      "y": 1057,
+      "bounds": {
+        "left": 1724,
+        "top": 1053,
+        "width": 22,
+        "height": 8
+      },
+      "confidence": 47
+    },
+    {
+      "text": "@",
+      "x": 1771,
+      "y": 1055,
+      "bounds": {
+        "left": 1766,
+        "top": 1050,
+        "width": 10,
+        "height": 11
+      },
+      "confidence": 31
+    },
+    {
+      "text": "x",
+      "x": 1798,
+      "y": 1056,
+      "bounds": {
+        "left": 1792,
+        "top": 1050,
+        "width": 12,
+        "height": 12
+      },
+      "confidence": 67
+    },
+    {
+      "text": "i",
+      "x": 1821,
+      "y": 1054,
+      "bounds": {
+        "left": 1813,
+        "top": 1048,
+        "width": 16,
+        "height": 13
+      },
+      "confidence": 51
+    }
+  ],
+  "unfiltered_text": "< Credits | % Usage) | Worksp | 4 The Ag\n\nai Up X= \u00a9 Dailye: 4 eitandy | + - a x\n\n\u20ac > G AM @ localhost:8050/chat\n\n{ tops (GEEESTESHE) m0 (WPiprovdon) se tis omat (mop) (Resa) (work) $8\n\nWhat's your analysis on NVIDIA (NVDA)? Should I buy, sell, or hold?|\n\n@ SENTINEL_INTELLIGENCE PULSE @\n\n[1426] asa (Scone) ans\n\nRATING \u2014 Assessing ASML Holding (NasdaqGS:ASML) After Srong AL-Driven Share Price Surge\n\u2018SCORE (ave2)) ANALvsT RATING \u2014 Prediction: ASMLs Stock Price Will it 62.000 by Thi Time\n\nSCORES] eAmWNGs W ASGN Inc (ASGN) Misses QA Earnings Estimates\n\n'SCOREZ] oTHex \u2014 Why ASGN (ASGN) Stock Is Trading Up Today\n\nSCORE (awe).\n\n= \u00a5 Why ASGN Incorporated (ASGN) Stock Is Down 5.82%\n\n\u2018SCORE (awrZ)) OTHER \u2014 First Week of February 2026 Options Trading For Arrowhead Pharmaceuticals (ARWR)\n\n\u2018SCORE (awr@)] OTHER \u2014 First Week of ARWR January 2026 Options Trading\n\n(\u00a9 New folder\n\nQa\n\n4A OD SHE) @\n\nWORKSPACE IDLE\n\n[sysTEM PURGE]\n\n2:26 PM\n2/6/2026\n\n>\n\nenc @ x i\n",
+  "plain_text": "< Credits | % Usage) | Worksp | 4 The Ag\n\nai Up X= \u00a9 Dailye: 4 eitandy | + - a x\n\n\u20ac > G AM @ localhost:8050/chat\n\n{ tops (GEEESTESHE) m0 (WPiprovdon) se tis omat (mop) (Resa) (work) $8\n\nWhat's your analysis on NVIDIA (NVDA)? Should I buy, sell, or hold?|\n\n@ SENTINEL_INTELLIGENCE PULSE @\n\n[1426] asa (Scone) ans\n\nRATING \u2014 Assessing ASML Holding (NasdaqGS:ASML) After Srong AL-Driven Share Price Surge\n\u2018SCORE (ave2)) ANALvsT RATING \u2014 Prediction: ASMLs Stock Price Will it 62.000 by Thi Time\n\nSCORES] eAmWNGs W ASGN Inc (ASGN) Misses QA Earnings Estimates\n\n'SCOREZ] oTHex \u2014 Why ASGN (ASGN) Stock Is Trading Up Today\n\nSCORE (awe).\n\n= \u00a5 Why ASGN Incorporated (ASGN) Stock Is Down 5.82%\n\n\u2018SCORE (awrZ)) OTHER \u2014 First Week of February 2026 Options Trading For Arrowhead Pharmaceuticals (ARWR)\n\n\u2018SCORE (awr@)] OTHER \u2014 First Week of ARWR January 2026 Options Trading\n\n(\u00a9 New folder\n\nQa\n\n4A OD SHE) @\n\nWORKSPACE IDLE\n\n[sysTEM PURGE]\n\n2:26 PM\n2/6/2026\n\n>\n\nenc @ x i\n",
+  "total_elements": 142
+}
+14:26:12 | --------------------------------------------------------------------------------
+14:26:14 | CALL | describe_screen | {
+  "question": "Where is the EXECUTE button located on the screen?"
+}
+14:26:14 | RESULT | describe_screen | ✅ SUCCESS (296ms)
+{
+  "image_captured": true,
+  "image_base64": "[BASE64 DATA - 330620 chars]",
+  "description": "Screenshot captured successfully. Looking at the screen now.",
+  "question": "Where is the EXECUTE button located on the screen?"
+}
+14:26:14 | --------------------------------------------------------------------------------
+14:26:17 | CALL | click | {
+  "x": 764,
+  "y": 436
+}
+14:26:18 | RESULT | click | ✅ SUCCESS (267ms)
+{
+  "success": true,
+  "clicked": "(764, 436)"
+}
+14:26:18 | --------------------------------------------------------------------------------
+14:26:20 | CALL | wait | {
+  "seconds": 3
+}
+14:26:23 | RESULT | wait | ✅ SUCCESS (3001ms)
+{
+  "waited": 3
+}
+14:26:23 | --------------------------------------------------------------------------------
+14:26:25 | CALL | describe_screen | {
+  "question": "What's the response from the financial advisor? Did it provide analysis on NVIDIA (NVDA)?"
+}
+14:26:26 | RESULT | describe_screen | ✅ SUCCESS (232ms)
+{
+  "image_captured": true,
+  "image_base64": "[BASE64 DATA - 330156 chars]",
+  "description": "Screenshot captured successfully. Looking at the screen now.",
+  "question": "What's the response from the financial advisor? Did it provide analysis on NVIDIA (NVDA)?"
+}
+14:26:26 | --------------------------------------------------------------------------------
+14:26:29 | CALL | scroll | {
+  "direction": "down",
+  "amount": 3
+}
+14:26:30 | RESULT | scroll | ✅ SUCCESS (101ms)
+{
+  "success": true,
+  "scrolled": "down"
+}
+14:26:30 | --------------------------------------------------------------------------------
+14:26:33 | CALL | describe_screen | {
+  "question": "Is there any NVIDIA (NVDA) analysis visible in the feed now?"
+}
+14:26:33 | RESULT | describe_screen | ✅ SUCCESS (261ms)
+{
+  "image_captured": true,
+  "image_base64": "[BASE64 DATA - 332148 chars]",
+  "description": "Screenshot captured successfully. Looking at the screen now.",
+  "question": "Is there any NVIDIA (NVDA) analysis visible in the feed now?"
+}
+14:26:33 | --------------------------------------------------------------------------------
+14:26:38 | CALL | scroll | {
+  "direction": "up",
+  "amount": 5
+}
+14:26:38 | RESULT | scroll | ✅ SUCCESS (101ms)
+{
+  "success": true,
+  "scrolled": "up"
+}
+14:26:38 | --------------------------------------------------------------------------------
+14:26:41 | CALL | ocr_screen | {}
+14:26:43 | RESULT | ocr_screen | ✅ SUCCESS (2029ms)
+{
+  "elements": [
+    {
+      "text": "ai",
+      "x": 1450,
+      "y": 21,
+      "bounds": {
+        "left": 1446,
+        "top": 19,
+        "width": 8,
+        "height": 5
+      },
+      "confidence": 69
+    },
+    {
+      "text": "Up",
+      "x": 1475,
+      "y": 22,
+      "bounds": {
+        "left": 1467,
+        "top": 16,
+        "width": 17,
+        "height": 12
+      },
+      "confidence": 75
+    },
+    {
+      "text": "\u00a9",
+      "x": 1536,
+      "y": 20,
+      "bounds": {
+        "left": 1532,
+        "top": 12,
+        "width": 8,
+        "height": 16
+      },
+      "confidence": 54
+    },
+    {
+      "text": "4",
+      "x": 1628,
+      "y": 20,
+      "bounds": {
+        "left": 1623,
+        "top": 15,
+        "width": 10,
+        "height": 10
+      },
+      "confidence": 74
+    },
+    {
+      "text": "eitandy",
+      "x": 1661,
+      "y": 20,
+      "bounds": {
+        "left": 1644,
+        "top": 16,
+        "width": 35,
+        "height": 9
+      },
+      "confidence": 77
+    },
+    {
+      "text": "|",
+      "x": 1700,
+      "y": 20,
+      "bounds": {
+        "left": 1697,
+        "top": 8,
+        "width": 6,
+        "height": 24
+      },
+      "confidence": 92
+    },
+    {
+      "text": "+",
+      "x": 1715,
+      "y": 20,
+      "bounds": {
+        "left": 1710,
+        "top": 15,
+        "width": 10,
+        "height": 10
+      },
+      "confidence": 92
+    },
+    {
+      "text": "-",
+      "x": 1805,
+      "y": 19,
+      "bounds": {
+        "left": 1800,
+        "top": 19,
+        "width": 10,
+        "height": 1
+      },
+      "confidence": 44
+    },
+    {
+      "text": "a",
+      "x": 1851,
+      "y": 20,
+      "bounds": {
+        "left": 1846,
+        "top": 15,
+        "width": 10,
+        "height": 10
+      },
+      "confidence": 95
+    },
+    {
+      "text": "x",
+      "x": 1897,
+      "y": 20,
+      "bounds": {
+        "left": 1892,
+        "top": 15,
+        "width": 10,
+        "height": 10
+      },
+      "confidence": 92
+    },
+    {
+      "text": "GED",
+      "x": 79,
+      "y": 17,
+      "bounds": {
+        "left": 47,
+        "top": 0,
+        "width": 65,
+        "height": 35
+      },
+      "confidence": 38
+    },
+    {
+      "text": "CED",
+      "x": 143,
+      "y": 17,
+      "bounds": {
+        "left": 125,
+        "top": 0,
+        "width": 36,
+        "height": 35
+      },
+      "confidence": 76
+    },
+    {
+      "text": "GED",
+      "x": 199,
+      "y": 17,
+      "bounds": {
+        "left": 178,
+        "top": 0,
+        "width": 42,
+        "height": 35
+      },
+      "confidence": 78
+    },
+    {
+      "text": "0",
+      "x": 338,
+      "y": 17,
+      "bounds": {
+        "left": 332,
+        "top": 0,
+        "width": 13,
+        "height": 35
+      },
+      "confidence": 68
+    },
+    {
+      "text": "\u00ab|",
+      "x": 405,
+      "y": 17,
+      "bounds": {
+        "left": 393,
+        "top": 0,
+        "width": 25,
+        "height": 35
+      },
+      "confidence": 34
+    },
+    {
+      "text": "co",
+      "x": 471,
+      "y": 20,
+      "bounds": {
+        "left": 451,
+        "top": 16,
+        "width": 40,
+        "height": 9
+      },
+      "confidence": 64
+    },
+    {
+      "text": "x",
+      "x": 486,
+      "y": 17,
+      "bounds": {
+        "left": 481,
+        "top": 0,
+        "width": 10,
+        "height": 35
+      },
+      "confidence": 58
+    },
+    {
+      "text": "Bi",
+      "x": 550,
+      "y": 20,
+      "bounds": {
+        "left": 519,
+        "top": 14,
+        "width": 62,
+        "height": 12
+      },
+      "confidence": 67
+    },
+    {
+      "text": "x",
+      "x": 577,
+      "y": 17,
+      "bounds": {
+        "left": 574,
+        "top": 0,
+        "width": 7,
+        "height": 35
+      },
+      "confidence": 68
+    },
+    {
+      "text": "|",
+      "x": 597,
+      "y": 17,
+      "bounds": {
+        "left": 592,
+        "top": 0,
+        "width": 10,
+        "height": 35
+      },
+      "confidence": 48
+    },
+    {
+      "text": "x",
+      "x": 670,
+      "y": 17,
+      "bounds": {
+        "left": 665,
+        "top": 0,
+        "width": 10,
+        "height": 35
+      },
+      "confidence": 65
+    },
+    {
+      "text": "|",
+      "x": 687,
+      "y": 17,
+      "bounds": {
+        "left": 682,
+        "top": 0,
+        "width": 10,
+        "height": 35
+      },
+      "confidence": 45
+    },
+    {
+      "text": "Dee",
+      "x": 741,
+      "y": 20,
+      "bounds": {
+        "left": 722,
+        "top": 16,
+        "width": 39,
+        "height": 9
+      },
+      "confidence": 45
+    },
+    {
+      "text": "x",
+      "x": 758,
+      "y": 17,
+      "bounds": {
+        "left": 755,
+        "top": 0,
+        "width": 7,
+        "height": 35
+      },
+      "confidence": 51
+    },
+    {
+      "text": "|",
+      "x": 777,
+      "y": 17,
+      "bounds": {
+        "left": 773,
+        "top": 0,
+        "width": 9,
+        "height": 35
+      },
+      "confidence": 72
+    },
+    {
+      "text": "Us",
+      "x": 831,
+      "y": 20,
+      "bounds": {
+        "left": 812,
+        "top": 16,
+        "width": 39,
+        "height": 9
+      },
+      "confidence": 73
+    },
+    {
+      "text": "x",
+      "x": 847,
+      "y": 17,
+      "bounds": {
+        "left": 843,
+        "top": 0,
+        "width": 9,
+        "height": 35
+      },
+      "confidence": 59
+    },
+    {
+      "text": "|G",
+      "x": 875,
+      "y": 17,
+      "bounds": {
+        "left": 863,
+        "top": 0,
+        "width": 24,
+        "height": 35
+      },
+      "confidence": 40
+    },
+    {
+      "text": "Tok",
+      "x": 921,
+      "y": 20,
+      "bounds": {
+        "left": 901,
+        "top": 16,
+        "width": 40,
+        "height": 9
+      },
+      "confidence": 69
+    },
+    {
+      "text": "x",
+      "x": 938,
+      "y": 17,
+      "bounds": {
+        "left": 933,
+        "top": 0,
+        "width": 10,
+        "height": 35
+      },
+      "confidence": 58
+    },
+    {
+      "text": "|<",
+      "x": 966,
+      "y": 17,
+      "bounds": {
+        "left": 954,
+        "top": 0,
+        "width": 24,
+        "height": 35
+      },
+      "confidence": 52
+    },
+    {
+      "text": "Credits",
+      "x": 1009,
+      "y": 19,
+      "bounds": {
+        "left": 991,
+        "top": 13,
+        "width": 36,
+        "height": 13
+      },
+      "confidence": 70
+    },
+    {
+      "text": "|",
+      "x": 1047,
+      "y": 17,
+      "bounds": {
+        "left": 1044,
+        "top": 0,
+        "width": 7,
+        "height": 35
+      },
+      "confidence": 58
+    },
+    {
+      "text": "|",
+      "x": 1136,
+      "y": 17,
+      "bounds": {
+        "left": 1132,
+        "top": 0,
+        "width": 9,
+        "height": 35
+      },
+      "confidence": 75
+    },
+    {
+      "text": "M",
+      "x": 1154,
+      "y": 20,
+      "bounds": {
+        "left": 1149,
+        "top": 14,
+        "width": 10,
+        "height": 12
+      },
+      "confidence": 59
+    },
+    {
+      "text": "|",
+      "x": 1225,
+      "y": 17,
+      "bounds": {
+        "left": 1222,
+        "top": 0,
+        "width": 7,
+        "height": 35
+      },
+      "confidence": 77
+    },
+    {
+      "text": "4",
+      "x": 1242,
+      "y": 20,
+      "bounds": {
+        "left": 1239,
+        "top": 17,
+        "width": 6,
+        "height": 6
+      },
+      "confidence": 51
+    },
+    {
+      "text": "The",
+      "x": 1276,
+      "y": 22,
+      "bounds": {
+        "left": 1258,
+        "top": 16,
+        "width": 36,
+        "height": 12
+      },
+      "confidence": 34
+    },
+    {
+      "text": "Ao",
+      "x": 1291,
+      "y": 17,
+      "bounds": {
+        "left": 1283,
+        "top": 0,
+        "width": 16,
+        "height": 35
+      },
+      "confidence": 34
+    },
+    {
+      "text": "\u20ac",
+      "x": 22,
+      "y": 63,
+      "bounds": {
+        "left": 16,
+        "top": 57,
+        "width": 12,
+        "height": 12
+      },
+      "confidence": 89
+    },
+    {
+      "text": ">",
+      "x": 57,
+      "y": 63,
+      "bounds": {
+        "left": 52,
+        "top": 58,
+        "width": 11,
+        "height": 10
+      },
+      "confidence": 71
+    },
+    {
+      "text": "G",
+      "x": 94,
+      "y": 63,
+      "bounds": {
+        "left": 88,
+        "top": 57,
+        "width": 12,
+        "height": 12
+      },
+      "confidence": 73
+    },
+    {
+      "text": "\u00a9",
+      "x": 170,
+      "y": 63,
+      "bounds": {
+        "left": 166,
+        "top": 56,
+        "width": 8,
+        "height": 14
+      },
+      "confidence": 66
+    },
+    {
+      "text": "localhost:8050/chat",
+      "x": 248,
+      "y": 63,
+      "bounds": {
+        "left": 183,
+        "top": 56,
+        "width": 130,
+        "height": 14
+      },
+      "confidence": 56
+    },
+    {
+      "text": "Qx*",
+      "x": 1436,
+      "y": 63,
+      "bounds": {
+        "left": 1413,
+        "top": 56,
+        "width": 46,
+        "height": 14
+      },
+      "confidence": 43
+    },
+    {
+      "text": "{toms",
+      "x": 43,
+      "y": 98,
+      "bounds": {
+        "left": 23,
+        "top": 76,
+        "width": 41,
+        "height": 45
+      },
+      "confidence": 31
+    },
+    {
+      "text": "oo",
+      "x": 205,
+      "y": 100,
+      "bounds": {
+        "left": 194,
+        "top": 97,
+        "width": 23,
+        "height": 7
+      },
+      "confidence": 46
+    },
+    {
+      "text": "situs",
+      "x": 358,
+      "y": 99,
+      "bounds": {
+        "left": 334,
+        "top": 95,
+        "width": 48,
+        "height": 9
+      },
+      "confidence": 43
+    },
+    {
+      "text": "oma",
+      "x": 417,
+      "y": 101,
+      "bounds": {
+        "left": 402,
+        "top": 95,
+        "width": 30,
+        "height": 12
+      },
+      "confidence": 47
+    },
+    {
+      "text": "(ea)",
+      "x": 549,
+      "y": 98,
+      "bounds": {
+        "left": 525,
+        "top": 76,
+        "width": 49,
+        "height": 45
+      },
+      "confidence": 47
+    },
+    {
+      "text": "(WR)",
+      "x": 604,
+      "y": 98,
+      "bounds": {
+        "left": 581,
+        "top": 76,
+        "width": 46,
+        "height": 45
+      },
+      "confidence": 44
+    },
+    {
+      "text": "|",
+      "x": 667,
+      "y": 98,
+      "bounds": {
+        "left": 663,
+        "top": 76,
+        "width": 9,
+        "height": 45
+      },
+      "confidence": 49
+    },
+    {
+      "text": "Ca",
+      "x": 690,
+      "y": 98,
+      "bounds": {
+        "left": 683,
+        "top": 76,
+        "width": 15,
+        "height": 45
+      },
+      "confidence": 49
+    },
+    {
+      "text": "Now",
+      "x": 719,
+      "y": 98,
+      "bounds": {
+        "left": 708,
+        "top": 76,
+        "width": 23,
+        "height": 45
+      },
+      "confidence": 67
+    },
+    {
+      "text": "ter",
+      "x": 752,
+      "y": 98,
+      "bounds": {
+        "left": 738,
+        "top": 76,
+        "width": 28,
+        "height": 45
+      },
+      "confidence": 56
+    },
+    {
+      "text": "@",
+      "x": 1862,
+      "y": 63,
+      "bounds": {
+        "left": 1852,
+        "top": 53,
+        "width": 20,
+        "height": 20
+      },
+      "confidence": 79
+    },
+    {
+      "text": "WORKSPACE",
+      "x": 1463,
+      "y": 191,
+      "bounds": {
+        "left": 1406,
+        "top": 185,
+        "width": 114,
+        "height": 13
+      },
+      "confidence": 96
+    },
+    {
+      "text": "IDLE",
+      "x": 1549,
+      "y": 191,
+      "bounds": {
+        "left": 1529,
+        "top": 185,
+        "width": 40,
+        "height": 13
+      },
+      "confidence": 96
+    },
+    {
+      "text": "What's",
+      "x": 111,
+      "y": 575,
+      "bounds": {
+        "left": 88,
+        "top": 570,
+        "width": 47,
+        "height": 10
+      },
+      "confidence": 45
+    },
+    {
+      "text": "your",
+      "x": 159,
+      "y": 578,
+      "bounds": {
+        "left": 144,
+        "top": 573,
+        "width": 31,
+        "height": 10
+      },
+      "confidence": 96
+    },
+    {
+      "text": "analysis",
+      "x": 215,
+      "y": 576,
+      "bounds": {
+        "left": 184,
+        "top": 570,
+        "width": 62,
+        "height": 13
+      },
+      "confidence": 94
+    },
+    {
+      "text": "on",
+      "x": 262,
+      "y": 576,
+      "bounds": {
+        "left": 255,
+        "top": 573,
+        "width": 15,
+        "height": 7
+      },
+      "confidence": 94
+    },
+    {
+      "text": "NVIDIA",
+      "x": 302,
+      "y": 575,
+      "bounds": {
+        "left": 279,
+        "top": 571,
+        "width": 47,
+        "height": 9
+      },
+      "confidence": 93
+    },
+    {
+      "text": "(NVDA)?",
+      "x": 361,
+      "y": 576,
+      "bounds": {
+        "left": 335,
+        "top": 570,
+        "width": 53,
+        "height": 13
+      },
+      "confidence": 92
+    },
+    {
+      "text": "Should",
+      "x": 420,
+      "y": 575,
+      "bounds": {
+        "left": 397,
+        "top": 570,
+        "width": 46,
+        "height": 10
+      },
+      "confidence": 96
+    },
+    {
+      "text": "I",
+      "x": 456,
+      "y": 575,
+      "bounds": {
+        "left": 453,
+        "top": 571,
+        "width": 6,
+        "height": 9
+      },
+      "confidence": 87
+    },
+    {
+      "text": "buy,",
+      "x": 483,
+      "y": 576,
+      "bounds": {
+        "left": 469,
+        "top": 570,
+        "width": 28,
+        "height": 13
+      },
+      "confidence": 96
+    },
+    {
+      "text": "sell,",
+      "x": 527,
+      "y": 576,
+      "bounds": {
+        "left": 509,
+        "top": 570,
+        "width": 36,
+        "height": 12
+      },
+      "confidence": 95
+    },
+    {
+      "text": "or",
+      "x": 563,
+      "y": 576,
+      "bounds": {
+        "left": 556,
+        "top": 573,
+        "width": 15,
+        "height": 7
+      },
+      "confidence": 96
+    },
+    {
+      "text": "hold?",
+      "x": 599,
+      "y": 575,
+      "bounds": {
+        "left": 580,
+        "top": 570,
+        "width": 38,
+        "height": 10
+      },
+      "confidence": 95
+    },
+    {
+      "text": "PINNED",
+      "x": 1173,
+      "y": 576,
+      "bounds": {
+        "left": 1151,
+        "top": 572,
+        "width": 44,
+        "height": 8
+      },
+      "confidence": 87
+    },
+    {
+      "text": "INTELLIGENCE",
+      "x": 1247,
+      "y": 576,
+      "bounds": {
+        "left": 1203,
+        "top": 572,
+        "width": 89,
+        "height": 8
+      },
+      "confidence": 90
+    },
+    {
+      "text": "[sysTEM",
+      "x": 1009,
+      "y": 619,
+      "bounds": {
+        "left": 987,
+        "top": 614,
+        "width": 44,
+        "height": 10
+      },
+      "confidence": 58
+    },
+    {
+      "text": "PURGE]",
+      "x": 1053,
+      "y": 619,
+      "bounds": {
+        "left": 1035,
+        "top": 614,
+        "width": 36,
+        "height": 10
+      },
+      "confidence": 95
+    },
+    {
+      "text": "@",
+      "x": 72,
+      "y": 688,
+      "bounds": {
+        "left": 68,
+        "top": 683,
+        "width": 8,
+        "height": 11
+      },
+      "confidence": 78
+    },
+    {
+      "text": "SENTINEL_INTELLIGENCE",
+      "x": 187,
+      "y": 688,
+      "bounds": {
+        "left": 85,
+        "top": 684,
+        "width": 204,
+        "height": 9
+      },
+      "confidence": 90
+    },
+    {
+      "text": "PULSE",
+      "x": 270,
+      "y": 688,
+      "bounds": {
+        "left": 250,
+        "top": 674,
+        "width": 41,
+        "height": 28
+      },
+      "confidence": 89
+    },
+    {
+      "text": "@",
+      "x": 305,
+      "y": 688,
+      "bounds": {
+        "left": 302,
+        "top": 685,
+        "width": 7,
+        "height": 7
+      },
+      "confidence": 64
+    },
+    {
+      "text": "[1426]",
+      "x": 83,
+      "y": 763,
+      "bounds": {
+        "left": 70,
+        "top": 758,
+        "width": 27,
+        "height": 10
+      },
+      "confidence": 72
+    },
+    {
+      "text": "ATW",
+      "x": 120,
+      "y": 762,
+      "bounds": {
+        "left": 108,
+        "top": 758,
+        "width": 25,
+        "height": 8
+      },
+      "confidence": 44
+    },
+    {
+      "text": "1",
+      "x": 300,
+      "y": 761,
+      "bounds": {
+        "left": 299,
+        "top": 760,
+        "width": 2,
+        "height": 2
+      },
+      "confidence": 41
+    },
+    {
+      "text": "\u00a5",
+      "x": 312,
+      "y": 762,
+      "bounds": {
+        "left": 308,
+        "top": 759,
+        "width": 8,
+        "height": 7
+      },
+      "confidence": 42
+    },
+    {
+      "text": "Activision",
+      "x": 344,
+      "y": 762,
+      "bounds": {
+        "left": 322,
+        "top": 759,
+        "width": 44,
+        "height": 7
+      },
+      "confidence": 71
+    },
+    {
+      "text": "Blizzard",
+      "x": 387,
+      "y": 762,
+      "bounds": {
+        "left": 370,
+        "top": 758,
+        "width": 35,
+        "height": 8
+      },
+      "confidence": 80
+    },
+    {
+      "text": "Stock",
+      "x": 420,
+      "y": 762,
+      "bounds": {
+        "left": 408,
+        "top": 758,
+        "width": 25,
+        "height": 8
+      },
+      "confidence": 75
+    },
+    {
+      "text": "(NASDAQ:ATVD):",
+      "x": 471,
+      "y": 763,
+      "bounds": {
+        "left": 436,
+        "top": 758,
+        "width": 70,
+        "height": 10
+      },
+      "confidence": 41
+    },
+    {
+      "text": "Wait",
+      "x": 522,
+      "y": 762,
+      "bounds": {
+        "left": 512,
+        "top": 759,
+        "width": 20,
+        "height": 7
+      },
+      "confidence": 79
+    },
+    {
+      "text": "Until",
+      "x": 545,
+      "y": 762,
+      "bounds": {
+        "left": 535,
+        "top": 758,
+        "width": 20,
+        "height": 8
+      },
+      "confidence": 74
+    },
+    {
+      "text": "Antitrust",
+      "x": 577,
+      "y": 762,
+      "bounds": {
+        "left": 558,
+        "top": 759,
+        "width": 38,
+        "height": 7
+      },
+      "confidence": 64
+    },
+    {
+      "text": "Probe",
+      "x": 613,
+      "y": 762,
+      "bounds": {
+        "left": 600,
+        "top": 758,
+        "width": 26,
+        "height": 8
+      },
+      "confidence": 80
+    },
+    {
+      "text": "is",
+      "x": 632,
+      "y": 763,
+      "bounds": {
+        "left": 629,
+        "top": 761,
+        "width": 7,
+        "height": 5
+      },
+      "confidence": 80
+    },
+    {
+      "text": "Resolved",
+      "x": 660,
+      "y": 762,
+      "bounds": {
+        "left": 640,
+        "top": 758,
+        "width": 40,
+        "height": 8
+      },
+      "confidence": 95
+    },
+    {
+      "text": "[14:26]",
+      "x": 83,
+      "y": 796,
+      "bounds": {
+        "left": 70,
+        "top": 791,
+        "width": 27,
+        "height": 10
+      },
+      "confidence": 67
+    },
+    {
+      "text": "ATO",
+      "x": 119,
+      "y": 795,
+      "bounds": {
+        "left": 108,
+        "top": 791,
+        "width": 22,
+        "height": 8
+      },
+      "confidence": 88
+    },
+    {
+      "text": "W",
+      "x": 297,
+      "y": 795,
+      "bounds": {
+        "left": 293,
+        "top": 792,
+        "width": 8,
+        "height": 7
+      },
+      "confidence": 53
+    },
+    {
+      "text": "Atmos",
+      "x": 322,
+      "y": 796,
+      "bounds": {
+        "left": 308,
+        "top": 782,
+        "width": 29,
+        "height": 28
+      },
+      "confidence": 95
+    },
+    {
+      "text": "Energy",
+      "x": 355,
+      "y": 796,
+      "bounds": {
+        "left": 341,
+        "top": 782,
+        "width": 29,
+        "height": 28
+      },
+      "confidence": 95
+    },
+    {
+      "text": "cut",
+      "x": 380,
+      "y": 796,
+      "bounds": {
+        "left": 374,
+        "top": 793,
+        "width": 13,
+        "height": 6
+      },
+      "confidence": 86
+    },
+    {
+      "text": "at",
+      "x": 396,
+      "y": 796,
+      "bounds": {
+        "left": 392,
+        "top": 782,
+        "width": 8,
+        "height": 28
+      },
+      "confidence": 86
+    },
+    {
+      "text": "BofA",
+      "x": 412,
+      "y": 796,
+      "bounds": {
+        "left": 404,
+        "top": 782,
+        "width": 17,
+        "height": 28
+      },
+      "confidence": 87
+    },
+    {
+      "text": "as",
+      "x": 431,
+      "y": 796,
+      "bounds": {
+        "left": 427,
+        "top": 794,
+        "width": 8,
+        "height": 5
+      },
+      "confidence": 93
+    },
+    {
+      "text": "shares",
+      "x": 454,
+      "y": 795,
+      "bounds": {
+        "left": 440,
+        "top": 791,
+        "width": 29,
+        "height": 8
+      },
+      "confidence": 96
+    },
+    {
+      "text": "already",
+      "x": 488,
+      "y": 796,
+      "bounds": {
+        "left": 473,
+        "top": 782,
+        "width": 30,
+        "height": 28
+      },
+      "confidence": 74
+    },
+    {
+      "text": "reflect",
+      "x": 521,
+      "y": 796,
+      "bounds": {
+        "left": 507,
+        "top": 782,
+        "width": 28,
+        "height": 28
+      },
+      "confidence": 45
+    },
+    {
+      "text": "strong",
+      "x": 552,
+      "y": 796,
+      "bounds": {
+        "left": 539,
+        "top": 782,
+        "width": 27,
+        "height": 28
+      },
+      "confidence": 45
+    },
+    {
+      "text": "growth",
+      "x": 586,
+      "y": 796,
+      "bounds": {
+        "left": 571,
+        "top": 791,
+        "width": 30,
+        "height": 10
+      },
+      "confidence": 95
+    },
+    {
+      "text": "opportunity",
+      "x": 630,
+      "y": 797,
+      "bounds": {
+        "left": 605,
+        "top": 793,
+        "width": 51,
+        "height": 8
+      },
+      "confidence": 88
+    },
+    {
+      "text": "[1426]",
+      "x": 83,
+      "y": 828,
+      "bounds": {
+        "left": 70,
+        "top": 823,
+        "width": 27,
+        "height": 10
+      },
+      "confidence": 84
+    },
+    {
+      "text": "ato",
+      "x": 119,
+      "y": 827,
+      "bounds": {
+        "left": 108,
+        "top": 823,
+        "width": 22,
+        "height": 8
+      },
+      "confidence": 53
+    },
+    {
+      "text": "(SCORES",
+      "x": 160,
+      "y": 828,
+      "bounds": {
+        "left": 143,
+        "top": 825,
+        "width": 34,
+        "height": 7
+      },
+      "confidence": 40
+    },
+    {
+      "text": "Strong",
+      "x": 294,
+      "y": 827,
+      "bounds": {
+        "left": 280,
+        "top": 813,
+        "width": 29,
+        "height": 28
+      },
+      "confidence": 91
+    },
+    {
+      "text": "Demand",
+      "x": 332,
+      "y": 827,
+      "bounds": {
+        "left": 315,
+        "top": 823,
+        "width": 34,
+        "height": 8
+      },
+      "confidence": 90
+    },
+    {
+      "text": "Lifts",
+      "x": 363,
+      "y": 827,
+      "bounds": {
+        "left": 353,
+        "top": 813,
+        "width": 21,
+        "height": 28
+      },
+      "confidence": 77
+    },
+    {
+      "text": "Atmos",
+      "x": 391,
+      "y": 827,
+      "bounds": {
+        "left": 378,
+        "top": 824,
+        "width": 27,
+        "height": 7
+      },
+      "confidence": 90
+    },
+    {
+      "text": "Energy",
+      "x": 425,
+      "y": 827,
+      "bounds": {
+        "left": 411,
+        "top": 813,
+        "width": 29,
+        "height": 28
+      },
+      "confidence": 41
+    },
+    {
+      "text": "Corporation",
+      "x": 468,
+      "y": 827,
+      "bounds": {
+        "left": 444,
+        "top": 813,
+        "width": 49,
+        "height": 28
+      },
+      "confidence": 79
+    },
+    {
+      "text": "(ATO)",
+      "x": 510,
+      "y": 827,
+      "bounds": {
+        "left": 499,
+        "top": 813,
+        "width": 22,
+        "height": 28
+      },
+      "confidence": 96
+    },
+    {
+      "text": "First",
+      "x": 537,
+      "y": 827,
+      "bounds": {
+        "left": 528,
+        "top": 823,
+        "width": 19,
+        "height": 9
+      },
+      "confidence": 84
+    },
+    {
+      "text": "Quarter",
+      "x": 568,
+      "y": 827,
+      "bounds": {
+        "left": 553,
+        "top": 813,
+        "width": 31,
+        "height": 28
+      },
+      "confidence": 50
+    },
+    {
+      "text": "Profit",
+      "x": 599,
+      "y": 827,
+      "bounds": {
+        "left": 588,
+        "top": 813,
+        "width": 22,
+        "height": 28
+      },
+      "confidence": 50
+    },
+    {
+      "text": "Despite",
+      "x": 631,
+      "y": 827,
+      "bounds": {
+        "left": 616,
+        "top": 813,
+        "width": 31,
+        "height": 28
+      },
+      "confidence": 80
+    },
+    {
+      "text": "Extreme",
+      "x": 669,
+      "y": 827,
+      "bounds": {
+        "left": 651,
+        "top": 813,
+        "width": 36,
+        "height": 28
+      },
+      "confidence": 87
+    },
+    {
+      "text": "Winter",
+      "x": 705,
+      "y": 827,
+      "bounds": {
+        "left": 691,
+        "top": 813,
+        "width": 28,
+        "height": 28
+      },
+      "confidence": 66
+    },
+    {
+      "text": "Condi",
+      "x": 737,
+      "y": 827,
+      "bounds": {
+        "left": 726,
+        "top": 813,
+        "width": 22,
+        "height": 28
+      },
+      "confidence": 92
+    },
+    {
+      "text": "[1426]",
+      "x": 83,
+      "y": 861,
+      "bounds": {
+        "left": 70,
+        "top": 856,
+        "width": 27,
+        "height": 10
+      },
+      "confidence": 84
+    },
+    {
+      "text": "ATO",
+      "x": 119,
+      "y": 860,
+      "bounds": {
+        "left": 108,
+        "top": 856,
+        "width": 22,
+        "height": 8
+      },
+      "confidence": 93
+    },
+    {
+      "text": "[SCORED",
+      "x": 160,
+      "y": 860,
+      "bounds": {
+        "left": 143,
+        "top": 857,
+        "width": 34,
+        "height": 7
+      },
+      "confidence": 80
+    },
+    {
+      "text": "(aw)",
+      "x": 195,
+      "y": 861,
+      "bounds": {
+        "left": 184,
+        "top": 857,
+        "width": 23,
+        "height": 9
+      },
+      "confidence": 37
+    },
+    {
+      "text": "|",
+      "x": 214,
+      "y": 860,
+      "bounds": {
+        "left": 213,
+        "top": 846,
+        "width": 3,
+        "height": 28
+      },
+      "confidence": 37
+    },
+    {
+      "text": "Here's",
+      "x": 343,
+      "y": 861,
+      "bounds": {
+        "left": 308,
+        "top": 856,
+        "width": 70,
+        "height": 10
+      },
+      "confidence": 48
+    },
+    {
+      "text": "Why",
+      "x": 348,
+      "y": 860,
+      "bounds": {
+        "left": 341,
+        "top": 846,
+        "width": 15,
+        "height": 28
+      },
+      "confidence": 96
+    },
+    {
+      "text": "ATO",
+      "x": 369,
+      "y": 860,
+      "bounds": {
+        "left": 362,
+        "top": 846,
+        "width": 15,
+        "height": 28
+      },
+      "confidence": 96
+    },
+    {
+      "text": "Stock",
+      "x": 395,
+      "y": 860,
+      "bounds": {
+        "left": 383,
+        "top": 846,
+        "width": 24,
+        "height": 28
+      },
+      "confidence": 91
+    },
+    {
+      "text": "Deserves",
+      "x": 446,
+      "y": 861,
+      "bounds": {
+        "left": 410,
+        "top": 856,
+        "width": 72,
+        "height": 10
+      },
+      "confidence": 91
+    },
+    {
+      "text": "a",
+      "x": 456,
+      "y": 860,
+      "bounds": {
+        "left": 455,
+        "top": 846,
+        "width": 3,
+        "height": 28
+      },
+      "confidence": 77
+    },
+    {
+      "text": "Spot",
+      "x": 472,
+      "y": 860,
+      "bounds": {
+        "left": 462,
+        "top": 846,
+        "width": 20,
+        "height": 28
+      },
+      "confidence": 64
+    },
+    {
+      "text": "in",
+      "x": 489,
+      "y": 861,
+      "bounds": {
+        "left": 486,
+        "top": 859,
+        "width": 7,
+        "height": 5
+      },
+      "confidence": 64
+    },
+    {
+      "text": "Your",
+      "x": 506,
+      "y": 860,
+      "bounds": {
+        "left": 496,
+        "top": 857,
+        "width": 20,
+        "height": 7
+      },
+      "confidence": 93
+    },
+    {
+      "text": "Portfolio",
+      "x": 539,
+      "y": 860,
+      "bounds": {
+        "left": 520,
+        "top": 856,
+        "width": 38,
+        "height": 8
+      },
+      "confidence": 56
+    },
+    {
+      "text": "Right",
+      "x": 573,
+      "y": 861,
+      "bounds": {
+        "left": 562,
+        "top": 856,
+        "width": 22,
+        "height": 10
+      },
+      "confidence": 56
+    },
+    {
+      "text": "Now",
+      "x": 599,
+      "y": 860,
+      "bounds": {
+        "left": 591,
+        "top": 846,
+        "width": 16,
+        "height": 28
+      },
+      "confidence": 96
+    },
+    {
+      "text": "[1426]",
+      "x": 83,
+      "y": 893,
+      "bounds": {
+        "left": 70,
+        "top": 888,
+        "width": 27,
+        "height": 10
+      },
+      "confidence": 68
+    },
+    {
+      "text": "ASML",
+      "x": 123,
+      "y": 892,
+      "bounds": {
+        "left": 108,
+        "top": 888,
+        "width": 31,
+        "height": 8
+      },
+      "confidence": 79
+    },
+    {
+      "text": "[SCORED",
+      "x": 169,
+      "y": 893,
+      "bounds": {
+        "left": 152,
+        "top": 890,
+        "width": 35,
+        "height": 7
+      },
+      "confidence": 44
+    },
+    {
+      "text": "(ews)",
+      "x": 204,
+      "y": 894,
+      "bounds": {
+        "left": 193,
+        "top": 890,
+        "width": 23,
+        "height": 9
+      },
+      "confidence": 38
+    },
+    {
+      "text": "STOR",
+      "x": 282,
+      "y": 893,
+      "bounds": {
+        "left": 275,
+        "top": 890,
+        "width": 15,
+        "height": 6
+      },
+      "confidence": 43
+    },
+    {
+      "text": "1",
+      "x": 314,
+      "y": 892,
+      "bounds": {
+        "left": 313,
+        "top": 889,
+        "width": 3,
+        "height": 7
+      },
+      "confidence": 39
+    },
+    {
+      "text": "ASML",
+      "x": 333,
+      "y": 892,
+      "bounds": {
+        "left": 320,
+        "top": 889,
+        "width": 27,
+        "height": 7
+      },
+      "confidence": 83
+    },
+    {
+      "text": "Chart",
+      "x": 362,
+      "y": 892,
+      "bounds": {
+        "left": 350,
+        "top": 888,
+        "width": 24,
+        "height": 8
+      },
+      "confidence": 83
+    },
+    {
+      "text": "That",
+      "x": 387,
+      "y": 892,
+      "bounds": {
+        "left": 377,
+        "top": 888,
+        "width": 20,
+        "height": 8
+      },
+      "confidence": 83
+    },
+    {
+      "text": "Every",
+      "x": 412,
+      "y": 893,
+      "bounds": {
+        "left": 401,
+        "top": 889,
+        "width": 23,
+        "height": 9
+      },
+      "confidence": 83
+    },
+    {
+      "text": "Chip",
+      "x": 437,
+      "y": 893,
+      "bounds": {
+        "left": 427,
+        "top": 888,
+        "width": 20,
+        "height": 10
+      },
+      "confidence": 96
+    },
+    {
+      "text": "Stock",
+      "x": 462,
+      "y": 892,
+      "bounds": {
+        "left": 450,
+        "top": 888,
+        "width": 25,
+        "height": 8
+      },
+      "confidence": 78
+    },
+    {
+      "text": "Investor",
+      "x": 496,
+      "y": 892,
+      "bounds": {
+        "left": 479,
+        "top": 889,
+        "width": 35,
+        "height": 7
+      },
+      "confidence": 78
+    },
+    {
+      "text": "Needs",
+      "x": 538,
+      "y": 892,
+      "bounds": {
+        "left": 518,
+        "top": 888,
+        "width": 41,
+        "height": 8
+      },
+      "confidence": 94
+    },
+    {
+      "text": "To",
+      "x": 554,
+      "y": 892,
+      "bounds": {
+        "left": 551,
+        "top": 878,
+        "width": 7,
+        "height": 28
+      },
+      "confidence": 96
+    },
+    {
+      "text": "See",
+      "x": 571,
+      "y": 892,
+      "bounds": {
+        "left": 563,
+        "top": 889,
+        "width": 16,
+        "height": 7
+      },
+      "confidence": 95
+    },
+    {
+      "text": "[1426]",
+      "x": 83,
+      "y": 926,
+      "bounds": {
+        "left": 70,
+        "top": 921,
+        "width": 27,
+        "height": 10
+      },
+      "confidence": 79
+    },
+    {
+      "text": "ASML",
+      "x": 123,
+      "y": 925,
+      "bounds": {
+        "left": 108,
+        "top": 921,
+        "width": 31,
+        "height": 8
+      },
+      "confidence": 63
+    },
+    {
+      "text": "\u2018Assessing",
+      "x": 308,
+      "y": 926,
+      "bounds": {
+        "left": 285,
+        "top": 922,
+        "width": 46,
+        "height": 9
+      },
+      "confidence": 66
+    },
+    {
+      "text": "ASML",
+      "x": 349,
+      "y": 925,
+      "bounds": {
+        "left": 337,
+        "top": 922,
+        "width": 24,
+        "height": 7
+      },
+      "confidence": 94
+    },
+    {
+      "text": "Holding",
+      "x": 381,
+      "y": 925,
+      "bounds": {
+        "left": 365,
+        "top": 911,
+        "width": 33,
+        "height": 28
+      },
+      "confidence": 92
+    },
+    {
+      "text": "(NasdaqGS-ASML)",
+      "x": 443,
+      "y": 926,
+      "bounds": {
+        "left": 402,
+        "top": 921,
+        "width": 83,
+        "height": 10
+      },
+      "confidence": 53
+    },
+    {
+      "text": "After",
+      "x": 500,
+      "y": 925,
+      "bounds": {
+        "left": 489,
+        "top": 921,
+        "width": 22,
+        "height": 8
+      },
+      "confidence": 87
+    },
+    {
+      "text": "Strong",
+      "x": 528,
+      "y": 926,
+      "bounds": {
+        "left": 514,
+        "top": 922,
+        "width": 29,
+        "height": 9
+      },
+      "confidence": 87
+    },
+    {
+      "text": "Share",
+      "x": 602,
+      "y": 925,
+      "bounds": {
+        "left": 590,
+        "top": 921,
+        "width": 25,
+        "height": 8
+      },
+      "confidence": 96
+    },
+    {
+      "text": "Price",
+      "x": 629,
+      "y": 925,
+      "bounds": {
+        "left": 618,
+        "top": 922,
+        "width": 22,
+        "height": 7
+      },
+      "confidence": 95
+    },
+    {
+      "text": "Surge",
+      "x": 656,
+      "y": 926,
+      "bounds": {
+        "left": 644,
+        "top": 922,
+        "width": 25,
+        "height": 9
+      },
+      "confidence": 88
+    },
+    {
+      "text": "[14:26]",
+      "x": 83,
+      "y": 959,
+      "bounds": {
+        "left": 70,
+        "top": 954,
+        "width": 27,
+        "height": 10
+      },
+      "confidence": 77
+    },
+    {
+      "text": "ASML",
+      "x": 123,
+      "y": 958,
+      "bounds": {
+        "left": 108,
+        "top": 954,
+        "width": 31,
+        "height": 8
+      },
+      "confidence": 92
+    },
+    {
+      "text": "[SCORET",
+      "x": 168,
+      "y": 958,
+      "bounds": {
+        "left": 152,
+        "top": 955,
+        "width": 33,
+        "height": 7
+      },
+      "confidence": 36
+    },
+    {
+      "text": "\u2014",
+      "x": 304,
+      "y": 958,
+      "bounds": {
+        "left": 301,
+        "top": 958,
+        "width": 7,
+        "height": 1
+      },
+      "confidence": 88
+    },
+    {
+      "text": "Stock",
+      "x": 414,
+      "y": 957,
+      "bounds": {
+        "left": 402,
+        "top": 943,
+        "width": 24,
+        "height": 28
+      },
+      "confidence": 91
+    },
+    {
+      "text": "Price",
+      "x": 440,
+      "y": 957,
+      "bounds": {
+        "left": 430,
+        "top": 943,
+        "width": 21,
+        "height": 28
+      },
+      "confidence": 94
+    },
+    {
+      "text": "Will",
+      "x": 462,
+      "y": 957,
+      "bounds": {
+        "left": 455,
+        "top": 943,
+        "width": 15,
+        "height": 28
+      },
+      "confidence": 77
+    },
+    {
+      "text": "Ht",
+      "x": 481,
+      "y": 958,
+      "bounds": {
+        "left": 476,
+        "top": 955,
+        "width": 10,
+        "height": 7
+      },
+      "confidence": 78
+    },
+    {
+      "text": "$2000",
+      "x": 503,
+      "y": 957,
+      "bounds": {
+        "left": 490,
+        "top": 943,
+        "width": 27,
+        "height": 28
+      },
+      "confidence": 39
+    },
+    {
+      "text": "by",
+      "x": 527,
+      "y": 959,
+      "bounds": {
+        "left": 523,
+        "top": 954,
+        "width": 8,
+        "height": 10
+      },
+      "confidence": 96
+    },
+    {
+      "text": "This",
+      "x": 545,
+      "y": 958,
+      "bounds": {
+        "left": 537,
+        "top": 954,
+        "width": 17,
+        "height": 8
+      },
+      "confidence": 96
+    },
+    {
+      "text": "Time",
+      "x": 568,
+      "y": 958,
+      "bounds": {
+        "left": 558,
+        "top": 955,
+        "width": 21,
+        "height": 7
+      },
+      "confidence": 95
+    },
+    {
+      "text": "[1425]",
+      "x": 83,
+      "y": 991,
+      "bounds": {
+        "left": 70,
+        "top": 986,
+        "width": 27,
+        "height": 10
+      },
+      "confidence": 76
+    },
+    {
+      "text": "ASGN",
+      "x": 123,
+      "y": 990,
+      "bounds": {
+        "left": 108,
+        "top": 986,
+        "width": 30,
+        "height": 8
+      },
+      "confidence": 91
+    },
+    {
+      "text": "ASGN",
+      "x": 271,
+      "y": 989,
+      "bounds": {
+        "left": 260,
+        "top": 975,
+        "width": 23,
+        "height": 28
+      },
+      "confidence": 73
+    },
+    {
+      "text": "Ine",
+      "x": 294,
+      "y": 990,
+      "bounds": {
+        "left": 287,
+        "top": 987,
+        "width": 15,
+        "height": 7
+      },
+      "confidence": 81
+    },
+    {
+      "text": "(ASGN)",
+      "x": 322,
+      "y": 991,
+      "bounds": {
+        "left": 306,
+        "top": 986,
+        "width": 33,
+        "height": 10
+      },
+      "confidence": 88
+    },
+    {
+      "text": "Misses",
+      "x": 358,
+      "y": 989,
+      "bounds": {
+        "left": 343,
+        "top": 975,
+        "width": 31,
+        "height": 28
+      },
+      "confidence": 80
+    },
+    {
+      "text": "Q\u00e9",
+      "x": 382,
+      "y": 989,
+      "bounds": {
+        "left": 378,
+        "top": 975,
+        "width": 8,
+        "height": 28
+      },
+      "confidence": 40
+    },
+    {
+      "text": "Earnings",
+      "x": 411,
+      "y": 989,
+      "bounds": {
+        "left": 392,
+        "top": 975,
+        "width": 38,
+        "height": 28
+      },
+      "confidence": 79
+    },
+    {
+      "text": "Estimates",
+      "x": 457,
+      "y": 989,
+      "bounds": {
+        "left": 435,
+        "top": 975,
+        "width": 44,
+        "height": 28
+      },
+      "confidence": 83
+    },
+    {
+      "text": "2:26",
+      "x": 1869,
+      "y": 1048,
+      "bounds": {
+        "left": 1858,
+        "top": 1044,
+        "width": 22,
+        "height": 8
+      },
+      "confidence": 81
+    },
+    {
+      "text": "PM",
+      "x": 1892,
+      "y": 1048,
+      "bounds": {
+        "left": 1884,
+        "top": 1044,
+        "width": 16,
+        "height": 8
+      },
+      "confidence": 81
+    },
+    {
+      "text": "2/6/2026",
+      "x": 1873,
+      "y": 1065,
+      "bounds": {
+        "left": 1846,
+        "top": 1060,
+        "width": 55,
+        "height": 10
+      },
+      "confidence": 77
+    },
+    {
+      "text": ">",
+      "x": 1697,
+      "y": 1056,
+      "bounds": {
+        "left": 1692,
+        "top": 1053,
+        "width": 10,
+        "height": 6
+      },
+      "confidence": 96
+    },
+    {
+      "text": "enc",
+      "x": 1735,
+      "y": 1057,
+      "bounds": {
+        "left": 1724,
+        "top": 1053,
+        "width": 22,
+        "height": 8
+      },
+      "confidence": 47
+    },
+    {
+      "text": "@",
+      "x": 1771,
+      "y": 1055,
+      "bounds": {
+        "left": 1766,
+        "top": 1050,
+        "width": 10,
+        "height": 11
+      },
+      "confidence": 31
+    },
+    {
+      "text": "x",
+      "x": 1798,
+      "y": 1056,
+      "bounds": {
+        "left": 1792,
+        "top": 1050,
+        "width": 12,
+        "height": 12
+      },
+      "confidence": 67
+    },
+    {
+      "text": "i",
+      "x": 1821,
+      "y": 1054,
+      "bounds": {
+        "left": 1813,
+        "top": 1048,
+        "width": 16,
+        "height": 13
+      },
+      "confidence": 51
+    }
+  ],
+  "unfiltered_text": "ai Up X= \u00a9 Dailye: 4 eitandy | + - a x\n\nS GED CED GED GUEED 0 te \u00ab| 6 co x | Bi x | con x | Dee x | @ Us x |G Tok x |< Credits | Me Usage) | M Works | 4 The Ao\n\u20ac > G M \u00a9 localhost:8050/chat Qx*\n\n{toms (oarESHE) oo situs oma (moar) (ea) (WR) BB | Ca Now ter\n\n4A OD SHE) @\n\nWORKSPACE IDLE\n\nWhat's your analysis on NVIDIA (NVDA)? Should I buy, sell, or hold? execs # PINNED INTELLIGENCE\n\n[sysTEM PURGE]\n\n@ SENTINEL_INTELLIGENCE PULSE @\n\n[1426] ATW (SORE (raws)] teoaL ascuL\n\n1 \u00a5 Activision Blizzard Stock (NASDAQ:ATVD): Wait Until Antitrust Probe is Resolved\n\n[14:26] ATO [SCORE4 (aw8)] anatysrRaTING W Atmos Energy cut at BofA as shares already reflect strong growth opportunity\n\n[1426] ato (SCORES (aw6) A. Strong Demand Lifts Atmos Energy Corporation (ATO) First Quarter Profit Despite Extreme Winter Condi\n[1426] ATO [SCORED (aw) | aNALYSTRATING Here's Why ATO Stock Deserves a Spot in Your Portfolio Right Now\n\n[1426] ASML [SCORED (ews)\n\nSTOR 1 ASML Chart That Every Chip Stock Investor Needs To See\n\n[1426] ASML [SCORES] anscr\n\n\u2018Assessing ASML Holding (NasdaqGS-ASML) After Strong ALOriven Share Price Surge\n[14:26] ASML [SCORET (eir2)) anavsraeniNe \u2014 Prediction: ASML Stock Price Will Ht $2000 by This Time\n\n[1425] ASGN [SCORES] Exnwncs \u00a5 ASGN Ine (ASGN) Misses Q\u00e9 Earnings Estimates\n\n2:26 PM\n2/6/2026\n\n>\n\nenc @ x i\n\n",
+  "plain_text": "ai Up X= \u00a9 Dailye: 4 eitandy | + - a x\n\nS GED CED GED GUEED 0 te \u00ab| 6 co x | Bi x | con x | Dee x | @ Us x |G Tok x |< Credits | Me Usage) | M Works | 4 The Ao\n\u20ac > G M \u00a9 localhost:8050/chat Qx*\n\n{toms (oarESHE) oo situs oma (moar) (ea) (WR) BB | Ca Now ter\n\n4A OD SHE) @\n\nWORKSPACE IDLE\n\nWhat's your analysis on NVIDIA (NVDA)? Should I buy, sell, or hold? execs # PINNED INTELLIGENCE\n\n[sysTEM PURGE]\n\n@ SENTINEL_INTELLIGENCE PULSE @\n\n[1426] ATW (SORE (raws)] teoaL ascuL\n\n1 \u00a5 Activision Blizzard Stock (NASDAQ:ATVD): Wait Until Antitrust Probe is Resolved\n\n[14:26] ATO [SCORE4 (aw8)] anatysrRaTING W Atmos Energy cut at BofA as shares already reflect strong growth opportunity\n\n[1426] ato (SCORES (aw6) A. Strong Demand Lifts Atmos Energy Corporation (ATO) First Quarter Profit Despite Extreme Winter Condi\n[1426] ATO [SCORED (aw) | aNALYSTRATING Here's Why ATO Stock Deserves a Spot in Your Portfolio Right Now\n\n[1426] ASML [SCORED (ews)\n\nSTOR 1 ASML Chart That Every Chip Stock Investor Needs To See\n\n[1426] ASML [SCORES] anscr\n\n\u2018Assessing ASML Holding (NasdaqGS-ASML) After Strong ALOriven Share Price Surge\n[14:26] ASML [SCORET (eir2)) anavsraeniNe \u2014 Prediction: ASML Stock Price Will Ht $2000 by This Time\n\n[1425] ASGN [SCORES] Exnwncs \u00a5 ASGN Ine (ASGN) Misses Q\u00e9 Earnings Estimates\n\n2:26 PM\n2/6/2026\n\n>\n\nenc @ x i\n\n",
+  "total_elements": 197
+}
+14:26:43 | --------------------------------------------------------------------------------
+14:26:46 | CALL | observe_desktop | {}
+14:26:47 | RESULT | observe_desktop | ✅ SUCCESS (221ms)
+{
+  "windows": [
+    {
+      "title": "Taskbar",
+      "is_active": false
+    },
+    {
+      "title": "Tradio Terminal - Google Chrome",
+      "is_active": true
+    },
+    {
+      "title": "powerful-project-collection - Antigravity - chat.py",
+      "is_active": false
+    },
+    {
+      "title": "Update and restart ChatGPT now?",
+      "is_active": false
+    },
+    {
+      "title": "Chrome Remote Desktop - Remote Access - Chrome Remote Desktop",
+      "is_active": false
+    },
+    {
+      "title": "WhatsApp",
+      "is_active": false
+    },
+    {
+      "title": "Program Manager",
+      "is_active": false
+    }
+  ]
+}
+14:26:47 | --------------------------------------------------------------------------------
+14:26:50 | CALL | focus_window | {
+  "title": "powerful-project-collection - Antigravity - chat.py"
+}
+14:26:50 | RESULT | focus_window | ✅ SUCCESS (104ms)
+{
+  "success": true,
+  "focused": "powerful-project-collection - Antigravity - chat.py",
+  "total_matches": 1
+}
+14:26:50 | --------------------------------------------------------------------------------
+14:26:53 | CALL | describe_screen | {
+  "question": "What can I see in the VS Code/terminal window? Are there any error messages or output from the Tradio system?"
+}
+14:26:53 | RESULT | describe_screen | ✅ SUCCESS (165ms)
+{
+  "image_captured": true,
+  "image_base64": "[BASE64 DATA - 474328 chars]",
+  "description": "Screenshot captured successfully. Looking at the screen now.",
+  "question": "What can I see in the VS Code/terminal window? Are there any error messages or output from the Tradio system?"
+}
+14:26:53 | --------------------------------------------------------------------------------
+14:27:00 | CALL | focus_window | {
+  "title": "Tradio Terminal - Google Chrome"
+}
+14:27:00 | RESULT | focus_window | ✅ SUCCESS (68ms)
+{
+  "success": true,
+  "focused": "Tradio Terminal - Google Chrome",
+  "total_matches": 1
+}
+14:27:00 | --------------------------------------------------------------------------------
+14:27:03 | CALL | describe_screen | {}
+14:27:04 | RESULT | describe_screen | ✅ SUCCESS (394ms)
+{
+  "image_captured": true,
+  "image_base64": "[BASE64 DATA - 319568 chars]",
+  "description": "Screenshot captured successfully. Looking at the screen now.",
+  "question": "What is on the screen?"
+}
+14:27:04 | --------------------------------------------------------------------------------
+14:45:21 | CALL | list_dir | {
+  "path": "."
+}
+14:45:21 | RESULT | list_dir | ✅ SUCCESS (1ms)
+{
+  "items": [
+    {
+      "name": "agent_data",
+      "type": "directory",
+      "size": null
+    },
+    {
+      "name": "memory",
+      "type": "directory",
+      "size": null
+    },
+    {
+      "name": "MEMORY.md",
+      "type": "file",
+      "size": 283
+    }
+  ]
+}
+14:45:21 | --------------------------------------------------------------------------------
+14:45:23 | CALL | find_files | {
+  "pattern": "tradio*"
+}
+14:45:23 | RESULT | find_files | ✅ SUCCESS (2ms)
+{
+  "files": []
+}
+14:45:23 | --------------------------------------------------------------------------------
+14:45:25 | CALL | find_files | {
+  "pattern": "*powerful*"
+}
+14:45:25 | RESULT | find_files | ✅ SUCCESS (1ms)
+{
+  "files": []
+}
+14:45:25 | --------------------------------------------------------------------------------
+14:45:27 | CALL | run_command | {
+  "command": "pwd && ls -la"
+}
+14:45:27 | RESULT | run_command | ✅ SUCCESS (115ms)
+{
+  "stdout": "",
+  "stderr": "'pwd' is not recognized as an internal or external command,\noperable program or batch file.\n",
+  "exit_code": 1
+}
+14:45:27 | --------------------------------------------------------------------------------
+14:45:28 | CALL | run_command | {
+  "command": "cd & dir"
+}
+14:45:28 | RESULT | run_command | ✅ SUCCESS (112ms)
+{
+  "stdout": "C:\\Users\\Magsihim_AI\\.agentshell\\user_8562474049\\workspace\n Volume in drive C has no label.\n Volume Serial Number is 2893-33BC\n\n Directory of C:\\Users\\Magsihim_AI\\.agentshell\\user_8562474049\\workspace\n\n02/06/2026  04:58 PM    <DIR>          .\n02/06/2026  04:58 PM    <DIR>          ..\n02/06/2026  04:58 PM    <DIR>          agent_data\n02/16/2026  02:21 PM    <DIR>          memory\n02/06/2026  04:58 PM               283 MEMORY.md\n               1 File(s)            283 bytes\n               4 Dir(s)  13,112,164,352 bytes free\n",
+  "stderr": "",
+  "exit_code": 0
+}
+14:45:28 | --------------------------------------------------------------------------------
+14:45:29 | CALL | describe_screen | {}
+14:45:29 | RESULT | describe_screen | ✅ SUCCESS (273ms)
+{
+  "image_captured": true,
+  "image_base64": "[BASE64 DATA - 351748 chars]",
+  "description": "Screenshot captured successfully. Looking at the screen now.",
+  "question": "What is on the screen?"
+}
+14:45:29 | --------------------------------------------------------------------------------
+14:45:33 | CALL | run_command | {
+  "command": "cd /d %USERPROFILE% && dir /s /b tradio 2>nul | head -20"
+}
+14:45:33 | RESULT | run_command | ✅ SUCCESS (110ms)
+{
+  "stdout": "",
+  "stderr": "'head' is not recognized as an internal or external command,\noperable program or batch file.\n",
+  "exit_code": 255
+}
+14:45:33 | --------------------------------------------------------------------------------
+14:45:35 | CALL | run_command | {
+  "command": "cd /d %USERPROFILE% && dir /s tradio 2>nul | findstr tradio"
+}
+15:08:17 | CALL | find_files | {
+  "pattern": "tradio"
+}
+15:08:17 | RESULT | find_files | ✅ SUCCESS (1ms)
+{
+  "files": []
+}
+15:08:17 | --------------------------------------------------------------------------------
+15:08:18 | CALL | list_dir | {
+  "path": "."
+}
+15:08:18 | RESULT | list_dir | ✅ SUCCESS (1ms)
+{
+  "items": [
+    {
+      "name": "agent_data",
+      "type": "directory",
+      "size": null
+    },
+    {
+      "name": "memory",
+      "type": "directory",
+      "size": null
+    },
+    {
+      "name": "MEMORY.md",
+      "type": "file",
+      "size": 283
+    }
+  ]
+}
+15:08:18 | --------------------------------------------------------------------------------
+15:08:20 | CALL | run_command | {
+  "command": "find ~ -maxdepth 3 -type d -name \"*powerful*\" 2>/dev/null"
+}
+15:08:20 | RESULT | run_command | ✅ SUCCESS (113ms)
+{
+  "stdout": "",
+  "stderr": "The system cannot find the path specified.\n",
+  "exit_code": 1
+}
+15:08:20 | --------------------------------------------------------------------------------
+15:08:22 | CALL | run_command | {
+  "command": "dir /s /b \"*tradio*\" 2>nul | head -20"
+}
+15:08:22 | RESULT | run_command | ✅ SUCCESS (111ms)
+{
+  "stdout": "",
+  "stderr": "'head' is not recognized as an internal or external command,\noperable program or batch file.\n",
+  "exit_code": 255
+}
+15:08:22 | --------------------------------------------------------------------------------
+15:08:23 | CALL | run_command | {
+  "command": "dir /s /b \"*tradio*\" C:\\Users 2>nul"
+}
+15:09:05 | RESULT | run_command | ❌ ERROR (41355ms)
+{
+  "error": "Command terminated by user interruption.",
+  "interrupted": true,
+  "stdout": "Command was terminated before completion."
+}
+15:09:05 | --------------------------------------------------------------------------------
+15:09:25 | CALL | run_command | {
+  "command": "find . -maxdepth 3 -type d -name \"*tradio*\" -o -name \"*powerful*project*\" 2>/dev/null | head -20"
+}
+15:09:25 | RESULT | run_command | ✅ SUCCESS (126ms)
+{
+  "stdout": "",
+  "stderr": "The system cannot find the path specified.\n",
+  "exit_code": 255
+}
+15:09:25 | --------------------------------------------------------------------------------
+15:09:27 | CALL | run_command | {
+  "command": "dir /s /b *tradio* 2>nul | findstr tradio",
+  "cwd": "%USERPROFILE%"
+}
+15:09:27 | RESULT | run_command | ❌ ERROR (1ms)
+{
+  "error": "Execution failed: [WinError 267] The directory name is invalid"
+}
+15:09:27 | --------------------------------------------------------------------------------
+15:09:29 | CALL | list_dir | {
+  "path": "."
+}
+15:09:29 | RESULT | list_dir | ✅ SUCCESS (1ms)
+{
+  "items": [
+    {
+      "name": "agent_data",
+      "type": "directory",
+      "size": null
+    },
+    {
+      "name": "memory",
+      "type": "directory",
+      "size": null
+    },
+    {
+      "name": "MEMORY.md",
+      "type": "file",
+      "size": 283
+    }
+  ]
+}
+15:09:29 | --------------------------------------------------------------------------------
+15:09:53 | CALL | run_background_command | {
+  "command": "sleep 10"
+}
+15:09:53 | RESULT | run_background_command | ✅ SUCCESS (15ms)
+{
+  "command_id": "657c8e2d",
+  "pid": 4184,
+  "status": "running",
+  "message": "Background command started. Use command_status('657c8e2d') to check output."
+}
+15:09:53 | --------------------------------------------------------------------------------
+15:09:55 | CALL | command_status | {
+  "command_id": "657c8e2d"
+}
+15:09:55 | RESULT | command_status | ✅ SUCCESS (0ms)
+{
+  "command_id": "657c8e2d",
+  "command": "sleep 10",
+  "status": "exited",
+  "output": "'sleep' is not recognized as an internal or external command,\noperable program or batch file.",
+  "total_lines": 2,
+  "exit_code": 1
+}
+15:09:55 | --------------------------------------------------------------------------------
+15:09:57 | CALL | run_background_command | {
+  "command": "timeout /t 10"
+}
+15:09:57 | RESULT | run_background_command | ✅ SUCCESS (10ms)
+{
+  "command_id": "2a60231c",
+  "pid": 23156,
+  "status": "running",
+  "message": "Background command started. Use command_status('2a60231c') to check output."
+}
+15:09:57 | --------------------------------------------------------------------------------
+15:09:59 | CALL | command_status | {
+  "command_id": "2a60231c"
+}
+15:09:59 | RESULT | command_status | ✅ SUCCESS (0ms)
+{
+  "command_id": "2a60231c",
+  "command": "timeout /t 10",
+  "status": "exited",
+  "output": "ERROR: Input redirection is not supported, exiting the process immediately.",
+  "total_lines": 1,
+  "exit_code": 1
+}
+15:09:59 | --------------------------------------------------------------------------------
+15:10:15 | CALL | run_background_command | {
+  "command": "find ~ -type d -name \"tradio\" 2>/dev/null"
+}
+15:10:15 | RESULT | run_background_command | ✅ SUCCESS (12ms)
+{
+  "command_id": "395c99c4",
+  "pid": 15296,
+  "status": "running",
+  "message": "Background command started. Use command_status('395c99c4') to check output."
+}
+15:10:15 | --------------------------------------------------------------------------------
+15:10:17 | CALL | command_status | {
+  "command_id": "395c99c4"
+}
+15:10:17 | RESULT | command_status | ✅ SUCCESS (0ms)
+{
+  "command_id": "395c99c4",
+  "command": "find ~ -type d -name \"tradio\" 2>/dev/null",
+  "status": "exited",
+  "output": "The system cannot find the path specified.",
+  "total_lines": 1,
+  "exit_code": 1
+}
+15:10:17 | --------------------------------------------------------------------------------
+15:10:19 | CALL | run_background_command | {
+  "command": "dir /s /b *tradio* 2>nul"
+}
+15:10:19 | RESULT | run_background_command | ✅ SUCCESS (8ms)
+{
+  "command_id": "7457fa5b",
+  "pid": 28688,
+  "status": "running",
+  "message": "Background command started. Use command_status('7457fa5b') to check output."
+}
+15:10:19 | --------------------------------------------------------------------------------
+15:10:20 | CALL | command_status | {
+  "command_id": "7457fa5b"
+}
+15:10:20 | RESULT | command_status | ✅ SUCCESS (0ms)
+{
+  "command_id": "7457fa5b",
+  "command": "dir /s /b *tradio* 2>nul",
+  "status": "exited",
+  "output": "",
+  "total_lines": 0,
+  "exit_code": 1
+}
+15:10:20 | --------------------------------------------------------------------------------

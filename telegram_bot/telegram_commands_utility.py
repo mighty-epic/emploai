@@ -291,6 +291,36 @@ def build_utility_command_handlers(
                 session.live_config.save_config()
                 await safe_reply(update, "⏹️ Heartbeat disabled")
 
+    @rate_limited(security_manager)
+    async def verbose_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Toggle verbose tool logging in Telegram."""
+        user = update.effective_user
+        session = get_session(user.id)
+        track_command_usage(session, "verbose")
+
+        arg = context.args[0].lower() if context.args else None
+        if arg in {"on", "enable"}:
+            session.verbose_mode = True
+        elif arg in {"off", "disable"}:
+            session.verbose_mode = False
+        elif arg is None:
+            # No argument: toggle
+            session.verbose_mode = not session.verbose_mode
+
+        status = "✅ ON" if session.verbose_mode else "⛔ OFF"
+        reply_markup = InlineKeyboardHelper.create_action_buttons(
+            [
+                {"text": "✅ On", "callback_data": "verbose:on"},
+                {"text": "⛔ Off", "callback_data": "verbose:off"},
+            ]
+        )
+        await safe_reply(
+            update,
+            f"**🔍 Verbose Tool Logging:** {status}\n\n"
+            "When ON, each tool call and its result will be shown live in the chat.",
+            reply_markup=reply_markup,
+        )
+
     return {
         "monitor_command": monitor_command,
         "analytics_command": analytics_command,
@@ -302,4 +332,5 @@ def build_utility_command_handlers(
         "memory_update_command": memory_update_command,
         "config_command": config_command,
         "heartbeat_command": heartbeat_command,
+        "verbose_command": verbose_command,
     }

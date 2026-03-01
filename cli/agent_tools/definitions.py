@@ -11,8 +11,10 @@ TOOL_LIST_DIR = "list_dir"
 TOOL_FIND_FILES = "find_files"
 TOOL_GREP_SEARCH = "grep_search"
 TOOL_RUN_COMMAND = "run_command"
+TOOL_RUN_BACKGROUND_COMMAND = "run_background_command"
 TOOL_COMMAND_STATUS = "command_status"
 TOOL_SEND_INPUT = "send_input"
+TOOL_KILL_COMMAND = "kill_command"
 TOOL_WEB_SEARCH = "web_search"
 TOOL_CHANGE_DIRECTORY = "change_directory"
 TOOL_PULL_SKILL = "pull_skill"
@@ -110,37 +112,60 @@ CLI_AGENT_TOOLS = [
     },
     {
         "name": TOOL_RUN_COMMAND,
-        "description": "Execute a terminal command in a specified working directory. For interactive commands, it returns a command ID.",
+        "description": "Execute a SHORT terminal command synchronously. The command runs and you get the full output when it finishes. Use this for quick commands (ls, cat, grep, pip install, etc.) that complete in under 30 seconds. For long-running commands (servers, builds, tests, watches), use run_background_command instead.",
         "parameters": {
             "type": "object",
             "properties": {
                 "command": {"type": "string", "description": "The full shell command to execute."},
-                "cwd": {"type": "string", "description": "Working directory to execute the command in (e.g., '..' for parent directory). Defaults to workspace root."}
+                "cwd": {"type": "string", "description": "Working directory to execute the command in. Defaults to workspace root."}
+            },
+            "required": ["command"]
+        }
+    },
+    {
+        "name": TOOL_RUN_BACKGROUND_COMMAND,
+        "description": "Start a command in the BACKGROUND. Returns a command_id immediately so you can continue working. Use this for long-running commands (dev servers, builds, npm install, test suites, file watchers, or any command that may take more than 30 seconds). After starting, use command_status to check output/progress, send_input to interact, or kill_command to stop it.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "The full shell command to run in the background."},
+                "cwd": {"type": "string", "description": "Working directory. Defaults to workspace root."}
             },
             "required": ["command"]
         }
     },
     {
         "name": TOOL_COMMAND_STATUS,
-        "description": "Check the status and output of a previously started command.",
+        "description": "Check the status and recent output of a background command started with run_background_command. Returns whether the command is still running, its exit code (if finished), and the latest stdout/stderr output.",
         "parameters": {
             "type": "object",
             "properties": {
-                "command_id": {"type": "string", "description": "The ID of the command to check."}
+                "command_id": {"type": "string", "description": "The command_id returned by run_background_command."}
             },
             "required": ["command_id"]
         }
     },
     {
         "name": TOOL_SEND_INPUT,
-        "description": "Send keyboard input to a running interactive command.",
+        "description": "Send text input (stdin) to a running background command. Use this for interactive commands that prompt for input (e.g., confirmation prompts, REPLs).",
         "parameters": {
             "type": "object",
             "properties": {
-                "command_id": {"type": "string", "description": "The ID of the running command."},
-                "input": {"type": "string", "description": "The text to send to stdin."}
+                "command_id": {"type": "string", "description": "The command_id of the running background command."},
+                "input": {"type": "string", "description": "The text to send to stdin. A newline is appended automatically."}
             },
             "required": ["command_id", "input"]
+        }
+    },
+    {
+        "name": TOOL_KILL_COMMAND,
+        "description": "Kill/terminate a running background command. Use this to stop long-running processes, servers, or commands that are stuck.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command_id": {"type": "string", "description": "The command_id of the command to kill."}
+            },
+            "required": ["command_id"]
         }
     },
     {

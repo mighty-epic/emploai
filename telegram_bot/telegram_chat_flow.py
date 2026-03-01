@@ -23,6 +23,60 @@ from bot_core.ui_helpers import InlineKeyboardHelper, ThinkingModeVisualizer, Sk
 
 logger = logging.getLogger(__name__)
 
+# --- Base64 field names to always strip from verbose output ---
+_BASE64_KEYS = frozenset({"image_base64", "base64", "image_data", "data", "screenshot"})
+
+
+def _format_verbose_tool_msg(name: str, args: dict, result, duration_ms: float) -> str:
+    """Format a compact tool call + result message for Telegram verbose mode."""
+    # -- Truncated args --
+    short_parts = []
+    for k, v in list(args.items())[:4]:
+        v_str = str(v)
+        # Skip base64-like fields entirely
+        if k in _BASE64_KEYS and len(v_str) > 100:
+            continue
+        if len(v_str) > 80:
+            v_str = v_str[:77] + "..."
+        short_parts.append(f"{k}: {v_str}")
+    args_str = ", ".join(short_parts)
+    if len(args_str) > 200:
+        args_str = args_str[:197] + "..."
+
+    # -- Compact result --
+    if isinstance(result, dict):
+        if "error" in result:
+            result_line = f"\u274c {str(result['error'])[:120]}"
+        else:
+            safe_keys = [k for k in result.keys() if k not in _BASE64_KEYS]
+            result_line = f"\u2705 {', '.join(safe_keys[:4])}"
+    elif isinstance(result, str):
+        clean = result
+        if len(clean) > 120:
+            clean = clean[:117] + "..."
+        result_line = f"\u274c {clean}" if clean.startswith("Error") else f"\u2705 {clean}"
+    else:
+        result_line = f"\u2705 {str(result)[:120]}"
+
+    msg = f"\U0001f527 {name}({args_str})\n\u2192 {result_line} ({duration_ms:.0f}ms)"
+    # Hard cap to prevent Telegram message-too-long errors
+    if len(msg) > 500:
+        msg = msg[:497] + "..."
+    return msg
+
+
+async def _send_verbose_to_telegram(session, msg: str):
+    """Send a verbose tool message to Telegram (fire-and-forget safe)."""
+    if not session._app:
+        return
+    try:
+        await session._app.bot.send_message(
+            chat_id=session.user_id,
+            text=msg,
+        )
+    except Exception:
+        pass  # Never let verbose logging break the flow
+
 
 async def run_chat_flow(update, context, session, user_message: str, is_retry: bool = False):
     """Shared chat execution flow for normal messages and retries."""
@@ -111,6 +165,7 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
             memory_context = f"\n\n## Recent Context from Memory\n\n{recent_memory}"
 
     system_content = f"{SYSTEM_PROMPT}{memory_context}{skills_index}{active_skills_context}"
+    system_content = system_content.replace("{{SYSTEM_INFO}}", session.system_info)
 
     messages = [{"role": "system", "content": system_content}] + [
         {"role": msg.get("role", "user"), "content": msg.get("content", "")}
@@ -175,6 +230,19 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
         "finish_stream": finish_stream_func,
         "update_status": update_status_func,
     }
+
+    # Verbose tool-use callback (sends live tool info to Telegram)
+    def on_tool_use_func(tool_name, tool_args, tool_result, dur_ms):
+        if not session.verbose_mode:
+            return
+        if not session._app or not session._loop:
+            return
+        msg = _format_verbose_tool_msg(tool_name, tool_args, tool_result, dur_ms)
+        asyncio.run_coroutine_threadsafe(
+            _send_verbose_to_telegram(session, msg), session._loop
+        )
+
+    callbacks["on_tool_use"] = on_tool_use_func
 
     loop = asyncio.get_running_loop()
 
@@ -244,6 +312,7 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
                     active_skills_context = f"\n\n# LOADED SPECIALIZED SKILLS\n{session.skill_registry.get_active_skills_context(session.active_skills)}"
             
             custom_system_prompt = f"{UNIFIED_AGENT_PROMPT}{memory_context}{skills_index}{active_skills_context}"
+            custom_system_prompt = custom_system_prompt.replace("{{SYSTEM_INFO}}", session.system_info)
 
             result = await loop.run_in_executor(
                 None,
@@ -359,6 +428,10 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
             )
 
         success = True
+
+        # Background: auto-rename session at message checkpoints (3, 20)
+        loop = asyncio.get_running_loop()
+        loop.run_in_executor(None, session.auto_rename_session)
 
     except Exception as exc:
         if session.current_task_id == my_task_id:

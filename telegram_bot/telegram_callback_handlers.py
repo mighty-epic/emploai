@@ -43,6 +43,14 @@ def build_callback_handlers(
             await safe_edit(query, f"Auto-reply set to {status}.")
             return
 
+        if data.startswith("verbose:"):
+            setting = data.split(":")[1]
+            async with session.lock:
+                session.verbose_mode = setting == "on"
+            status = "✅ ON" if session.verbose_mode else "⛔ OFF"
+            await safe_edit(query, f"🔍 Verbose tool logging set to {status}.")
+            return
+
         if data.startswith("files:"):
             action = data.split(":")[1]
             if action == "clear":

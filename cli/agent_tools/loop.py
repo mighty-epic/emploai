@@ -412,7 +412,12 @@ def run_tool_loop(
             # Verbose logging for tool result
             if VERBOSE_LOGGING:
                 log_tool_result(name, result, duration_ms)
-            
+
+            # Notify external callback (e.g. Telegram verbose mode)
+            on_tool_use_cb = callbacks.get("on_tool_use")
+            if on_tool_use_cb:
+                on_tool_use_cb(name, args, result, duration_ms)
+
             # Group result
             batch_results.append({
                 "id": tc["id"],

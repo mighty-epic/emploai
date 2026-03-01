@@ -3,6 +3,9 @@
 import os
 import subprocess
 import shlex
+import threading
+import uuid
+from collections import deque
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from .web_tools import duckduckgo_search
@@ -24,8 +27,8 @@ class ToolExecutor:
         self.single_agent = single_agent
         self.skill_registry = skill_registry
         self.active_skills = active_skills if active_skills is not None else []
-        # Track background processes (stub for now)
-        self.processes = {}
+        # Track background processes: {command_id: {process, output_lines, thread, command, ...}}
+        self._background_commands: Dict[str, Dict[str, Any]] = {}
 
     def _is_safe_path(self, path_str: str) -> bool:
         """
@@ -38,7 +41,9 @@ class ToolExecutor:
 
     def _resolve_path(self, path_str: str) -> Path:
         """Resolve a path. No workspace restriction - agent can navigate freely."""
-        p = Path(path_str)
+        # Expand environment variables (e.g. %USERPROFILE% or $HOME)
+        expanded = os.path.expandvars(path_str)
+        p = Path(expanded)
         if not p.is_absolute():
             p = (self.workspace_path / p).resolve()
         else:
@@ -226,6 +231,70 @@ class ToolExecutor:
             
         return {"success": True, "message": "File updated successfully."}
 
+    def tool_str_replace_based_edit_tool(self, command: str, path: str = "", **kwargs) -> Dict[str, Any]:
+        """
+        Handler for Claude's native text_editor_20250728 tool.
+        Maps text_editor commands to existing file operation methods.
+        
+        Commands:
+            view        - Read file contents or list directory (maps to read_file / list_dir)
+            create      - Create a new file with content (maps to write_file)
+            str_replace - Replace text in a file (maps to edit_file)
+            insert      - Insert text at a specific line number
+        """
+        if command == "view":
+            if not path:
+                return {"error": "path is required for view command"}
+            p = self._resolve_path(path)
+            if p.is_dir():
+                return self.tool_list_dir(path)
+            view_range = kwargs.get("view_range")
+            if view_range and isinstance(view_range, list) and len(view_range) == 2:
+                start_line = view_range[0]
+                end_line = view_range[1] if view_range[1] != -1 else None
+                return self.tool_read_file(path, start_line=start_line, end_line=end_line)
+            return self.tool_read_file(path)
+
+        elif command == "create":
+            file_text = kwargs.get("file_text", "")
+            if not path:
+                return {"error": "path is required for create command"}
+            if not file_text:
+                return {"error": "file_text is required for create command"}
+            return self.tool_write_file(path, file_text)
+
+        elif command == "str_replace":
+            old_str = kwargs.get("old_str", "")
+            new_str = kwargs.get("new_str", "")
+            if not path:
+                return {"error": "path is required for str_replace command"}
+            if not old_str:
+                return {"error": "old_str is required for str_replace command"}
+            return self.tool_edit_file(path, old_str, new_str)
+
+        elif command == "insert":
+            insert_line = kwargs.get("insert_line", 0)
+            insert_text = kwargs.get("insert_text", "")
+            if not path:
+                return {"error": "path is required for insert command"}
+            if not insert_text:
+                return {"error": "insert_text is required for insert command"}
+            p = self._resolve_path(path)
+            if not p.is_file():
+                return {"error": f"File not found: {path}"}
+            with open(p, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            insert_idx = max(0, min(insert_line, len(lines)))
+            if not insert_text.endswith('\n'):
+                insert_text += '\n'
+            lines.insert(insert_idx, insert_text)
+            with open(p, 'w', encoding='utf-8') as f:
+                f.writelines(lines)
+            return {"success": True, "message": f"Text inserted at line {insert_line} in {path}"}
+
+        else:
+            return {"error": f"Unknown text_editor command: {command}"}
+
     def tool_change_directory(self, path: str) -> Dict[str, Any]:
         """Update the base workspace path for the executor."""
         new_path = self._resolve_path(path)
@@ -380,7 +449,7 @@ class ToolExecutor:
             )
             
             start_time = time.time()
-            timeout = 600 # Increased safety timeout to 10 minutes
+            timeout = 30 # Synchronous commands must finish in 30s. Use background tools for longer tasks.
             
             while process.poll() is None:
                 # Check for interruption flag
@@ -407,6 +476,143 @@ class ToolExecutor:
             }
         except Exception as e:
             return {"error": f"Execution failed: {str(e)}"}
+
+    # -----------------------------------------------------------------------
+    # Background Command System
+    # -----------------------------------------------------------------------
+
+    def _bg_reader_thread(self, command_id: str):
+        """Daemon thread that continuously reads stdout from a background process."""
+        entry = self._background_commands.get(command_id)
+        if not entry:
+            return
+        proc = entry["process"]
+        out_lines = entry["output_lines"]
+        try:
+            for raw_line in iter(proc.stdout.readline, ""):
+                out_lines.append(raw_line.rstrip("\n"))
+        except (ValueError, OSError):
+            pass  # pipe closed
+
+    def tool_run_background_command(self, command: str, cwd: str = None) -> Dict[str, Any]:
+        """Start a command in the background. Returns immediately with a command_id."""
+        if cwd:
+            work_dir = self._resolve_path(cwd)
+        else:
+            work_dir = self.workspace_path
+
+        command_id = uuid.uuid4().hex[:8]
+
+        try:
+            process = subprocess.Popen(
+                command,
+                shell=True,
+                cwd=work_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,  # merge stderr into stdout
+                stdin=subprocess.PIPE,
+                text=True,
+                bufsize=1,  # line-buffered
+            )
+        except Exception as e:
+            return {"error": f"Failed to start background command: {str(e)}"}
+
+        entry = {
+            "process": process,
+            "command": command,
+            "cwd": str(work_dir),
+            "output_lines": deque(maxlen=200),  # keep last 200 lines
+            "thread": None,
+        }
+        self._background_commands[command_id] = entry
+
+        # Start reader thread (daemon so it won't block shutdown)
+        reader = threading.Thread(
+            target=self._bg_reader_thread,
+            args=(command_id,),
+            daemon=True,
+        )
+        entry["thread"] = reader
+        reader.start()
+
+        return {
+            "command_id": command_id,
+            "pid": process.pid,
+            "status": "running",
+            "message": f"Background command started. Use command_status('{command_id}') to check output.",
+        }
+
+    def tool_command_status(self, command_id: str) -> Dict[str, Any]:
+        """Check the status and recent output of a background command."""
+        entry = self._background_commands.get(command_id)
+        if not entry:
+            return {"error": f"No background command found with id '{command_id}'."}
+
+        proc = entry["process"]
+        exit_code = proc.poll()
+        is_running = exit_code is None
+        recent = list(entry["output_lines"])  # snapshot
+
+        # Return last 50 lines to keep response size reasonable
+        tail = recent[-50:] if len(recent) > 50 else recent
+
+        result = {
+            "command_id": command_id,
+            "command": entry["command"],
+            "status": "running" if is_running else "exited",
+            "output": "\n".join(tail),
+            "total_lines": len(recent),
+        }
+        if not is_running:
+            result["exit_code"] = exit_code
+        return result
+
+    def tool_send_input(self, command_id: str, input: str) -> Dict[str, Any]:
+        """Send text input to a running background command's stdin."""
+        entry = self._background_commands.get(command_id)
+        if not entry:
+            return {"error": f"No background command found with id '{command_id}'."}
+
+        proc = entry["process"]
+        if proc.poll() is not None:
+            return {"error": f"Command '{command_id}' has already exited (code {proc.returncode}). Cannot send input."}
+
+        try:
+            proc.stdin.write(input + "\n")
+            proc.stdin.flush()
+            return {"status": "sent", "input": input}
+        except (BrokenPipeError, OSError) as e:
+            return {"error": f"Failed to send input: {str(e)}"}
+
+    def tool_kill_command(self, command_id: str) -> Dict[str, Any]:
+        """Kill a running background command."""
+        entry = self._background_commands.get(command_id)
+        if not entry:
+            return {"error": f"No background command found with id '{command_id}'."}
+
+        proc = entry["process"]
+        if proc.poll() is not None:
+            return {
+                "status": "already_exited",
+                "exit_code": proc.returncode,
+                "message": f"Command '{command_id}' was already finished.",
+            }
+
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=2)
+        except Exception as e:
+            return {"error": f"Failed to kill command: {str(e)}"}
+
+        return {
+            "status": "killed",
+            "exit_code": proc.returncode,
+            "message": f"Command '{command_id}' has been terminated.",
+        }
 
     # --- WEB TOOLS ---
 

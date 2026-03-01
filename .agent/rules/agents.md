@@ -43,7 +43,7 @@ You are one of **4 AI developer agents** working on this codebase simultaneously
 
 ## Coordination Protocol
 
-### Before Starting Any Task
+### Before Starting Any Task !!(only if your orking in emploai dir)
 
 1. Read `WORK_IN_PROGRESS.md` to see active work
 2. If your intended files are NOT claimed → Add your entry and proceed

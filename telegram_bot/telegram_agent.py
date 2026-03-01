@@ -168,6 +168,7 @@ memory_command = _utility_command_handlers["memory_command"]
 memory_update_command = _utility_command_handlers["memory_update_command"]
 config_command = _utility_command_handlers["config_command"]
 heartbeat_command = _utility_command_handlers["heartbeat_command"]
+verbose_command = _utility_command_handlers["verbose_command"]
 
 # ======================================================================================
 # CALLBACK QUERY HANDLER (for inline buttons)
@@ -250,6 +251,7 @@ command_handlers = {
     "memory_update": memory_update_command,
     "config": config_command,
     "heartbeat": heartbeat_command,
+    "verbose": verbose_command,
 }
 
 message_handlers = {

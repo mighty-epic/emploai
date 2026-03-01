@@ -30,11 +30,26 @@ def to_anthropic_format(tools: List[Dict[str, Any]] = None) -> List[Dict[str, An
     - Canonical format: {"name": ..., "description": ..., "parameters": ...}
     - OpenAI format: {"type": "function", "function": {"name": ..., ...}}
     Used by: Anthropic (Claude).
+    
+    When using default CLI tools, replaces custom write_file/edit_file/read_file
+    with Claude's native text_editor_20250728 tool for reliable file operations.
     """
+    is_default = tools is None
     if tools is None:
         tools = CLI_AGENT_TOOLS
+    
+    # Tools that Claude's native text_editor replaces
+    TEXT_EDITOR_REPLACES = {"write_file", "edit_file", "read_file"}
         
     anthropic_tools = []
+    
+    # Add Claude's native text_editor tool ONLY for default CLI tools
+    if is_default:
+        anthropic_tools.append({
+            "type": "text_editor_20250728",
+            "name": "str_replace_based_edit_tool"
+        })
+    
     for tool in tools:
         # Check if it's OpenAI format (has "function" key)
         if "function" in tool:
@@ -47,6 +62,10 @@ def to_anthropic_format(tools: List[Dict[str, Any]] = None) -> List[Dict[str, An
             name = tool.get("name", "")
             description = tool.get("description", "")
             parameters = tool.get("parameters", {"type": "object", "properties": {}})
+        
+        # Skip tools replaced by native text_editor when using default CLI tools
+        if is_default and name in TEXT_EDITOR_REPLACES:
+            continue
         
         anthropic_tools.append({
             "name": name,
