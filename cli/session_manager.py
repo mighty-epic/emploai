@@ -29,7 +29,7 @@ class SessionManager:
         workspace: Optional[Path] = None,
         model: str = "claude-haiku-4.5",
         variant: str = "standard",
-        agent_mode: str = "manual"
+        agent_mode: str = "auto"
     ) -> Session:
         """Create a new session.
         

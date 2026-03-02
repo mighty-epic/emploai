@@ -249,7 +249,7 @@ class BrowserTool:
                 element = self.driver.find_element(By.CSS_SELECTOR, target)
                 if element.is_displayed():
                     element.click()
-                    return {"success": True, "method": "css_selector"}
+                    return {"success": True, "method": "css_selector", "NEXT": "You MUST call describe_screen or ocr_screen NOW to verify the click worked before doing anything else."}
             except:
                 pass
             
@@ -268,7 +268,7 @@ class BrowserTool:
             for el in elements:
                 if el.is_displayed():
                     el.click()
-                    return {"success": True, "method": "xpath", "matched": target}
+                    return {"success": True, "method": "xpath", "matched": target, "NEXT": "You MUST call describe_screen or ocr_screen NOW to verify the click worked before doing anything else."}
             
             return {"error": f"Element not found: '{target}'"}
         except Exception as e:
@@ -284,7 +284,7 @@ class BrowserTool:
             if clear_first:
                 active.clear()
             active.send_keys(text)
-            return {"success": True, "typed": text}
+            return {"success": True, "typed": text, "NEXT": "You MUST call describe_screen or ocr_screen NOW to verify the text appeared in the correct field."}
         except Exception as e:
             return {"error": str(e)}
     
@@ -458,7 +458,7 @@ BROWSER_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "browser_click",
-            "description": "Click element by text content or CSS selector. Prefers snapshot+click_ref for reliability.",
+            "description": "Click element by text content or CSS selector. MANDATORY: After calling this, you MUST call describe_screen or ocr_screen to verify the click worked before taking any other action.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -472,7 +472,7 @@ BROWSER_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "browser_type",
-            "description": "Type text into the focused element.",
+            "description": "Type text into the focused element. MANDATORY: After calling this, you MUST call describe_screen or ocr_screen to verify the text appeared correctly before taking any other action.",
             "parameters": {
                 "type": "object",
                 "properties": {

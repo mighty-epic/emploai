@@ -57,7 +57,7 @@ class TelegramSession:
     user_id: int
     current_model: str = "gpt-5.2"
     current_variant: str = "standard"
-    agent_mode: str = "manual"  # Changed from auto - allow model switching
+    agent_mode: str = "auto"  # Default to auto for full autonomous behavior
     max_turns: int = 100
     chat_history: List[Dict] = field(default_factory=list)
 
@@ -115,7 +115,7 @@ class TelegramSession:
     show_skill_notifications: bool = True
 
     # Verbose tool logging to Telegram
-    verbose_mode: bool = False
+    verbose_mode: bool = True  # Default ON so user sees tool actions
 
     # File handling
     pending_files: List[Dict[str, Any]] = field(default_factory=list)
@@ -142,10 +142,11 @@ class TelegramSession:
         user_data_path = Path.home() / ".agentshell" / f"user_{self.user_id}"
         user_data_path.mkdir(parents=True, exist_ok=True)
         
-        # If workspace is still default (cwd), move it to user-specific storage in Documents
+        # If workspace is still default (cwd), set it to the emploai project directory
         if self.workspace == Path.cwd():
-            self.workspace = Path.home() / "Documents" / "EmploAI" / f"user_{self.user_id}"
-            self.workspace.mkdir(parents=True, exist_ok=True)
+            # telegram_agent.py runs from emploai/telegram_bot/, so parent is emploai/
+            self.workspace = Path(__file__).resolve().parent.parent
+            # Don't create dirs — workspace should already exist
 
         # Initialize session context
         session_registry = get_session_registry()

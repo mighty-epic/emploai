@@ -68,7 +68,8 @@ AGENT_TOOLS = [
     
     # --- BROWSER TOOLS ---
     {"type": "function", "function": {"name": "open_browser", "description": "Open Chrome browser and navigate to a URL.", "parameters": {"type": "object", "properties": {"url": {"type": "string", "description": "URL to navigate to"}}, "required": ["url"]}}},
-    {"type": "function", "function": {"name": "browser_click", "description": "Click an element in the browser by text content or CSS selector.", "parameters": {"type": "object", "properties": {"target": {"type": "string", "description": "Text content or CSS selector of element to click"}}, "required": ["target"]}}},
+    {"type": "function", "function": {"name": "browser_click_ref", "description": "THE BEST WAY TO CLICK. Click a browser element by its [ref=N] ID. You MUST run observe_browser first to get the IDs, then use this.", "parameters": {"type": "object", "properties": {"ref": {"type": "integer", "description": "The reference ID from observe_browser (e.g. 5)"}}, "required": ["ref"]}}},
+    {"type": "function", "function": {"name": "browser_click", "description": "WARNING: Highly unreliable. Use observe_browser + browser_click_ref instead if possible. Click an element by text.", "parameters": {"type": "object", "properties": {"target": {"type": "string", "description": "Text content or CSS selector of element to click"}}, "required": ["target"]}}},
     {"type": "function", "function": {"name": "browser_type", "description": "Type text into the focused browser element.", "parameters": {"type": "object", "properties": {"text": {"type": "string"}, "clear_first": {"type": "boolean", "default": False}}, "required": ["text"]}}},
     {"type": "function", "function": {"name": "browser_press_key", "description": "Press a key in the browser (enter, tab, escape, etc).", "parameters": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}}},
     {"type": "function", "function": {"name": "browser_scroll", "description": "Scroll the browser page.", "parameters": {"type": "object", "properties": {"direction": {"type": "string", "enum": ["up", "down"]}, "amount": {"type": "integer", "default": 300}}}}},
@@ -85,12 +86,12 @@ AGENT_TOOLS = [
     {"type": "function", "function": {"name": "close_window", "description": "Close a window by title.", "parameters": {"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]}}},
     
     # --- INPUT TOOLS (Desktop) ---
-    {"type": "function", "function": {"name": "click", "description": "Click at screen coordinates. Use ocr_screen first to find coordinates of text.", "parameters": {"type": "object", "properties": {"x": {"type": "integer", "description": "X coordinate on screen"}, "y": {"type": "integer", "description": "Y coordinate on screen"}}, "required": ["x", "y"]}}},
+    {"type": "function", "function": {"name": "click", "description": "Click at screen coordinates. Use ocr_screen first to find coordinates of text. MANDATORY: After calling this, you MUST call describe_screen or ocr_screen to verify the click worked before taking any other action.", "parameters": {"type": "object", "properties": {"x": {"type": "integer", "description": "X coordinate on screen"}, "y": {"type": "integer", "description": "Y coordinate on screen"}}, "required": ["x", "y"]}}},
     {"type": "function", "function": {"name": "right_click", "description": "Right-click at screen coordinates.", "parameters": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}, "required": ["x", "y"]}}},
     {"type": "function", "function": {"name": "double_click", "description": "Double-click at screen coordinates.", "parameters": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}, "required": ["x", "y"]}}},
-    {"type": "function", "function": {"name": "type_text", "description": "Type text using keyboard.", "parameters": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}},
+    {"type": "function", "function": {"name": "type_text", "description": "Type text using keyboard. MANDATORY: After calling this, you MUST call describe_screen or ocr_screen to verify the text appeared correctly before taking any other action.", "parameters": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}},
     {"type": "function", "function": {"name": "press_key", "description": "Press a single key (enter, tab, escape, f1, etc).", "parameters": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}}},
-    {"type": "function", "function": {"name": "hotkey", "description": "Press a key combination (e.g., ctrl+c, alt+tab, ctrl+shift+n).", "parameters": {"type": "object", "properties": {"keys": {"type": "string", "description": "Keys separated by + (e.g., 'ctrl+c', 'alt+f4')"}}, "required": ["keys"]}}},
+    {"type": "function", "function": {"name": "hotkey", "description": "Press a key combination (e.g., ctrl+c, alt+tab, ctrl+shift+n). MANDATORY: After calling this, you MUST call describe_screen or ocr_screen to verify the action worked.", "parameters": {"type": "object", "properties": {"keys": {"type": "string", "description": "Keys separated by + (e.g., 'ctrl+c', 'alt+f4')"}}, "required": ["keys"]}}},
     {"type": "function", "function": {"name": "scroll", "description": "Scroll at current mouse position.", "parameters": {"type": "object", "properties": {"direction": {"type": "string", "enum": ["up", "down"]}, "amount": {"type": "integer", "default": 3}}}}},
     {"type": "function", "function": {"name": "drag_and_drop", "description": "Drag from one position to another.", "parameters": {"type": "object", "properties": {"start_x": {"type": "integer"}, "start_y": {"type": "integer"}, "end_x": {"type": "integer"}, "end_y": {"type": "integer"}}, "required": ["start_x", "start_y", "end_x", "end_y"]}}},
     
@@ -170,17 +171,19 @@ BEST PRACTICES:
    - This confirms whether the wait is actually needed (e.g., page still loading, animation in progress)
    - Never wait blindly without knowing the current state
 
-2. FINDING BUTTONS/ELEMENTS TO CLICK:
-   - First use describe_screen to understand what's on screen and identify the text/label on the button
-   - Then use ocr_screen to get the exact coordinates of that text
-   - ocr_screen returns elements with x,y center coordinates - use these with click(x, y)
-   - Example workflow: describe_screen → "I see a blue 'Submit' button" → ocr_screen → find "Submit" with x=500, y=300 → click(500, 300)
+2. BROWSER NAVIGATION (The "Holy Grail"):
+   - For websites, `observe_browser` is your most powerful tool. It scans the page code and assigns `[ref=N]` IDs to every clickable button, link, and input.
+   - You MUST use `observe_browser` first, read the reference IDs, and then use `browser_click_ref(ref=N)` to click them.
+   - Do NOT use `browser_click(target="text")` on modern websites (like Google). It frequently fails. Always use `observe_browser` + `browser_click_ref`.
 
-3. OBSERVATION PRIORITY:
-   - For browser: use observe_browser first (it gives element selectors)
-   - For desktop apps: use observe_desktop to see windows, then ocr_screen for text positions
-   - Use describe_screen when you need visual context (colors, layout, images)
-   - IMPORTANT: Focus the correct window before using vision/OCR tools
+3. DESKTOP NAVIGATION & ALIEN WEBSITES:
+   - If `observe_browser` misses a button, or if you are automating a Desktop app, you must use physical `click(x, y)`.
+   - To find the X, Y coordinates, you MUST use `ocr_screen`. It returns exact pixel coordinates for text.
+   - NEVER try to guess coordinates from `describe_screen`.
+
+4. UNDERSTANDING THE SCREEN (describe_screen vs ocr_screen):
+   - `describe_screen` is ONLY for visual verification. Use it to check if a page loaded, if an error popup appeared, or to understand the visual layout. It does NOT provide reliable coordinates.
+   - `ocr_screen` is ONLY for getting exact physical coordinate numbers to pass into `click(x, y)`.
    
 4. OBSERVATION HINTS:
    - If OCR doesn't capture something that observe_browser or observe_desktop captured, you may need to scroll or change tab/webpage
@@ -281,6 +284,7 @@ class SingleAgent:
             
             # Browser Tools
             if name == "open_browser": return self._open_browser(args["url"])
+            if name == "browser_click_ref": return self._browser_click_ref(args["ref"])
             if name == "browser_click": return self._browser_click(args["target"])
             if name == "browser_type": return self._browser_type(args["text"], args.get("clear_first", False))
             if name == "browser_press_key": return self._browser_press_key(args["key"])
@@ -504,6 +508,15 @@ class SingleAgent:
         except Exception as e:
             return {"error": str(e)}
     
+    def _browser_click_ref(self, ref: int) -> Dict:
+        """Click browser element by aria reference ID."""
+        if not self.browser: return {"error": "Browser not initialized"}
+        result = self.browser.click_by_ref(ref)
+        if result.get("success"):
+            result["NEXT"] = "You MUST call describe_screen or ocr_screen NOW to verify the click worked."
+        self._log(f"Browser click ref {ref}: {'Success' if result.get('success') else 'Failed'}")
+        return result
+
     def _browser_click(self, target: str) -> Dict:
         """Click element in browser by text, selector, or attribute."""
         if not self.driver:
@@ -707,7 +720,7 @@ class SingleAgent:
             pyautogui.moveTo(x, y, duration=0.1)
             time.sleep(0.05)  # Small delay for stability
             pyautogui.click()
-            return {"success": True, "clicked": f"({x}, {y})"}
+            return {"success": True, "clicked": f"({x}, {y})", "NEXT": "You MUST call describe_screen or ocr_screen NOW to verify the click worked before doing anything else."}
         except Exception as e:
             return {"error": str(e)}
     
@@ -719,7 +732,7 @@ class SingleAgent:
             pyautogui.moveTo(x, y, duration=0.1)
             time.sleep(0.05)
             pyautogui.rightClick()
-            return {"success": True, "right_clicked": f"({x}, {y})"}
+            return {"success": True, "right_clicked": f"({x}, {y})", "NEXT": "You MUST call describe_screen or ocr_screen NOW to verify the action worked before doing anything else."}
         except Exception as e:
             return {"error": str(e)}
     
@@ -731,7 +744,7 @@ class SingleAgent:
             pyautogui.moveTo(x, y, duration=0.1)
             time.sleep(0.05)
             pyautogui.doubleClick()
-            return {"success": True, "double_clicked": f"({x}, {y})"}
+            return {"success": True, "double_clicked": f"({x}, {y})", "NEXT": "You MUST call describe_screen or ocr_screen NOW to verify the action worked before doing anything else."}
         except Exception as e:
             return {"error": str(e)}
     
@@ -740,14 +753,14 @@ class SingleAgent:
         if not PYAUTOGUI_AVAILABLE:
             return {"error": "PyAutoGUI not available"}
         pyautogui.write(text, interval=0.02)
-        return {"success": True, "typed": text}
+        return {"success": True, "typed": text, "NEXT": "You MUST call describe_screen or ocr_screen NOW to verify the text appeared correctly before doing anything else."}
     
     def _press_key(self, key: str) -> Dict:
         """Press single key."""
         if not PYAUTOGUI_AVAILABLE:
             return {"error": "PyAutoGUI not available"}
         pyautogui.press(key)
-        return {"success": True, "pressed": key}
+        return {"success": True, "pressed": key, "NEXT": "You MUST call describe_screen or ocr_screen NOW to verify the action worked before doing anything else."}
     
     def _hotkey(self, keys: str) -> Dict:
         """Press key combination."""
@@ -755,7 +768,7 @@ class SingleAgent:
             return {"error": "PyAutoGUI not available"}
         key_list = [k.strip() for k in keys.split('+')]
         pyautogui.hotkey(*key_list)
-        return {"success": True, "hotkey": keys}
+        return {"success": True, "hotkey": keys, "NEXT": "You MUST call describe_screen or ocr_screen NOW to verify the action worked before doing anything else."}
     
     def _scroll(self, direction: str, amount: int) -> Dict:
         """Scroll at mouse position."""

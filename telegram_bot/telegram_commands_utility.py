@@ -303,9 +303,9 @@ def build_utility_command_handlers(
             session.verbose_mode = True
         elif arg in {"off", "disable"}:
             session.verbose_mode = False
-        elif arg is None:
-            # No argument: toggle
+        elif arg == "toggle":
             session.verbose_mode = not session.verbose_mode
+        # No arg = just show current status, don't toggle
 
         status = "✅ ON" if session.verbose_mode else "⛔ OFF"
         reply_markup = InlineKeyboardHelper.create_action_buttons(
