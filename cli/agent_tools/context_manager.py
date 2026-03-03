@@ -15,7 +15,7 @@ DEFAULT_CONTEXT_SIZES = {
     "gemini": 1000000,   # Gemini models: 1M tokens
     "gpt": 400000,       # GPT models: 400K tokens
     "claude": 200000,    # Claude models: 200K tokens
-    "grok": 128000,      # Grok models: 128K tokens
+    "grok": 2000000,      # Grok models: 128K tokens
     "deepseek": 64000,   # DeepSeek models: 64K tokens
 }
 
@@ -31,8 +31,8 @@ class ContextManager:
     - Summarize: Everything in between
     """
     
-    COMPRESSION_THRESHOLD = 0.50  # 50% - trigger compression
-    TARGET_AFTER_COMPRESSION = 0.15  # 15% - target after compression
+    COMPRESSION_THRESHOLD = 0.30  # 50% - trigger compression
+    TARGET_AFTER_COMPRESSION = 0.5  # 15% - target after compression
     
     def __init__(
         self,
