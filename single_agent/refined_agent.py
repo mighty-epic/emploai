@@ -73,8 +73,8 @@ The browser uses ARIA snapshots for reliable interaction. Instead of guessing se
 
 - browser_navigate(url): Open URL (auto-starts browser)
 - browser_snapshot(): Get ARIA snapshot - returns clean tree like "- button "Login" [ref=1]"
-- browser_click_ref(ref): Click by reference number from snapshot (RELIABLE)
-- browser_click(target): Click by text/selector (fallback method)
+- browser_click_ref(ref): Click by reference number from snapshot (RELIABLE — primary method)
+# - browser_click(target): DISABLED — use browser_click_ref instead. Fall back to physical click(x,y) via ocr_screen if needed.
 - browser_type(text, clear_first): Type into focused element
 - browser_press_key(key): Press enter, tab, escape, arrow keys, etc
 - browser_scroll(direction, amount): Scroll page up/down
@@ -126,7 +126,7 @@ The browser uses ARIA snapshots for reliable interaction. Instead of guessing se
 
 ## BEST PRACTICES
 
-1. **Browser Interaction**: Always use browser_snapshot first, then browser_click_ref with the reference number. This is more reliable than text matching.
+1. **Browser Interaction**: Always use browser_snapshot first, then browser_click_ref with the reference number. browser_click is disabled. If browser_click_ref fails, fall back to physical click(x, y) via ocr_screen.
 
 2. **Desktop Interaction**: Use describe_screen to understand layout, then ocr_screen to get exact coordinates for clicking.
 
@@ -284,7 +284,7 @@ class RefinedAgent:
             "browser_navigate": self._browser_navigate,
             "browser_snapshot": self._browser_snapshot,
             "browser_click_ref": self._browser_click_ref,
-            "browser_click": self._browser_click,
+            # "browser_click": self._browser_click,  # DISABLED: use browser_click_ref
             "browser_type": self._browser_type,
             "browser_press_key": self._browser_press_key,
             "browser_scroll": self._browser_scroll,

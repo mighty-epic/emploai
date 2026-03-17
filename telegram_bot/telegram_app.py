@@ -46,6 +46,7 @@ COMMAND_ORDER = [
     "config",
     "heartbeat",
     "verbose",
+    "bridge",
 ]
 
 
@@ -53,7 +54,6 @@ def build_bot_commands() -> list[BotCommand]:
     return [
         BotCommand("start", "Initialize the agent"),
         BotCommand("help", "Show available commands"),
-        BotCommand("mode", "Set agent mode (manual/semi/auto)"),
         BotCommand("variant", "Set model variant"),
         BotCommand("model", "Switch AI model"),
         BotCommand("models", "List all models"),
@@ -61,7 +61,6 @@ def build_bot_commands() -> list[BotCommand]:
         BotCommand("workspace", "Set workspace path"),
         BotCommand("headless", "Toggle browser mode"),
         BotCommand("security", "Security status"),
-        BotCommand("task", "Run browser/desktop automation"),
         BotCommand("continue", "Resume paused task"),
         BotCommand("pause", "Pause running task"),
         BotCommand("stop", "Stop running task"),
@@ -83,6 +82,7 @@ def build_bot_commands() -> list[BotCommand]:
         BotCommand("setup", "Guided setup wizard"),
         BotCommand("forget", "Remove last user message"),
         BotCommand("verbose", "Toggle live tool logging"),
+        BotCommand("bridge", "Toggle native browser bridge"),
     ]
 
 

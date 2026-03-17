@@ -31,8 +31,8 @@ class ContextManager:
     - Summarize: Everything in between
     """
     
-    COMPRESSION_THRESHOLD = 0.30  # 50% - trigger compression
-    TARGET_AFTER_COMPRESSION = 0.5  # 15% - target after compression
+    COMPRESSION_THRESHOLD = 0.30  # 30% - trigger compression
+    TARGET_AFTER_COMPRESSION = 0.05  # 5% - target after compression
     
     def __init__(
         self,

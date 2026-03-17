@@ -143,29 +143,58 @@ class UnifiedToolRegistry:
             }
         }
         
-        self.tools['browser_click'] = {
-            'name': 'browser_click',
-            'description': 'Click an element on the page',
-            'parameters': {
-                'type': 'object',
-                'properties': {
-                    'selector': {'type': 'string', 'description': 'CSS selector or text'},
-                    'role': {'type': 'string', 'description': 'ARIA role (button, link, etc)'}
-                },
-                'required': ['selector']
-            }
-        }
+        # DISABLED: browser_click removed in favor of browser_click_ref (more reliable ARIA-based clicking)
+        # self.tools['browser_click'] = {
+        #     'name': 'browser_click',
+        #     'description': 'Click an element on the page',
+        #     'parameters': {
+        #         'type': 'object',
+        #         'properties': {
+        #             'selector': {'type': 'string', 'description': 'CSS selector or text'},
+        #             'role': {'type': 'string', 'description': 'ARIA role (button, link, etc)'}
+        #         },
+        #         'required': ['selector']
+        #     }
+        # }
         
         self.tools['browser_type'] = {
             'name': 'browser_type',
-            'description': 'Type text into an input field',
+            'description': 'Type text into the focused input, or into a specific snapshot ref when provided. Prefer ref-based typing for reliable long tasks.',
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'selector': {'type': 'string', 'description': 'CSS selector'},
-                    'text': {'type': 'string', 'description': 'Text to type'}
+                    'text': {'type': 'string', 'description': 'Text to type'},
+                    'ref': {'type': 'integer', 'description': 'Optional ARIA ref from browser_snapshot'},
+                    'clear_first': {'type': 'boolean', 'description': 'Clear the field before typing'}
                 },
-                'required': ['selector', 'text']
+                'required': ['text']
+            }
+        }
+
+        self.tools['browser_clear_ref'] = {
+            'name': 'browser_clear_ref',
+            'description': 'Clear a specific input field by its ARIA ref before typing new content',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'ref': {'type': 'integer', 'description': 'Input ref from browser_snapshot'}
+                },
+                'required': ['ref']
+            }
+        }
+
+        self.tools['browser_select_option_ref'] = {
+            'name': 'browser_select_option_ref',
+            'description': 'Select an option on a native <select> element by ref using visible text, value, or index',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'ref': {'type': 'integer', 'description': 'Select ref from browser_snapshot'},
+                    'text': {'type': 'string', 'description': 'Visible option text to select'},
+                    'value': {'type': 'string', 'description': 'Option value to select'},
+                    'index': {'type': 'integer', 'description': 'Zero-based option index to select'}
+                },
+                'required': ['ref']
             }
         }
         
@@ -184,6 +213,20 @@ class UnifiedToolRegistry:
             'name': 'browser_snapshot',
             'description': 'Get ARIA snapshot of interactive elements on the page (refs)',
             'parameters': {'type': 'object', 'properties': {}}
+        }
+
+        self.tools['browser_wait_for'] = {
+            'name': 'browser_wait_for',
+            'description': 'Wait for a URL, title, or page text condition on the current task tab instead of using blind delays',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'url_contains': {'type': 'string'},
+                    'title_contains': {'type': 'string'},
+                    'text_contains': {'type': 'string'},
+                    'timeout_seconds': {'type': 'number', 'description': 'Maximum wait time in seconds'}
+                }
+            }
         }
 
         self.tools['browser_click_ref'] = {
@@ -232,6 +275,21 @@ class UnifiedToolRegistry:
             'name': 'browser_stop',
             'description': 'Close the browser completely',
             'parameters': {'type': 'object', 'properties': {}}
+        }
+
+        self.tools['browser_extension_toggle'] = {
+            'name': 'browser_extension_toggle',
+            'description': 'Toggle between headless Selenium and the Native Extension Bridge',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'enable': {
+                        'type': 'boolean',
+                        'description': 'True to use Native extension, False for Selenium'
+                    }
+                },
+                'required': ['enable']
+            }
         }
         
         # Memory

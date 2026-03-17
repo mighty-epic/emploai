@@ -57,10 +57,35 @@ def get_system_info() -> str:
             except Exception:
                 pass
 
+        active_windows = "Unknown"
+        if platform.system() == "Windows":
+            try:
+                from pywinauto import Desktop
+                windows = Desktop(backend="uia").windows()
+                window_titles = [w.window_text() for w in windows if w.window_text()]
+                if window_titles:
+                    # Filter out duplicates and small useless titles
+                    seen = set()
+                    filtered = []
+                    for t in window_titles:
+                        if t not in seen and len(t) > 2:
+                            filtered.append(t)
+                            seen.add(t)
+                    active_windows = ", ".join(filtered[:15]) # Limit to top 15
+            except Exception:
+                active_windows = "Unavailable"
+        elif platform.system() == "Linux":
+            try:
+                from telegram_bot.linux.system_info_ext import get_linux_active_windows
+                active_windows = get_linux_active_windows()
+            except ImportError:
+                active_windows = "Unavailable (linux module not found)"
+
         return (
             f"OS: {os_info}\n"
             f"Hardware: {cpu_info} | {ram_info}{model_info}\n"
-            f"Shell: {'PowerShell/CMD' if platform.system() == 'Windows' else 'Bash/Zsh'}"
+            f"Shell: {'PowerShell/CMD' if platform.system() == 'Windows' else 'Bash/Zsh'}\n"
+            f"Active Windows: {active_windows}"
         )
 
     except Exception as e:

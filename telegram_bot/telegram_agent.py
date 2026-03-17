@@ -1,9 +1,9 @@
 """
-Telegram CLI Agent - Full CLI functionality via Telegram with interactive menus.
-Supports: modes, variants, models, sessions, task execution, and settings.
+Telegram CLI Agent - Unified auto agent via Telegram with interactive menus.
+Supports: variants, models, sessions, automation, and settings.
 
-Default chat uses CLI Agent (codebase tools: file ops, terminal, search).
-/task command uses SingleAgent (multi-turn browser/desktop automation).
+Default chat uses the unified auto agent for file ops, terminal, search,
+browser, and desktop automation.
 """
 
 import logging
@@ -19,7 +19,7 @@ load_dotenv()
 from bot_core.hooks import HookEvent, HookType
 from bot_core.security import SecurityManager, rate_limited, authorized_only
 from bot_core.ui_helpers import InlineKeyboardHelper, MessageFormatter
-from cli.tui_constants import AVAILABLE_MODELS as _ALL_MODELS, MODEL_CONFIGS as _ALL_MODEL_CONFIGS, AGENT_MODE_LABELS
+from cli.tui_constants import AVAILABLE_MODELS as _ALL_MODELS, MODEL_CONFIGS as _ALL_MODEL_CONFIGS
 from telegram_app import run_bot
 
 # ======================================================================================
@@ -108,6 +108,7 @@ _task_command_handlers = build_task_command_handlers(
     track_command_usage=track_command_usage,
     safe_reply=safe_reply,
     run_task_flow=run_task_flow,
+    run_chat_flow=run_chat_flow,
 )
 
 task_command = _task_command_handlers["task_command"]
@@ -169,6 +170,7 @@ memory_update_command = _utility_command_handlers["memory_update_command"]
 config_command = _utility_command_handlers["config_command"]
 heartbeat_command = _utility_command_handlers["heartbeat_command"]
 verbose_command = _utility_command_handlers["verbose_command"]
+bridge_command = _utility_command_handlers["bridge_command"]
 
 # ======================================================================================
 # CALLBACK QUERY HANDLER (for inline buttons)
@@ -186,7 +188,6 @@ _callback_handlers = build_callback_handlers(
     InlineKeyboardHelper=InlineKeyboardHelper,
     AVAILABLE_MODELS=AVAILABLE_MODELS,
     MODEL_CONFIGS=MODEL_CONFIGS,
-    AGENT_MODE_LABELS=AGENT_MODE_LABELS,
 )
 
 button_callback = _callback_handlers["button_callback"]
@@ -252,6 +253,7 @@ command_handlers = {
     "config": config_command,
     "heartbeat": heartbeat_command,
     "verbose": verbose_command,
+    "bridge": bridge_command,
 }
 
 message_handlers = {

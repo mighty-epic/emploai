@@ -19,7 +19,6 @@ def build_callback_handlers(
     InlineKeyboardHelper,
     AVAILABLE_MODELS,
     MODEL_CONFIGS,
-    AGENT_MODE_LABELS,
 ):
     async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle inline button presses."""
@@ -41,6 +40,19 @@ def build_callback_handlers(
                     session.auto_reply_notice_sent = False
             status = "✅ ON" if session.auto_reply_enabled else "⛔ OFF"
             await safe_edit(query, f"Auto-reply set to {status}.")
+            return
+
+        if data.startswith("bridge:"):
+            setting = data.split(":")[1]
+            enable = setting == "on"
+            async with session.lock:
+                session.live_config.set('browser.use_extension', enable, user.id)
+                session.live_config.save_config()
+                if enable:
+                    from telegram_unified_agent import _get_browser_tool
+                    _get_browser_tool(session)
+            status = "✅ ENABLED" if enable else "⛔ DISABLED"
+            await safe_edit(query, f"Browser bridge set to {status}.")
             return
 
         if data.startswith("verbose:"):
@@ -107,8 +119,7 @@ def build_callback_handlers(
                 return
 
             if len(parts) >= 3 and parts[1] == "mode":
-                mode = parts[2]
-                session.agent_mode = mode
+                session.agent_mode = "auto"
                 session.wizard_state = {"step": "monitor"}
                 reply_markup = InlineKeyboardHelper.create_action_buttons(
                     [
@@ -119,7 +130,7 @@ def build_callback_handlers(
                 )
                 await safe_edit(
                     query,
-                    "**Setup Step 2/3:** Enable auto-reply?",
+                    "**Setup Step 1/2:** Auto mode is always enabled.\nEnable auto-reply?",
                     reply_markup=reply_markup,
                 )
                 return
@@ -139,7 +150,7 @@ def build_callback_handlers(
                 )
                 await safe_edit(
                     query,
-                    "**Setup Step 3/3:** Show skill notifications?",
+                    "**Setup Step 2/2:** Show skill notifications?",
                     reply_markup=reply_markup,
                 )
                 return
@@ -150,7 +161,7 @@ def build_callback_handlers(
                 session.wizard_state = {}
                 await safe_edit(
                     query,
-                    "✅ Setup complete. You can adjust settings anytime with /mode, /monitor, /skills.",
+                    "✅ Setup complete. You can adjust settings anytime with /monitor and /skills.",
                 )
                 return
 
@@ -158,7 +169,7 @@ def build_callback_handlers(
             action = data.split(":")[1]
             if action == "task" and session.last_task_text:
                 await safe_edit(query, "🔄 Retrying task...")
-                await run_task_flow(update, context, session, session.last_task_text)
+                await run_chat_flow(update, context, session, session.last_task_text)
             elif action == "message" and session.last_user_message:
                 await safe_edit(query, "🔄 Retrying message...")
                 await run_chat_flow(
@@ -205,11 +216,9 @@ def build_callback_handlers(
             return
 
         if data.startswith("mode:"):
-            mode = data.split(":")[1]
             async with session.lock:
-                session.agent_mode = mode
-            label = AGENT_MODE_LABELS.get(mode, mode)
-            await safe_edit(query, f"✅ Agent mode set to: **{label}**")
+                session.agent_mode = "auto"
+            await safe_edit(query, "✅ Auto mode is always enabled.")
         elif data.startswith("variant:"):
             variant = data.split(":")[1]
             async with session.lock:

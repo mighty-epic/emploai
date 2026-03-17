@@ -27,6 +27,8 @@ class ToolExecutor:
         self.single_agent = single_agent
         self.skill_registry = skill_registry
         self.active_skills = active_skills if active_skills is not None else []
+        # Optional session-specific handlers (used by Telegram auto mode).
+        self.custom_tool_handlers: Dict[str, Any] = {}
         # Track background processes: {command_id: {process, output_lines, thread, command, ...}}
         self._background_commands: Dict[str, Dict[str, Any]] = {}
 
@@ -107,12 +109,19 @@ class ToolExecutor:
             method = getattr(self, f"tool_{name}", None)
             if method:
                 return method(**args)
+
+            # 1.5. Check for session-specific handlers (Telegram bridge/browser tools)
+            custom_handler = self.custom_tool_handlers.get(name)
+            if custom_handler:
+                return custom_handler(args)
             
             # 2. Check for Task Agent tools
             if self.single_agent and hasattr(self.single_agent, 'tools'):
                 if name in self.single_agent.tools:
                     # Execute via SingleAgent's dispatcher
                     return self.single_agent.tools[name](**args)
+                if hasattr(self.single_agent, "_execute_tool"):
+                    return self.single_agent._execute_tool(name, args)
 
             return {"error": f"Unknown tool: {name}"}
         except PermissionError as e:

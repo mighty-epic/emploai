@@ -52,6 +52,21 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class BrowserTaskContext:
+    """Tracks the browser backend and primary task-owned tab for one task."""
+
+    task_id: int = 0
+    backend: Optional[str] = None
+    primary_tab_id: Optional[Any] = None
+    primary_window_id: Optional[Any] = None
+    owned_tab_ids: List[Any] = field(default_factory=list)
+    last_url: Optional[str] = None
+    last_title: Optional[str] = None
+    last_snapshot_hash: Optional[str] = None
+    healthy: bool = True
+
+
+@dataclass
 class TelegramSession:
     """Holds per-user state for the Telegram bot."""
     user_id: int
@@ -89,6 +104,9 @@ class TelegramSession:
     # NEW: Unified agent (replaces fragmented agents)
     unified_agent: Optional[UnifiedAgent] = None
 
+    # Compression / Context
+    context_manager: Optional[Any] = None
+
     # LLM Clients
     openai_client: Optional[OpenAI] = None
     anthropic_client: Optional[Anthropic] = None
@@ -108,6 +126,7 @@ class TelegramSession:
     should_interrupt: bool = False
     interrupt_message: Optional[str] = None  # The message that caused the interruption
     current_task_id: int = 0  # Unique ID for current task, to detect abandoned tasks
+    browser_task_context: BrowserTaskContext = field(default_factory=BrowserTaskContext)
 
     # Auto-reply / monitoring
     auto_reply_enabled: bool = True
@@ -133,6 +152,11 @@ class TelegramSession:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     workspace: Path = field(default_factory=lambda: Path.cwd())
+
+    def refresh_system_info(self):
+        """Update system info string with current windows and hardware state."""
+        from bot_core.system_info import get_system_info
+        self.system_info = get_system_info()
 
     # Session auto-rename: tracks which message-count thresholds have fired
     _session_rename_checkpoints: set = field(default_factory=set)
@@ -188,6 +212,14 @@ class TelegramSession:
         self.enhanced_skills = enhance_skill_registry(self.skill_registry)
 
         self._init_clients()
+        
+        if self.gemini_openai_client:
+            from cli.agent_tools.context_manager import ContextManager, DEFAULT_CONTEXT_SIZES
+            self.context_manager = ContextManager(
+                model_context_sizes=DEFAULT_CONTEXT_SIZES,
+                compression_client=self.gemini_openai_client,
+                compression_model="gemini-2.0-flash"
+            )
 
         def path_confirm_callback(msg: str) -> bool:
             """Allow all path/command adjustments silently without user friction."""
@@ -208,6 +240,65 @@ class TelegramSession:
         self.should_interrupt = False
         self.interrupt_message = None
 
+    def get_browser_task_context(self) -> BrowserTaskContext:
+        """Return the current task-scoped browser context, resetting if stale."""
+        if self.browser_task_context.task_id != self.current_task_id:
+            self.browser_task_context = BrowserTaskContext(task_id=self.current_task_id)
+        return self.browser_task_context
+
+    def reset_browser_task_context(self, task_id: Optional[int] = None) -> BrowserTaskContext:
+        """Reset browser backend and task-owned tab tracking."""
+        resolved_task_id = self.current_task_id if task_id is None else task_id
+        self.browser_task_context = BrowserTaskContext(task_id=resolved_task_id)
+        return self.browser_task_context
+
+    def start_browser_task(self, task_id: int) -> BrowserTaskContext:
+        """Create a fresh browser context for a newly started task."""
+        self.browser_task_context = BrowserTaskContext(task_id=task_id)
+        return self.browser_task_context
+
+    def update_browser_task_context(self, result: Optional[Dict[str, Any]], *, owned_tab: bool = False) -> BrowserTaskContext:
+        """Apply browser action results back into the current task context."""
+        context = self.get_browser_task_context()
+        if not result:
+            return context
+
+        if result.get("backend"):
+            context.backend = result.get("backend")
+
+        error_type = result.get("error_type")
+        if result.get("error"):
+            if error_type in {"connection", "protocol", "timeout"}:
+                context.healthy = False
+            return context
+
+        context.healthy = bool(result.get("success", True))
+
+        tab_id = result.get("tab_id")
+        if tab_id is not None:
+            context.primary_tab_id = tab_id
+            if owned_tab and tab_id not in context.owned_tab_ids:
+                context.owned_tab_ids.append(tab_id)
+
+        window_id = result.get("window_id")
+        if window_id is not None:
+            context.primary_window_id = window_id
+
+        if result.get("url") is not None:
+            context.last_url = result.get("url")
+        if result.get("title") is not None:
+            context.last_title = result.get("title")
+        if result.get("snapshot_hash") is not None:
+            context.last_snapshot_hash = result.get("snapshot_hash")
+
+        closed_tab_id = result.get("closed_tab_id")
+        if closed_tab_id in context.owned_tab_ids:
+            context.owned_tab_ids = [tab for tab in context.owned_tab_ids if tab != closed_tab_id]
+        if closed_tab_id is not None and context.primary_tab_id == closed_tab_id:
+            context.primary_tab_id = result.get("tab_id")
+
+        return context
+
     def _init_clients(self):
         """Initialize LLM clients from config/env."""
         openai_key = self.config_manager.get_api_key("openai") or os.getenv("OPENAI_API_KEY")
@@ -226,8 +317,13 @@ class TelegramSession:
         if HAS_GEMINI and google_key:
             genai.configure(api_key=google_key)
             self.google_client = genai
+            self.gemini_openai_client = OpenAI(
+                api_key=google_key,
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+            )
         else:
             self.google_client = None
+            self.gemini_openai_client = None
 
     def get_available_variants(self) -> List[str]:
         """Get available variants for current model."""
@@ -280,7 +376,7 @@ class TelegramSession:
         session_obj.chat_history = self.chat_history
         session_obj.model = self.current_model
         session_obj.variant = self.current_variant
-        session_obj.agent_mode = self.agent_mode
+        session_obj.agent_mode = "auto"
         session_obj.active_skills = self.active_skills
 
         # Save to disk
@@ -297,7 +393,7 @@ class TelegramSession:
         self.chat_history = session_obj.chat_history
         self.current_model = session_obj.model
         self.current_variant = session_obj.variant
-        self.agent_mode = session_obj.agent_mode
+        self.agent_mode = "auto"
         self.active_skills = session_obj.active_skills
 
         # Clear specific agent histories to avoid context leaks

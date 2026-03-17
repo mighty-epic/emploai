@@ -147,17 +147,19 @@ def build_utility_command_handlers(
         session = get_session(user.id)
         track_command_usage(session, "setup")
 
-        session.wizard_state = {"step": "mode"}
+        session.agent_mode = "auto"
+        session.wizard_state = {"step": "monitor"}
         reply_markup = InlineKeyboardHelper.create_action_buttons(
             [
-                {"text": "Manual", "callback_data": "setup:mode:manual"},
-                {"text": "Semi", "callback_data": "setup:mode:semi"},
-                {"text": "Auto", "callback_data": "setup:mode:auto"},
+                {"text": "✅ On", "callback_data": "setup:monitor:on"},
+                {"text": "⛔ Off", "callback_data": "setup:monitor:off"},
                 {"text": "Cancel", "callback_data": "setup:cancel"},
             ]
         )
         await safe_reply(
-            update, "**Setup Step 1/3:** Choose agent mode", reply_markup=reply_markup
+            update,
+            "**Setup Step 1/2:** Auto mode is always enabled.\nEnable auto-reply?",
+            reply_markup=reply_markup,
         )
 
     @rate_limited(security_manager)
@@ -321,6 +323,64 @@ def build_utility_command_handlers(
             reply_markup=reply_markup,
         )
 
+    @rate_limited(security_manager)
+    async def bridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Toggle or check browser extension bridge status."""
+        user = update.effective_user
+        session = get_session(user.id)
+        track_command_usage(session, "bridge")
+
+        arg = context.args[0].lower() if context.args else "status"
+        if arg in {"on", "enable"}:
+            session.live_config.set('browser.use_extension', True, user.id)
+            session.live_config.save_config()
+            session.reset_browser_task_context(session.current_task_id)
+            from telegram_unified_agent import ensure_extension_bridge
+            ensure_extension_bridge(session)
+            await safe_reply(update, "✅ Browser Extension Bridge enabled. Future browser tasks will use your real Chrome.")
+            return
+        if arg in {"off", "disable"}:
+            session.live_config.set('browser.use_extension', False, user.id)
+            session.live_config.save_config()
+            session.reset_browser_task_context(session.current_task_id)
+            await safe_reply(update, "⛔ Browser Extension Bridge disabled. Reverting to headless Selenium.")
+            return
+
+        from telegram_unified_agent import get_browser_bridge_status
+        bridge_status = get_browser_bridge_status(session)
+
+        status = "✅ ENABLED (Using real Chrome)" if bridge_status["desired_backend"] == "extension" else "⛔ DISABLED (Using headless Selenium)"
+
+        conn_status = ""
+        extension = bridge_status.get("extension") or {}
+        if bridge_status["desired_backend"] == "extension":
+            if extension.get("connected"):
+                heartbeat_age = extension.get("heartbeat_age_seconds")
+                heartbeat_text = f" ({heartbeat_age}s since heartbeat)" if heartbeat_age is not None else ""
+                conn_status = f"\n📡 **Bridge Connection:** Online{heartbeat_text}"
+            else:
+                conn_status = "\n📡 **Bridge Connection:** Offline (Waiting for extension)"
+
+        task_backend = bridge_status.get("task_backend") or "unassigned"
+        tab_status = bridge_status.get("primary_tab_id")
+        owned_count = len(bridge_status.get("owned_tab_ids", []))
+
+        reply_markup = InlineKeyboardHelper.create_action_buttons(
+            [
+                {"text": "✅ Enable", "callback_data": "bridge:on"},
+                {"text": "⛔ Disable", "callback_data": "bridge:off"},
+            ]
+        )
+        await safe_reply(
+            update, 
+            f"**🌐 Browser Bridge Status:**\n{status}{conn_status}\n"
+            f"🧭 **Pinned Task Backend:** {task_backend}\n"
+            f"🗂️ **Primary Task Tab:** {tab_status}\n"
+            f"🧾 **Owned Task Tabs:** {owned_count}\n\n"
+            "Usage: `/bridge on|off|status`",
+            reply_markup=reply_markup
+        )
+
     return {
         "monitor_command": monitor_command,
         "analytics_command": analytics_command,
@@ -333,4 +393,5 @@ def build_utility_command_handlers(
         "config_command": config_command,
         "heartbeat_command": heartbeat_command,
         "verbose_command": verbose_command,
+        "bridge_command": bridge_command,
     }

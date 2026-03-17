@@ -20,10 +20,11 @@ def build_task_command_handlers(
     track_command_usage,
     safe_reply,
     run_task_flow,
+    run_chat_flow,
 ):
     @rate_limited(security_manager)
     async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Run a multi-turn browser/desktop task with the RefinedAgent (Moltbot Clone)."""
+        """Compatibility alias that forwards work into the normal auto chat flow."""
         user = update.effective_user
 
         session = get_session(user.id)
@@ -32,15 +33,15 @@ def build_task_command_handlers(
         if not context.args:
             await safe_reply(
                 update,
-                "**Usage:** /task <task description>\n\n"
-                "This runs a multi-turn browser/desktop automation task with the Moltbot Clone.\n"
-                "Features: ARIA snapshots, parallel sub-agents, cron scheduling, safe execution.\n\n"
-                "Example: `/task Go to github.com and find the top trending Python repo`",
+                "**Auto mode is always on.**\n\n"
+                "Send the request as a normal message and it will run through the unified agent.\n"
+                "You can still use `/task <request>` as a compatibility alias.",
             )
             return
 
         task_text = " ".join(context.args)
-        await run_task_flow(update, context, session, task_text)
+        session.last_task_text = task_text
+        await run_chat_flow(update, context, session, task_text)
 
     @rate_limited(security_manager)
     async def continue_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -74,6 +75,7 @@ def build_task_command_handlers(
 
             session.current_task_id += 1
             my_task_id = session.current_task_id
+            session.start_browser_task(my_task_id)
             session.should_interrupt = False
             session.is_processing = True
 

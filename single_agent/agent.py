@@ -69,8 +69,9 @@ AGENT_TOOLS = [
     # --- BROWSER TOOLS ---
     {"type": "function", "function": {"name": "open_browser", "description": "Open Chrome browser and navigate to a URL.", "parameters": {"type": "object", "properties": {"url": {"type": "string", "description": "URL to navigate to"}}, "required": ["url"]}}},
     {"type": "function", "function": {"name": "browser_click_ref", "description": "THE BEST WAY TO CLICK. Click a browser element by its [ref=N] ID. You MUST run observe_browser first to get the IDs, then use this.", "parameters": {"type": "object", "properties": {"ref": {"type": "integer", "description": "The reference ID from observe_browser (e.g. 5)"}}, "required": ["ref"]}}},
-    {"type": "function", "function": {"name": "browser_click", "description": "WARNING: Highly unreliable. Use observe_browser + browser_click_ref instead if possible. Click an element by text.", "parameters": {"type": "object", "properties": {"target": {"type": "string", "description": "Text content or CSS selector of element to click"}}, "required": ["target"]}}},
-    {"type": "function", "function": {"name": "browser_type", "description": "Type text into the focused browser element.", "parameters": {"type": "object", "properties": {"text": {"type": "string"}, "clear_first": {"type": "boolean", "default": False}}, "required": ["text"]}}},
+    # DISABLED: browser_click removed in favor of browser_click_ref (more reliable ARIA-based clicking)
+    # {"type": "function", "function": {"name": "browser_click", "description": "WARNING: Highly unreliable. Use observe_browser + browser_click_ref instead if possible. Click an element by text.", "parameters": {"type": "object", "properties": {"target": {"type": "string", "description": "Text content or CSS selector of element to click"}}, "required": ["target"]}}},
+    {"type": "function", "function": {"name": "browser_type", "description": "Type text into the focused browser element, or into a specific ref when provided.", "parameters": {"type": "object", "properties": {"text": {"type": "string"}, "ref": {"type": "integer", "description": "Optional ARIA ref from observe_browser/browser_snapshot."}, "clear_first": {"type": "boolean", "default": False}}, "required": ["text"]}}},
     {"type": "function", "function": {"name": "browser_press_key", "description": "Press a key in the browser (enter, tab, escape, etc).", "parameters": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}}},
     {"type": "function", "function": {"name": "browser_scroll", "description": "Scroll the browser page.", "parameters": {"type": "object", "properties": {"direction": {"type": "string", "enum": ["up", "down"]}, "amount": {"type": "integer", "default": 300}}}}},
     {"type": "function", "function": {"name": "switch_tab", "description": "Switch to a browser tab by index (0-based).", "parameters": {"type": "object", "properties": {"index": {"type": "integer"}}, "required": ["index"]}}},
@@ -124,7 +125,7 @@ BROWSER (Selenium-controlled Chrome):
    * Underlying Mechanics: Launches a new chromedriver session.
 - observe_browser: Returns the page title, URL, and list of clickable elements
    * Underlying Mechanics: Scans DOM for visible interactive elements.
-- browser_click: Clicks an element by its text or CSS selector
+- browser_click: DISABLED — use browser_click_ref instead for reliable element clicking
    * Underlying Mechanics: Locates element in DOM and triggers click (virtual event).
 - browser_type: Types text into the currently focused input field
 - browser_press_key: Presses a key (enter, tab, escape, etc)
@@ -174,7 +175,7 @@ BEST PRACTICES:
 2. BROWSER NAVIGATION (The "Holy Grail"):
    - For websites, `observe_browser` is your most powerful tool. It scans the page code and assigns `[ref=N]` IDs to every clickable button, link, and input.
    - You MUST use `observe_browser` first, read the reference IDs, and then use `browser_click_ref(ref=N)` to click them.
-   - Do NOT use `browser_click(target="text")` on modern websites (like Google). It frequently fails. Always use `observe_browser` + `browser_click_ref`.
+   - browser_click is DISABLED. Always use `observe_browser` + `browser_click_ref`. If browser_click_ref fails, fall back to physical click(x, y) via ocr_screen.
 
 3. DESKTOP NAVIGATION & ALIEN WEBSITES:
    - If `observe_browser` misses a button, or if you are automating a Desktop app, you must use physical `click(x, y)`.
@@ -232,7 +233,8 @@ class SingleAgent:
             "observe_browser": self._observe_browser,
             "observe_desktop": self._observe_desktop,
             "open_browser": self._open_browser,
-            "browser_click": self._browser_click,
+            "browser_click_ref": self._browser_click_ref,
+            # "browser_click": self._browser_click,  # DISABLED: use browser_click_ref
             "browser_type": self._browser_type,
             "browser_press_key": self._browser_press_key,
             "browser_scroll": self._browser_scroll,
@@ -285,7 +287,7 @@ class SingleAgent:
             # Browser Tools
             if name == "open_browser": return self._open_browser(args["url"])
             if name == "browser_click_ref": return self._browser_click_ref(args["ref"])
-            if name == "browser_click": return self._browser_click(args["target"])
+            # if name == "browser_click": return self._browser_click(args["target"])  # DISABLED: use browser_click_ref
             if name == "browser_type": return self._browser_type(args["text"], args.get("clear_first", False))
             if name == "browser_press_key": return self._browser_press_key(args["key"])
             if name == "browser_scroll": return self._browser_scroll(args.get("direction", "down"), args.get("amount", 300))

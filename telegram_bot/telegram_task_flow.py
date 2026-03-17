@@ -26,6 +26,7 @@ async def run_task_flow(update, context, session, task_text: str) -> None:
 
         session.current_task_id += 1
         my_task_id = session.current_task_id
+        session.start_browser_task(my_task_id)
         session.should_interrupt = False
         session.is_processing = True
 
@@ -38,7 +39,17 @@ async def run_task_flow(update, context, session, task_text: str) -> None:
     await context.bot.send_chat_action(chat_id=session.user_id, action=ChatAction.TYPING)
 
     workspace_context = session.context_loader.build_system_prompt_context()
-    effective_task = f"{workspace_context}\n\n{task_text}" if workspace_context else task_text
+    execution_contract = (
+        "# Task Execution Contract\n"
+        "- Complete one verified step at a time.\n"
+        "- Do not repeat steps that are already verified.\n"
+        "- Prefer browser DOM tools and task-owned tabs for webpage work.\n"
+        "- Use browser_wait_for instead of blind waiting when possible.\n"
+        "- The task is done only when the requested state, file, or deliverable is verified.\n"
+        "- End with a short completion report: what is done, proof, and any remaining blocker."
+    )
+    task_sections = [section for section in (workspace_context, execution_contract, task_text) if section]
+    effective_task = "\n\n".join(task_sections)
 
     if session.session_context.can_access_memory:
         # Pass the current session ID to only see relevant context

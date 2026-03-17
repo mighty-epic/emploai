@@ -7,7 +7,7 @@ import logging
 import time
 import base64
 from pathlib import Path
-from typing import Any, Dict, Callable
+from typing import Any, Dict, Callable, List, Optional
 
 try:
     import pyautogui
@@ -41,9 +41,282 @@ from shared import (
     get_heartbeat_manager,
 )
 from single_agent.browser_tool import create_browser_tool
+from single_agent.extension_tool import create_extension_tool
 
 
 logger = logging.getLogger(__name__)
+
+# Linux compatibility: auto-detect or force via PLATFORM=linux env var
+from linux import LINUX_MODE
+if LINUX_MODE:
+    from linux.desktop_tools import get_linux_desktop_overrides
+    _LINUX_DESKTOP_OVERRIDES = get_linux_desktop_overrides()
+else:
+    _LINUX_DESKTOP_OVERRIDES = {}
+
+AUTO_MODE_BROWSER_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_extension_toggle",
+            "description": "Toggle between Selenium and the native Chrome extension bridge.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "enable": {
+                        "type": "boolean",
+                        "description": "True to use the native Chrome extension bridge, false to use Selenium.",
+                    }
+                },
+                "required": ["enable"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_navigate",
+            "description": "Navigate the browser to a URL. Works with Selenium or the native Chrome extension bridge.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to navigate to"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_snapshot",
+            "description": "Get an ARIA snapshot of the current page with interactive [ref=N] IDs.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_click_ref",
+            "description": "Click an ARIA-tagged browser element by its [ref=N] id.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ref": {"type": "integer", "description": "Reference id from browser_snapshot."},
+                },
+                "required": ["ref"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_type",
+            "description": "Type text into the focused input, or into a specific ref when provided. Prefer ref-based typing for reliable long tasks.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Text to type."},
+                    "ref": {"type": "integer", "description": "Optional input ref from browser_snapshot."},
+                    "clear_first": {"type": "boolean", "default": False},
+                },
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_clear_ref",
+            "description": "Clear a specific input field by its [ref=N] id before typing new content.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ref": {"type": "integer", "description": "Input ref from browser_snapshot."},
+                },
+                "required": ["ref"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_select_option_ref",
+            "description": "Select an option on a native <select> element by ref using visible text, value, or index.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ref": {"type": "integer", "description": "Select ref from browser_snapshot."},
+                    "text": {"type": "string", "description": "Visible option text to select."},
+                    "value": {"type": "string", "description": "Option value attribute to select."},
+                    "index": {"type": "integer", "description": "Zero-based option index to select."},
+                },
+                "required": ["ref"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_press_key",
+            "description": "Press a key inside the active browser page. Use this sparingly for browser navigation because synthetic key events are less reliable than ref-based actions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Key name such as enter, tab, escape, arrow_down."},
+                },
+                "required": ["key"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_wait_for",
+            "description": "Wait for a page condition on the current task tab. Prefer this over blind sleep when waiting for navigation or status text.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url_contains": {"type": "string", "description": "Substring expected in the current URL."},
+                    "title_contains": {"type": "string", "description": "Substring expected in the page title."},
+                    "text_contains": {"type": "string", "description": "Substring expected in visible page text."},
+                    "timeout_seconds": {"type": "number", "default": 10},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_scroll",
+            "description": "Scroll the current browser page.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "direction": {"type": "string", "enum": ["up", "down"], "default": "down"},
+                    "amount": {"type": "integer", "default": 300},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_screenshot",
+            "description": "Capture a screenshot of the current browser page.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_back",
+            "description": "Go back in browser history.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_forward",
+            "description": "Go forward in browser history.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_switch_tab",
+            "description": "Switch to a browser tab by index (0-based).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer", "description": "The tab index."},
+                },
+                "required": ["index"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_list_tabs",
+            "description": "List currently open browser tabs with indices, titles, URLs, and the active tab.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_activate_tab",
+            "description": "Activate an existing browser tab by title substring, URL substring, tab id, or index. Use this when asked to move to an already-open tab.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer", "description": "Tab index if already known."},
+                    "title_contains": {"type": "string", "description": "Substring of the tab title to match."},
+                    "url_contains": {"type": "string", "description": "Substring of the tab URL to match."},
+                    "tab_id": {"type": "integer", "description": "Specific tab id if already known."},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_close_tab",
+            "description": "Close the current browser tab.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_stop",
+            "description": "Stop the browser session or disconnect from the bridge.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+]
+
+
+def get_auto_mode_extra_tools() -> List[Dict[str, Any]]:
+    return list(AUTO_MODE_BROWSER_TOOLS)
+
+
+def get_auto_mode_tool_handlers(session) -> Dict[str, Callable[[Dict[str, Any]], Any]]:
+    handlers = {
+        "browser_extension_toggle": lambda args: _execute_browser_extension_toggle(session, args),
+        "browser_navigate": lambda args: _execute_browser_navigate(session, args),
+        "browser_snapshot": lambda args: _execute_browser_snapshot(session, args),
+        "browser_click_ref": lambda args: _execute_browser_click_ref(session, args),
+        "browser_type": lambda args: _execute_browser_type(session, args),
+        "browser_clear_ref": lambda args: _execute_browser_clear_ref(session, args),
+        "browser_select_option_ref": lambda args: _execute_browser_select_option_ref(session, args),
+        "browser_press_key": lambda args: _execute_browser_press_key(session, args),
+        "browser_wait_for": lambda args: _execute_browser_wait_for(session, args),
+        "browser_scroll": lambda args: _execute_browser_scroll(session, args),
+        "browser_screenshot": lambda args: _execute_browser_screenshot(session, args),
+        "browser_back": lambda args: _execute_browser_back(session, args),
+        "browser_forward": lambda args: _execute_browser_forward(session, args),
+        "browser_switch_tab": lambda args: _execute_browser_switch_tab(session, args),
+        "browser_list_tabs": lambda args: _execute_browser_list_tabs(session, args),
+        "browser_activate_tab": lambda args: _execute_browser_activate_tab(session, args),
+        "browser_close_tab": lambda args: _execute_browser_close_tab(session, args),
+        "browser_stop": lambda args: _execute_browser_stop(session, args),
+        # Backwards-compatible aliases used by the legacy SingleAgent schema/prompt.
+        "open_browser": lambda args: _execute_browser_navigate(session, {"url": args["url"]}),
+        "observe_browser": lambda args: _execute_browser_snapshot(session, args),
+        "switch_tab": lambda args: _execute_browser_switch_tab(session, {"index": args["index"]}),
+        "close_tab": lambda args: _execute_browser_close_tab(session, args),
+        "go_back": lambda args: _execute_browser_back(session, args),
+        "go_forward": lambda args: _execute_browser_forward(session, args),
+    }
+    # Linux override: swap Windows-only desktop tools for Linux equivalents
+    if LINUX_MODE:
+        for name, func in _LINUX_DESKTOP_OVERRIDES.items():
+            handlers[name] = lambda args, f=func: f(session, args)
+    return handlers
 
 
 def create_unified_agent_for_task(session, app, loop) -> None:
@@ -118,14 +391,21 @@ def _build_unified_tool_executor(session) -> Callable[[str, Dict], Any]:
         'web_search': lambda args: _execute_web_search(session, args),
         'fetch_url': lambda args: _execute_fetch_url(session, args),
         'browser_navigate': lambda args: _execute_browser_navigate(session, args),
-        'browser_click': lambda args: _execute_browser_click(session, args),
+        # 'browser_click': lambda args: _execute_browser_click(session, args),  # DISABLED: use browser_click_ref
         'browser_type': lambda args: _execute_browser_type(session, args),
+        'browser_clear_ref': lambda args: _execute_browser_clear_ref(session, args),
+        'browser_select_option_ref': lambda args: _execute_browser_select_option_ref(session, args),
+        'browser_press_key': lambda args: _execute_browser_press_key(session, args),
+        'browser_wait_for': lambda args: _execute_browser_wait_for(session, args),
+        'browser_scroll': lambda args: _execute_browser_scroll(session, args),
         'browser_screenshot': lambda args: _execute_browser_screenshot(session, args),
         'browser_snapshot': lambda args: _execute_browser_snapshot(session, args),
         'browser_click_ref': lambda args: _execute_browser_click_ref(session, args),
         'browser_back': lambda args: _execute_browser_back(session, args),
         'browser_forward': lambda args: _execute_browser_forward(session, args),
         'browser_switch_tab': lambda args: _execute_browser_switch_tab(session, args),
+        'browser_list_tabs': lambda args: _execute_browser_list_tabs(session, args),
+        'browser_activate_tab': lambda args: _execute_browser_activate_tab(session, args),
         'browser_close_tab': lambda args: _execute_browser_close_tab(session, args),
         'browser_stop': lambda args: _execute_browser_stop(session, args),
         'search_memory': lambda args: _execute_search_memory(session, args),
@@ -150,7 +430,14 @@ def _build_unified_tool_executor(session) -> Callable[[str, Dict], Any]:
         'schedule_job': lambda args: _execute_schedule_job(session, args),
         'list_scheduled_jobs': lambda args: _execute_list_scheduled_jobs(session, args),
         'remove_scheduled_job': lambda args: _execute_remove_scheduled_job(session, args),
+        'browser_extension_toggle': lambda args: _execute_browser_extension_toggle(session, args),
     }
+
+    # Linux override: swap Windows-only desktop tools for Linux equivalents
+    if LINUX_MODE:
+        for name, func in _LINUX_DESKTOP_OVERRIDES.items():
+            if name in tool_map:
+                tool_map[name] = lambda args, f=func: f(session, args)
 
     def unified_tool_executor(tool_name: str, tool_args: Dict) -> Any:
         executor = tool_map.get(tool_name)
@@ -267,116 +554,424 @@ def _execute_fetch_url(session, args: Dict) -> str:
         return f"Error fetching URL: {str(e)}"
 
 
-def _get_browser_tool(session):
-    """Get the browser tool for this session, creating if needed."""
-    if hasattr(session, 'browser_tool') and session.browser_tool:
+FAILOVER_ERROR_TYPES = {"connection", "protocol", "timeout"}
+
+
+def _bridge_enabled(session) -> bool:
+    return bool(session.live_config.get("browser.use_extension", True))
+
+
+def ensure_extension_bridge(session):
+    """Ensure the localhost bridge server is running without pinning a backend."""
+    if not hasattr(session, "extension_tool") or not session.extension_tool:
+        session.extension_tool = create_extension_tool()
+    session.extension_tool.start_server()
+    return session.extension_tool
+
+
+def _get_selenium_tool(session):
+    if hasattr(session, "browser_tool") and session.browser_tool:
         return session.browser_tool
-    
-    # Try to reuse from refined_agent
-    if session.refined_agent and hasattr(session.refined_agent, 'browser') and session.refined_agent.browser:
+
+    if session.refined_agent and hasattr(session.refined_agent, "browser") and session.refined_agent.browser:
         session.browser_tool = session.refined_agent.browser
         return session.browser_tool
-        
-    # Create new
+
     session.browser_tool = create_browser_tool(headless=True)
     return session.browser_tool
 
 
+def _get_browser_tool(session):
+    """Return the current preferred browser tool for compatibility callers."""
+    context = session.get_browser_task_context()
+    if context.backend == "selenium" or not _bridge_enabled(session):
+        return _get_selenium_tool(session)
+    return ensure_extension_bridge(session)
+
+
+def get_browser_bridge_status(session) -> Dict[str, Any]:
+    context = session.get_browser_task_context()
+    extension_status = None
+    if hasattr(session, "extension_tool") and session.extension_tool:
+        extension_status = session.extension_tool.get_status()
+
+    return {
+        "desired_backend": "extension" if _bridge_enabled(session) else "selenium",
+        "task_backend": context.backend,
+        "task_id": context.task_id,
+        "healthy": context.healthy,
+        "primary_tab_id": context.primary_tab_id,
+        "primary_window_id": context.primary_window_id,
+        "owned_tab_ids": list(context.owned_tab_ids),
+        "last_url": context.last_url,
+        "last_title": context.last_title,
+        "last_snapshot_hash": context.last_snapshot_hash,
+        "extension": extension_status,
+    }
+
+
+def _should_failover_browser_result(result: Dict[str, Any]) -> bool:
+    return bool(result.get("error")) and result.get("error_type") in FAILOVER_ERROR_TYPES
+
+
+def _run_browser_action(session, extension_action, selenium_action, *, own_tab: bool = False) -> Dict[str, Any]:
+    context = session.get_browser_task_context()
+    use_extension = _bridge_enabled(session) and context.backend != "selenium"
+
+    if use_extension:
+        extension_tool = ensure_extension_bridge(session)
+        result = extension_action(extension_tool, context)
+        if _should_failover_browser_result(result):
+            context.backend = "selenium"
+            context.healthy = False
+            fallback = selenium_action(_get_selenium_tool(session), context)
+            context.backend = "selenium"
+            session.update_browser_task_context(fallback, owned_tab=own_tab)
+            return fallback
+
+        context.backend = "extension"
+        session.update_browser_task_context(result, owned_tab=own_tab)
+        return result
+
+    result = selenium_action(_get_selenium_tool(session), context)
+    context.backend = "selenium"
+    session.update_browser_task_context(result, owned_tab=own_tab)
+    return result
+
+
+def _browser_action_error(prefix: str, result: Dict[str, Any]) -> str:
+    url = result.get("url")
+    title = result.get("title")
+    location = []
+    if title:
+        location.append(title)
+    if url:
+        location.append(url)
+    suffix = f" [{' | '.join(location)}]" if location else ""
+    return f"{prefix}: {result.get('error', 'Unknown browser error')}{suffix}"
+
+
+def _browser_result_summary(action: str, result: Dict[str, Any], *, detail: Optional[str] = None) -> str:
+    title = result.get("title") or "(no title)"
+    url = result.get("url") or "(no url)"
+    state_bits = []
+    if result.get("backend"):
+        state_bits.append(f"backend={result['backend']}")
+    if result.get("tab_id") is not None:
+        state_bits.append(f"tab={result['tab_id']}")
+    if result.get("wait_reason"):
+        state_bits.append(f"wait={result['wait_reason']}")
+
+    lines = [f"{action}: {title} - {url}"]
+    if detail:
+        lines.append(detail)
+    if state_bits:
+        lines.append(f"State: {', '.join(state_bits)}")
+    if result.get("field_value") is not None:
+        lines.append(f"Field value: {result.get('field_value')}")
+    if result.get("selected_text") or result.get("selected_value") is not None:
+        lines.append(
+            f"Selected: text={result.get('selected_text')!r}, value={result.get('selected_value')!r}"
+        )
+    if result.get("matched_conditions"):
+        lines.append(f"Matched: {', '.join(result.get('matched_conditions', []))}")
+    return "\n".join(lines)
+
+
+def _execute_browser_extension_toggle(session, args: Dict) -> str:
+    """Explicit tool to toggle browser extension mode."""
+    enable = args.get("enable", True)
+    if isinstance(enable, str):
+        enable = enable.strip().lower() in {"true", "1", "yes", "on"}
+    session.live_config.set("browser.use_extension", enable, session.user_id)
+    session.live_config.save_config()
+    session.reset_browser_task_context(session.current_task_id)
+
+    if enable:
+        ensure_extension_bridge(session)
+
+    mode = "Extension" if enable else "Selenium"
+    return f"Browser mode changed to: {mode}. The browser backend will be re-evaluated on the next task."
+
+
 def _execute_browser_navigate(session, args: Dict) -> str:
-    browser = _get_browser_tool(session)
-    result = browser.navigate(args['url'])
+    result = _run_browser_action(
+        session,
+        lambda browser, context: browser.navigate(args["url"], tab_id=context.primary_tab_id),
+        lambda browser, context: browser.navigate(args["url"], tab_id=context.primary_tab_id),
+        own_tab=True,
+    )
     if "error" in result:
-        return f"Browser error: {result['error']}"
-    return f"Navigated to {result['url']} - {result['title']}"
+        return _browser_action_error("Browser error", result)
+    detail = "Task tab ready for the next verified step."
+    return _browser_result_summary("Navigated", result, detail=detail)
 
 
 def _execute_browser_click(session, args: Dict) -> str:
-    browser = _get_browser_tool(session)
-    result = browser.click(args['target'])
+    result = _run_browser_action(
+        session,
+        lambda browser, context: browser.click(args["target"]),
+        lambda browser, context: browser.click(args["target"]),
+    )
     if "error" in result:
-        return f"Click error: {result['error']}"
+        return _browser_action_error("Click error", result)
     return "Clicked successfully"
 
 
 def _execute_browser_type(session, args: Dict) -> str:
-    browser = _get_browser_tool(session)
-    result = browser.type(args['text'], clear_first=args.get('clear_first', False))
+    result = _run_browser_action(
+        session,
+        lambda browser, context: browser.type(
+            args["text"],
+            clear_first=args.get("clear_first", False),
+            ref=args.get("ref"),
+            tab_id=context.primary_tab_id,
+        ),
+        lambda browser, context: browser.type(
+            args["text"],
+            clear_first=args.get("clear_first", False),
+            ref=args.get("ref"),
+            tab_id=context.primary_tab_id,
+        ),
+    )
     if "error" in result:
-        return f"Type error: {result['error']}"
-    return f"Typed: {args['text']}"
+        return _browser_action_error("Type error", result)
+    target = f"ref={args['ref']}" if args.get("ref") is not None else "focused element"
+    return _browser_result_summary(
+        "Typed",
+        result,
+        detail=f"Target: {target}; clear_first={bool(args.get('clear_first', False))}",
+    )
+
+
+def _execute_browser_clear_ref(session, args: Dict) -> str:
+    result = _run_browser_action(
+        session,
+        lambda browser, context: browser.clear_ref(args["ref"], tab_id=context.primary_tab_id),
+        lambda browser, context: browser.clear_ref(args["ref"], tab_id=context.primary_tab_id),
+    )
+    if "error" in result:
+        return _browser_action_error("Clear error", result)
+    return _browser_result_summary("Cleared field", result, detail=f"Target: ref={args['ref']}")
+
+
+def _execute_browser_select_option_ref(session, args: Dict) -> str:
+    result = _run_browser_action(
+        session,
+        lambda browser, context: browser.select_option_by_ref(
+            args["ref"],
+            text=args.get("text"),
+            value=args.get("value"),
+            index=args.get("index"),
+            tab_id=context.primary_tab_id,
+        ),
+        lambda browser, context: browser.select_option_by_ref(
+            args["ref"],
+            text=args.get("text"),
+            value=args.get("value"),
+            index=args.get("index"),
+            tab_id=context.primary_tab_id,
+        ),
+    )
+    if "error" in result:
+        return _browser_action_error("Select option error", result)
+    return _browser_result_summary("Selected option", result, detail=f"Target: ref={args['ref']}")
+
+
+def _execute_browser_press_key(session, args: Dict) -> str:
+    result = _run_browser_action(
+        session,
+        lambda browser, context: browser.press_key(args["key"], tab_id=context.primary_tab_id),
+        lambda browser, context: browser.press_key(args["key"], tab_id=context.primary_tab_id),
+    )
+    if "error" in result:
+        return _browser_action_error("Key error", result)
+    return _browser_result_summary(
+        "Pressed browser key",
+        result,
+        detail=f"Key: {args['key']} (synthetic DOM event; prefer ref-based actions when possible)",
+    )
+
+
+def _execute_browser_wait_for(session, args: Dict) -> str:
+    result = _run_browser_action(
+        session,
+        lambda browser, context: browser.wait_for(
+            url_contains=args.get("url_contains"),
+            title_contains=args.get("title_contains"),
+            text_contains=args.get("text_contains"),
+            timeout_seconds=args.get("timeout_seconds", 10),
+            tab_id=context.primary_tab_id,
+        ),
+        lambda browser, context: browser.wait_for(
+            url_contains=args.get("url_contains"),
+            title_contains=args.get("title_contains"),
+            text_contains=args.get("text_contains"),
+            timeout_seconds=args.get("timeout_seconds", 10),
+            tab_id=context.primary_tab_id,
+        ),
+    )
+    if "error" in result:
+        return _browser_action_error("Wait error", result)
+    detail = "Observed requested page condition."
+    return _browser_result_summary("Wait complete", result, detail=detail)
+
+
+def _execute_browser_scroll(session, args: Dict) -> str:
+    direction = args.get("direction", "down")
+    amount = args.get("amount", 300)
+    result = _run_browser_action(
+        session,
+        lambda browser, context: browser.scroll(direction, amount, tab_id=context.primary_tab_id),
+        lambda browser, context: browser.scroll(direction, amount, tab_id=context.primary_tab_id),
+    )
+    if "error" in result:
+        return _browser_action_error("Scroll error", result)
+    return _browser_result_summary("Scrolled browser", result, detail=f"Direction: {direction}; amount={amount}")
 
 
 def _execute_browser_screenshot(session, args: Dict) -> Dict:
-    browser = _get_browser_tool(session)
-    if not browser.driver:
-        return {"error": "Browser not started"}
-    try:
-        temp_dir = Path("temp")
-        temp_dir.mkdir(exist_ok=True)
-        path = temp_dir / f"browser_{int(time.time())}.png"
-        browser.driver.save_screenshot(str(path))
-        
-        with open(path, "rb") as f:
-            base64_image = base64.b64encode(f.read()).decode('utf-8')
-            
-        return {
-            "image_captured": True,
-            "image_base64": base64_image,
-            "description": f"Browser screenshot captured successfully.",
-            "metadata": {"path": str(path)}
-        }
-    except Exception as e:
-        return {"error": f"Screenshot error: {str(e)}"}
+    result = _run_browser_action(
+        session,
+        lambda browser, context: browser.screenshot(tab_id=context.primary_tab_id),
+        lambda browser, context: browser.screenshot(tab_id=context.primary_tab_id),
+    )
+    if "error" in result:
+        return {"error": f"Screenshot error: {result['error']}"}
+    return result
 
 
 def _execute_browser_snapshot(session, args: Dict) -> str:
-    browser = _get_browser_tool(session)
-    result = browser.snapshot()
+    result = _run_browser_action(
+        session,
+        lambda browser, context: browser.snapshot(tab_id=context.primary_tab_id),
+        lambda browser, context: browser.snapshot(tab_id=context.primary_tab_id),
+    )
     if "error" in result:
-        return f"Snapshot error: {result['error']}"
-    return f"Browser ARIA Snapshot:\n{result['formatted']}"
+        return _browser_action_error("Snapshot error", result)
+    metadata = f"Snapshot: {(result.get('title') or '(no title)')} - {(result.get('url') or '(no url)')}"
+    return f"{metadata}\nBrowser ARIA Snapshot:\n{result.get('formatted', 'No interactive elements found')}"
 
 
 def _execute_browser_click_ref(session, args: Dict) -> str:
-    browser = _get_browser_tool(session)
-    result = browser.click_by_ref(args['ref'])
+    result = _run_browser_action(
+        session,
+        lambda browser, context: browser.click_by_ref(args["ref"], tab_id=context.primary_tab_id),
+        lambda browser, context: browser.click_by_ref(args["ref"], tab_id=context.primary_tab_id),
+    )
     if "error" in result:
-        return f"Click ref error: {result['error']}"
-    return f"Clicked element ref={args['ref']}"
+        return _browser_action_error("Click ref error", result)
+    return _browser_result_summary("Clicked element", result, detail=f"Target: ref={args['ref']}")
 
 
 def _execute_browser_back(session, args: Dict) -> str:
-    browser = _get_browser_tool(session)
-    result = browser.back()
-    if "error" in result: return result['error']
-    return f"Went back to {result.get('url')}"
+    result = _run_browser_action(
+        session,
+        lambda browser, context: browser.back(tab_id=context.primary_tab_id),
+        lambda browser, context: browser.back(tab_id=context.primary_tab_id),
+    )
+    if "error" in result:
+        return _browser_action_error("Back error", result)
+    return _browser_result_summary("Went back", result)
 
 
 def _execute_browser_forward(session, args: Dict) -> str:
-    browser = _get_browser_tool(session)
-    result = browser.forward()
-    if "error" in result: return result['error']
-    return f"Went forward to {result.get('url')}"
+    result = _run_browser_action(
+        session,
+        lambda browser, context: browser.forward(tab_id=context.primary_tab_id),
+        lambda browser, context: browser.forward(tab_id=context.primary_tab_id),
+    )
+    if "error" in result:
+        return _browser_action_error("Forward error", result)
+    return _browser_result_summary("Went forward", result)
 
 
 def _execute_browser_switch_tab(session, args: Dict) -> str:
-    browser = _get_browser_tool(session)
-    result = browser.switch_tab(args['index'])
-    if "error" in result: return result['error']
-    return f"Switched to tab {args['index']}"
+    index = args.get("index")
+    if isinstance(index, str) and index.isdigit():
+        index = int(index)
+
+    result = _run_browser_action(
+        session,
+        lambda browser, context: browser.activate_tab(index=index),
+        lambda browser, context: browser.activate_tab(index=index),
+    )
+    if "error" in result:
+        return _browser_action_error("Switch tab error", result)
+    return _browser_result_summary("Switched tab", result, detail=f"Index: {result.get('index')}")
+
+
+def _execute_browser_list_tabs(session, args: Dict) -> str:
+    result = _run_browser_action(
+        session,
+        lambda browser, context: browser.list_tabs(),
+        lambda browser, context: browser.list_tabs(),
+    )
+    if "error" in result:
+        return _browser_action_error("Tab list error", result)
+
+    tabs = result.get("tabs", [])
+    if not tabs:
+        return "No browser tabs are open."
+
+    lines = [f"Open browser tabs ({result.get('count', len(tabs))} total):"]
+    for tab in tabs[:20]:
+        marker = "*" if tab.get("active") else " "
+        title = tab.get("title") or "(no title)"
+        url = tab.get("url") or ""
+        lines.append(f"{marker} [{tab.get('index')}] {title} - {url}")
+    if len(tabs) > 20:
+        lines.append(f"... and {len(tabs) - 20} more tabs")
+    return "\n".join(lines)
+
+
+def _execute_browser_activate_tab(session, args: Dict) -> str:
+    index = args.get("index")
+    if isinstance(index, str) and index.isdigit():
+        index = int(index)
+
+    tab_id = args.get("tab_id")
+    if isinstance(tab_id, str) and tab_id.isdigit():
+        tab_id = int(tab_id)
+
+    result = _run_browser_action(
+        session,
+        lambda browser, context: browser.activate_tab(
+            index=index,
+            title_contains=args.get("title_contains"),
+            url_contains=args.get("url_contains"),
+            tab_id=tab_id,
+        ),
+        lambda browser, context: browser.activate_tab(
+            index=index,
+            title_contains=args.get("title_contains"),
+            url_contains=args.get("url_contains"),
+            tab_id=tab_id,
+        ),
+    )
+    if "error" in result:
+        return _browser_action_error("Activate tab error", result)
+
+    return _browser_result_summary("Activated tab", result, detail=f"Index: {result.get('index')}")
 
 
 def _execute_browser_close_tab(session, args: Dict) -> str:
-    browser = _get_browser_tool(session)
-    result = browser.close_tab()
-    if "error" in result: return result['error']
-    return "Closed current tab"
+    result = _run_browser_action(
+        session,
+        lambda browser, context: browser.close_tab(tab_id=context.primary_tab_id),
+        lambda browser, context: browser.close_tab(tab_id=context.primary_tab_id),
+    )
+    if "error" in result:
+        return _browser_action_error("Close tab error", result)
+    return _browser_result_summary("Closed tab", result)
 
 
 def _execute_browser_stop(session, args: Dict) -> str:
     browser = _get_browser_tool(session)
     result = browser.stop()
-    if "error" in result: return result['error']
+    if "error" in result:
+        return _browser_action_error("Browser stop error", result)
+    session.reset_browser_task_context(session.current_task_id)
     return "Browser stopped"
 
 
@@ -497,8 +1092,13 @@ def _execute_observe_desktop(session, args: Dict) -> str:
 def _execute_click(session, args: Dict) -> str:
     if not PYAUTOGUI_AVAILABLE: return "PyAutoGUI not available"
     try:
-        pyautogui.click(args['x'], args['y'])
-        return f"Clicked at ({args['x']}, {args['y']})"
+        # Robust parsing in case model sends strings or comma-separated values
+        x_val = str(args['x']).split(',')[0].strip()
+        y_val = str(args['y']).split(',')[0].strip()
+        x, y = int(float(x_val)), int(float(y_val))
+        
+        pyautogui.click(x, y)
+        return f"Clicked at ({x}, {y})"
     except Exception as e:
         return f"Error clicking: {str(e)}"
 
@@ -506,8 +1106,11 @@ def _execute_click(session, args: Dict) -> str:
 def _execute_right_click(session, args: Dict) -> str:
     if not PYAUTOGUI_AVAILABLE: return "PyAutoGUI not available"
     try:
-        pyautogui.rightClick(args['x'], args['y'])
-        return f"Right-clicked at ({args['x']}, {args['y']})"
+        x_val = str(args['x']).split(',')[0].strip()
+        y_val = str(args['y']).split(',')[0].strip()
+        x, y = int(float(x_val)), int(float(y_val))
+        pyautogui.rightClick(x, y)
+        return f"Right-clicked at ({x}, {y})"
     except Exception as e:
         return f"Error right-clicking: {str(e)}"
 
@@ -515,8 +1118,11 @@ def _execute_right_click(session, args: Dict) -> str:
 def _execute_double_click(session, args: Dict) -> str:
     if not PYAUTOGUI_AVAILABLE: return "PyAutoGUI not available"
     try:
-        pyautogui.doubleClick(args['x'], args['y'])
-        return f"Double-clicked at ({args['x']}, {args['y']})"
+        x_val = str(args['x']).split(',')[0].strip()
+        y_val = str(args['y']).split(',')[0].strip()
+        x, y = int(float(x_val)), int(float(y_val))
+        pyautogui.doubleClick(x, y)
+        return f"Double-clicked at ({x}, {y})"
     except Exception as e:
         return f"Error double-clicking: {str(e)}"
 

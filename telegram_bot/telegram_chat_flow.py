@@ -16,6 +16,7 @@ from cli.agent_tools.loop import run_tool_loop
 from cli.tui_constants import MODEL_CONFIGS, SYSTEM_PROMPT, UNIFIED_AGENT_PROMPT
 from bot_core.hooks import HookEvent, HookType
 from single_agent.agent import AGENT_TOOLS
+from telegram_unified_agent import get_auto_mode_extra_tools, get_auto_mode_tool_handlers
 
 from telegram_messaging import safe_reply, safe_edit_message
 from bot_core.ui_helpers import InlineKeyboardHelper, ThinkingModeVisualizer, SkillTriggerFeedback
@@ -25,6 +26,20 @@ logger = logging.getLogger(__name__)
 
 # --- Base64 field names to always strip from verbose output ---
 _BASE64_KEYS = frozenset({"image_base64", "base64", "image_data", "data", "screenshot"})
+
+
+def _merge_openai_tools(*tool_groups):
+    merged = []
+    seen = set()
+    for group in tool_groups:
+        for tool in group:
+            func = tool.get("function", {})
+            name = func.get("name")
+            if not name or name in seen:
+                continue
+            merged.append(tool)
+            seen.add(name)
+    return merged
 
 
 def _format_verbose_tool_msg(name: str, args: dict, result, duration_ms: float) -> str:
@@ -87,6 +102,7 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
 
         session.current_task_id += 1
         my_task_id = session.current_task_id
+        session.start_browser_task(my_task_id)
         session.should_interrupt = False
         session.is_processing = True
 
@@ -106,10 +122,50 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
         if message_id is not None:
             session.message_id_map[message_id] = len(session.chat_history) - 1
 
-        estimated_tokens = sum(len(str(msg.get('content', ''))) // 4 for msg in session.chat_history)
-        if estimated_tokens > 50000:
-            session.chat_history = session.chat_history[-50:]
-            logger.info("Compressed conversation history")
+        # Check if this is the very first message in the session
+        is_session_start = len(session.chat_history) == 1
+        
+        if is_session_start:
+            # Refresh system info at session start as requested
+            session.refresh_system_info()
+            
+            # Extract window list for user-facing announcement
+            window_info = "Unknown"
+            if "Active Windows: " in session.system_info:
+                window_info = session.system_info.split("Active Windows: ")[-1]
+            
+            await safe_reply(
+                update,
+                "🌍 *Session Started*\n"
+                "Checking environment and active windows...\n\n"
+                f"**Active Windows:** {window_info}"
+            )
+
+        # Smart context compression via LLM summarization
+        if session.context_manager:
+            model_id = session.current_model or "claude-sonnet-4-5"
+            if session.context_manager.needs_compression(session.chat_history, model_id):
+                logger.info("[ContextManager] Compressing conversation history...")
+                
+                # Update system info with fresh window list before compression
+                session.refresh_system_info()
+                
+                # Extract window list for the debug message
+                window_info = "Unknown"
+                if "Active Windows: " in session.system_info:
+                    window_info = session.system_info.split("Active Windows: ")[-1]
+                
+                # Notify user of compression (debug message)
+                await safe_reply(
+                    update,
+                    "🔘 *Memory Compressed*\n"
+                    "I've summarized our previous conversation to save space. "
+                    "I also refreshed the list of active windows/apps.\n\n"
+                    f"**Active Windows:** {window_info}"
+                )
+                
+                session.chat_history = session.context_manager.compress(session.chat_history)
+                logger.info("[ContextManager] Compression complete")
         
         # Save session to disk
         session.save_session()
@@ -172,6 +228,20 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
         for msg in session.chat_history
     ]
 
+    messages.insert(1, {
+        "role": "system",
+        "content": (
+            "TASK EXECUTION CONTRACT:\n"
+            "- For complex tasks, keep a short internal checklist and complete one verified step at a time.\n"
+            "- Do not repeat a step once the requested state is already verified.\n"
+            "- For webpage DOM actions, rely on browser tool results and browser_snapshot first. Use describe_screen or ocr_screen only for browser chrome, desktop apps, or when DOM tools are unavailable.\n"
+            "- Prefer ref-based browser tools over focus-dependent typing or synthetic keypresses.\n"
+            "- Use browser_wait_for instead of blind delays when waiting for navigation or confirmation text.\n"
+            "- A task is done only when the requested file, page state, or deliverable is verified.\n"
+            "- End with a short completion report that states what is done, the proof, and any remaining blocker."
+        ),
+    })
+
     # --- Kickstart priming: inject a hidden exchange that primes the model to act ---
     # This is invisible to the user but teaches the model its expected behavior pattern.
     # Only inject on first few messages to avoid bloating long conversations.
@@ -187,8 +257,11 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
                     "Do not list what you can't do — find a way. "
                     "If you need to sign up for a service, open the browser and sign up. "
                     "If you need to install something, install it. "
-                    "ALWAYS use describe_screen or ocr_screen after EVERY click or type action to verify it worked. "
-                    "Never chain click→type→click→type without observing in between. "
+                    "Use the cheapest verification tool that fits the environment: browser tool results and browser_snapshot first for webpages, "
+                    "describe_screen or ocr_screen only for browser chrome, desktop apps, or when DOM tools fail. "
+                    "Never chain multiple browser edits without verifying the resulting page state. "
+                    "Do not repeat already-completed steps. "
+                    "Only declare done after the requested result is verified. "
                     "Act first. Report results after."
                 ),
             },
@@ -197,8 +270,9 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
                 "content": (
                     "Understood. I will act immediately on every request — no explanations, no permission-seeking, "
                     "no listing limitations. I'll use my tools to execute tasks directly, sign up for services myself "
-                    "if needed, install packages, write scripts, and verify every screen action with describe_screen "
-                    "or ocr_screen between clicks. Ready for your task."
+                    "if needed, install packages, write scripts, and verify each step with the lowest-waste tool that can prove it worked. "
+                    "For webpages I will stay in the task tab, prefer ref-based DOM tools, avoid repeating completed steps, "
+                    "and only finish after the deliverable is verified. Ready for your task."
                 ),
             },
         ]
@@ -331,8 +405,11 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
         if not session.single_agent:
             session.init_single_agent(context.application, loop)
 
+        if session.tool_executor:
+            session.tool_executor.custom_tool_handlers = get_auto_mode_tool_handlers(session)
+
         # Always provide automation tools + CLI tools
-        extra_tools = AGENT_TOOLS
+        extra_tools = _merge_openai_tools(get_auto_mode_extra_tools(), AGENT_TOOLS)
 
         # Build custom prompt with skills index, active skills, and memory context
         skills_index = ""

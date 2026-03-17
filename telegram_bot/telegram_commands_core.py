@@ -1,4 +1,4 @@
-"""Core Telegram command handlers (help/mode/model/settings/workspace)."""
+"""Core Telegram command handlers."""
 
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ from cli.tui_constants import AGENT_MODE_LABELS, AVAILABLE_MODELS, MODEL_CONFIGS
 
 COMMAND_HELP: Dict[str, str] = {
     "help": "Show all commands or details: `/help <command>`",
-    "mode": "Choose agent mode: `/mode` (manual/semi/auto)",
+    "mode": "Auto mode is always enabled. `/mode` is kept only as a compatibility stub.",
     "variant": "Set model variant: `/variant` (standard/thinking)",
     "model": "Switch model: `/model`",
     "models": "List available models: `/models`",
-    "task": "Run automation: `/task <task description>`",
+    "task": "Compatibility alias. Send the request normally and the auto agent will handle it.",
     "continue": "Resume paused task: `/continue`",
     "pause": "Pause running task: `/pause`",
     "stop": "Stop running task: `/stop`",
@@ -47,6 +47,7 @@ COMMAND_HELP: Dict[str, str] = {
     "memory_update": "Append note to memory: `/memory_update <note>`",
     "config": "View/edit configuration: `/config [key] [value]`",
     "heartbeat": "Control heartbeat: `/heartbeat on|off|status`",
+    "bridge": "Toggle the browser extension bridge: `/bridge on|off|status`",
 }
 
 
@@ -79,8 +80,8 @@ def build_core_command_handlers(
             f"**Mode:** {mode_label}\n"
             f"**Max Turns:** {session.max_turns}\n"
             f"**Workspace:** `{session.workspace}`\n\n"
-            "**Default Chat:** CLI Agent (file ops, terminal, search)\n"
-            "**Use /task:** For browser/desktop automation\n\n"
+            "**Default Chat:** Unified auto agent\n"
+            "Send requests directly, including browser or desktop automation.\n\n"
             "Use /help to see available commands.",
         )
 
@@ -105,12 +106,10 @@ def build_core_command_handlers(
             update,
             "**📋 Commands**\n\n"
             "**Agent Control:**\n"
-            "/mode - Set agent mode\n"
             "/variant - Set model variant\n"
             "/model - Switch model\n"
             "/models - List all models\n\n"
-            "**Automation (Moltbot Clone):**\n"
-            "/task <desc> - Run browser/desktop task\n"
+            "**Automation & Control:**\n"
             "/continue - Resume paused task\n"
             "/pause - Pause running task\n"
             "/stop - Stop running task\n"
@@ -132,6 +131,7 @@ def build_core_command_handlers(
             "/headless - Toggle headless/headed browser mode\n"
             "/config - View/edit configuration\n"
             "/heartbeat - Control heartbeat checks\n\n"
+            "/bridge - Toggle the browser extension bridge\n\n"
             "**Skills:**\n"
             "/skills - List available skills\n"
             "/skill <name> - Invoke a specific skill\n\n"
@@ -146,52 +146,23 @@ def build_core_command_handlers(
             "**Security:**\n"
             "/security - Show security status and rate limits\n\n"
             "**Chat Mode (Default):**\n"
-            "Send any message to use CLI Agent with:\n"
+            "Send any message to use the unified auto agent with:\n"
             "• File operations (read/write/edit)\n"
             "• Terminal commands\n"
             "• Web search\n"
             "• Codebase search\n"
+            "• Browser and desktop automation\n"
             "• 🧠 Persistent memory (auto-loaded & saved)",
         )
 
     @rate_limited(security_manager)
     async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show mode selector with inline buttons."""
-        user = update.effective_user
-
-        session = get_session(user.id)
-        current = session.agent_mode
-
-        keyboard = [
-            [
-                InlineKeyboardButton(
-                    f"{'✓ ' if current == 'manual' else ''}Manual",
-                    callback_data="mode:manual",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    f"{'✓ ' if current == 'semi' else ''}Semi",
-                    callback_data="mode:semi",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    f"{'✓ ' if current == 'auto' else ''}Auto",
-                    callback_data="mode:auto",
-                )
-            ],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
+        """Explain that the Telegram bot now runs in auto-only mode."""
         await safe_reply(
             update,
-            f"**Agent Mode:** {AGENT_MODE_LABELS.get(current, current)}\n\n"
-            "• **Manual** - CLI and Task agents independent\n"
-            "• **Semi** - Agents share summarized context\n"
-            "• **Auto** - Unified agent with merged capabilities\n\n"
-            "Select a mode:",
-            reply_markup=reply_markup,
+            "**Agent Mode:** Auto\n\n"
+            "This Telegram bot now runs in unified auto mode only.\n"
+            "Send requests directly instead of switching modes.",
         )
 
     @rate_limited(security_manager)

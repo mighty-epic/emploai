@@ -1,0 +1,46 @@
+{
+  "telegram": {
+    "reply_mode": "full",
+    "show_thinking": false,
+    "inline_buttons": true,
+    "rate_limit_per_min": 30,
+    "rate_limit_per_hour": 200
+  },
+  "heartbeat": {
+    "enabled": false,
+    "interval_seconds": 1800,
+    "quiet_hours_start": 23,
+    "quiet_hours_end": 8
+  },
+  "memory": {
+    "auto_save_daily_logs": true,
+    "max_daily_log_days": 30,
+    "enable_semantic_search": false
+  },
+  "agent": {
+    "default_model": "claude-sonnet-4-5",
+    "default_mode": "auto",
+    "max_turns": 100,
+    "context_compression_threshold": 0.5
+  },
+  "skills": {
+    "auto_trigger": true,
+    "show_notifications": true
+  },
+  "security": {
+    "allowed_user_ids": [],
+    "max_file_size_mb": 10,
+    "allowed_file_types": [
+      "txt",
+      "md",
+      "py",
+      "js",
+      "json",
+      "yaml",
+      "yml"
+    ]
+  },
+  "browser": {
+    "use_extension": true
+  }
+}
