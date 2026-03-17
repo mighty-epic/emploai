@@ -14,6 +14,7 @@ _build_unified_tool_executor() when LINUX_MODE is True.
 
 import subprocess
 import shutil
+import shlex
 import time
 from typing import Any, Dict
 
@@ -21,6 +22,41 @@ from typing import Any, Dict
 def _has_command(cmd: str) -> bool:
     """Check if a system command is available on PATH."""
     return shutil.which(cmd) is not None
+
+
+_APP_ALIASES = {
+    "browser": ["xdg-open"],
+    "chrome": ["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"],
+    "google chrome": ["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"],
+    "chromium": ["chromium", "chromium-browser", "google-chrome", "google-chrome-stable"],
+    "terminal": ["x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal", "lxterminal", "xterm"],
+}
+
+
+def _resolve_launch_command(name: str) -> list[str] | None:
+    """Resolve a user/model-provided app name to an executable command."""
+    try:
+        parts = shlex.split(name)
+    except ValueError:
+        parts = [name]
+
+    if not parts:
+        return None
+
+    base = parts[0]
+    if _has_command(base):
+        return parts
+
+    alias_keys = [name.strip().lower()]
+    if base.lower() not in alias_keys:
+        alias_keys.append(base.lower())
+
+    for key in alias_keys:
+        for candidate in _APP_ALIASES.get(key, []):
+            if _has_command(candidate):
+                return [candidate, *parts[1:]]
+
+    return None
 
 
 # ==========================================================================
@@ -234,15 +270,15 @@ def _execute_open_app(session, args: Dict) -> str:
         return "Error: 'name' argument is required"
 
     try:
-        # Try direct command first (e.g., "firefox", "chromium-browser")
-        if _has_command(name):
+        launch_cmd = _resolve_launch_command(name)
+        if launch_cmd:
             subprocess.Popen(
-                [name],
+                launch_cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
             time.sleep(1)
-            return f"Launched: {name}"
+            return f"Launched: {' '.join(launch_cmd)}"
 
         # Try xdg-open (for URLs, file types, etc.)
         if _has_command("xdg-open"):

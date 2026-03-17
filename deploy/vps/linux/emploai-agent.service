@@ -1,0 +1,19 @@
+[Unit]
+Description=EmploAI Telegram agent
+After=network.target emploai-display.service
+Requires=emploai-display.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/emploai/telegram_bot
+Environment=DISPLAY=:99
+Environment=HEADLESS=false
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/opt/emploai/.env
+ExecStart=/opt/emploai/venv/bin/python telegram_agent.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

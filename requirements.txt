@@ -3,13 +3,14 @@
 # Observation Layer
 selenium>=4.15.0
 webdriver-manager>=4.0.0
-pywinauto>=0.6.8
+pywinauto>=0.6.8; platform_system == "Windows"
 Pillow>=10.0.0
 mss>=9.0.0  # Fast cross-platform screenshots
 
 # Hands Layer
 pyautogui>=0.9.54
 pynput>=1.7.6  # Keyboard/mouse monitoring
+pyperclip>=1.8.2
 
 # Brain Layer (LLM clients)
 openai>=1.0.0
@@ -27,6 +28,7 @@ pydantic>=2.5.0
 
 # Utilities
 python-dotenv>=1.0.0
+python-telegram-bot[all]>=20.0
 loguru>=0.7.0
 numpy>=1.24.0
 textual>=0.55.0

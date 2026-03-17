@@ -47,9 +47,16 @@ from single_agent.extension_tool import create_extension_tool
 logger = logging.getLogger(__name__)
 
 # Linux compatibility: auto-detect or force via PLATFORM=linux env var
-from linux import LINUX_MODE
+try:
+    from .linux import LINUX_MODE
+    if LINUX_MODE:
+        from .linux.desktop_tools import get_linux_desktop_overrides
+except ImportError:
+    from linux import LINUX_MODE
+    if LINUX_MODE:
+        from linux.desktop_tools import get_linux_desktop_overrides
+
 if LINUX_MODE:
-    from linux.desktop_tools import get_linux_desktop_overrides
     _LINUX_DESKTOP_OVERRIDES = get_linux_desktop_overrides()
 else:
     _LINUX_DESKTOP_OVERRIDES = {}
