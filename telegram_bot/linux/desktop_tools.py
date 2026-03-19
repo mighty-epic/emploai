@@ -310,6 +310,12 @@ _APP_ALIASES = {
     "terminal": ["x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal", "lxterminal", "xterm"],
 }
 
+_CHROME_DEFAULT_FLAGS = [
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-session-crashed-bubble",
+]
+
 
 def _resolve_launch_command(name: str) -> list[str] | None:
     """Resolve a user/model-provided app name to an executable command."""
@@ -335,6 +341,27 @@ def _resolve_launch_command(name: str) -> list[str] | None:
                 return [candidate, *parts[1:]]
 
     return None
+
+
+def _is_chrome_command(command: list[str]) -> bool:
+    if not command:
+        return False
+    executable = Path(command[0]).name.lower()
+    return executable in {
+        "google-chrome",
+        "google-chrome-stable",
+        "chromium",
+        "chromium-browser",
+    }
+
+
+def _with_chrome_defaults(command: list[str]) -> list[str]:
+    if not _is_chrome_command(command):
+        return command
+
+    existing_flags = set(command[1:])
+    extras = [flag for flag in _CHROME_DEFAULT_FLAGS if flag not in existing_flags]
+    return [*command, *extras]
 
 
 # ==========================================================================
@@ -564,6 +591,7 @@ def _execute_open_app(session, args: Dict) -> str:
     try:
         launch_cmd = _resolve_launch_command(name)
         if launch_cmd:
+            launch_cmd = _with_chrome_defaults(launch_cmd)
             subprocess.Popen(
                 launch_cmd,
                 stdout=subprocess.DEVNULL,

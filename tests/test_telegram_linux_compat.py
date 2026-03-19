@@ -59,8 +59,13 @@ def test_linux_open_app_maps_common_chrome_alias(monkeypatch):
 
     result = desktop_tools._execute_open_app(None, {"name": "chrome"})
 
-    assert launched["args"] == ["google-chrome"]
-    assert result == "Launched: google-chrome"
+    assert launched["args"] == [
+        "google-chrome",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-session-crashed-bubble",
+    ]
+    assert result == "Launched: google-chrome --no-first-run --no-default-browser-check --disable-session-crashed-bubble"
 
 
 def test_linux_open_app_splits_command_arguments(monkeypatch):
@@ -76,8 +81,17 @@ def test_linux_open_app_splits_command_arguments(monkeypatch):
 
     result = desktop_tools._execute_open_app(None, {"name": "google-chrome --incognito"})
 
-    assert launched["args"] == ["google-chrome", "--incognito"]
-    assert result == "Launched: google-chrome --incognito"
+    assert launched["args"] == [
+        "google-chrome",
+        "--incognito",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-session-crashed-bubble",
+    ]
+    assert result == (
+        "Launched: google-chrome --incognito --no-first-run --no-default-browser-check "
+        "--disable-session-crashed-bubble"
+    )
 
 
 def test_linux_click_uses_xdotool_and_parses_coordinates(monkeypatch):

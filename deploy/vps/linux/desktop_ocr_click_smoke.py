@@ -101,11 +101,14 @@ def main() -> int:
     html_path = _create_smoke_html()
     profile_dir = Path(tempfile.gettempdir()) / "emploai-desktop-smoke-profile"
     profile_dir.mkdir(parents=True, exist_ok=True)
-    app_url = f"file:///{html_path.as_posix()}"
+    app_url = html_path.resolve().as_uri()
 
     chrome_args = [
         args.chrome_binary,
         "--no-sandbox",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-session-crashed-bubble",
         "--new-window",
         f"--user-data-dir={profile_dir}",
         f"--app={app_url}",
