@@ -280,5 +280,8 @@ def test_system_prompt_starts_with_live_browser_runtime_status():
     prompt = build_unified_system_prompt(session)
 
     assert prompt.startswith("# LIVE BROWSER RUNTIME STATUS")
+    assert "# LIVE DESKTOP RUNTIME STATUS" in prompt
+    assert "- Active Windows: none" in prompt
     assert "Real Chrome available now: NO" in prompt
     assert "Do NOT assume browser_* tools can use the extension" in prompt
+    assert "Do NOT spend a turn on observe_desktop or focus_window" in prompt

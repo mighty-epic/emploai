@@ -724,6 +724,28 @@ def build_browser_runtime_prompt(session) -> str:
     )
 
 
+def build_desktop_runtime_prompt(session) -> str:
+    system_info = str(getattr(session, "system_info", "") or "")
+    window_lines = [
+        line.strip()
+        for line in system_info.splitlines()
+        if "active window" in line.lower() or "active windows" in line.lower()
+    ]
+
+    if not window_lines:
+        window_lines = ["Active windows snapshot unavailable in SYSTEM_INFO."]
+
+    return "\n".join(
+        [
+            "# LIVE DESKTOP RUNTIME STATUS (Overrides redundant desktop re-checks below)",
+            *[f"- {line}" for line in window_lines],
+            "- The startup SYSTEM_INFO already contains the initial desktop/window snapshot for this turn.",
+            "- Do NOT spend a turn on observe_desktop or focus_window if that snapshot already identifies the target window and nothing has changed yet.",
+            "- Re-check the desktop only after an action changed state, the user may have changed it, or the target window is still uncertain.",
+        ]
+    )
+
+
 def build_unified_system_prompt(
     session,
     *,
@@ -739,6 +761,7 @@ def build_unified_system_prompt(
 
     sections = [
         build_browser_runtime_prompt(session),
+        build_desktop_runtime_prompt(session),
         UNIFIED_AGENT_PROMPT,
         workspace_context.strip() if workspace_context else "",
         memory_context.strip() if memory_context else "",

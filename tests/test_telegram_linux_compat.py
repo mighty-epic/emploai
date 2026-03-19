@@ -1,5 +1,7 @@
+import base64
 import importlib
 import sys
+from types import SimpleNamespace
 
 from telegram_bot.linux import desktop_tools
 
@@ -32,7 +34,15 @@ def test_platform_override_enables_linux_desktop_handlers(monkeypatch):
     handlers = module.get_auto_mode_tool_handlers(session=None)
 
     assert module.LINUX_MODE is True
-    for tool_name in ("observe_desktop", "focus_window", "open_app"):
+    for tool_name in (
+        "describe_screen",
+        "ocr_screen",
+        "observe_desktop",
+        "click",
+        "type_text",
+        "focus_window",
+        "open_app",
+    ):
         assert tool_name in handlers
 
 
@@ -68,3 +78,67 @@ def test_linux_open_app_splits_command_arguments(monkeypatch):
 
     assert launched["args"] == ["google-chrome", "--incognito"]
     assert result == "Launched: google-chrome --incognito"
+
+
+def test_linux_click_uses_xdotool_and_parses_coordinates(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(desktop_tools, "_has_command", lambda cmd: cmd == "xdotool")
+    monkeypatch.setattr(desktop_tools, "_display_geometry", lambda: (1920, 1080))
+
+    def fake_run(args, check=False, timeout=None, **_kwargs):
+        calls.append((args, check, timeout))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(desktop_tools.subprocess, "run", fake_run)
+
+    result = desktop_tools._execute_click(None, {"x": "1467, 25", "y": "25"})
+
+    assert result["success"] is True
+    assert result["backend"] == "xdotool"
+    assert calls[0][0] == ["xdotool", "mousemove", "--sync", "1467", "25"]
+    assert calls[1][0] == ["xdotool", "click", "1"]
+
+
+def test_linux_ocr_screen_returns_structured_result(monkeypatch, tmp_path):
+    screenshot_path = tmp_path / "ocr.png"
+    screenshot_path.write_bytes(b"fake-image")
+
+    monkeypatch.setattr(desktop_tools, "_has_command", lambda cmd: cmd == "scrot")
+    monkeypatch.setattr(desktop_tools, "_capture_screenshot_path", lambda prefix="ocr": screenshot_path)
+    monkeypatch.setattr(desktop_tools, "_load_image", lambda path: SimpleNamespace(width=640, height=480))
+    monkeypatch.setattr(
+        desktop_tools,
+        "_extract_best_ocr",
+        lambda image: {
+            "elements": [{"text": "EMPLO SMOKE TARGET", "x": 500, "y": 300, "confidence": 92.5}],
+            "unfiltered_text": "EMPLO SMOKE TARGET\nWAITING FOR CLICK",
+            "plain_text": "EMPLO SMOKE TARGET\nWAITING FOR CLICK",
+            "total_elements": 1,
+            "variant": "contrast",
+            "average_confidence": 92.5,
+        },
+    )
+
+    result = desktop_tools._execute_ocr_screen(None, {})
+
+    assert result["total_elements"] == 1
+    assert result["elements"][0]["text"] == "EMPLO SMOKE TARGET"
+    assert result["metadata"]["backend"] == "scrot"
+    assert result["metadata"]["width"] == 640
+
+
+def test_linux_describe_screen_returns_base64_image(monkeypatch, tmp_path):
+    screenshot_path = tmp_path / "screen.png"
+    screenshot_path.write_bytes(b"png-bytes")
+
+    monkeypatch.setattr(desktop_tools, "_has_command", lambda cmd: cmd == "scrot")
+    monkeypatch.setattr(desktop_tools, "_capture_screenshot_path", lambda prefix="screen": screenshot_path)
+    monkeypatch.setattr(desktop_tools, "_load_image", lambda path: SimpleNamespace(width=800, height=600))
+
+    result = desktop_tools._execute_describe_screen(None, {"question": "What is on screen?"})
+
+    assert result["image_captured"] is True
+    assert result["question"] == "What is on screen?"
+    assert result["image_base64"] == base64.b64encode(b"png-bytes").decode("utf-8")
+    assert result["metadata"]["backend"] == "scrot"

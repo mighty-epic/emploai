@@ -5,7 +5,7 @@ This deployment keeps the Telegram agent on a persistent virtual desktop so it c
 - run headed Chrome
 - take screenshots
 - use OCR
-- click/type via `pyautogui`
+- click/type via X11-native `xdotool`
 - manage windows via `xdotool` and `wmctrl`
 - keep running even when you are not watching it
 
@@ -25,6 +25,7 @@ This deployment keeps the Telegram agent on a persistent virtual desktop so it c
 - `emploai-display.service`: systemd unit for the display/VNC stack
 - `emploai-agent.service`: systemd unit for the Telegram agent
 - `browser_bridge_smoke.py`: manual live-environment bridge test for Chrome + the unpacked extension
+- `desktop_ocr_click_smoke.py`: manual live-environment test for Linux screenshot/OCR/click on the virtual desktop
 
 ## Expected Paths
 
@@ -86,6 +87,15 @@ systemctl start emploai-agent.service
 ```
 
 This validates the extension bridge against the actual VPS desktop and Chrome session, including `browser_snapshot`.
+
+Run a live desktop OCR/click smoke test on the VPS:
+
+```bash
+source /opt/emploai/venv/bin/activate
+DISPLAY=:99 python deploy/vps/linux/desktop_ocr_click_smoke.py
+```
+
+This opens a controlled Chrome app window on the VPS desktop, OCRs the button text, clicks it with `xdotool`, and verifies the page changed to `CLICK CONFIRMED`.
 
 ## Remote Viewing
 
