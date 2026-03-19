@@ -601,8 +601,24 @@ function hashString(text) {
     return hash.toString(16).padStart(8, "0");
 }
 
+function getDeepActiveElement(root = document) {
+    const active = root && root.activeElement ? root.activeElement : null;
+    if (!active) {
+        return null;
+    }
+
+    if (active.shadowRoot) {
+        const shadowActive = getDeepActiveElement(active.shadowRoot);
+        if (shadowActive) {
+            return shadowActive;
+        }
+    }
+
+    return active;
+}
+
 function getFocusedRef() {
-    const active = document.activeElement;
+    const active = getDeepActiveElement(document);
     if (!active) {
         return null;
     }
@@ -749,9 +765,43 @@ function getPageState() {
     };
 }
 
+function findElementByAriaRef(rootNode, ref) {
+    if (!rootNode) {
+        return null;
+    }
+
+    if (rootNode instanceof Element && rootNode.getAttribute('data-aria-ref') === String(ref)) {
+        return rootNode;
+    }
+
+    const children = rootNode.children || [];
+    for (const child of children) {
+        if (!(child instanceof Element)) {
+            continue;
+        }
+
+        if (child.getAttribute('data-aria-ref') === String(ref)) {
+            return child;
+        }
+
+        if (child.shadowRoot) {
+            const shadowMatch = findElementByAriaRef(child.shadowRoot, ref);
+            if (shadowMatch) {
+                return shadowMatch;
+            }
+        }
+
+        const descendantMatch = findElementByAriaRef(child, ref);
+        if (descendantMatch) {
+            return descendantMatch;
+        }
+    }
+
+    return null;
+}
+
 function focusByRef(ref) {
-    const selector = `[data-aria-ref='${ref}']`;
-    const element = document.querySelector(selector);
+    const element = findElementByAriaRef(document, ref);
     if (!element) throw new Error(`Element with ref=${ref} not found`);
 
     element.scrollIntoView({ block: 'center' });

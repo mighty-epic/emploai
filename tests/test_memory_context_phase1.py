@@ -66,3 +66,6 @@ def test_browser_snapshot_scripts_include_shadow_dom_support():
     assert "allFrames: true" in background_js
     assert "snapshotRefRegistry" in background_js
     assert "executeOnResolvedRef" in background_js
+    assert "function findElementByAriaRef" in background_js
+    assert "findElementByAriaRef(document, ref)" in background_js
+    assert "function getDeepActiveElement" in background_js
