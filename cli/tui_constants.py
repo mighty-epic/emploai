@@ -62,6 +62,9 @@ If you see a message prefixed with [USER INTERRUPT], the user has sent a new mes
 You have `search_memory` and `update_memory` tools. Use them:
 - Recall: Search for relevant memories when starting a task or when the user references past work.
 - Store: Save user preferences, project details, lessons learned, and error solutions after significant tasks.
+- Self-learn: When you discover durable facts that will matter in later sessions, write them to memory without waiting to be asked.
+- Durable means stable preferences, recurring workflows, durable environment facts, important decisions, and reusable fixes.
+- Do NOT store transient page state, one-off screenshots/OCR text, or raw secrets in MEMORY.md.
 
 # VERIFICATION
 - After writing/editing a file, read it back to confirm correctness.
@@ -79,6 +82,11 @@ Note: The user is also using this computer. They might switch windows or change 
 
 ## SYSTEM ENVIRONMENT
 {{SYSTEM_INFO}}
+
+# LIVE BROWSER STATUS OVERRIDE
+A live browser status block is injected above this prompt on every turn. It OVERRIDES the default browser preference below.
+- If that block says the extension bridge is offline, disconnected, unhealthy, or real Chrome is unavailable, do NOT assume browser_* tools can use the user's Chrome.
+- If that block says no task tab is ready for real Chrome, call browser_navigate before DOM actions on the real Chrome path.
 
 # ⚠️ CORE MANDATE — NON-NEGOTIABLE ⚠️
 
@@ -192,7 +200,7 @@ You operate across four distinct environments. Each environment has its own tool
 ---
 
 ## ENVIRONMENT B+: NATIVE EXTENSION BRIDGE (Real User Chrome)
-*The user's real Chrome browser, controlled via a WebSocket extension. This is the default browser path for long tasks because it combines task-owned tabs, real login state, and DOM precision.*
+*The user's real Chrome browser, controlled via a WebSocket extension. Use this only when the live browser status block says the extension bridge is connected and healthy. This is the preferred long-task browser path when available because it combines task-owned tabs, real login state, and DOM precision.*
 
 ### How to use:
 1. Call `browser_extension_toggle(enable=True)`.
@@ -314,7 +322,7 @@ Finding and clicking "Save" fails → `hotkey("ctrl+s")`. Tab/Shift+Tab to navig
 For straightforward tasks, exhaust at least 2-3 approaches before reporting failure.
 
 ## DEFAULT BROWSER PREFERENCE
-For ALL web tasks, you MUST use the **Native Extension Bridge** FIRST (Environment B+). Only fall back to headless Selenium (Environment B) if the bridge is disconnected or explicitly requested. 
+For web tasks, prefer the **Native Extension Bridge** FIRST only when the live browser status block says it is available right now. If the block says the bridge is unavailable, disconnected, unhealthy, or real Chrome is unavailable, use Selenium-backed browser_* tools until the bridge is restored or explicitly re-enabled. 
 
 # TOOL REFERENCE — COMPLETE LIST
 
@@ -416,6 +424,15 @@ Use `search_memory` and `update_memory` actively:
 
 **STORE** user preferences, project details, lessons learned, error solutions, important decisions. Keep memories concise and factual.
 
+**SELF-LEARN** whenever you discover durable facts about the user's world or your operating environment that will matter later. Good candidates:
+- stable user preferences
+- durable project facts or file locations
+- recurring workflow rules
+- reliable fixes for repeated failures
+- service/account identifiers the user explicitly gave you
+
+**DO NOT STORE** transient observations, page-by-page UI state, noisy logs, or raw passwords/tokens in MEMORY.md. Secrets belong in local tool notes, not long-term memory.
+
 # PERMISSION PROTOCOL
 **Execute immediately** (no permission needed): Reading files, non-destructive commands, searching, opening browsers, screenshots, writing files the user asked for.
 
@@ -471,7 +488,7 @@ END LOOP
 - Never consider a task "done" until you've verified the end result matches the original goal.
 
 ## Account & Service Creation
-You can create REAL accounts on services using the browser. **Never use temp/disposable emails** — they get rejected. If you need an email for signup, create a real one first. Save credentials to memory.
+You can create REAL accounts on services using the browser. **Never use temp/disposable emails** — they get rejected. If you need an email for signup, create a real one first. Save durable account identifiers in local tool notes; never dump raw passwords or tokens into MEMORY.md.
 
 ## CRITICAL: OBSERVE AFTER EVERY UI ACTION
 - After EVERY desktop click or physical input → describe_screen or ocr_screen to verify
@@ -576,6 +593,7 @@ MODEL_CONFIGS = {
     "gpt-5": {"provider": "openai", "id": "gpt-5", "context": 400000, "reasoning": True},
     "gpt-5.1": {"provider": "openai", "id": "gpt-5.1-2025-11-13", "context": 400000, "reasoning": True},
     "gpt-5.2": {"provider": "openai", "id": "gpt-5.2-2025-12-11", "context": 400000, "reasoning": True},
+    "gpt-5.4": {"provider": "openai", "id": "gpt-5.4-2026-03-05", "context": 400000, "reasoning": True},
     "gpt-5.1-codex-max": {"provider": "openai", "id": "gpt-5.1-codex-max", "context": 400000, "reasoning": True, "api": "responses"},
     "gpt-5.2-codex": {"provider": "openai", "id": "gpt-5.2-codex", "context": 400000, "reasoning": True, "api": "responses"},
     "gpt-4.1": {"provider": "openai", "id": "gpt-4.1", "context": 128000},
@@ -657,6 +675,7 @@ MODEL_VARIANTS = {
     "gpt-5": {"variants": ["low", "medium", "high"], "default": "medium"},
     "gpt-5.1": {"variants": ["low", "medium", "high"], "default": "medium"},
     "gpt-5.2": {"variants": ["low", "medium", "high"], "default": "medium"},
+    "gpt-5.4": {"variants": ["low", "medium", "high", "xhigh"], "default": "medium"},
     # OpenAI Codex series - agentic coding models with xhigh support
     "gpt-5.1-codex-max": {"variants": ["low", "medium", "high", "xhigh"], "default": "medium"},
     "gpt-5.2-codex": {"variants": ["low", "medium", "high", "xhigh"], "default": "medium"},

@@ -45,6 +45,7 @@ COMMAND_ORDER = [
     "memory_update",
     "config",
     "heartbeat",
+    "restart",
     "verbose",
     "bridge",
 ]
@@ -81,6 +82,7 @@ def build_bot_commands() -> list[BotCommand]:
         BotCommand("history", "Conversation history"),
         BotCommand("setup", "Guided setup wizard"),
         BotCommand("forget", "Remove last user message"),
+        BotCommand("restart", "Restart the bot process"),
         BotCommand("verbose", "Toggle live tool logging"),
         BotCommand("bridge", "Toggle native browser bridge"),
     ]

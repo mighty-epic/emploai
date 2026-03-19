@@ -51,6 +51,7 @@ from telegram_commands_tasks import build_task_command_handlers
 from telegram_commands_utility import build_utility_command_handlers
 from telegram_message_handlers import build_message_handlers
 from telegram_messaging import safe_edit, safe_reply
+from restart_runtime import exec_current_process
 from telegram_session_state import get_session, track_command_usage
 from telegram_task_flow import run_task_flow
 
@@ -75,6 +76,11 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+
+def restart_process() -> None:
+    """Re-exec the current Python process so the bot restarts in-place."""
+    exec_current_process(script_path_fallback=os.path.abspath(__file__))
 
 
 # ======================================================================================
@@ -157,6 +163,7 @@ _utility_command_handlers = build_utility_command_handlers(
     track_command_usage=track_command_usage,
     safe_reply=safe_reply,
     InlineKeyboardHelper=InlineKeyboardHelper,
+    restart_process=restart_process,
 )
 
 monitor_command = _utility_command_handlers["monitor_command"]
@@ -171,6 +178,7 @@ config_command = _utility_command_handlers["config_command"]
 heartbeat_command = _utility_command_handlers["heartbeat_command"]
 verbose_command = _utility_command_handlers["verbose_command"]
 bridge_command = _utility_command_handlers["bridge_command"]
+restart_command = _utility_command_handlers["restart_command"]
 
 # ======================================================================================
 # CALLBACK QUERY HANDLER (for inline buttons)
@@ -252,6 +260,7 @@ command_handlers = {
     "memory_update": memory_update_command,
     "config": config_command,
     "heartbeat": heartbeat_command,
+    "restart": restart_command,
     "verbose": verbose_command,
     "bridge": bridge_command,
 }

@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from bot_core.ui_helpers import InlineKeyboardHelper
+
+
+logger = logging.getLogger(__name__)
 
 
 def build_utility_command_handlers(
@@ -18,7 +23,10 @@ def build_utility_command_handlers(
     track_command_usage,
     safe_reply,
     InlineKeyboardHelper,
+    restart_process,
 ):
+    restart_state = {"pending": False}
+
     @rate_limited(security_manager)
     async def monitor_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Toggle auto-reply/monitoring mode."""
@@ -179,8 +187,13 @@ def build_utility_command_handlers(
 
             response = f"**🔍 Memory Search: {query}**\n\n"
             for result in results:
+                location = (
+                    f"{result['source']}:{result['line']}"
+                    if result.get("line") is not None
+                    else result["source"]
+                )
                 response += (
-                    f"**{result['source']}:{result['line']}**\n"
+                    f"**{location}**\n"
                     f"{result['content']}\n\n---\n\n"
                 )
 
@@ -215,8 +228,12 @@ def build_utility_command_handlers(
 
         note = " ".join(context.args)
         if session.memory_manager:
+            stored = session.memory_manager.append_to_memory("User Notes", f"- {note}")
             session.memory_manager.append_to_daily_log(note, "user_note")
-            await safe_reply(update, f"✅ Appended to memory:\n\n{note[:200]}...")
+            if stored:
+                await safe_reply(update, f"✅ Appended to memory:\n\n{note[:200]}...")
+            else:
+                await safe_reply(update, "ℹ️ That note is already present in long-term memory.")
         else:
             await safe_reply(update, "❌ Memory manager not initialized.")
 
@@ -349,19 +366,23 @@ def build_utility_command_handlers(
         from telegram_unified_agent import get_browser_bridge_status
         bridge_status = get_browser_bridge_status(session)
 
-        status = "✅ ENABLED (Using real Chrome)" if bridge_status["desired_backend"] == "extension" else "⛔ DISABLED (Using headless Selenium)"
+        status = "✅ ENABLED (Using real Chrome)" if bridge_status["desired_backend"] == "extension" else "⛔ DISABLED (Using Selenium)"
 
         conn_status = ""
         extension = bridge_status.get("extension") or {}
         if bridge_status["desired_backend"] == "extension":
-            if extension.get("connected"):
+            if bridge_status.get("extension_ready"):
                 heartbeat_age = extension.get("heartbeat_age_seconds")
                 heartbeat_text = f" ({heartbeat_age}s since heartbeat)" if heartbeat_age is not None else ""
                 conn_status = f"\n📡 **Bridge Connection:** Online{heartbeat_text}"
+            elif extension.get("connected"):
+                conn_status = "\n📡 **Bridge Connection:** Connected but unhealthy/stale"
             else:
                 conn_status = "\n📡 **Bridge Connection:** Offline (Waiting for extension)"
 
         task_backend = bridge_status.get("task_backend") or "unassigned"
+        real_browser = "Yes" if bridge_status.get("real_browser_available") else "No"
+        task_tab_ready = "Yes" if bridge_status.get("task_tab_available") else "No"
         tab_status = bridge_status.get("primary_tab_id")
         owned_count = len(bridge_status.get("owned_tab_ids", []))
 
@@ -375,11 +396,54 @@ def build_utility_command_handlers(
             update, 
             f"**🌐 Browser Bridge Status:**\n{status}{conn_status}\n"
             f"🧭 **Pinned Task Backend:** {task_backend}\n"
+            f"🖥️ **Real Chrome Available:** {real_browser}\n"
+            f"📄 **Task Tab Ready:** {task_tab_ready}\n"
             f"🗂️ **Primary Task Tab:** {tab_status}\n"
             f"🧾 **Owned Task Tabs:** {owned_count}\n\n"
             "Usage: `/bridge on|off|status`",
             reply_markup=reply_markup
         )
+
+    @rate_limited(security_manager)
+    async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Restart the bot process in-place."""
+        user = update.effective_user
+        if not security_manager.is_user_authorized(user.id):
+            return
+
+        session = get_session(user.id)
+        track_command_usage(session, "restart")
+
+        if restart_state["pending"]:
+            await safe_reply(update, "♻️ Restart already scheduled.")
+            return
+
+        restart_state["pending"] = True
+
+        async with session.lock:
+            session.should_interrupt = True
+            session.is_processing = False
+            if session.single_agent:
+                session.single_agent.stop()
+            if session.refined_agent:
+                session.refined_agent.stop()
+            if session.unified_agent:
+                session.unified_agent.stop()
+            if session.heartbeat_manager:
+                session.heartbeat_manager.stop()
+            session.save_session()
+
+        await safe_reply(update, "♻️ Restarting the bot process now...")
+
+        async def _restart_after_ack():
+            await asyncio.sleep(1.0)
+            try:
+                restart_process()
+            except Exception:
+                restart_state["pending"] = False
+                logger.exception("Telegram bot restart failed")
+
+        context.application.create_task(_restart_after_ack())
 
     return {
         "monitor_command": monitor_command,
@@ -394,4 +458,5 @@ def build_utility_command_handlers(
         "heartbeat_command": heartbeat_command,
         "verbose_command": verbose_command,
         "bridge_command": bridge_command,
+        "restart_command": restart_command,
     }

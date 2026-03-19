@@ -13,10 +13,14 @@ from anthropic import Anthropic
 from telegram.constants import ChatAction
 
 from cli.agent_tools.loop import run_tool_loop
-from cli.tui_constants import MODEL_CONFIGS, SYSTEM_PROMPT, UNIFIED_AGENT_PROMPT
+from cli.tui_constants import MODEL_CONFIGS
 from bot_core.hooks import HookEvent, HookType
 from single_agent.agent import AGENT_TOOLS
-from telegram_unified_agent import get_auto_mode_extra_tools, get_auto_mode_tool_handlers
+from telegram_unified_agent import (
+    build_unified_system_prompt,
+    get_auto_mode_extra_tools,
+    get_auto_mode_tool_handlers,
+)
 
 from telegram_messaging import safe_reply, safe_edit_message
 from bot_core.ui_helpers import InlineKeyboardHelper, ThinkingModeVisualizer, SkillTriggerFeedback
@@ -211,17 +215,26 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
 
     memory_context = ""
     if session.session_context.can_access_memory:
-        # Pass the current session ID to only see relevant context
-        recent_memory = session.memory_manager.get_recent_context(
-            days=7, 
-            max_chars=3000,
-            session_id=session.session_manager.current_session.id if session.session_manager and session.session_manager.current_session else None
+        current_session_id = (
+            session.session_manager.current_session.id
+            if session.session_manager and session.session_manager.current_session
+            else None
         )
-        if recent_memory:
-            memory_context = f"\n\n## Recent Context from Memory\n\n{recent_memory}"
+        prompt_memory = session.memory_manager.build_prompt_context(
+            recent_days=7,
+            recent_chars=3000,
+            long_term_chars=4000,
+            session_id=current_session_id,
+        )
+        if prompt_memory:
+            memory_context = f"\n\n{prompt_memory}"
 
-    system_content = f"{UNIFIED_AGENT_PROMPT}{memory_context}{skills_index}{active_skills_context}"
-    system_content = system_content.replace("{{SYSTEM_INFO}}", session.system_info)
+    system_content = build_unified_system_prompt(
+        session,
+        memory_context=memory_context,
+        skills_index=skills_index,
+        active_skills_context=active_skills_context,
+    )
 
     messages = [{"role": "system", "content": system_content}] + [
         {"role": msg.get("role", "user"), "content": msg.get("content", "")}
@@ -419,8 +432,12 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
             if session.active_skills:
                 active_skills_context = f"\n\n# LOADED SPECIALIZED SKILLS\n{session.skill_registry.get_active_skills_context(session.active_skills)}"
         
-        custom_system_prompt = f"{UNIFIED_AGENT_PROMPT}{memory_context}{skills_index}{active_skills_context}"
-        custom_system_prompt = custom_system_prompt.replace("{{SYSTEM_INFO}}", session.system_info)
+        custom_system_prompt = build_unified_system_prompt(
+            session,
+            memory_context=memory_context,
+            skills_index=skills_index,
+            active_skills_context=active_skills_context,
+        )
 
         result = await loop.run_in_executor(
             None,

@@ -516,11 +516,13 @@ function getAriaSnapshot() {
         'menuitemcheckbox', 'menuitemradio', 'option', 'tab', 'treeitem',
         'searchbox', 'spinbutton', 'switch', 'combobox', 'slider', 'input'
     ];
+    const INTERACTIVE_TAGS = new Set(['BUTTON', 'A', 'INPUT', 'TEXTAREA', 'SELECT']);
 
     const results = [];
     let refCounter = 1;
 
     function isVisible(node) {
+        if (!(node instanceof Element)) return false;
         const style = window.getComputedStyle(node);
         return style.display !== 'none' &&
             style.visibility !== 'hidden' &&
@@ -529,42 +531,71 @@ function getAriaSnapshot() {
             node.offsetHeight > 0;
     }
 
-    function traverse(node, depth = 0) {
-        if (!node || depth > 50) return;
+    function getAccessibleName(node) {
+        const labelledBy = (node.getAttribute('aria-labelledby') || '')
+            .split(/\s+/)
+            .filter(Boolean)
+            .map(id => document.getElementById(id))
+            .filter(Boolean)
+            .map(el => el.innerText || el.textContent || '');
 
-        const role = node.getAttribute('role') || node.tagName.toLowerCase();
-        const isInteractive = INTERACTIVE_ROLES.includes(role) ||
-            node.tagName === 'BUTTON' ||
-            node.tagName === 'A' ||
-            node.tagName === 'INPUT' ||
-            node.tagName === 'TEXTAREA' ||
-            node.tagName === 'SELECT';
+        const candidates = [
+            node.getAttribute('aria-label'),
+            labelledBy.join(' '),
+            node.innerText,
+            node.textContent,
+            node.getAttribute('placeholder'),
+            node.getAttribute('value'),
+            node.getAttribute('title'),
+            node.getAttribute('name'),
+            node.getAttribute('alt'),
+            node.id
+        ];
 
-        if (isInteractive && isVisible(node)) {
-            const text = node.textContent ||
-                node.getAttribute('aria-label') ||
-                node.getAttribute('placeholder') ||
-                node.getAttribute('value') ||
-                '';
-
-            const cleanText = text.trim().substring(0, 100);
-
-            if (cleanText || node.tagName === 'INPUT' || node.tagName === 'TEXTAREA') {
-                const ref = refCounter++;
-                node.setAttribute('data-aria-ref', ref.toString());
-
-                results.push({
-                    ref: ref,
-                    role: role,
-                    name: cleanText,
-                    enabled: !node.disabled,
-                    checked: node.checked || false
-                });
+        for (const candidate of candidates) {
+            const clean = String(candidate || '').replace(/\s+/g, ' ').trim();
+            if (clean) {
+                return clean.substring(0, 100);
             }
         }
 
-        for (const child of node.children) {
-            traverse(child, depth + 1);
+        return '';
+    }
+
+    function traverse(node, depth = 0) {
+        if (!node || depth > 50) return;
+
+        if (node instanceof Element) {
+            const role = node.getAttribute('role') || node.tagName.toLowerCase();
+            const isInteractive = INTERACTIVE_ROLES.includes(role) || INTERACTIVE_TAGS.has(node.tagName);
+
+            if (isInteractive && isVisible(node)) {
+                const cleanText = getAccessibleName(node);
+
+                if (cleanText || INTERACTIVE_TAGS.has(node.tagName)) {
+                    const ref = refCounter++;
+                    node.setAttribute('data-aria-ref', ref.toString());
+
+                    results.push({
+                        ref: ref,
+                        role: role,
+                        name: cleanText,
+                        enabled: !node.disabled,
+                        checked: node.checked || false
+                    });
+                }
+            }
+
+            if (node.shadowRoot) {
+                traverse(node.shadowRoot, depth + 1);
+            }
+        }
+
+        const children = node.children || [];
+        for (const child of children) {
+            if (child instanceof Element || child instanceof ShadowRoot) {
+                traverse(child, depth + 1);
+            }
         }
     }
 

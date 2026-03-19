@@ -152,7 +152,7 @@ def test_extension_tool_rejects_stale_heartbeat():
     )
     client.start()
 
-    tool.last_heartbeat_at = time.monotonic() - 60
+    tool._heartbeat_age = lambda: 60.0
     result = tool.run_sync(tool._send_command("list_tabs", timeout=1))
 
     assert result["error_type"] == "connection"

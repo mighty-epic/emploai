@@ -1000,6 +1000,7 @@ def create_unified_agent(
         "gpt-5": ModelConfig(name="gpt-5", provider="openai", model_id="gpt-5", max_context=400000),
         "gpt-5.1": ModelConfig(name="gpt-5.1", provider="openai", model_id="gpt-5.1-2025-11-13", max_context=400000),
         "gpt-5.2": ModelConfig(name="gpt-5.2", provider="openai", model_id="gpt-5.2-2025-12-11", max_context=400000),
+        "gpt-5.4": ModelConfig(name="gpt-5.4", provider="openai", model_id="gpt-5.4-2026-03-05", max_context=400000),
         "gpt-5.1-codex-max": ModelConfig(name="gpt-5.1-codex-max", provider="openai", model_id="gpt-5.1-codex-max", max_context=400000),
         "gpt-5.2-codex": ModelConfig(name="gpt-5.2-codex", provider="openai", model_id="gpt-5.2-codex", max_context=400000),
         "gpt-4.1": ModelConfig(name="gpt-4.1", provider="openai", model_id="gpt-4.1", max_context=128000),

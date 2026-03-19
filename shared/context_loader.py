@@ -85,6 +85,24 @@ class ContextLoader:
         except Exception as e:
             logger.error(f"Error loading {filename}: {e}")
             return None
+
+    def load_optional_context_file(self, filename: str) -> Optional[str]:
+        """Load an optional markdown context file from the workspace root or agent_data/."""
+        candidates = [
+            self.workspace / filename,
+            self.workspace / "agent_data" / filename,
+        ]
+
+        for filepath in candidates:
+            if not filepath.exists():
+                continue
+            try:
+                return filepath.read_text(encoding='utf-8')
+            except Exception as e:
+                logger.error(f"Error loading optional context file {filepath.name}: {e}")
+                return None
+
+        return None
     
     def load_all_context(self) -> Dict[str, Optional[str]]:
         """Load all context files."""
@@ -125,6 +143,10 @@ class ContextLoader:
             content = self.load_context(key)
             if content:
                 parts.append(f"# {self.CONTEXT_FILES[key]}\n\n{content}")
+
+        local_tools = self.load_optional_context_file("LOCAL_TOOLS.md")
+        if local_tools:
+            parts.append("# LOCAL_TOOLS.md (Local-Only Notes)\n\n" + local_tools)
         
         if not parts:
             return ""
@@ -269,6 +291,10 @@ Things like:
 - File paths and locations
 - Device names
 - Anything environment-specific
+
+## Sensitive Notes
+
+`TOOLS.md` may be committed. Put local-only secrets in `LOCAL_TOOLS.md` instead.
 
 ## Examples
 

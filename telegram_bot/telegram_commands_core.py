@@ -48,6 +48,7 @@ COMMAND_HELP: Dict[str, str] = {
     "config": "View/edit configuration: `/config [key] [value]`",
     "heartbeat": "Control heartbeat: `/heartbeat on|off|status`",
     "bridge": "Toggle the browser extension bridge: `/bridge on|off|status`",
+    "restart": "Restart the bot process in-place: `/restart`",
 }
 
 
@@ -130,7 +131,8 @@ def build_core_command_handlers(
             "/workspace - Set workspace path\n"
             "/headless - Toggle headless/headed browser mode\n"
             "/config - View/edit configuration\n"
-            "/heartbeat - Control heartbeat checks\n\n"
+            "/heartbeat - Control heartbeat checks\n"
+            "/restart - Restart the bot process\n\n"
             "/bridge - Toggle the browser extension bridge\n\n"
             "**Skills:**\n"
             "/skills - List available skills\n"

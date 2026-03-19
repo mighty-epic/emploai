@@ -106,12 +106,16 @@ class MemoryManager:
         """Update the long-term memory file."""
         self.memory_file.write_text(content, encoding='utf-8')
         logger.info("Updated MEMORY.md")
-    
-    def append_to_memory(self, section: str, content: str):
+
+    def append_to_memory(self, section: str, content: str) -> bool:
         """
         Append content to a specific section in MEMORY.md.
         Creates section if it doesn't exist.
         """
+        content = content.strip()
+        if not content:
+            return False
+
         current = self.read_memory()
         
         # Find section
@@ -123,6 +127,10 @@ class MemoryManager:
             after_parts = parts[1].split("\n## ", 1)
             section_content = after_parts[0]
             rest = "\n## " + after_parts[1] if len(after_parts) > 1 else ""
+
+            if content in section_content:
+                logger.debug("Skipped duplicate memory entry for section %s", section)
+                return False
             
             new_content = before + section_content + f"\n{content}\n" + rest
         else:
@@ -130,6 +138,37 @@ class MemoryManager:
             new_content = current.rstrip() + f"\n\n## {section}\n\n{content}\n"
         
         self.update_memory(new_content)
+        return True
+
+    @staticmethod
+    def _trim_context_block(text: str, max_chars: int) -> str:
+        text = text.strip()
+        if max_chars <= 0 or len(text) <= max_chars:
+            return text
+
+        marker = "\n... (truncated) ...\n"
+        head = max(0, (max_chars - len(marker)) // 2)
+        tail = max(0, max_chars - len(marker) - head)
+        return text[:head].rstrip() + marker + text[-tail:].lstrip()
+
+    def get_long_term_context(self, max_chars: int = 4000) -> str:
+        """Get the curated long-term memory block for prompt injection."""
+        memory_content = self.read_memory()
+        if not memory_content:
+            return ""
+
+        filtered_lines = []
+        for line in memory_content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("*(") and stripped.endswith(")*"):
+                continue
+            filtered_lines.append(line)
+
+        filtered = "\n".join(filtered_lines).strip()
+        if not filtered or filtered == "# MEMORY.md - Long-Term Memory":
+            return ""
+
+        return self._trim_context_block(filtered, max_chars)
     
     def search_memory(self, query: str, max_results: int = 5, session_id: Optional[str] = None) -> List[Dict]:
         """
@@ -241,6 +280,31 @@ class MemoryManager:
                     break
         
         return "\n\n".join(context_parts)
+
+    def build_prompt_context(
+        self,
+        *,
+        session_id: Optional[str] = None,
+        long_term_chars: int = 4000,
+        recent_days: int = 7,
+        recent_chars: int = 3000,
+    ) -> str:
+        """Build combined long-term + recent memory context for prompt injection."""
+        parts = []
+
+        long_term = self.get_long_term_context(max_chars=long_term_chars)
+        if long_term:
+            parts.append(f"## Long-Term Memory\n\n{long_term}")
+
+        recent = self.get_recent_context(
+            days=recent_days,
+            max_chars=recent_chars,
+            session_id=session_id,
+        )
+        if recent:
+            parts.append(f"## Recent Context from Memory\n\n{recent}")
+
+        return "\n\n".join(parts)
     
     def export_memory_summary(self) -> Dict:
         """Export memory statistics and summary."""

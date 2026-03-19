@@ -2,7 +2,9 @@ from telegram_bot.telegram_session_state import BrowserTaskContext
 from telegram_bot.telegram_unified_agent import (
     _execute_browser_activate_tab,
     _execute_browser_navigate,
+    _execute_observe_browser,
     _execute_browser_snapshot,
+    build_unified_system_prompt,
 )
 from single_agent.browser_actions import browser_error, browser_success
 
@@ -27,6 +29,7 @@ class DummySession:
         self.extension_tool = None
         self.current_task_id = 1
         self.browser_task_context = BrowserTaskContext(task_id=1)
+        self.system_info = "OS: Test\nActive Windows: none"
 
     def get_browser_task_context(self):
         if self.browser_task_context.task_id != self.current_task_id:
@@ -167,6 +170,20 @@ class FakeSeleniumBrowser:
         )
 
 
+class FakeOfflineExtensionBrowser(FakeExtensionBrowser):
+    def get_status(self):
+        return {
+            "backend": "extension",
+            "server_running": True,
+            "connected": False,
+            "healthy": False,
+            "heartbeat_age_seconds": None,
+        }
+
+    def navigate(self, url, tab_id=None):
+        raise AssertionError("extension navigate should not be called while the bridge is offline")
+
+
 def test_first_navigate_creates_task_owned_extension_tab_and_pins_backend():
     session = DummySession()
     session.extension_tool = FakeExtensionBrowser()
@@ -214,6 +231,18 @@ def test_snapshot_updates_last_snapshot_hash():
     assert session.get_browser_task_context().last_snapshot_hash == "deadbeef"
 
 
+def test_observe_browser_reports_page_state_and_interactive_count():
+    session = DummySession()
+    session.extension_tool = FakeExtensionBrowser()
+
+    _execute_browser_navigate(session, {"url": "https://example.com"})
+    result = _execute_observe_browser(session, {})
+
+    assert "Browser state:" in result
+    assert "Interactive elements detected: 3" in result
+    assert "Run" in result
+
+
 def test_extension_timeout_falls_back_to_selenium_and_sticks_for_task():
     session = DummySession()
     session.extension_tool = FakeExtensionBrowser(fail_first_navigate=True)
@@ -228,3 +257,28 @@ def test_extension_timeout_falls_back_to_selenium_and_sticks_for_task():
     assert context.backend == "selenium"
     assert session.extension_tool.navigate_calls == [None]
     assert session.browser_tool.navigate_calls == [None, "selenium-1"]
+
+
+def test_offline_extension_preflights_directly_to_selenium():
+    session = DummySession()
+    session.extension_tool = FakeOfflineExtensionBrowser()
+    session.browser_tool = FakeSeleniumBrowser()
+
+    message = _execute_browser_navigate(session, {"url": "https://offline.example"})
+
+    context = session.get_browser_task_context()
+    assert "offline.example" in message
+    assert "Bridge fallback" in message
+    assert context.backend == "selenium"
+    assert session.browser_tool.navigate_calls == [None]
+
+
+def test_system_prompt_starts_with_live_browser_runtime_status():
+    session = DummySession()
+    session.extension_tool = FakeOfflineExtensionBrowser()
+
+    prompt = build_unified_system_prompt(session)
+
+    assert prompt.startswith("# LIVE BROWSER RUNTIME STATUS")
+    assert "Real Chrome available now: NO" in prompt
+    assert "Do NOT assume browser_* tools can use the extension" in prompt

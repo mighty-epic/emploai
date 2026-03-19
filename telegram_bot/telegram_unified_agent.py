@@ -313,7 +313,7 @@ def get_auto_mode_tool_handlers(session) -> Dict[str, Callable[[Dict[str, Any]],
         "browser_stop": lambda args: _execute_browser_stop(session, args),
         # Backwards-compatible aliases used by the legacy SingleAgent schema/prompt.
         "open_browser": lambda args: _execute_browser_navigate(session, {"url": args["url"]}),
-        "observe_browser": lambda args: _execute_browser_snapshot(session, args),
+        "observe_browser": lambda args: _execute_observe_browser(session, args),
         "switch_tab": lambda args: _execute_browser_switch_tab(session, {"index": args["index"]}),
         "close_tab": lambda args: _execute_browser_close_tab(session, args),
         "go_back": lambda args: _execute_browser_back(session, args),
@@ -346,14 +346,32 @@ def create_unified_agent_for_task(session, app, loop) -> None:
             f"No API key configured for {provider}. Set {provider.upper()}_API_KEY environment variable."
         )
 
-    from cli.tui_constants import UNIFIED_AGENT_PROMPT
-    
     # Build system prompt with skills index
     skills_index = ""
     if hasattr(session, "skill_registry") and session.skill_registry:
         skills_index = f"\n\n{session.skill_registry.get_skills_index()}"
-    
-    system_prompt = UNIFIED_AGENT_PROMPT + skills_index
+
+    memory_context = ""
+    if session.session_context.can_access_memory and session.memory_manager:
+        current_session_id = (
+            session.session_manager.current_session.id
+            if session.session_manager and session.session_manager.current_session
+            else None
+        )
+        prompt_memory = session.memory_manager.build_prompt_context(
+            recent_days=2,
+            recent_chars=2000,
+            long_term_chars=4000,
+            session_id=current_session_id,
+        )
+        if prompt_memory:
+            memory_context = f"\n\n{prompt_memory}"
+
+    system_prompt = build_unified_system_prompt(
+        session,
+        memory_context=memory_context,
+        skills_index=skills_index,
+    )
 
     session.unified_agent = create_unified_agent(
         model_name=session.current_model,
@@ -584,7 +602,9 @@ def _get_selenium_tool(session):
         session.browser_tool = session.refined_agent.browser
         return session.browser_tool
 
-    session.browser_tool = create_browser_tool(headless=True)
+    # Respect the HEADLESS environment setting so VPS deployments can keep
+    # fallback Selenium visible on the persistent desktop when desired.
+    session.browser_tool = create_browser_tool()
     return session.browser_tool
 
 
@@ -596,25 +616,137 @@ def _get_browser_tool(session):
     return ensure_extension_bridge(session)
 
 
+def _extension_status_ready(extension_status: Optional[Dict[str, Any]]) -> bool:
+    return bool(
+        extension_status
+        and extension_status.get("connected")
+        and extension_status.get("healthy")
+    )
+
+
 def get_browser_bridge_status(session) -> Dict[str, Any]:
     context = session.get_browser_task_context()
     extension_status = None
-    if hasattr(session, "extension_tool") and session.extension_tool:
+    if _bridge_enabled(session):
+        extension_status = ensure_extension_bridge(session).get_status()
+    elif hasattr(session, "extension_tool") and session.extension_tool:
         extension_status = session.extension_tool.get_status()
 
+    extension_connected = bool(extension_status and extension_status.get("connected"))
+    extension_healthy = bool(extension_status and extension_status.get("healthy"))
+    extension_ready = _extension_status_ready(extension_status)
+    desired_backend = "extension" if _bridge_enabled(session) else "selenium"
+    effective_backend = "selenium"
+    if desired_backend == "extension" and context.backend != "selenium" and extension_ready:
+        effective_backend = "extension"
+
     return {
-        "desired_backend": "extension" if _bridge_enabled(session) else "selenium",
+        "desired_backend": desired_backend,
+        "effective_backend": effective_backend,
         "task_backend": context.backend,
         "task_id": context.task_id,
         "healthy": context.healthy,
         "primary_tab_id": context.primary_tab_id,
         "primary_window_id": context.primary_window_id,
         "owned_tab_ids": list(context.owned_tab_ids),
+        "task_tab_available": context.primary_tab_id is not None,
         "last_url": context.last_url,
         "last_title": context.last_title,
         "last_snapshot_hash": context.last_snapshot_hash,
+        "extension_connected": extension_connected,
+        "extension_healthy": extension_healthy,
+        "extension_ready": extension_ready,
+        "real_browser_available": extension_ready,
         "extension": extension_status,
     }
+
+
+def build_browser_runtime_prompt(session) -> str:
+    status = get_browser_bridge_status(session)
+    heartbeat_age = (status.get("extension") or {}).get("heartbeat_age_seconds")
+    heartbeat_text = f"{heartbeat_age}s" if heartbeat_age is not None else "unknown"
+    last_title = status.get("last_title")
+    last_url = status.get("last_url")
+    if last_title or last_url:
+        last_page = f"{last_title or '(no title)'} - {last_url or '(no url)'}"
+    else:
+        last_page = "unknown"
+
+    if status["desired_backend"] == "extension":
+        if status["real_browser_available"]:
+            availability_rule = (
+                "Real Chrome is available now. Standard browser_* tools may use "
+                "the extension-backed real Chrome path."
+            )
+        else:
+            availability_rule = (
+                "Real Chrome is NOT available now. Do NOT assume browser_* tools "
+                "can use the extension or the user's Chrome. Use Selenium-backed "
+                "browser_* tools until Chrome plus the extension bridge is restored."
+            )
+    else:
+        availability_rule = (
+            "Extension mode is disabled. Use Selenium-backed browser_* tools and "
+            "do NOT rely on the user's Chrome until the bridge is enabled again."
+        )
+
+    if status["task_tab_available"]:
+        task_tab_rule = "A task tab is already pinned for this task. Reuse it."
+    else:
+        task_tab_rule = (
+            "No task tab is pinned yet. If you need real Chrome, call "
+            "browser_navigate before browser_snapshot, browser_click_ref, "
+            "browser_type, browser_clear_ref, browser_select_option_ref, "
+            "browser_press_key, browser_wait_for, browser_scroll, "
+            "browser_screenshot, browser_back, browser_forward, or "
+            "browser_close_tab."
+        )
+
+    return "\n".join(
+        [
+            "# LIVE BROWSER RUNTIME STATUS (Overrides browser preference below)",
+            f"- Desired backend preference: {status['desired_backend']}",
+            f"- Effective backend right now: {status['effective_backend']}",
+            f"- Task backend pin: {status.get('task_backend') or 'unassigned'}",
+            f"- Real Chrome available now: {'YES' if status['real_browser_available'] else 'NO'}",
+            f"- Extension connected: {'YES' if status['extension_connected'] else 'NO'}",
+            f"- Extension healthy: {'YES' if status['extension_healthy'] else 'NO'}",
+            f"- Extension heartbeat age: {heartbeat_text}",
+            f"- Task tab ready: {'YES' if status['task_tab_available'] else 'NO'}",
+            f"- Primary task tab id: {status.get('primary_tab_id') or 'none'}",
+            f"- Owned task tab count: {len(status.get('owned_tab_ids', []))}",
+            f"- Last known page: {last_page}",
+            "Rules:",
+            f"- {availability_rule}",
+            f"- {task_tab_rule}",
+            "- Never claim the extension is active unless Real Chrome available now is YES.",
+        ]
+    )
+
+
+def build_unified_system_prompt(
+    session,
+    *,
+    memory_context: str = "",
+    skills_index: str = "",
+    active_skills_context: str = "",
+) -> str:
+    from cli.tui_constants import UNIFIED_AGENT_PROMPT
+
+    workspace_context = ""
+    if getattr(session, "context_loader", None):
+        workspace_context = session.context_loader.build_system_prompt_context()
+
+    sections = [
+        build_browser_runtime_prompt(session),
+        UNIFIED_AGENT_PROMPT,
+        workspace_context.strip() if workspace_context else "",
+        memory_context.strip() if memory_context else "",
+        skills_index.strip() if skills_index else "",
+        active_skills_context.strip() if active_skills_context else "",
+    ]
+    system_prompt = "\n\n".join(section for section in sections if section)
+    return system_prompt.replace("{{SYSTEM_INFO}}", session.system_info)
 
 
 def _should_failover_browser_result(result: Dict[str, Any]) -> bool:
@@ -627,11 +759,29 @@ def _run_browser_action(session, extension_action, selenium_action, *, own_tab: 
 
     if use_extension:
         extension_tool = ensure_extension_bridge(session)
+        extension_status = extension_tool.get_status()
+        if not _extension_status_ready(extension_status):
+            fallback = selenium_action(_get_selenium_tool(session), context)
+            fallback = dict(fallback)
+            fallback.setdefault(
+                "bridge_fallback_reason",
+                "Extension bridge unavailable; using Selenium instead.",
+            )
+            fallback.setdefault("extension_connected", bool(extension_status.get("connected")))
+            fallback.setdefault("extension_healthy", bool(extension_status.get("healthy")))
+            context.backend = "selenium"
+            session.update_browser_task_context(fallback, owned_tab=own_tab)
+            return fallback
         result = extension_action(extension_tool, context)
         if _should_failover_browser_result(result):
             context.backend = "selenium"
             context.healthy = False
             fallback = selenium_action(_get_selenium_tool(session), context)
+            fallback = dict(fallback)
+            fallback.setdefault(
+                "bridge_fallback_reason",
+                result.get("error") or "Extension bridge failed; using Selenium instead.",
+            )
             context.backend = "selenium"
             session.update_browser_task_context(fallback, owned_tab=own_tab)
             return fallback
@@ -672,6 +822,8 @@ def _browser_result_summary(action: str, result: Dict[str, Any], *, detail: Opti
     lines = [f"{action}: {title} - {url}"]
     if detail:
         lines.append(detail)
+    if result.get("bridge_fallback_reason"):
+        lines.append(f"Bridge fallback: {result['bridge_fallback_reason']}")
     if state_bits:
         lines.append(f"State: {', '.join(state_bits)}")
     if result.get("field_value") is not None:
@@ -860,6 +1012,29 @@ def _execute_browser_snapshot(session, args: Dict) -> str:
     return f"{metadata}\nBrowser ARIA Snapshot:\n{result.get('formatted', 'No interactive elements found')}"
 
 
+def _execute_observe_browser(session, args: Dict) -> str:
+    result = _run_browser_action(
+        session,
+        lambda browser, context: browser.snapshot(tab_id=context.primary_tab_id),
+        lambda browser, context: browser.snapshot(tab_id=context.primary_tab_id),
+    )
+    if "error" in result:
+        return _browser_action_error("Observe browser error", result)
+
+    title = result.get("title") or "(no title)"
+    url = result.get("url") or "(no url)"
+    interactive_count = result.get("interactive_count", result.get("count", 0))
+    lines = [
+        f"Browser state: {title} - {url}",
+        f"Interactive elements detected: {interactive_count}",
+        "Key elements:",
+        result.get("formatted", "No interactive elements found"),
+    ]
+    if result.get("bridge_fallback_reason"):
+        lines.append(f"Bridge fallback: {result['bridge_fallback_reason']}")
+    return "\n".join(lines)
+
+
 def _execute_browser_click_ref(session, args: Dict) -> str:
     result = _run_browser_action(
         session,
@@ -992,7 +1167,8 @@ def _execute_search_memory(session, args: Dict) -> str:
             return f"No memory results found for: {args['query']}"
         output = []
         for r in results:
-            output.append(f"**{r['source']}:{r['line']}**\n{r['content']}")
+            location = f"{r['source']}:{r['line']}" if r.get("line") is not None else r["source"]
+            output.append(f"**{location}**\n{r['content']}")
         return '\n\n---\n\n'.join(output)
     except Exception as e:
         return f"Error searching memory: {str(e)}"
@@ -1000,8 +1176,10 @@ def _execute_search_memory(session, args: Dict) -> str:
 
 def _execute_update_memory(session, args: Dict) -> str:
     try:
-        session.memory_manager.append_to_memory(args['section'], args['content'])
-        return f"Updated {args['section']} in MEMORY.md"
+        updated = session.memory_manager.append_to_memory(args['section'], args['content'])
+        if updated:
+            return f"Updated {args['section']} in MEMORY.md"
+        return f"No change made to {args['section']} in MEMORY.md"
     except Exception as e:
         return f"Error updating memory: {str(e)}"
 
