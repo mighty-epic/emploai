@@ -63,3 +63,6 @@ def test_browser_snapshot_scripts_include_shadow_dom_support():
     assert "getAccessibleName" in ARIA_SNAPSHOT_JS
     assert "shadowRoot" in background_js
     assert "getAccessibleName" in background_js
+    assert "allFrames: true" in background_js
+    assert "snapshotRefRegistry" in background_js
+    assert "executeOnResolvedRef" in background_js

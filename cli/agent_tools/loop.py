@@ -38,7 +38,7 @@ def run_tool_loop(
     variant: str = "standard",
     extra_tools: List[Dict[str, Any]] = None,
     custom_system_prompt: str = None,
-    api_type: str = "chat"  # kept for signature compatibility, but unused
+    api_type: str = "chat"
 ) -> LoopResult:
     """
     Executes a multi-turn conversation loop where the model can call tools.
@@ -267,7 +267,11 @@ def run_tool_loop(
                     "stream_options": {"include_usage": True}
                 }
                 
-                if variant in ["low", "medium", "high", "xhigh"] and provider == "openai":
+                if (
+                    variant in ["low", "medium", "high", "xhigh"]
+                    and provider == "openai"
+                    and api_type != "responses"
+                ):
                     kwargs["reasoning_effort"] = variant if variant != "xhigh" else "high"
 
                 response_stream = client.chat.completions.create(**kwargs)

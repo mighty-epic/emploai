@@ -593,7 +593,7 @@ MODEL_CONFIGS = {
     "gpt-5": {"provider": "openai", "id": "gpt-5", "context": 400000, "reasoning": True},
     "gpt-5.1": {"provider": "openai", "id": "gpt-5.1-2025-11-13", "context": 400000, "reasoning": True},
     "gpt-5.2": {"provider": "openai", "id": "gpt-5.2-2025-12-11", "context": 400000, "reasoning": True},
-    "gpt-5.4": {"provider": "openai", "id": "gpt-5.4-2026-03-05", "context": 400000, "reasoning": True},
+    "gpt-5.4": {"provider": "openai", "id": "gpt-5.4-2026-03-05", "context": 400000, "reasoning": True, "api": "responses"},
     "gpt-5.1-codex-max": {"provider": "openai", "id": "gpt-5.1-codex-max", "context": 400000, "reasoning": True, "api": "responses"},
     "gpt-5.2-codex": {"provider": "openai", "id": "gpt-5.2-codex", "context": 400000, "reasoning": True, "api": "responses"},
     "gpt-4.1": {"provider": "openai", "id": "gpt-4.1", "context": 128000},
@@ -675,7 +675,7 @@ MODEL_VARIANTS = {
     "gpt-5": {"variants": ["low", "medium", "high"], "default": "medium"},
     "gpt-5.1": {"variants": ["low", "medium", "high"], "default": "medium"},
     "gpt-5.2": {"variants": ["low", "medium", "high"], "default": "medium"},
-    "gpt-5.4": {"variants": ["low", "medium", "high", "xhigh"], "default": "medium"},
+    "gpt-5.4": {"variants": ["standard"], "default": "standard"},
     # OpenAI Codex series - agentic coding models with xhigh support
     "gpt-5.1-codex-max": {"variants": ["low", "medium", "high", "xhigh"], "default": "medium"},
     "gpt-5.2-codex": {"variants": ["low", "medium", "high", "xhigh"], "default": "medium"},

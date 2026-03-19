@@ -24,6 +24,7 @@ This deployment keeps the Telegram agent on a persistent virtual desktop so it c
 - `start-display.sh`: starts the persistent GUI session on `:99`
 - `emploai-display.service`: systemd unit for the display/VNC stack
 - `emploai-agent.service`: systemd unit for the Telegram agent
+- `browser_bridge_smoke.py`: manual live-environment bridge test for Chrome + the unpacked extension
 
 ## Expected Paths
 
@@ -74,6 +75,17 @@ systemctl status emploai-display.service
 systemctl status emploai-agent.service
 journalctl -u emploai-agent.service -f
 ```
+
+Run a live bridge smoke test on the VPS:
+
+```bash
+systemctl stop emploai-agent.service
+source /opt/emploai/venv/bin/activate
+python deploy/vps/linux/browser_bridge_smoke.py --url https://open.spotify.com
+systemctl start emploai-agent.service
+```
+
+This validates the extension bridge against the actual VPS desktop and Chrome session, including `browser_snapshot`.
 
 ## Remote Viewing
 

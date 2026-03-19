@@ -581,6 +581,8 @@ class RefinedAgent:
             return {"error": "Input automation not available"}
         
         try:
+            x = int(float(str(x).split(",")[0].strip()))
+            y = int(float(str(y).split(",")[0].strip()))
             pyautogui.moveTo(x, y, duration=0.1)
             time.sleep(0.05)
             pyautogui.click()
@@ -593,6 +595,8 @@ class RefinedAgent:
             return {"error": "Input automation not available"}
         
         try:
+            x = int(float(str(x).split(",")[0].strip()))
+            y = int(float(str(y).split(",")[0].strip()))
             pyautogui.moveTo(x, y, duration=0.1)
             time.sleep(0.05)
             pyautogui.rightClick()
@@ -605,6 +609,8 @@ class RefinedAgent:
             return {"error": "Input automation not available"}
         
         try:
+            x = int(float(str(x).split(",")[0].strip()))
+            y = int(float(str(y).split(",")[0].strip()))
             pyautogui.moveTo(x, y, duration=0.1)
             time.sleep(0.05)
             pyautogui.doubleClick()

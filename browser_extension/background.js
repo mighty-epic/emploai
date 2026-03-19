@@ -5,6 +5,7 @@ let heartbeatTimer = null;
 const SERVER_URL = "ws://127.0.0.1:8765";
 const HEARTBEAT_INTERVAL_MS = 10000;
 const RECONNECT_DELAY_MS = 1000;
+const snapshotRefRegistry = new Map();
 
 function clearReconnectTimer() {
     if (reconnectTimer) {
@@ -57,6 +58,28 @@ function sendMessage(payload) {
         throw new Error("Bridge socket is not open");
     }
     socket.send(JSON.stringify(payload));
+}
+
+function clearSnapshotRefsForTab(tabId) {
+    if (tabId == null) {
+        return;
+    }
+    snapshotRefRegistry.delete(Number(tabId));
+}
+
+function storeSnapshotRefsForTab(tabId, refsByGlobalId) {
+    if (tabId == null) {
+        return;
+    }
+    snapshotRefRegistry.set(Number(tabId), refsByGlobalId);
+}
+
+function resolveSnapshotRef(tabId, ref) {
+    const tabRefs = snapshotRefRegistry.get(Number(tabId));
+    if (!tabRefs) {
+        return null;
+    }
+    return tabRefs.get(Number(ref)) || null;
 }
 
 function waitForTabComplete(tabId, timeoutMs = 15000) {
@@ -176,13 +199,24 @@ async function handleCommand(command) {
         case "snapshot":
             return await snapshotTab(params);
         case "click_ref":
-            return await executeOnResolvedTab(params, clickByRef, [params.ref]);
+            return await executeOnResolvedRef(params, clickByRef, (binding) => [binding.localRef]);
         case "type":
-            return await executeOnResolvedTab(params, typeText, [params.text, params.clearFirst, params.ref ?? null]);
+            if (params.ref != null) {
+                return await executeOnResolvedRef(
+                    params,
+                    typeText,
+                    (binding) => [params.text, params.clearFirst, binding.localRef]
+                );
+            }
+            return await executeOnResolvedTab(params, typeText, [params.text, params.clearFirst, null]);
         case "clear_ref":
-            return await executeOnResolvedTab(params, clearRef, [params.ref]);
+            return await executeOnResolvedRef(params, clearRef, (binding) => [binding.localRef]);
         case "select_option_ref":
-            return await executeOnResolvedTab(params, selectOptionByRef, [params.ref, params.text ?? null, params.value ?? null, params.index ?? null]);
+            return await executeOnResolvedRef(
+                params,
+                selectOptionByRef,
+                (binding) => [binding.localRef, params.text ?? null, params.value ?? null, params.index ?? null]
+            );
         case "screenshot":
             return await captureTabScreenshot(params);
         case "scroll":
@@ -286,19 +320,53 @@ function enrichPageResult(result, tab) {
 }
 
 async function executeOnTab(tabId, func, args = []) {
+    return await executeOnFrame(tabId, null, func, args);
+}
+
+async function executeOnFrame(tabId, frameId, func, args = []) {
     const tab = await chrome.tabs.get(tabId);
     const focusedTab = await ensureTabFocused(tab);
+    const target = frameId == null
+        ? { tabId: focusedTab.id }
+        : { tabId: focusedTab.id, frameIds: [frameId] };
     const results = await chrome.scripting.executeScript({
-        target: { tabId: focusedTab.id },
+        target,
         func: func,
         args: args
     });
     return { tab: focusedTab, result: results[0].result };
 }
 
+async function executeOnAllFrames(tabId, func, args = []) {
+    const tab = await chrome.tabs.get(tabId);
+    const focusedTab = await ensureTabFocused(tab);
+    const results = await chrome.scripting.executeScript({
+        target: { tabId: focusedTab.id, allFrames: true },
+        func: func,
+        args: args
+    });
+    return { tab: focusedTab, results: results || [] };
+}
+
 async function executeOnResolvedTab(params, func, args = []) {
     const tab = await resolveTargetTab(params);
     const execution = await executeOnTab(tab.id, func, args);
+    return enrichPageResult(execution.result, execution.tab);
+}
+
+async function executeOnResolvedRef(params, func, buildArgs) {
+    const tab = await resolveTargetTab(params);
+    const refBinding = resolveSnapshotRef(tab.id, params.ref);
+    if (!refBinding) {
+        throw new Error("Reference not found for the current tab. Run browser_snapshot again before using this ref.");
+    }
+
+    const execution = await executeOnFrame(
+        tab.id,
+        refBinding.frameId,
+        func,
+        buildArgs(refBinding)
+    );
     return enrichPageResult(execution.result, execution.tab);
 }
 
@@ -315,6 +383,7 @@ async function navigateTab(params = {}) {
     }
 
     if (targetTab) {
+        clearSnapshotRefsForTab(targetTab.id);
         targetTab = await chrome.tabs.update(targetTab.id, { url: params.url, active: true });
     } else {
         targetTab = await chrome.tabs.create({ url: params.url, active: true });
@@ -333,8 +402,55 @@ async function navigateTab(params = {}) {
 
 async function snapshotTab(params = {}) {
     const tab = await resolveTargetTab(params);
-    const execution = await executeOnTab(tab.id, getAriaSnapshot);
-    return enrichPageResult(execution.result, execution.tab);
+    const execution = await executeOnAllFrames(tab.id, getAriaSnapshot);
+    const sortedResults = execution.results
+        .filter((entry) => entry && entry.result)
+        .sort((left, right) => (left.frameId ?? 0) - (right.frameId ?? 0));
+
+    let globalRef = 1;
+    let focusedRef = null;
+    const globalElements = [];
+    const refsByGlobalId = new Map();
+
+    for (const frameEntry of sortedResults) {
+        const frameId = frameEntry.frameId ?? 0;
+        const snapshot = frameEntry.result || {};
+        const frameElements = Array.isArray(snapshot.elements) ? snapshot.elements : [];
+
+        for (const element of frameElements) {
+            const assignedRef = globalRef++;
+            refsByGlobalId.set(assignedRef, {
+                frameId,
+                localRef: element.ref
+            });
+
+            globalElements.push({
+                ...element,
+                ref: assignedRef
+            });
+
+            if (focusedRef == null && snapshot.focusedRef === element.ref) {
+                focusedRef = assignedRef;
+            }
+        }
+    }
+
+    storeSnapshotRefsForTab(execution.tab.id, refsByGlobalId);
+
+    const formatted = globalElements.length
+        ? globalElements.map((element) => `- ${element.role} "${element.name}" [ref=${element.ref}]`).join("\n")
+        : "No interactive elements found";
+
+    return enrichPageResult(
+        {
+            elements: globalElements,
+            formatted,
+            count: globalElements.length,
+            focusedRef,
+            snapshotHash: hashString(formatted)
+        },
+        execution.tab
+    );
 }
 
 async function captureTabScreenshot(params = {}) {
@@ -367,6 +483,7 @@ async function closeTab(params = {}) {
     const closedTabId = tab.id;
     const windowId = tab.windowId;
 
+    clearSnapshotRefsForTab(closedTabId);
     await chrome.tabs.remove(closedTabId);
 
     const remainingTabs = await chrome.tabs.query({ windowId });
@@ -523,12 +640,14 @@ function getAriaSnapshot() {
 
     function isVisible(node) {
         if (!(node instanceof Element)) return false;
+        if (node.hidden || node.getAttribute('aria-hidden') === 'true') return false;
         const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
         return style.display !== 'none' &&
             style.visibility !== 'hidden' &&
-            style.opacity !== '0' &&
-            node.offsetWidth > 0 &&
-            node.offsetHeight > 0;
+            parseFloat(style.opacity || '1') > 0.01 &&
+            rect.width > 1 &&
+            rect.height > 1;
     }
 
     function getAccessibleName(node) {
@@ -567,7 +686,12 @@ function getAriaSnapshot() {
 
         if (node instanceof Element) {
             const role = node.getAttribute('role') || node.tagName.toLowerCase();
-            const isInteractive = INTERACTIVE_ROLES.includes(role) || INTERACTIVE_TAGS.has(node.tagName);
+            const tabIndex = node.tabIndex;
+            const isInteractive = INTERACTIVE_ROLES.includes(role) ||
+                INTERACTIVE_TAGS.has(node.tagName) ||
+                node.hasAttribute('onclick') ||
+                node.isContentEditable ||
+                tabIndex >= 0;
 
             if (isInteractive && isVisible(node)) {
                 const cleanText = getAccessibleName(node);

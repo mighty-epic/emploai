@@ -718,6 +718,8 @@ class SingleAgent:
         if x is None or y is None:
             return {"error": "You must provide x and y coordinates. Use ocr_screen first to find the coordinates of text you want to click."}
         try:
+            x = int(float(str(x).split(",")[0].strip()))
+            y = int(float(str(y).split(",")[0].strip()))
             # Move to position first, then click (more reliable)
             pyautogui.moveTo(x, y, duration=0.1)
             time.sleep(0.05)  # Small delay for stability
@@ -731,6 +733,8 @@ class SingleAgent:
         if not PYAUTOGUI_AVAILABLE:
             return {"error": "PyAutoGUI not available"}
         try:
+            x = int(float(str(x).split(",")[0].strip()))
+            y = int(float(str(y).split(",")[0].strip()))
             pyautogui.moveTo(x, y, duration=0.1)
             time.sleep(0.05)
             pyautogui.rightClick()
@@ -743,6 +747,8 @@ class SingleAgent:
         if not PYAUTOGUI_AVAILABLE:
             return {"error": "PyAutoGUI not available"}
         try:
+            x = int(float(str(x).split(",")[0].strip()))
+            y = int(float(str(y).split(",")[0].strip()))
             pyautogui.moveTo(x, y, duration=0.1)
             time.sleep(0.05)
             pyautogui.doubleClick()

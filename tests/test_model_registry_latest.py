@@ -7,7 +7,8 @@ from shared.unified_agent import create_unified_agent
 def test_gpt_5_4_is_available_in_primary_model_registry():
     assert MODEL_CONFIGS["gpt-5.4"]["provider"] == "openai"
     assert MODEL_CONFIGS["gpt-5.4"]["id"] == "gpt-5.4-2026-03-05"
-    assert MODEL_VARIANTS["gpt-5.4"]["variants"] == ["low", "medium", "high", "xhigh"]
+    assert MODEL_CONFIGS["gpt-5.4"]["api"] == "responses"
+    assert MODEL_VARIANTS["gpt-5.4"]["variants"] == ["standard"]
 
 
 def test_shared_unified_agent_maps_gpt_5_4_to_openai_snapshot():
