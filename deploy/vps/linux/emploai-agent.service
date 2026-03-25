@@ -5,12 +5,16 @@ Requires=emploai-display.service
 
 [Service]
 Type=simple
-User=root
+User=emploai
+Group=emploai
 WorkingDirectory=/opt/emploai/telegram_bot
+Environment=PLATFORM=linux
 Environment=DISPLAY=:99
+Environment=XAUTHORITY=/opt/emploai/.xauth/emploai-xauth
 Environment=HEADLESS=false
 Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=/opt/emploai/.env
+EnvironmentFile=-/opt/emploai/.env
+EnvironmentFile=-/etc/emploai/agent.env
 ExecStart=/opt/emploai/venv/bin/python telegram_agent.py
 Restart=always
 RestartSec=10

@@ -1,9 +1,11 @@
 import base64
 import importlib
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 from telegram_bot.linux import desktop_tools
+from telegram_bot import linux
 
 
 def _reload_telegram_unified_agent():
@@ -44,6 +46,25 @@ def test_platform_override_enables_linux_desktop_handlers(monkeypatch):
         "open_app",
     ):
         assert tool_name in handlers
+
+
+def test_headed_linux_runtime_error_requires_non_root(monkeypatch):
+    monkeypatch.setattr(linux, "LINUX_MODE", True)
+    monkeypatch.setenv("HEADLESS", "false")
+    monkeypatch.setattr(linux.os, "geteuid", lambda: 0, raising=False)
+
+    error = linux.headed_linux_runtime_error()
+
+    assert error is not None
+    assert "cannot run as root" in error
+
+
+def test_headed_linux_runtime_error_allows_non_root(monkeypatch):
+    monkeypatch.setattr(linux, "LINUX_MODE", True)
+    monkeypatch.setenv("HEADLESS", "false")
+    monkeypatch.setattr(linux.os, "geteuid", lambda: 1000, raising=False)
+
+    assert linux.headed_linux_runtime_error() is None
 
 
 def test_linux_open_app_maps_common_chrome_alias(monkeypatch):
@@ -92,6 +113,25 @@ def test_linux_open_app_splits_command_arguments(monkeypatch):
         "Launched: google-chrome --incognito --no-first-run --no-default-browser-check "
         "--disable-session-crashed-bubble"
     )
+
+
+def test_linux_open_app_rejects_root_chrome_launch(monkeypatch):
+    popen_called = False
+
+    monkeypatch.setattr(desktop_tools, "_has_command", lambda cmd: cmd == "google-chrome")
+    monkeypatch.setattr(desktop_tools.os, "geteuid", lambda: 0, raising=False)
+
+    def fake_popen(*_args, **_kwargs):
+        nonlocal popen_called
+        popen_called = True
+        raise AssertionError("chrome launch should have been blocked")
+
+    monkeypatch.setattr(desktop_tools.subprocess, "Popen", fake_popen)
+
+    result = desktop_tools._execute_open_app(None, {"name": "chrome"})
+
+    assert "cannot be launched as root" in result
+    assert popen_called is False
 
 
 def test_linux_click_uses_xdotool_and_parses_coordinates(monkeypatch):
@@ -156,3 +196,12 @@ def test_linux_describe_screen_returns_base64_image(monkeypatch, tmp_path):
     assert result["question"] == "What is on screen?"
     assert result["image_base64"] == base64.b64encode(b"png-bytes").decode("utf-8")
     assert result["metadata"]["backend"] == "scrot"
+
+
+def test_vps_agent_service_supports_both_env_file_locations():
+    service_path = Path(__file__).resolve().parents[1] / "deploy" / "vps" / "linux" / "emploai-agent.service"
+    content = service_path.read_text(encoding="utf-8")
+
+    assert "User=emploai" in content
+    assert "EnvironmentFile=-/opt/emploai/.env" in content
+    assert "EnvironmentFile=-/etc/emploai/agent.env" in content

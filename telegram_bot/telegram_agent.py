@@ -13,6 +13,15 @@ import sys
 # Add parent directory to path to allow imports from root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+try:
+    from linux import headed_linux_runtime_error
+except ImportError:
+    try:
+        from telegram_bot.linux import headed_linux_runtime_error
+    except ImportError:
+        def headed_linux_runtime_error() -> str | None:
+            return None
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -274,6 +283,11 @@ message_handlers = {
 
 
 def main():
+    runtime_error = headed_linux_runtime_error()
+    if runtime_error:
+        logger.error(runtime_error)
+        raise RuntimeError(runtime_error)
+
     run_bot(
         bot_token=BOT_TOKEN,
         command_handlers=command_handlers,

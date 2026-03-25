@@ -364,6 +364,22 @@ def _with_chrome_defaults(command: list[str]) -> list[str]:
     return [*command, *extras]
 
 
+def _chrome_launch_runtime_error(command: list[str]) -> str | None:
+    """Return a helpful deployment/runtime error for invalid Chrome launches."""
+    if not _is_chrome_command(command):
+        return None
+
+    geteuid = getattr(os, "geteuid", None)
+    if callable(geteuid) and geteuid() == 0:
+        return (
+            "Headed Chrome cannot be launched as root on Linux. Run the X11 "
+            "display session and telegram agent under the same non-root user "
+            "(for example, 'emploai')."
+        )
+
+    return None
+
+
 # ==========================================================================
 # OBSERVE DESKTOP — replaces pywinauto Desktop().windows()
 # ==========================================================================
@@ -592,6 +608,9 @@ def _execute_open_app(session, args: Dict) -> str:
         launch_cmd = _resolve_launch_command(name)
         if launch_cmd:
             launch_cmd = _with_chrome_defaults(launch_cmd)
+            runtime_error = _chrome_launch_runtime_error(launch_cmd)
+            if runtime_error:
+                return runtime_error
             subprocess.Popen(
                 launch_cmd,
                 stdout=subprocess.DEVNULL,

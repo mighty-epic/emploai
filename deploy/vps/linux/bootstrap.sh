@@ -3,8 +3,19 @@ set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-/opt/emploai}"
 VENV_DIR="${VENV_DIR:-$REPO_DIR/venv}"
+APP_USER="${APP_USER:-emploai}"
+APP_GROUP="${APP_GROUP:-$APP_USER}"
 
 export DEBIAN_FRONTEND=noninteractive
+
+run_as_app_user() {
+  local command="$1"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    sudo -u "$APP_USER" bash -lc "$command"
+  else
+    bash -lc "$command"
+  fi
+}
 
 sudo apt-get update
 sudo apt-get install -y \
@@ -32,12 +43,20 @@ if ! command -v google-chrome >/dev/null 2>&1 && ! command -v google-chrome-stab
   sudo apt-get install -y google-chrome-stable
 fi
 
-python3 -m venv "$VENV_DIR"
-source "$VENV_DIR/bin/activate"
-python -m pip install --upgrade pip wheel setuptools
-python -m pip install -r "$REPO_DIR/requirements.txt"
-python -m pip install python-xlib
+if [[ "$(id -u)" -eq 0 ]]; then
+  if ! id -u "$APP_USER" >/dev/null 2>&1; then
+    sudo useradd --system --create-home --shell /bin/bash "$APP_USER"
+  fi
+  sudo mkdir -p "$REPO_DIR"
+  sudo chown -R "$APP_USER:$APP_GROUP" "$REPO_DIR"
+fi
+
+run_as_app_user "python3 -m venv '$VENV_DIR'"
+run_as_app_user "source '$VENV_DIR/bin/activate' && python -m pip install --upgrade pip wheel setuptools"
+run_as_app_user "source '$VENV_DIR/bin/activate' && python -m pip install -r '$REPO_DIR/requirements.txt'"
+run_as_app_user "source '$VENV_DIR/bin/activate' && python -m pip install python-xlib"
 
 echo "Bootstrap complete."
 echo "Repo: $REPO_DIR"
 echo "Venv: $VENV_DIR"
+echo "Run user: $APP_USER"

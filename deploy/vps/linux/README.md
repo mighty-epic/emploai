@@ -33,19 +33,23 @@ Default assumptions:
 
 - repo path: `/opt/emploai`
 - venv path: `/opt/emploai/venv`
-- run user: `root`
+- run user: `emploai`
 - display: `:99`
 - VNC port: `5900`
 
 You can change these in the systemd units before enabling them.
+The agent and display services must run as the same non-root user for headed
+Chrome and the extension bridge to work reliably.
+The agent service accepts both `/etc/emploai/agent.env` and
+`/opt/emploai/.env` so newer and older VPS installs both work.
 
 ## Basic Flow
 
 1. SSH into the VPS.
 2. Clone the repo to `/opt/emploai`.
-3. Run `deploy/vps/linux/bootstrap.sh`.
+3. Run `deploy/vps/linux/bootstrap.sh` with `APP_USER=emploai`.
 4. Copy the service files into `/etc/systemd/system/`.
-5. Create `/opt/emploai/.env`.
+5. Create `/etc/emploai/agent.env` (preferred) or `/opt/emploai/.env`.
 6. Enable and start the services.
 
 ## Commands
@@ -54,8 +58,12 @@ Bootstrap:
 
 ```bash
 cd /opt/emploai
-bash deploy/vps/linux/bootstrap.sh
+sudo APP_USER=emploai bash deploy/vps/linux/bootstrap.sh
 ```
+
+If the `emploai` user does not exist yet, the bootstrap script will create it
+and chown `/opt/emploai` so the bot can write logs, screenshots, and runtime
+state under the same non-root account that owns the X11 session.
 
 Install services:
 
@@ -102,7 +110,7 @@ This opens a controlled Chrome app window on the VPS desktop, OCRs the button te
 By default the VNC server binds to localhost only. Tunnel it over SSH:
 
 ```bash
-ssh -L 5900:127.0.0.1:5900 root@<server-ip>
+ssh -L 5900:127.0.0.1:5900 <your-admin-user>@<server-ip>
 ```
 
 Then connect your VNC viewer to:
@@ -115,7 +123,7 @@ This attaches to the same display the agent uses. Disconnecting the viewer does 
 
 ## Required Secrets
 
-Add these to `/opt/emploai/.env`:
+Add these to `/etc/emploai/agent.env` (preferred) or `/opt/emploai/.env`:
 
 ```env
 TELEGRAM_BOT_TOKEN=...
