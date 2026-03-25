@@ -36,6 +36,7 @@ except ImportError:
     PYPERCLIP_AVAILABLE = False
 
 from telegram.constants import ParseMode
+from cli.agent_tools.web_tools import duckduckgo_search
 from shared import (
     create_unified_agent,
     get_heartbeat_manager,
@@ -566,7 +567,37 @@ def _execute_command(session, args: Dict) -> str:
 
 
 def _execute_web_search(session, args: Dict) -> str:
-    return f"Web search for '{args['query']}' - Not implemented yet"
+    query = str(args.get("query", "")).strip()
+    if not query:
+        return "Error: 'query' is required"
+
+    max_results = args.get("max_results", 5)
+    try:
+        max_results = max(1, min(int(max_results), 10))
+    except (TypeError, ValueError):
+        max_results = 5
+
+    result = duckduckgo_search(query, max_results=max_results)
+    if result.get("error"):
+        return f"DuckDuckGo search error for '{query}': {result['error']}"
+
+    results = result.get("results") or []
+    if not results:
+        return f"No DuckDuckGo results found for '{query}'."
+
+    lines = [f"DuckDuckGo results for '{query}':"]
+    for index, item in enumerate(results, start=1):
+        title = str(item.get("title") or "(untitled result)").strip()
+        url = str(item.get("url") or "").strip()
+        snippet = str(item.get("snippet") or "").strip()
+
+        lines.append(f"{index}. {title}")
+        if url:
+            lines.append(f"   URL: {url}")
+        if snippet:
+            lines.append(f"   Snippet: {snippet}")
+
+    return "\n".join(lines)
 
 
 def _execute_fetch_url(session, args: Dict) -> str:
