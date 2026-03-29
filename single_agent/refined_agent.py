@@ -24,7 +24,7 @@ except ImportError:
 # Import new tools
 from .browser_tool import BrowserTool, BROWSER_TOOL_DEFINITIONS, create_browser_tool
 from .spawn_tool import SpawnTool, SPAWN_TOOL_DEFINITIONS, get_spawn_tool
-from .cron_scheduler import CronScheduler, CRON_TOOL_DEFINITIONS, get_scheduler, parse_schedule
+from .cron_scheduler import CronScheduler, CRON_TOOL_DEFINITIONS, get_scheduler, parse_schedule_with_error
 
 
 # Import desktop automation tools from existing agent
@@ -118,6 +118,9 @@ The browser uses ARIA snapshots for reliable interaction. Instead of guessing se
   * Examples: "every 5 minutes", "every 1 hour", "every day at 08:00"
   * Jobs persist across restarts and run automatically
 - list_scheduled_jobs(): View all scheduled jobs
+- get_scheduled_job(job_id): Inspect one job in detail
+- update_scheduled_job(job_id, ...): Modify name, prompt, schedule, or enabled state
+- run_scheduled_job_now(job_id): Queue a job to run on the next scheduler check
 - remove_scheduled_job(job_id): Delete a job
 - enable_job(job_id) / disable_job(job_id): Toggle jobs
 
@@ -272,11 +275,45 @@ class RefinedAgent:
         self.is_paused = False
         self.should_stop = False
         
-        self.client = None # Redundant - using main loop client
+        self.client = self._create_client_for_model(model)
         
         # Tool mappings
         self._setup_tools()
     
+    def _create_client_for_model(self, model: str):
+        """Create the appropriate LLM client for the selected model."""
+        model_lower = (model or "").lower()
+
+        if model_lower.startswith("claude"):
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            if api_key:
+                try:
+                    from anthropic import Anthropic
+                    return Anthropic(api_key=api_key)
+                except Exception:
+                    return None
+            return None
+
+        if model_lower.startswith("gemini"):
+            api_key = os.getenv("GOOGLE_API_KEY")
+            if api_key and OPENAI_AVAILABLE:
+                try:
+                    return OpenAI(
+                        api_key=api_key,
+                        base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+                    )
+                except Exception:
+                    return None
+            return None
+
+        api_key = os.getenv("OPENAI_API_KEY")
+        if api_key and OPENAI_AVAILABLE:
+            try:
+                return OpenAI(api_key=api_key)
+            except Exception:
+                return None
+        return None
+
     def _setup_tools(self) -> None:
         """Setup tool function mappings."""
         self.tools = {
@@ -327,6 +364,9 @@ class RefinedAgent:
             # Cron tools
             "schedule_job": self._schedule_job,
             "list_scheduled_jobs": self._list_scheduled_jobs,
+            "get_scheduled_job": self._get_scheduled_job,
+            "update_scheduled_job": self._update_scheduled_job,
+            "run_scheduled_job_now": self._run_scheduled_job_now,
             "remove_scheduled_job": self._remove_scheduled_job,
             "enable_job": self._enable_job,
             "disable_job": self._disable_job,
@@ -748,14 +788,21 @@ class RefinedAgent:
     def _schedule_job(self, name: str, prompt: str, schedule: str) -> Dict:
         """Schedule a recurring job."""
         try:
-            interval = parse_schedule(schedule)
-            if not interval:
-                return {"error": f"Could not parse schedule: {schedule}. Use format like 'every 1 hour' or 'every 5 minutes'"}
+            interval, error = parse_schedule_with_error(schedule)
+            if error:
+                return {"error": error}
             
-            job_id = self.cron_scheduler.add_job(name, prompt, interval)
+            job_id = self.cron_scheduler.add_job(
+                name,
+                prompt,
+                interval,
+                schedule_text=schedule,
+            )
+            job = self.cron_scheduler.get_job(job_id)
             return {
                 "success": True,
                 "job_id": job_id,
+                "job": job.to_dict() if job else None,
                 "message": f"Scheduled job '{name}' (ID: {job_id}) to run {schedule}"
             }
         except Exception as e:
@@ -764,8 +811,59 @@ class RefinedAgent:
     def _list_scheduled_jobs(self) -> Dict:
         """List scheduled jobs."""
         try:
-            status = self.cron_scheduler.get_status()
-            return status
+            return self.cron_scheduler.get_status()
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _get_scheduled_job(self, job_id: str) -> Dict:
+        """Get one scheduled job."""
+        try:
+            job = self.cron_scheduler.get_job(job_id)
+            if not job:
+                return {"error": f"Job {job_id} not found"}
+            return {"success": True, "job": job.to_dict()}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _update_scheduled_job(
+        self,
+        job_id: str,
+        name: Optional[str] = None,
+        prompt: Optional[str] = None,
+        schedule: Optional[str] = None,
+        enabled: Optional[bool] = None,
+    ) -> Dict:
+        """Update an existing scheduled job."""
+        try:
+            interval = None
+            if schedule is not None:
+                interval, error = parse_schedule_with_error(schedule)
+                if error:
+                    return {"error": error}
+
+            success = self.cron_scheduler.update_job(
+                job_id,
+                name=name,
+                prompt=prompt,
+                schedule_text=schedule,
+                interval_seconds=interval,
+                enabled=enabled,
+            )
+            if not success:
+                return {"error": f"Job {job_id} not found"}
+
+            job = self.cron_scheduler.get_job(job_id)
+            return {"success": True, "job": job.to_dict() if job else None}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _run_scheduled_job_now(self, job_id: str) -> Dict:
+        """Queue a scheduled job to run on the next check."""
+        try:
+            success = self.cron_scheduler.run_job_now(job_id)
+            if not success:
+                return {"error": f"Job {job_id} not found"}
+            return {"success": True, "job_id": job_id}
         except Exception as e:
             return {"error": str(e)}
     
@@ -873,15 +971,46 @@ class RefinedAgent:
             self._log(f"\n--- Turn {self._turns_used + turn + 1} ---")
             
             try:
+                if self.client is None:
+                    raise RuntimeError(f"No LLM client configured for model: {self.model}")
+
                 # Get LLM response
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=self.messages,
-                    tools=self.get_tool_definitions(),
-                    max_tokens=2000
-                )
-                
-                message = response.choices[0].message
+                if self.model.lower().startswith("claude"):
+                    system_messages = [m for m in self.messages if m.get("role") == "system"]
+                    non_system_messages = [m for m in self.messages if m.get("role") != "system"]
+                    system_text = "\n\n".join(str(m.get("content", "")) for m in system_messages) or None
+                    response = self.client.messages.create(
+                        model=self.model,
+                        max_tokens=2000,
+                        system=system_text,
+                        tools=self.get_tool_definitions(),
+                        messages=non_system_messages,
+                    )
+
+                    assistant_text = ""
+                    tool_calls = []
+                    for block in response.content:
+                        if getattr(block, "type", None) == "text":
+                            assistant_text += getattr(block, "text", "")
+                        elif getattr(block, "type", None) == "tool_use":
+                            tool_calls.append(type("ToolCall", (), {
+                                "id": block.id,
+                                "function": type("Fn", (), {
+                                    "name": block.name,
+                                    "arguments": json.dumps(block.input)
+                                })()
+                            })())
+
+                    message = type("Msg", (), {"content": assistant_text or None, "tool_calls": tool_calls})()
+                else:
+                    response = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=self.messages,
+                        tools=self.get_tool_definitions(),
+                        max_tokens=2000
+                    )
+                    
+                    message = response.choices[0].message
                 
                 # Check if complete (no tool calls)
                 if not message.tool_calls:
@@ -890,7 +1019,21 @@ class RefinedAgent:
                     return message.content or "Task completed."
                 
                 # Execute tools
-                self.messages.append(message)
+                self.messages.append({
+                    "role": "assistant",
+                    "content": message.content,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                        for tc in (message.tool_calls or [])
+                    ] if message.tool_calls else None,
+                })
                 tool_results = []
                 
                 for tool_call in message.tool_calls:
@@ -923,11 +1066,21 @@ class RefinedAgent:
                     
                     self._log(f"  [RESULT] {result_str}")
                     
-                    tool_results.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": result_str
-                    })
+                    if self.model.lower().startswith("claude"):
+                        tool_results.append({
+                            "role": "user",
+                            "content": [{
+                                "type": "tool_result",
+                                "tool_use_id": tool_call.id,
+                                "content": result_str,
+                            }]
+                        })
+                    else:
+                        tool_results.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": result_str
+                        })
                 
                 self.messages.extend(tool_results)
             
@@ -943,13 +1096,29 @@ class RefinedAgent:
         return f"{content or 'Task stopped'} (Max turns reached)"
     
     def get_tool_definitions(self) -> List[Dict]:
-        """Get all tool definitions."""
-        return (
+        """Get all tool definitions in provider-compatible format."""
+        tools = (
             BROWSER_TOOL_DEFINITIONS +
             SPAWN_TOOL_DEFINITIONS +
             CRON_TOOL_DEFINITIONS +
             self._get_desktop_tool_definitions()
         )
+
+        if self.model.lower().startswith("claude"):
+            converted = []
+            for tool in tools:
+                if "function" in tool:
+                    func = tool["function"]
+                    converted.append({
+                        "name": func.get("name", ""),
+                        "description": func.get("description", ""),
+                        "input_schema": func.get("parameters", {"type": "object", "properties": {}}),
+                    })
+                else:
+                    converted.append(tool)
+            return converted
+
+        return tools
     
     def _get_desktop_tool_definitions(self) -> List[Dict]:
         """Get desktop/input tool definitions."""

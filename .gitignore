@@ -1,3 +1,20 @@
 .env
 LOCAL_TOOLS.md
 agent_data/LOCAL_TOOLS.md
+
+# local runtime state / secrets / logs
+MEMORY.md
+memory/
+.xauth/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+telegram_bot/jobs.json
+telegram_bot/logs/
+telegram_bot/single_agent/screenshots/
+
+# local scratch / clones
+emplo-own/
+git-push-test/
+agent_data/AGENTS.md

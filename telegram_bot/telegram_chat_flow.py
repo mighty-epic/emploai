@@ -150,24 +150,13 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
             model_id = session.current_model or "claude-sonnet-4-5"
             if session.context_manager.needs_compression(session.chat_history, model_id):
                 logger.info("[ContextManager] Compressing conversation history...")
-                
-                # Update system info with fresh window list before compression
-                session.refresh_system_info()
-                
-                # Extract window list for the debug message
-                window_info = "Unknown"
-                if "Active Windows: " in session.system_info:
-                    window_info = session.system_info.split("Active Windows: ")[-1]
-                
-                # Notify user of compression (debug message)
+
                 await safe_reply(
                     update,
                     "🔘 *Memory Compressed*\n"
-                    "I've summarized our previous conversation to save space. "
-                    "I also refreshed the list of active windows/apps.\n\n"
-                    f"**Active Windows:** {window_info}"
+                    "I summarized earlier conversation history to keep the live Telegram session within context limits."
                 )
-                
+
                 session.chat_history = session.context_manager.compress(session.chat_history)
                 logger.info("[ContextManager] Compression complete")
         

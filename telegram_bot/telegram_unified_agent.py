@@ -43,6 +43,7 @@ from shared import (
 )
 from single_agent.browser_tool import create_browser_tool
 from single_agent.extension_tool import create_extension_tool
+from single_agent.cron_scheduler import CRON_TOOL_DEFINITIONS, parse_schedule_with_error
 
 
 logger = logging.getLogger(__name__)
@@ -289,7 +290,7 @@ AUTO_MODE_BROWSER_TOOLS = [
 
 
 def get_auto_mode_extra_tools() -> List[Dict[str, Any]]:
-    return list(AUTO_MODE_BROWSER_TOOLS)
+    return list(AUTO_MODE_BROWSER_TOOLS) + list(CRON_TOOL_DEFINITIONS)
 
 
 def get_auto_mode_tool_handlers(session) -> Dict[str, Callable[[Dict[str, Any]], Any]]:
@@ -312,6 +313,14 @@ def get_auto_mode_tool_handlers(session) -> Dict[str, Callable[[Dict[str, Any]],
         "browser_activate_tab": lambda args: _execute_browser_activate_tab(session, args),
         "browser_close_tab": lambda args: _execute_browser_close_tab(session, args),
         "browser_stop": lambda args: _execute_browser_stop(session, args),
+        "schedule_job": lambda args: _execute_schedule_job(session, args),
+        "list_scheduled_jobs": lambda args: _execute_list_scheduled_jobs(session, args),
+        "get_scheduled_job": lambda args: _execute_get_scheduled_job(session, args),
+        "update_scheduled_job": lambda args: _execute_update_scheduled_job(session, args),
+        "run_scheduled_job_now": lambda args: _execute_run_scheduled_job_now(session, args),
+        "remove_scheduled_job": lambda args: _execute_remove_scheduled_job(session, args),
+        "enable_job": lambda args: _execute_enable_job(session, args),
+        "disable_job": lambda args: _execute_disable_job(session, args),
         # Backwards-compatible aliases used by the legacy SingleAgent schema/prompt.
         "open_browser": lambda args: _execute_browser_navigate(session, {"url": args["url"]}),
         "observe_browser": lambda args: _execute_observe_browser(session, args),
@@ -455,6 +464,9 @@ def _build_unified_tool_executor(session) -> Callable[[str, Dict], Any]:
         'list_sub_agents': lambda args: _execute_list_sub_agents(session, args),
         'schedule_job': lambda args: _execute_schedule_job(session, args),
         'list_scheduled_jobs': lambda args: _execute_list_scheduled_jobs(session, args),
+        'get_scheduled_job': lambda args: _execute_get_scheduled_job(session, args),
+        'update_scheduled_job': lambda args: _execute_update_scheduled_job(session, args),
+        'run_scheduled_job_now': lambda args: _execute_run_scheduled_job_now(session, args),
         'remove_scheduled_job': lambda args: _execute_remove_scheduled_job(session, args),
         'browser_extension_toggle': lambda args: _execute_browser_extension_toggle(session, args),
     }
@@ -790,9 +802,24 @@ def build_unified_system_prompt(
     if getattr(session, "context_loader", None):
         workspace_context = session.context_loader.build_system_prompt_context()
 
+    cron_prompt = """
+## SCHEDULING TOOLS
+You can manage recurring scheduled jobs with these tools:
+- schedule_job(name, prompt, schedule): create a recurring job
+- list_scheduled_jobs(): list all jobs and their status
+- get_scheduled_job(job_id): inspect one job in detail
+- update_scheduled_job(job_id, ...): change name, prompt, schedule, or enabled state
+- run_scheduled_job_now(job_id): queue a job to run on the next scheduler check
+- remove_scheduled_job(job_id): delete a job
+- enable_job(job_id): enable a disabled job
+- disable_job(job_id): disable a job without deleting it
+Supported schedules include: 'every 30 seconds', 'every 5 minutes', 'every 1 hour', and 'every day at 08:00'.
+""".strip()
+
     sections = [
         build_browser_runtime_prompt(session),
         build_desktop_runtime_prompt(session),
+        cron_prompt,
         UNIFIED_AGENT_PROMPT,
         workspace_context.strip() if workspace_context else "",
         memory_context.strip() if memory_context else "",
@@ -1479,43 +1506,126 @@ def _execute_list_sub_agents(session, args: Dict) -> str:
         return f"Error listing tasks: {str(e)}"
 
 
-def _execute_schedule_job(session, args: Dict) -> str:
+def _execute_schedule_job(session, args: Dict) -> Dict[str, Any]:
     if not session.cron_scheduler:
-        return "Cron scheduler not initialized"
+        return {"error": "Cron scheduler not initialized"}
     try:
-        session.cron_scheduler.add_job(
-            name=args['name'],
-            prompt=args['prompt'],
-            schedule_str=args['schedule']
+        interval, error = parse_schedule_with_error(args["schedule"])
+        if error:
+            return {"error": error}
+
+        job_id = session.cron_scheduler.add_job(
+            name=args["name"],
+            prompt=args["prompt"],
+            interval_seconds=interval,
+            schedule_text=args["schedule"],
+            timezone_offset_hours=2,
         )
-        return f"Job '{args['name']}' scheduled: {args['schedule']}"
+        job = session.cron_scheduler.get_job(job_id)
+        return {
+            "success": True,
+            "job_id": job_id,
+            "job": job.to_dict() if job else None,
+            "message": f"Job '{args['name']}' scheduled: {args['schedule']} (ID: {job_id})",
+        }
     except Exception as e:
-        return f"Error scheduling job: {str(e)}"
+        return {"error": f"Error scheduling job: {str(e)}"}
 
 
-def _execute_list_scheduled_jobs(session, args: Dict) -> str:
+def _execute_list_scheduled_jobs(session, args: Dict) -> Dict[str, Any]:
     if not session.cron_scheduler:
-        return "Cron scheduler not initialized"
+        return {"error": "Cron scheduler not initialized"}
     try:
-        jobs = session.cron_scheduler.list_jobs()
-        if not jobs:
-            return "No scheduled jobs"
-        lines = []
-        for j in jobs:
-            status = "Enabled" if j.get('enabled', True) else "Disabled"
-            lines.append(f"[{status}] {j['id']}: {j['schedule']} - {j['prompt'][:30]}...")
-        return "Scheduled Jobs:\n" + "\n".join(lines)
+        return session.cron_scheduler.get_status()
     except Exception as e:
-        return f"Error listing jobs: {str(e)}"
+        return {"error": f"Error listing jobs: {str(e)}"}
 
 
-def _execute_remove_scheduled_job(session, args: Dict) -> str:
+def _execute_get_scheduled_job(session, args: Dict) -> Dict[str, Any]:
     if not session.cron_scheduler:
-        return "Cron scheduler not initialized"
+        return {"error": "Cron scheduler not initialized"}
     try:
-        deleted = session.cron_scheduler.remove_job(args['job_id'])
-        if deleted:
-            return f"Job {args['job_id']} removed"
-        return f"Job {args['job_id']} not found"
+        job = session.cron_scheduler.get_job(args["job_id"])
+        if not job:
+            return {"error": f"Job {args['job_id']} not found"}
+        return {"success": True, "job": job.to_dict()}
     except Exception as e:
-        return f"Error removing job: {str(e)}"
+        return {"error": f"Error getting job: {str(e)}"}
+
+
+def _execute_update_scheduled_job(session, args: Dict) -> Dict[str, Any]:
+    if not session.cron_scheduler:
+        return {"error": "Cron scheduler not initialized"}
+    try:
+        interval = None
+        schedule = args.get("schedule")
+        if schedule is not None:
+            interval, error = parse_schedule_with_error(schedule)
+            if error:
+                return {"error": error}
+
+        success = session.cron_scheduler.update_job(
+            args["job_id"],
+            name=args.get("name"),
+            prompt=args.get("prompt"),
+            schedule_text=schedule,
+            interval_seconds=interval,
+            enabled=args.get("enabled"),
+            timezone_offset_hours=2,
+        )
+        if not success:
+            return {"error": f"Job {args['job_id']} not found"}
+        job = session.cron_scheduler.get_job(args["job_id"])
+        return {"success": True, "job": job.to_dict() if job else None}
+    except Exception as e:
+        return {"error": f"Error updating job: {str(e)}"}
+
+
+def _execute_run_scheduled_job_now(session, args: Dict) -> Dict[str, Any]:
+    if not session.cron_scheduler:
+        return {"error": "Cron scheduler not initialized"}
+    try:
+        success = session.cron_scheduler.run_job_now(args["job_id"])
+        if not success:
+            return {"error": f"Job {args['job_id']} not found"}
+        return {"success": True, "job_id": args["job_id"]}
+    except Exception as e:
+        return {"error": f"Error triggering job: {str(e)}"}
+
+
+def _execute_remove_scheduled_job(session, args: Dict) -> Dict[str, Any]:
+    if not session.cron_scheduler:
+        return {"error": "Cron scheduler not initialized"}
+    try:
+        deleted = session.cron_scheduler.remove_job(args["job_id"])
+        if not deleted:
+            return {"error": f"Job {args['job_id']} not found"}
+        return {"success": True, "job_id": args["job_id"]}
+    except Exception as e:
+        return {"error": f"Error removing job: {str(e)}"}
+
+
+def _execute_enable_job(session, args: Dict) -> Dict[str, Any]:
+    if not session.cron_scheduler:
+        return {"error": "Cron scheduler not initialized"}
+    try:
+        success = session.cron_scheduler.enable_job(args["job_id"])
+        if not success:
+            return {"error": f"Job {args['job_id']} not found"}
+        job = session.cron_scheduler.get_job(args["job_id"])
+        return {"success": True, "job": job.to_dict() if job else None}
+    except Exception as e:
+        return {"error": f"Error enabling job: {str(e)}"}
+
+
+def _execute_disable_job(session, args: Dict) -> Dict[str, Any]:
+    if not session.cron_scheduler:
+        return {"error": "Cron scheduler not initialized"}
+    try:
+        success = session.cron_scheduler.disable_job(args["job_id"])
+        if not success:
+            return {"error": f"Job {args['job_id']} not found"}
+        job = session.cron_scheduler.get_job(args["job_id"])
+        return {"success": True, "job": job.to_dict() if job else None}
+    except Exception as e:
+        return {"error": f"Error disabling job: {str(e)}"}

@@ -1,0 +1,171 @@
+"""Cron job execution through the live unified tool-loop path.
+
+This phases cron execution away from RefinedAgent without changing the
+existing interactive Telegram chat flow.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime
+from typing import Callable, Optional
+
+from cli.agent_tools.loop import run_tool_loop
+from cli.agent_tools.adapters import to_anthropic_format
+from cli.tui_constants import MODEL_CONFIGS
+from single_agent.agent import AGENT_TOOLS
+from telegram_bot.telegram_unified_agent import (
+    build_unified_system_prompt,
+    get_auto_mode_extra_tools,
+    get_auto_mode_tool_handlers,
+)
+
+
+def _merge_openai_tools(*tool_groups):
+    merged = []
+    seen = set()
+    for group in tool_groups:
+        for tool in group:
+            func = tool.get("function", {})
+            name = func.get("name")
+            if not name or name in seen:
+                continue
+            merged.append(tool)
+            seen.add(name)
+    return merged
+
+
+def _get_provider_tools(provider: str):
+    merged = _merge_openai_tools(get_auto_mode_extra_tools(), AGENT_TOOLS)
+    if provider == "anthropic":
+        return to_anthropic_format(merged)
+    return merged
+
+
+async def run_cron_job_via_unified_flow(
+    session,
+    prompt: str,
+    *,
+    max_turns: int = 30,
+    progress_callback: Optional[Callable[[str], None]] = None,
+) -> str:
+    """Execute one cron prompt using the same unified tool-loop stack as live chat."""
+    client, provider = session.get_client_for_model()
+    if not client:
+        raise RuntimeError(f"No API key configured for provider: {provider}")
+
+    model_config = MODEL_CONFIGS.get(session.current_model, {})
+    model_id = model_config.get("id", session.current_model)
+    api_type = model_config.get("api", "chat")
+
+    if session.tool_executor:
+        session.tool_executor.custom_tool_handlers = get_auto_mode_tool_handlers(session)
+
+    extra_tools = _get_provider_tools(provider)
+
+    skills_index = ""
+    active_skills_context = ""
+    if session.skill_registry:
+        skills_index = f"\n\n{session.skill_registry.get_skills_index()}"
+        if session.active_skills:
+            active_skills_context = (
+                "\n\n# LOADED SPECIALIZED SKILLS\n"
+                f"{session.skill_registry.get_active_skills_context(session.active_skills)}"
+            )
+
+    memory_context = ""
+    if session.memory_manager:
+        try:
+            memory_context = session.memory_manager.load_context()
+        except Exception:
+            memory_context = ""
+
+    custom_system_prompt = build_unified_system_prompt(
+        session,
+        memory_context=memory_context,
+        skills_index=skills_index,
+        active_skills_context=active_skills_context,
+    )
+
+    messages = [
+        {"role": "system", "content": custom_system_prompt},
+        {
+            "role": "user",
+            "content": (
+                "[SCHEDULED JOB]\n"
+                "This task was triggered automatically by the scheduler. "
+                "Complete it and produce the final user-facing result.\n\n"
+                f"{prompt}"
+            ),
+        },
+    ]
+
+    response_buffer = []
+
+    def begin_stream_func():
+        response_buffer.clear()
+
+    def append_stream_func(text: str):
+        response_buffer.append(text)
+
+    def finish_stream_func():
+        pass
+
+    def log_func(text: str):
+        if progress_callback and text and not text.startswith("  [TOOL]"):
+            progress_callback(text)
+
+    callbacks = {
+        "log": log_func,
+        "log_inline": lambda text: response_buffer.append(text) if text else None,
+        "begin_stream": begin_stream_func,
+        "append_stream": append_stream_func,
+        "finish_stream": finish_stream_func,
+        "update_status": lambda: None,
+    }
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None,
+        lambda: run_tool_loop(
+            provider=provider,
+            model_id=model_id,
+            client=client,
+            messages=messages,
+            tool_executor=session.tool_executor,
+            callbacks=callbacks,
+            variant=session.current_variant,
+            extra_tools=extra_tools,
+            custom_system_prompt=custom_system_prompt,
+            api_type=api_type,
+        ),
+    )
+
+    final_response = result.content or "".join(response_buffer)
+    clean_response = final_response.strip() or "Done (no text response)"
+
+    if session.memory_manager:
+        try:
+            session.memory_manager.append_to_daily_log(
+                f"Scheduled Job Prompt: {prompt[:200]}...\n\nAssistant: {clean_response[:200]}...",
+                "cron",
+                session_id=(
+                    session.session_manager.current_session.id
+                    if session.session_manager and session.session_manager.current_session
+                    else None
+                ),
+            )
+        except Exception:
+            pass
+
+    session.chat_history.append(
+        {
+            "role": "assistant",
+            "content": clean_response,
+            "timestamp": datetime.now().isoformat(),
+            "scheduled_job": True,
+        }
+    )
+    session.save_session()
+
+    return clean_response

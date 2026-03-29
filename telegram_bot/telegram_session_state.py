@@ -22,6 +22,7 @@ from single_agent.agent import SingleAgent
 from single_agent.refined_agent import RefinedAgent, create_refined_agent
 from single_agent.cron_scheduler import get_scheduler
 from single_agent.spawn_tool import get_spawn_tool
+from telegram_bot.cron_runner import run_cron_job_via_unified_flow
 
 from bot_core.analytics import get_analytics_tracker, AnalyticsTracker
 from bot_core.file_processor import get_file_processor, FileProcessor
@@ -523,50 +524,85 @@ class TelegramSession:
     def _init_refined_agent(self, app: Application, loop: asyncio.AbstractEventLoop, logger_func):
         """Initialize RefinedAgent with spawn tool and cron scheduler."""
 
-        def announcement_callback(text: str):
+        async def announcement_callback(text: str):
             """Send announcement to user via Telegram."""
             if self._app and self.user_id:
                 try:
                     announcement_text = text[:4000] if len(text) > 4000 else text
-                    asyncio.run_coroutine_threadsafe(
-                        self._app.bot.send_message(
-                            chat_id=self.user_id,
-                            text=announcement_text,
-                            parse_mode=ParseMode.MARKDOWN,
-                        ),
-                        loop,
+                    await self._app.bot.send_message(
+                        chat_id=self.user_id,
+                        text=announcement_text,
+                        parse_mode=ParseMode.MARKDOWN,
                     )
                 except Exception as exc:
                     print(f"[ANNOUNCE ERROR] {exc}")
 
-        def spawn_callback(job_id: str, prompt: str):
-            """Callback for cron scheduler to spawn agents."""
-            print(f"[CRON] Spawning agent for job {job_id}: {prompt[:50]}...")
-            if self.refined_agent and self.refined_agent.spawn_tool:
-                asyncio.run_coroutine_threadsafe(
-                    self.refined_agent.spawn_tool.spawn(
-                        prompt=prompt,
-                        headless=True,
-                        max_turns=50,
-                        announce_on_complete=True,
-                    ),
-                    loop,
+        async def spawn_callback(job_id: str, prompt: str):
+            """Callback for cron scheduler to run jobs through the live unified path."""
+            print(f"[CRON] Running unified job {job_id}: {prompt[:50]}...")
+            task_label = f"cron-{job_id}"
+            if self._app and self.user_id:
+                try:
+                    await self._app.bot.send_message(
+                        chat_id=self.user_id,
+                        text=(
+                            f"🧠 **Scheduled Job Running**\n\n"
+                            f"Job ID: `{job_id}`\n"
+                            f"Execution Path: `unified`\n"
+                            f"Task: `{task_label}`"
+                        ),
+                        parse_mode=ParseMode.MARKDOWN,
+                    )
+                except Exception as exc:
+                    print(f"[CRON SPAWN ANNOUNCE ERROR] {exc}")
+
+            try:
+                result_text = await run_cron_job_via_unified_flow(
+                    self,
+                    prompt,
+                    max_turns=30,
                 )
+                if self._app and self.user_id:
+                    try:
+                        await self._app.bot.send_message(
+                            chat_id=self.user_id,
+                            text=f"🤖 **Scheduled Job Report [{task_label}]**\n\n{result_text[:3500]}",
+                            parse_mode=ParseMode.MARKDOWN,
+                        )
+                    except Exception as exc:
+                        print(f"[CRON RESULT ANNOUNCE ERROR] {exc}")
+                return task_label
+            except Exception as exc:
+                print(f"[CRON UNIFIED RUN ERROR] {exc}")
+                if self._app and self.user_id:
+                    try:
+                        await self._app.bot.send_message(
+                            chat_id=self.user_id,
+                            text=f"❌ **Scheduled Job Failed [{task_label}]**\n\n{str(exc)[:3500]}",
+                            parse_mode=ParseMode.MARKDOWN,
+                        )
+                    except Exception as announce_exc:
+                        print(f"[CRON FAILURE ANNOUNCE ERROR] {announce_exc}")
+                return None
 
         self.cron_scheduler = get_scheduler(
             job_store="jobs.json",
             spawn_callback=spawn_callback,
             announcement_callback=announcement_callback,
         )
+        loop.call_soon_threadsafe(lambda: asyncio.create_task(self.cron_scheduler.start()))
 
         self.spawn_tool = get_spawn_tool(
             agent_factory=lambda headless=True: create_refined_agent(
+                model="claude-sonnet-4-5-20250929",
                 headless=headless,
                 logger=logger_func,
             ),
             announcement_callback=announcement_callback,
         )
 
+        # Keep refined agent initialization intact for legacy/background paths,
+        # but cron execution now routes through the unified live tool-loop path.
         self.refined_agent = RefinedAgent(
             model="claude-sonnet-4-5-20250929",
             headless=True,

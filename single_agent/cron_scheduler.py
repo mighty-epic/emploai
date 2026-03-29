@@ -9,9 +9,10 @@ import json
 import asyncio
 import uuid
 import time
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, Tuple
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
+import re
 from pathlib import Path
 import threading
 
@@ -30,6 +31,7 @@ class CronJob:
     last_run: Optional[float] = None
     run_count: int = 0
     error_count: int = 0
+    timezone_offset_hours: Optional[int] = None
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -142,13 +144,20 @@ class CronScheduler:
                     continue
                 
                 if now >= job.next_run:
-                    # Job is due - execute it
-                    await self._execute_job(job)
-                    
-                    # Update next run time
+                    # Reserve the next run time before executing to avoid duplicate fires
+                    # if another scheduler instance or overlapping check sees the same due job.
+                    next_run = compute_next_run(
+                        job.schedule,
+                        now_ts=now,
+                        timezone_offset_hours=job.timezone_offset_hours,
+                    ) or (now + job.interval_seconds)
                     job.last_run = now
                     job.run_count += 1
-                    job.next_run = now + job.interval_seconds
+                    job.next_run = next_run
+                    self._save_jobs()
+
+                    # Job is due - execute it
+                    await self._execute_job(job)
         
         # Save after any changes
         self._save_jobs()
@@ -177,7 +186,10 @@ class CronScheduler:
         name: str,
         prompt: str,
         interval_seconds: int,
-        enabled: bool = True
+        enabled: bool = True,
+        schedule_text: Optional[str] = None,
+        run_immediately: bool = False,
+        timezone_offset_hours: Optional[int] = None,
     ) -> str:
         """
         Add a new recurring job.
@@ -187,20 +199,31 @@ class CronScheduler:
             prompt: The task prompt for the agent
             interval_seconds: How often to run (in seconds)
             enabled: Whether job is initially enabled
+            schedule_text: Original human-readable schedule string
+            run_immediately: Whether the first run should happen on the next check
         
         Returns:
             Job ID
         """
         job_id = str(uuid.uuid4())[:8]
+        normalized_schedule = schedule_text or f"every {interval_seconds}s"
+        default_first_run = time.time() if run_immediately else time.time() + interval_seconds
+        first_run = time.time() if run_immediately else (
+            compute_next_run(
+                normalized_schedule,
+                timezone_offset_hours=timezone_offset_hours,
+            ) or default_first_run
+        )
         
         job = CronJob(
             id=job_id,
             name=name,
             prompt=prompt,
-            schedule=f"every {interval_seconds}s",
-            next_run=time.time(),  # Run immediately on next check
+            schedule=normalized_schedule,
+            next_run=first_run,
             interval_seconds=interval_seconds,
-            enabled=enabled
+            enabled=enabled,
+            timezone_offset_hours=timezone_offset_hours,
         )
         
         async def _add():
@@ -228,6 +251,71 @@ class CronScheduler:
             print(f"[Cron] Removed job {job_id}")
             return True
         return False
+
+    def get_job(self, job_id: str) -> Optional[CronJob]:
+        """Get a job by ID."""
+        return self.jobs.get(job_id)
+
+    def list_jobs(self) -> List[Dict[str, Any]]:
+        """List all jobs with detailed metadata."""
+        now = time.time()
+        jobs = []
+        for job in self.jobs.values():
+            jobs.append({
+                "id": job.id,
+                "name": job.name,
+                "prompt": job.prompt,
+                "schedule": job.schedule,
+                "interval_seconds": job.interval_seconds,
+                "enabled": job.enabled,
+                "created_at": datetime.fromtimestamp(job.created_at).isoformat() if job.created_at else None,
+                "next_run": datetime.fromtimestamp(job.next_run).isoformat() if job.next_run else None,
+                "last_run": datetime.fromtimestamp(job.last_run).isoformat() if job.last_run else None,
+                "run_count": job.run_count,
+                "error_count": job.error_count,
+                "due": bool(job.next_run and now >= job.next_run),
+            })
+        return sorted(jobs, key=lambda job: (job["next_run"] is None, job["next_run"] or ""))
+
+    def update_job(
+        self,
+        job_id: str,
+        *,
+        name: Optional[str] = None,
+        prompt: Optional[str] = None,
+        schedule_text: Optional[str] = None,
+        interval_seconds: Optional[int] = None,
+        enabled: Optional[bool] = None,
+        timezone_offset_hours: Optional[int] = None,
+        reset_next_run: bool = True,
+    ) -> bool:
+        """Update a job in place."""
+        job = self.jobs.get(job_id)
+        if not job:
+            return False
+
+        if name is not None:
+            job.name = name
+        if prompt is not None:
+            job.prompt = prompt
+        if schedule_text is not None:
+            job.schedule = schedule_text
+        if interval_seconds is not None:
+            job.interval_seconds = interval_seconds
+        if timezone_offset_hours is not None:
+            job.timezone_offset_hours = timezone_offset_hours
+        if reset_next_run and (schedule_text is not None or interval_seconds is not None or timezone_offset_hours is not None):
+            now_ts = time.time()
+            job.next_run = compute_next_run(
+                job.schedule,
+                now_ts=now_ts,
+                timezone_offset_hours=job.timezone_offset_hours,
+            ) or (now_ts + job.interval_seconds)
+        if enabled is not None:
+            job.enabled = enabled
+
+        self._save_jobs()
+        return True
     
     def enable_job(self, job_id: str) -> bool:
         """Enable a job."""
@@ -288,6 +376,51 @@ class CronScheduler:
 
 
 # Natural language parsing for common schedules
+def _parse_daily_time(schedule_text: str) -> Optional[Tuple[int, int]]:
+    """Parse 'every day at HH:MM' and return (hour, minute)."""
+    text = (schedule_text or "").strip().lower()
+    match = re.fullmatch(r"every day at\s+(\d{1,2}):(\d{2})", text)
+    if not match:
+        return None
+
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour, minute
+
+
+
+def compute_next_run(
+    schedule_text: str,
+    *,
+    now_ts: Optional[float] = None,
+    timezone_offset_hours: Optional[int] = None,
+) -> Optional[float]:
+    """Compute the next run timestamp for supported schedule strings."""
+    now_ts = now_ts if now_ts is not None else time.time()
+    daily = _parse_daily_time(schedule_text)
+    if daily:
+        hour, minute = daily
+        tz_offset = timezone_offset_hours or 0
+
+        # Shift the UTC timestamp into the user's local wall-clock, compute the next
+        # local scheduled occurrence, then shift back to UTC for storage.
+        local_now = datetime.fromtimestamp(now_ts + tz_offset * 3600)
+        candidate_local = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+        if candidate_local <= local_now:
+            candidate_local = candidate_local + timedelta(days=1)
+
+        return candidate_local.timestamp() - tz_offset * 3600
+
+    interval = parse_schedule(schedule_text)
+    if interval:
+        return now_ts + interval
+    return None
+
+
+
 def parse_schedule(schedule_text: str) -> Optional[int]:
     """
     Parse natural language schedule to interval in seconds.
@@ -296,9 +429,12 @@ def parse_schedule(schedule_text: str) -> Optional[int]:
         "every 1 minute" -> 60
         "every 5 minutes" -> 300
         "every 1 hour" -> 3600
-        "every day at 08:00" -> 86400 (next 08:00)
+        "every day at 08:00" -> 86400
     """
     text = schedule_text.lower().strip()
+
+    if _parse_daily_time(text):
+        return 86400
     
     # Parse "every N minutes/hours/seconds"
     if text.startswith("every "):
@@ -319,13 +455,23 @@ def parse_schedule(schedule_text: str) -> Optional[int]:
             except ValueError:
                 pass
     
-    # Parse "every day at HH:MM"
-    if "every day at " in text:
-        # For simplicity, return 1 day interval
-        # In production, you'd calculate seconds until next occurrence
-        return 86400
-    
     return None
+
+
+def parse_schedule_with_error(schedule_text: str) -> Tuple[Optional[int], Optional[str]]:
+    """Parse a schedule and return a friendly error when unsupported."""
+    normalized = (schedule_text or "").strip()
+    if not normalized:
+        return None, "Schedule is required"
+
+    interval = parse_schedule(normalized)
+    if interval:
+        return interval, None
+
+    return None, (
+        f"Could not parse schedule: {schedule_text}. "
+        "Supported formats include 'every 30 seconds', 'every 5 minutes', 'every 1 hour', and 'every day at 08:00'."
+    )
 
 
 # Tool definitions for agent integration
@@ -352,6 +498,52 @@ CRON_TOOL_DEFINITIONS = [
             "name": "list_scheduled_jobs",
             "description": "List all scheduled recurring jobs with their status.",
             "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_scheduled_job",
+            "description": "Get detailed information for one scheduled job.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": {"type": "string", "description": "The job ID to inspect"}
+                },
+                "required": ["job_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_scheduled_job",
+            "description": "Update an existing scheduled job's name, prompt, schedule, or enabled state.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": {"type": "string", "description": "The job ID to update"},
+                    "name": {"type": "string", "description": "Optional new human-readable name"},
+                    "prompt": {"type": "string", "description": "Optional new task prompt"},
+                    "schedule": {"type": "string", "description": "Optional new schedule string"},
+                    "enabled": {"type": "boolean", "description": "Optional enabled/disabled state"}
+                },
+                "required": ["job_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_scheduled_job_now",
+            "description": "Mark a scheduled job to run on the next scheduler check.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": {"type": "string", "description": "The job ID to trigger"}
+                },
+                "required": ["job_id"]
+            }
         }
     },
     {
