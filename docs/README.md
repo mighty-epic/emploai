@@ -6,29 +6,49 @@ An AI-powered personal assistant that runs on your computer. Control it through 
 
 ## What Can It Do?
 
+EmploAI is not just a chat bot. It is an agent that can take actions across your local machine, browser, files, and recurring workflows.
+
 ### 💻 Codebase & System
 - Read, write, and edit files in your workspace
 - Execute shell commands and manage terminal processes
 - Search for files and text patterns across your project
-- Run builds, tests, and scripts
+- Run builds, tests, scripts, and automation flows
+- Inspect project structure and make targeted code changes
 
-### 🌐 Web Browsing (Selenium)
-- Open Chrome and navigate to any URL
-- Click, type, scroll, and interact with web elements
-- Switch between tabs, go back/forward
-- Extract page content and interactive elements
+### 🌐 Web Browsing
+- Open websites and navigate across pages
+- Click, type, scroll, and interact with forms and web apps
+- Extract content from pages and inspect interactive elements
+- Work through either a controlled browser session or a real Chrome session when the browser bridge is enabled
+- Use web search for live research instead of relying only on model memory
 
 ### 🖥️ Desktop Automation
-- **Vision**: Capture screenshots, describe screen content, OCR text extraction
-- **Input**: Simulate mouse clicks, keyboard typing, hotkeys, scroll, drag-and-drop
-- **Window Management**: List, focus, minimize, maximize, close applications
-- **App Control**: Open any application, interact with desktop UI
+- **Vision**: capture screenshots, describe the screen, OCR visible text
+- **Input**: click, type, press hotkeys, scroll, and drag-and-drop
+- **Window management**: list, focus, minimize, maximize, and close app windows
+- **App control**: open desktop apps and interact with their UI
+- Move between browser, terminal, and desktop workflows in one task
 
-### 🧠 AI & Memory
+### 📅 Scheduled / Recurring Jobs
+- Create recurring jobs such as morning briefings, nightly summaries, monitoring tasks, and periodic research
+- Enable, disable, inspect, update, run-now, and remove jobs
+- Deliver scheduled job results back to the user through Telegram
+- Run scheduled work through the same live unified tool path used by the main Telegram agent
+
+### 🧠 AI, Memory, and Skills
 - Multi-provider LLM support (OpenAI, Anthropic, Google Gemini, xAI, DeepSeek, OpenRouter)
 - Persistent memory across sessions
-- Skill system for specialized tasks
-- Context-aware conversations with smart summarization
+- Context-aware conversations with smart summarization / compression
+- Loadable skills for specialized workflows
+- Can combine reasoning with real tool use instead of only producing text
+
+### ✅ Typical Things EmploAI Can Do
+- Research a topic live on the web and send back a concise summary
+- Modify code, run tests, and explain exactly what changed
+- Log into sites, fill forms, and navigate browser workflows
+- Operate desktop software when browser automation is not enough
+- Watch for changes on a schedule and report back in Telegram
+- Generate morning and nightly market/news briefings automatically
 
 ---
 
