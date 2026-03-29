@@ -187,7 +187,11 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown pairing") from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return DevicePairCompleteResponse(access_token=result["access_token"], device_id=result["device_id"])
+        return DevicePairCompleteResponse(
+            access_token=result["access_token"],
+            device_id=result["device_id"],
+            expires_in_seconds=TOKEN_TTL_SECONDS,
+        )
 
     @app.get("/api/app/me", response_model=AppUserProfile)
     async def me(authorization: Optional[str] = Header(default=None)) -> AppUserProfile:
@@ -499,7 +503,7 @@ def create_app() -> FastAPI:
                     elif kind == "log":
                         await send_model(
                             RealtimeServerEvent(
-                                type="log",
+                                type="status",
                                 session_id=req_session_id,
                                 payload={"message": event.get("message", "")},
                             )
@@ -559,6 +563,18 @@ def create_app() -> FastAPI:
                     )
                 )
         except WebSocketDisconnect:
+            return
+        except Exception as exc:
+            try:
+                await send_model(
+                    RealtimeServerEvent(
+                        type="error",
+                        session_id=effective_session_id,
+                        payload={"message": f"Chat websocket failed: {str(exc)}"},
+                    )
+                )
+            except Exception:
+                pass
             return
 
     @app.websocket("/ws/app/voice")
@@ -683,7 +699,7 @@ def create_app() -> FastAPI:
                         elif kind == "log":
                             await send_model(
                                 RealtimeServerEvent(
-                                    type="log",
+                                    type="status",
                                     session_id=active_session_id,
                                     payload={"message": event_data.get("message", "")},
                                 )
@@ -774,6 +790,18 @@ def create_app() -> FastAPI:
                     draft.reset()
                     await send_voice_event("voice_state", {"state": "cancelled"})
         except WebSocketDisconnect:
+            return
+        except Exception as exc:
+            try:
+                await send_model(
+                    RealtimeServerEvent(
+                        type="error",
+                        session_id=active_session_id,
+                        payload={"message": f"Voice websocket failed: {str(exc)}"},
+                    )
+                )
+            except Exception:
+                pass
             return
 
     return app
