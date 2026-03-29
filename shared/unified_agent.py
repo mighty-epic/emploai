@@ -527,6 +527,46 @@ class UnifiedToolRegistry:
             'parameters': {'type': 'object', 'properties': {}}
         }
 
+        self.tools['get_scheduled_job'] = {
+            'name': 'get_scheduled_job',
+            'description': 'View details for one scheduled recurring task',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'job_id': {'type': 'string'}
+                },
+                'required': ['job_id']
+            }
+        }
+
+        self.tools['update_scheduled_job'] = {
+            'name': 'update_scheduled_job',
+            'description': 'Update a scheduled recurring task',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'job_id': {'type': 'string'},
+                    'name': {'type': 'string'},
+                    'prompt': {'type': 'string'},
+                    'schedule': {'type': 'string'},
+                    'enabled': {'type': 'boolean'}
+                },
+                'required': ['job_id']
+            }
+        }
+
+        self.tools['run_scheduled_job_now'] = {
+            'name': 'run_scheduled_job_now',
+            'description': 'Queue a scheduled recurring task to run on the next scheduler check',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'job_id': {'type': 'string'}
+                },
+                'required': ['job_id']
+            }
+        }
+
         self.tools['remove_scheduled_job'] = {
             'name': 'remove_scheduled_job',
             'description': 'Delete a scheduled recurring task',

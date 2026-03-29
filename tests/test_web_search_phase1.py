@@ -4,62 +4,68 @@ from cli.agent_tools import web_tools
 from telegram_bot.telegram_unified_agent import _execute_web_search
 
 
-class _FakeResponse:
-    def __init__(self, text: str, status_code: int = 200):
-        self.text = text
-        self.status_code = status_code
+class _FakeDDGS:
+    def __init__(self, results=None, error=None):
+        self._results = results or []
+        self._error = error
+
+    def text(self, query, max_results=5):
+        if self._error:
+            raise self._error
+        return self._results[:max_results]
 
 
-class _FakeClient:
-    def __init__(self, response: _FakeResponse):
-        self._response = response
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-    def get(self, url, params=None, timeout=None):
-        return self._response
-
-
-def test_duckduckgo_search_parses_results_with_snippets(monkeypatch):
-    html = """
-    <html><body>
-      <a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Falpha">Alpha <b>Result</b></a>
-      <div class="result__snippet">Alpha snippet with <b>bold</b> text.</div>
-      <a class="result__a" href="https://example.com/beta">Beta Result</a>
-      <a class="result__snippet">Beta snippet text.</a>
-    </body></html>
-    """
-
+def test_duckduckgo_search_normalizes_ddgs_results(monkeypatch):
     monkeypatch.setattr(
-        web_tools.httpx,
-        "Client",
-        lambda **kwargs: _FakeClient(_FakeResponse(html)),
+        web_tools,
+        "DDGS",
+        lambda: _FakeDDGS(
+            [
+                {
+                    "title": "Alpha Result",
+                    "href": "https://example.com/alpha",
+                    "body": "Alpha snippet",
+                },
+                {
+                    "title": "Beta Result",
+                    "url": "https://example.com/beta",
+                    "snippet": "Beta snippet",
+                },
+            ]
+        ),
     )
 
     result = web_tools.duckduckgo_search("emploai", max_results=5)
 
     assert len(result["results"]) == 2
-    assert result["results"][0]["title"] == "Alpha Result"
-    assert result["results"][0]["url"] == "https://example.com/alpha"
-    assert result["results"][0]["snippet"] == "Alpha snippet with bold text."
-    assert result["results"][1]["title"] == "Beta Result"
-    assert result["results"][1]["url"] == "https://example.com/beta"
+    assert result["results"][0] == {
+        "title": "Alpha Result",
+        "url": "https://example.com/alpha",
+        "snippet": "Alpha snippet",
+    }
+    assert result["results"][1] == {
+        "title": "Beta Result",
+        "url": "https://example.com/beta",
+        "snippet": "Beta snippet",
+    }
 
 
-def test_duckduckgo_search_returns_error_for_non_200(monkeypatch):
+def test_duckduckgo_search_returns_error_when_ddgs_fails(monkeypatch):
     monkeypatch.setattr(
-        web_tools.httpx,
-        "Client",
-        lambda **kwargs: _FakeClient(_FakeResponse("nope", status_code=503)),
+        web_tools,
+        "DDGS",
+        lambda: _FakeDDGS(error=RuntimeError("blocked")),
     )
 
     result = web_tools.duckduckgo_search("emploai")
 
-    assert result["error"] == "Search failed with status 503"
+    assert result["error"] == "Search error: blocked"
+
+
+def test_duckduckgo_search_requires_query():
+    result = web_tools.duckduckgo_search("   ")
+
+    assert result["error"] == "Query is required"
 
 
 def test_telegram_web_search_formats_results(monkeypatch):

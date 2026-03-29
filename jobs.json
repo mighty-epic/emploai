@@ -1,0 +1,19 @@
+{
+  "jobs": [
+    {
+      "id": "425c6669",
+      "name": "Smoke App Job",
+      "prompt": "Say hello",
+      "schedule": "every 1 hour",
+      "next_run": 1774782514.5759513,
+      "interval_seconds": 3600,
+      "enabled": true,
+      "created_at": 1774778914.5759683,
+      "last_run": null,
+      "run_count": 0,
+      "error_count": 0,
+      "timezone_offset_hours": null
+    }
+  ],
+  "saved_at": 1774778915.3006375
+}

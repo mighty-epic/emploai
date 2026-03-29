@@ -64,9 +64,9 @@ def _parse_coordinate(value: object) -> int:
 
 
 def _temp_capture_path(prefix: str = "screen") -> Path:
-    capture_dir = Path(tempfile.gettempdir()) / "emploai-captures"
-    capture_dir.mkdir(parents=True, exist_ok=True)
-    return capture_dir / f"{prefix}_{int(time.time() * 1000)}.png"
+    preferred_dir = Path("single_agent/screenshots")
+    preferred_dir.mkdir(parents=True, exist_ok=True)
+    return preferred_dir / f"{prefix}_{int(time.time() * 1000)}.png"
 
 
 def _capture_screenshot_path(prefix: str = "screen") -> Path:
@@ -399,21 +399,23 @@ def _execute_observe_desktop(session, args: Dict) -> str:
                 active_title = ""
 
         if _has_command("wmctrl"):
-            output = subprocess.check_output(
-                ["wmctrl", "-l"], text=True, timeout=5
-            )
-            lines = output.strip().splitlines()
-            titles = []
-            for line in lines:
-                # wmctrl -l format: <window_id> <desktop> <host> <title>
-                parts = line.split(None, 3)
-                if len(parts) >= 4:
-                    title = parts[3]
-                    prefix = "* " if active_title and title == active_title else "- "
-                    titles.append(prefix + title)
-            if titles:
-                return "Open Windows:\n" + "\n".join(titles[:20])
-            return "No windows found."
+            try:
+                output = subprocess.check_output(
+                    ["wmctrl", "-l"], text=True, timeout=5
+                )
+                lines = output.strip().splitlines()
+                titles = []
+                for line in lines:
+                    # wmctrl -l format: <window_id> <desktop> <host> <title>
+                    parts = line.split(None, 3)
+                    if len(parts) >= 4:
+                        title = parts[3]
+                        prefix = "* " if active_title and title == active_title else "- "
+                        titles.append(prefix + title)
+                if titles:
+                    return "Open Windows:\n" + "\n".join(titles[:20])
+            except Exception:
+                pass
 
         if _has_command("xdotool"):
             output = subprocess.check_output(
