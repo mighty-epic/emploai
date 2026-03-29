@@ -126,6 +126,8 @@ class TelegramSession:
     is_processing: bool = False
     should_interrupt: bool = False
     interrupt_message: Optional[str] = None  # The message that caused the interruption
+    interrupt_queue: List[str] = field(default_factory=list)
+    deferred_interrupt_queue: List[str] = field(default_factory=list)
     current_task_id: int = 0  # Unique ID for current task, to detect abandoned tasks
     browser_task_context: BrowserTaskContext = field(default_factory=BrowserTaskContext)
 
@@ -230,16 +232,50 @@ class TelegramSession:
             self.workspace,
             confirm_callback=path_confirm_callback,
             check_interruption=lambda: self.should_interrupt,
-            get_interrupt_message=lambda: self.interrupt_message,
+            get_interrupt_message=self.get_interrupt_message,
             clear_interrupt=self._clear_interrupt,
+            activate_deferred_interrupts=self.activate_deferred_interrupts,
+            has_deferred_interrupts=self.has_deferred_interrupts,
             skill_registry=self.skill_registry,
             active_skills=self.active_skills
         )
 
     def _clear_interrupt(self):
-        """Reset interrupt flags after the message has been processed."""
-        self.should_interrupt = False
-        self.interrupt_message = None
+        """Consume one active interrupt and keep any queued steering intact."""
+        if self.interrupt_queue:
+            self.interrupt_queue.pop(0)
+        self.interrupt_message = self.interrupt_queue[0] if self.interrupt_queue else None
+        self.should_interrupt = bool(self.interrupt_message)
+
+    def get_interrupt_message(self) -> Optional[str]:
+        """Return the next immediate steering/interrupt message."""
+        if self.interrupt_queue:
+            return self.interrupt_queue[0]
+        return self.interrupt_message
+
+    def queue_interrupt(self, message: str, *, deferred: bool = False) -> None:
+        """Queue a steering message for immediate or post-tool activation."""
+        clean = (message or "").strip()
+        if not clean:
+            return
+        if deferred:
+            self.deferred_interrupt_queue.append(clean)
+            return
+        self.interrupt_queue.append(clean)
+        self.interrupt_message = self.interrupt_queue[0]
+        self.should_interrupt = True
+
+    def has_deferred_interrupts(self) -> bool:
+        return bool(self.deferred_interrupt_queue)
+
+    def activate_deferred_interrupts(self) -> bool:
+        if not self.deferred_interrupt_queue:
+            return False
+        self.interrupt_queue.extend(self.deferred_interrupt_queue)
+        self.deferred_interrupt_queue.clear()
+        self.interrupt_message = self.interrupt_queue[0] if self.interrupt_queue else None
+        self.should_interrupt = bool(self.interrupt_message)
+        return self.should_interrupt
 
     def get_browser_task_context(self) -> BrowserTaskContext:
         """Return the current task-scoped browser context, resetting if stale."""

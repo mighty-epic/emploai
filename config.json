@@ -52,6 +52,7 @@
       "host": "0.0.0.0",
       "port": 8787,
       "auth_mode": "token",
+      "steering_beta": false,
       "push_notifications": false
     }
   }

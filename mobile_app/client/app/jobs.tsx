@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
-const API_BASE = process.env.EXPO_PUBLIC_EMPLOAI_APP_URL || 'http://127.0.0.1:8765';
+import { loadAppConfig } from '../lib/appConfig';
 
 type Job = {
   id: string;
@@ -15,21 +15,40 @@ type Job = {
 };
 
 export default function JobsScreen() {
-  const token = useMemo(() => process.env.EXPO_PUBLIC_EMPLOAI_APP_TOKEN || '', []);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [status, setStatus] = useState('idle');
   const [name, setName] = useState('');
   const [prompt, setPrompt] = useState('');
   const [schedule, setSchedule] = useState('every 1 hour');
+  const [apiBaseUrl, setApiBaseUrl] = useState('');
+  const [token, setToken] = useState('');
+  const [configLoaded, setConfigLoaded] = useState(false);
+
+  useEffect(() => {
+    loadAppConfig()
+      .then((config) => {
+        setApiBaseUrl(config.apiBaseUrl);
+        setToken(config.accessToken);
+        setConfigLoaded(true);
+      })
+      .catch(() => {
+        setStatus('config error');
+        setConfigLoaded(true);
+      });
+  }, []);
 
   const loadJobs = async () => {
+    if (!apiBaseUrl) {
+      setStatus('missing backend');
+      return;
+    }
     if (!token) {
       setStatus('missing token');
       return;
     }
     setStatus('loading');
     try {
-      const response = await fetch(`${API_BASE}/api/app/jobs`, {
+      const response = await fetch(`${apiBaseUrl}/api/app/jobs`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await response.json();
@@ -41,14 +60,15 @@ export default function JobsScreen() {
   };
 
   useEffect(() => {
+    if (!configLoaded) return;
     loadJobs();
-  }, []);
+  }, [apiBaseUrl, configLoaded, token]);
 
   const createJob = async () => {
-    if (!token || !name.trim() || !prompt.trim() || !schedule.trim()) return;
+    if (!apiBaseUrl || !token || !name.trim() || !prompt.trim() || !schedule.trim()) return;
     setStatus('creating');
     try {
-      const response = await fetch(`${API_BASE}/api/app/jobs`, {
+      const response = await fetch(`${apiBaseUrl}/api/app/jobs`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
@@ -66,13 +86,13 @@ export default function JobsScreen() {
   };
 
   const act = async (jobId: string, action: 'run' | 'enable' | 'disable' | 'delete') => {
-    if (!token) return;
+    if (!apiBaseUrl || !token) return;
     setStatus(`${action}...`);
     try {
       const method = action === 'delete' ? 'DELETE' : 'POST';
       const url = action === 'delete'
-        ? `${API_BASE}/api/app/jobs/${jobId}`
-        : `${API_BASE}/api/app/jobs/${jobId}/${action}`;
+        ? `${apiBaseUrl}/api/app/jobs/${jobId}`
+        : `${apiBaseUrl}/api/app/jobs/${jobId}/${action}`;
       const response = await fetch(url, {
         method,
         headers: { Authorization: `Bearer ${token}` },
@@ -89,6 +109,7 @@ export default function JobsScreen() {
       <View style={styles.header}>
         <Text style={styles.title}>Jobs and scheduler</Text>
         <Text style={styles.meta}>Status: {status}</Text>
+        <Text style={styles.meta}>Backend: {apiBaseUrl || 'not set'}</Text>
         <Pressable style={styles.primaryButton} onPress={loadJobs}>
           <Text style={styles.primaryButtonText}>Refresh</Text>
         </Pressable>

@@ -13,7 +13,19 @@ import shutil
 from cli.config_manager import get_config_manager
 
 class ToolExecutor:
-    def __init__(self, workspace_path: Path, confirm_callback=None, single_agent=None, check_interruption=None, get_interrupt_message=None, clear_interrupt=None, skill_registry=None, active_skills=None):
+    def __init__(
+        self,
+        workspace_path: Path,
+        confirm_callback=None,
+        single_agent=None,
+        check_interruption=None,
+        get_interrupt_message=None,
+        clear_interrupt=None,
+        activate_deferred_interrupts=None,
+        has_deferred_interrupts=None,
+        skill_registry=None,
+        active_skills=None,
+    ):
         self.workspace_path = workspace_path.resolve()
         # confirm_callback: Callable[[str], bool] to ask user for permission
         self.confirm_callback = confirm_callback
@@ -23,6 +35,10 @@ class ToolExecutor:
         self.get_interrupt_message = get_interrupt_message
         # clear_interrupt: Callable[[], None] to reset the interrupt flag after handling
         self.clear_interrupt = clear_interrupt
+        # activate_deferred_interrupts: Callable[[], bool] to arm queued "after tool" interrupts
+        self.activate_deferred_interrupts = activate_deferred_interrupts
+        # has_deferred_interrupts: Callable[[], bool] to check whether deferred steering is waiting
+        self.has_deferred_interrupts = has_deferred_interrupts
         self.config_manager = get_config_manager()
         self.single_agent = single_agent
         self.skill_registry = skill_registry

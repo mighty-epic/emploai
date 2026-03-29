@@ -365,6 +365,15 @@ def run_tool_loop(
 
         if not formatted_tc:
             final_response = assistant_text
+            has_deferred = (
+                hasattr(tool_executor, "has_deferred_interrupts")
+                and tool_executor.has_deferred_interrupts
+                and tool_executor.has_deferred_interrupts()
+            )
+            if has_deferred and hasattr(tool_executor, "activate_deferred_interrupts") and tool_executor.activate_deferred_interrupts:
+                if tool_executor.activate_deferred_interrupts():
+                    log("  ↪ Applying deferred steering after current turn.")
+                    continue
             if interrupted_stream:
                 continue 
             break
@@ -502,6 +511,11 @@ def run_tool_loop(
                             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{res['image_data']}"}}
                         ]
                     })
+
+        if hasattr(tool_executor, "activate_deferred_interrupts") and tool_executor.activate_deferred_interrupts:
+            activated_deferred = tool_executor.activate_deferred_interrupts()
+            if activated_deferred:
+                log("  ↪ Applying deferred steering after tool boundary.")
 
     return LoopResult(
         content=final_response,

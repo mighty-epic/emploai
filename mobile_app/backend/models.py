@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 
 ChannelType = Literal["telegram", "app"]
+InterruptPolicy = Literal["none", "steer_now", "after_tool"]
 SourceFormat = Literal[
     "telegram_text",
     "app_text",
@@ -44,6 +45,9 @@ class AppUserProfile(BaseModel):
     current_model: Optional[str] = None
     current_variant: Optional[str] = None
     app_enabled: bool = True
+    device_id: Optional[str] = None
+    device_name: Optional[str] = None
+    device_platform: Optional[str] = None
 
 
 class SessionMessageView(BaseModel):
@@ -92,6 +96,7 @@ class ChatSendRequest(BaseModel):
     session_id: Optional[str] = None
     text: str
     source_format: SourceFormat = "app_text"
+    interrupt_policy: InterruptPolicy = "none"
 
 
 class UploadDescriptor(BaseModel):
@@ -106,6 +111,15 @@ class UploadResponse(BaseModel):
     accepted: bool = True
     session_id: Optional[str] = None
     attached: bool = True
+
+
+class ScreenCaptureView(BaseModel):
+    mime_type: str
+    image_base64: str
+    width: int
+    height: int
+    backend: str
+    captured_at: float
 
 
 class JobCreateRequest(BaseModel):
@@ -148,6 +162,22 @@ class JobActionResponse(BaseModel):
     action: str
 
 
+class TrustedDeviceView(BaseModel):
+    device_id: str
+    device_name: Optional[str] = None
+    device_platform: Optional[str] = None
+    created_at: Optional[str] = None
+    last_used_at: Optional[str] = None
+    revoked_at: Optional[str] = None
+    revoked: bool = False
+
+
+class DeviceActionResponse(BaseModel):
+    ok: bool = True
+    device_id: str
+    action: str
+
+
 class VoiceClientEvent(BaseModel):
     type: Literal[
         "voice_start",
@@ -161,6 +191,7 @@ class VoiceClientEvent(BaseModel):
     mime_type: Optional[str] = None
     audio_base64: Optional[str] = None
     sequence: Optional[int] = None
+    interrupt_policy: Optional[InterruptPolicy] = None
 
 
 class RealtimeServerEvent(BaseModel):

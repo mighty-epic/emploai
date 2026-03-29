@@ -6,10 +6,28 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "android": {
-      "package": "com.emploai.app"
+      "package": "com.emploai.app",
+      "permissions": [
+        "RECORD_AUDIO",
+        "CAMERA"
+      ]
     },
     "plugins": [
-      "expo-router"
+      "expo-router",
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Allow EmploAI App to capture voice input for live conversations."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow EmploAI App to upload screenshots and images.",
+          "cameraPermission": "Allow EmploAI App to capture photos for uploads."
+        }
+      ],
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true

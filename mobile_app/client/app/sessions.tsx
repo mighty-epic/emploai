@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-const API_BASE = process.env.EXPO_PUBLIC_EMPLOAI_APP_URL || 'http://127.0.0.1:8765';
+import { loadAppConfig } from '../lib/appConfig';
 
 type SessionSummary = {
   id: string;
@@ -13,18 +13,37 @@ type SessionSummary = {
 };
 
 export default function SessionsScreen() {
-  const token = useMemo(() => process.env.EXPO_PUBLIC_EMPLOAI_APP_TOKEN || '', []);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [status, setStatus] = useState('idle');
+  const [apiBaseUrl, setApiBaseUrl] = useState('');
+  const [token, setToken] = useState('');
+  const [configLoaded, setConfigLoaded] = useState(false);
+
+  useEffect(() => {
+    loadAppConfig()
+      .then((config) => {
+        setApiBaseUrl(config.apiBaseUrl);
+        setToken(config.accessToken);
+        setConfigLoaded(true);
+      })
+      .catch(() => {
+        setStatus('config error');
+        setConfigLoaded(true);
+      });
+  }, []);
 
   const loadSessions = async () => {
+    if (!apiBaseUrl) {
+      setStatus('missing backend');
+      return;
+    }
     if (!token) {
       setStatus('missing token');
       return;
     }
     setStatus('loading');
     try {
-      const response = await fetch(`${API_BASE}/api/app/sessions`, {
+      const response = await fetch(`${apiBaseUrl}/api/app/sessions`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await response.json();
@@ -36,14 +55,16 @@ export default function SessionsScreen() {
   };
 
   useEffect(() => {
+    if (!configLoaded) return;
     loadSessions();
-  }, []);
+  }, [apiBaseUrl, configLoaded, token]);
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Shared sessions</Text>
         <Text style={styles.meta}>Status: {status}</Text>
+        <Text style={styles.meta}>Backend: {apiBaseUrl || 'not set'}</Text>
         <Pressable style={styles.button} onPress={loadSessions}>
           <Text style={styles.buttonText}>Refresh</Text>
         </Pressable>

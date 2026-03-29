@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import hashlib
 import hmac
 import json
@@ -15,11 +14,14 @@ from typing import Dict, Optional
 from fastapi import FastAPI, File, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
+from mobile_app.backend.auth_store import AppAuthStore
+from mobile_app.backend.capture_runtime import capture_screen_snapshot
 from mobile_app.backend.models import (
     AppUserProfile,
     ChatSendRequest,
     CreateSessionRequest,
     CreateSessionResponse,
+    DeviceActionResponse,
     DevicePairCompleteRequest,
     DevicePairCompleteResponse,
     DevicePairStartRequest,
@@ -29,23 +31,26 @@ from mobile_app.backend.models import (
     JobDetailView,
     RealtimeServerEvent,
     ScheduledJobView,
+    ScreenCaptureView,
     SessionDetailView,
     SessionSummaryView,
+    TrustedDeviceView,
     UploadResponse,
     VoiceClientEvent,
 )
 from mobile_app.backend.runtime import run_app_chat_turn
 from mobile_app.backend.session_bridge import AppSessionBridge
+from mobile_app.backend.voice_runtime import VoiceDraftState, synthesize_assistant_audio
 from shared.live_config import get_live_config
 from single_agent.cron_scheduler import get_scheduler, parse_schedule_with_error
 
 
 APP_SECRET_ENV = "EMPLO_APP_SECRET"
+PAIRING_SECRET_ENV = "EMPLO_APP_PAIRING_SECRET"
 DEFAULT_PAIR_TTL_SECONDS = 300
 TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30
 
-_pairings: Dict[str, Dict[str, object]] = {}
-_tokens: Dict[str, Dict[str, object]] = {}
+_auth_store: Optional[AppAuthStore] = None
 _server_thread: Optional[threading.Thread] = None
 _server_started = False
 
@@ -58,38 +63,47 @@ def _sign(value: str) -> str:
     return hmac.new(_secret().encode("utf-8"), value.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-def _issue_token(device_id: str, user_id: int) -> str:
-    raw = f"{device_id}:{user_id}:{secrets.token_urlsafe(24)}"
-    token = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("utf-8").rstrip("=")
-    _tokens[token] = {
-        "device_id": device_id,
-        "user_id": user_id,
-        "expires_at": time.time() + TOKEN_TTL_SECONDS,
-    }
-    return token
+def _get_auth_store() -> AppAuthStore:
+    global _auth_store
+    if _auth_store is None:
+        _auth_store = AppAuthStore()
+    return _auth_store
+
+
+def _bearer_token_from_header(auth_header: Optional[str]) -> str:
+    if not auth_header or not auth_header.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    return auth_header.split(" ", 1)[1].strip()
 
 
 def _resolve_token(auth_header: Optional[str]) -> Dict[str, object]:
-    if not auth_header or not auth_header.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Missing bearer token")
-    token = auth_header.split(" ", 1)[1].strip()
-    payload = _tokens.get(token)
+    token = _bearer_token_from_header(auth_header)
+    payload = _get_auth_store().resolve_access_token(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid token")
-    if float(payload.get("expires_at", 0)) < time.time():
-        _tokens.pop(token, None)
-        raise HTTPException(status_code=401, detail="Expired token")
     return payload
 
 
 def _resolve_ws_token(token: Optional[str]) -> Dict[str, object]:
-    payload = _tokens.get(token or "")
+    payload = _get_auth_store().resolve_access_token(token or "")
     if not payload:
         raise WebSocketDisconnect(code=4401)
-    if float(payload.get("expires_at", 0)) < time.time():
-        _tokens.pop(token or "", None)
-        raise WebSocketDisconnect(code=4401)
     return payload
+
+
+def _authorize_pair_start(auth_header: Optional[str], pair_secret: Optional[str]) -> int:
+    if auth_header:
+        return int(_resolve_token(auth_header)["user_id"])
+
+    configured_secret = os.getenv(PAIRING_SECRET_ENV, "").strip()
+    provided_secret = (pair_secret or "").strip()
+    if configured_secret and provided_secret and hmac.compare_digest(provided_secret, configured_secret):
+        return _default_user_id()
+
+    raise HTTPException(
+        status_code=401,
+        detail="Pair start requires an existing device token or X-App-Pair-Secret",
+    )
 
 
 def _bridge_for_user(user_id: int) -> AppSessionBridge:
@@ -126,20 +140,29 @@ def create_app() -> FastAPI:
             "ok": True,
             "channel": "app",
             "enabled": bool(config.get("channels.app.enabled", False)),
+            "pairing_bootstrap_enabled": bool(os.getenv(PAIRING_SECRET_ENV, "").strip()),
+            "steering_beta_enabled": bool(
+                os.getenv("EMPLO_APP_STEERING_BETA_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+                or config.get("channels.app.steering_beta", False)
+            ),
         }
 
     @app.post("/api/app/pair/start", response_model=DevicePairStartResponse)
-    async def pair_start(request: DevicePairStartRequest) -> DevicePairStartResponse:
-        pairing_id = secrets.token_hex(8)
-        issued_at = int(time.time())
+    async def pair_start(
+        request: DevicePairStartRequest,
+        authorization: Optional[str] = Header(default=None),
+        x_app_pair_secret: Optional[str] = Header(default=None),
+    ) -> DevicePairStartResponse:
+        created_by_user = _authorize_pair_start(authorization, x_app_pair_secret)
+        record = _get_auth_store().create_pairing(
+            device_name=request.device_name,
+            created_by=f"user:{created_by_user}",
+            ttl_seconds=DEFAULT_PAIR_TTL_SECONDS,
+        )
+        pairing_id = str(record["pairing_id"])
+        issued_at = int(record["issued_at"])
         payload = f"{pairing_id}:{issued_at}"
         token = f"{payload}:{_sign(payload)}"
-        _pairings[pairing_id] = {
-            "token": token,
-            "issued_at": issued_at,
-            "expires_at": time.time() + DEFAULT_PAIR_TTL_SECONDS,
-            "device_name": request.device_name,
-        }
         return DevicePairStartResponse(pairing_id=pairing_id, pairing_token=token)
 
     @app.post("/api/app/pair/complete", response_model=DevicePairCompleteResponse)
@@ -151,17 +174,20 @@ def create_app() -> FastAPI:
         payload = f"{pairing_id}:{issued_at}"
         if not hmac.compare_digest(signature, _sign(payload)):
             raise HTTPException(status_code=400, detail="Invalid pairing token")
-        pairing = _pairings.get(pairing_id)
-        if not pairing:
-            raise HTTPException(status_code=404, detail="Unknown pairing")
-        if float(pairing.get("expires_at", 0)) < time.time():
-            _pairings.pop(pairing_id, None)
-            raise HTTPException(status_code=400, detail="Expired pairing token")
-        device_id = secrets.token_hex(12)
         user_id = _default_user_id()
-        access_token = _issue_token(device_id, user_id)
-        _pairings.pop(pairing_id, None)
-        return DevicePairCompleteResponse(access_token=access_token, device_id=device_id)
+        try:
+            result = _get_auth_store().complete_pairing(
+                pairing_id=pairing_id,
+                user_id=user_id,
+                device_name=request.device_name,
+                device_platform=request.device_platform,
+                token_ttl_seconds=TOKEN_TTL_SECONDS,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown pairing") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return DevicePairCompleteResponse(access_token=result["access_token"], device_id=result["device_id"])
 
     @app.get("/api/app/me", response_model=AppUserProfile)
     async def me(authorization: Optional[str] = Header(default=None)) -> AppUserProfile:
@@ -174,7 +200,23 @@ def create_app() -> FastAPI:
             current_session_id=current.id if current else None,
             current_model=current.model if current else None,
             current_variant=current.variant if current else None,
+            device_id=auth.get("device_id"),
+            device_name=auth.get("device_name"),
+            device_platform=auth.get("device_platform"),
         )
+
+    @app.get("/api/app/devices", response_model=list[TrustedDeviceView])
+    async def list_devices(authorization: Optional[str] = Header(default=None)) -> list[TrustedDeviceView]:
+        auth = _resolve_token(authorization)
+        devices = _get_auth_store().list_devices(user_id=int(auth["user_id"]))
+        return [TrustedDeviceView(**device) for device in devices]
+
+    @app.post("/api/app/devices/{device_id}/revoke", response_model=DeviceActionResponse)
+    async def revoke_device(device_id: str, authorization: Optional[str] = Header(default=None)) -> DeviceActionResponse:
+        auth = _resolve_token(authorization)
+        if not _get_auth_store().revoke_device(user_id=int(auth["user_id"]), device_id=device_id):
+            raise HTTPException(status_code=404, detail="Device not found")
+        return DeviceActionResponse(device_id=device_id, action="revoke")
 
     @app.get("/api/app/sessions", response_model=list[SessionSummaryView])
     async def list_sessions(authorization: Optional[str] = Header(default=None)) -> list[SessionSummaryView]:
@@ -202,7 +244,14 @@ def create_app() -> FastAPI:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
         runtime = bridge.load_runtime_session(request.session_id)
-        result = await run_app_chat_turn(runtime, user_message=request.text, source_format=request.source_format)
+        result = await run_app_chat_turn(
+            runtime,
+            user_message=request.text,
+            source_format=request.source_format,
+            interrupt_policy=request.interrupt_policy,
+        )
+        if result.get("busy"):
+            raise HTTPException(status_code=409, detail="Session is already processing another message")
         return result
 
     @app.get("/api/app/jobs", response_model=list[ScheduledJobView])
@@ -302,9 +351,103 @@ def create_app() -> FastAPI:
             attached=True,
         )
 
+    @app.get("/api/app/screenshot/current", response_model=ScreenCaptureView)
+    async def current_screenshot(authorization: Optional[str] = Header(default=None)) -> ScreenCaptureView:
+        _resolve_token(authorization)
+        try:
+            capture = capture_screen_snapshot()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Screenshot capture failed: {str(exc)}") from exc
+        return ScreenCaptureView(**capture)
+
+    @app.websocket("/ws/app/screen")
+    async def screen_ws(websocket: WebSocket) -> None:
+        await websocket.accept()
+        send_lock = asyncio.Lock()
+
+        async def send_model(event: RealtimeServerEvent) -> None:
+            async with send_lock:
+                await websocket.send_json(event.model_dump())
+
+        try:
+            token = websocket.query_params.get("token")
+            _resolve_ws_token(token)
+
+            try:
+                fps = float(websocket.query_params.get("fps", "1.0") or "1.0")
+            except ValueError:
+                fps = 1.0
+            fps = max(0.4, min(fps, 3.0))
+            interval_seconds = 1.0 / fps
+
+            try:
+                max_width = int(websocket.query_params.get("max_width", "960") or "960")
+            except ValueError:
+                max_width = 960
+
+            try:
+                jpeg_quality = int(websocket.query_params.get("quality", "55") or "55")
+            except ValueError:
+                jpeg_quality = 55
+            jpeg_quality = max(30, min(jpeg_quality, 85))
+
+            await send_model(
+                RealtimeServerEvent(
+                    type="screen_state",
+                    payload={
+                        "state": "connected",
+                        "fps": fps,
+                        "max_width": max_width,
+                        "quality": jpeg_quality,
+                    },
+                )
+            )
+
+            announced_streaming = False
+            loop = asyncio.get_running_loop()
+            while True:
+                capture = await loop.run_in_executor(
+                    None,
+                    lambda: capture_screen_snapshot(max_width=max_width, jpeg_quality=jpeg_quality),
+                )
+                if not announced_streaming:
+                    await send_model(
+                        RealtimeServerEvent(
+                            type="screen_state",
+                            payload={"state": "streaming", "fps": fps},
+                        )
+                    )
+                    announced_streaming = True
+                await send_model(
+                    RealtimeServerEvent(
+                        type="screen_frame",
+                        payload=capture,
+                    )
+                )
+                await asyncio.sleep(interval_seconds)
+        except WebSocketDisconnect:
+            return
+        except Exception as exc:
+            try:
+                await send_model(
+                    RealtimeServerEvent(
+                        type="error",
+                        payload={"message": f"Screen feed failed: {str(exc)}"},
+                    )
+                )
+            except Exception:
+                pass
+            return
+
     @app.websocket("/ws/app/chat")
     async def chat_ws(websocket: WebSocket) -> None:
         await websocket.accept()
+        send_lock = asyncio.Lock()
+
+        async def send_model(event: RealtimeServerEvent) -> None:
+            async with send_lock:
+                await websocket.send_json(event.model_dump())
+
         try:
             token = websocket.query_params.get("token")
             session_id = websocket.query_params.get("session_id")
@@ -312,12 +455,12 @@ def create_app() -> FastAPI:
             bridge = _bridge_for_user(int(auth["user_id"]))
             runtime = bridge.load_runtime_session(session_id)
             effective_session_id = runtime.session_manager.get_current_session_id()
-            await websocket.send_json(
+            await send_model(
                 RealtimeServerEvent(
                     type="session_snapshot",
                     session_id=effective_session_id,
                     payload={"connected": True},
-                ).model_dump()
+                )
             )
             while True:
                 raw = await websocket.receive_text()
@@ -325,7 +468,7 @@ def create_app() -> FastAPI:
                 text = str(data.get("text", "")).strip()
                 req_session_id = data.get("session_id") or effective_session_id
                 if not text:
-                    await websocket.send_json(RealtimeServerEvent(type="warning", message="Empty message ignored").model_dump())
+                    await send_model(RealtimeServerEvent(type="warning", message="Empty message ignored"))
                     continue
 
                 runtime = bridge.load_runtime_session(req_session_id)
@@ -333,15 +476,15 @@ def create_app() -> FastAPI:
                 async def emit(event: dict) -> None:
                     kind = event.get("type")
                     if kind == "assistant_delta":
-                        await websocket.send_json(
+                        await send_model(
                             RealtimeServerEvent(
                                 type="assistant_delta",
                                 session_id=req_session_id,
                                 payload={"delta": event.get("delta", "")},
-                            ).model_dump()
+                            )
                         )
                     elif kind == "tool_use":
-                        await websocket.send_json(
+                        await send_model(
                             RealtimeServerEvent(
                                 type="tool_event",
                                 session_id=req_session_id,
@@ -351,33 +494,58 @@ def create_app() -> FastAPI:
                                     "tool_result": event.get("tool_result"),
                                     "duration_ms": event.get("duration_ms"),
                                 },
-                            ).model_dump()
+                            )
                         )
                     elif kind == "log":
-                        await websocket.send_json(
+                        await send_model(
                             RealtimeServerEvent(
                                 type="log",
                                 session_id=req_session_id,
                                 payload={"message": event.get("message", "")},
-                            ).model_dump()
+                            )
                         )
                     elif kind == "status":
-                        await websocket.send_json(
+                        await send_model(
                             RealtimeServerEvent(
                                 type="status",
                                 session_id=req_session_id,
                                 payload={"message": event.get("message", "")},
-                            ).model_dump()
+                            )
                         )
 
                 result = await run_app_chat_turn(
                     runtime,
                     user_message=text,
                     source_format="app_text",
+                    interrupt_policy=str(data.get("interrupt_policy", "none")),
                     log_callback=emit,
                 )
+                if result.get("busy"):
+                    await send_model(
+                        RealtimeServerEvent(
+                            type="warning",
+                            session_id=req_session_id,
+                            payload={"message": "Session is already processing another message"},
+                        )
+                    )
+                    continue
+                if result.get("steering"):
+                    await send_model(
+                        RealtimeServerEvent(
+                            type="status",
+                            session_id=req_session_id,
+                            payload={
+                                "message": (
+                                    "Beta steering accepted"
+                                    if result.get("steering_status") == "armed"
+                                    else "Beta steering queued for next safe boundary"
+                                )
+                            },
+                        )
+                    )
+                    continue
                 final_session_id = result.get("session_id") or runtime.session_manager.get_current_session_id() or req_session_id
-                await websocket.send_json(
+                await send_model(
                     RealtimeServerEvent(
                         type="assistant_final",
                         session_id=final_session_id,
@@ -388,7 +556,7 @@ def create_app() -> FastAPI:
                             "output_tokens": result.get("output_tokens"),
                             "total_tokens": result.get("total_tokens"),
                         },
-                    ).model_dump()
+                    )
                 )
         except WebSocketDisconnect:
             return
@@ -396,41 +564,215 @@ def create_app() -> FastAPI:
     @app.websocket("/ws/app/voice")
     async def voice_ws(websocket: WebSocket) -> None:
         await websocket.accept()
+        send_lock = asyncio.Lock()
+
+        async def send_model(event: RealtimeServerEvent) -> None:
+            async with send_lock:
+                await websocket.send_json(event.model_dump())
+
         try:
             token = websocket.query_params.get("token")
             auth = _resolve_ws_token(token)
             bridge = _bridge_for_user(int(auth["user_id"]))
-            draft_text = ""
+            draft = VoiceDraftState()
             active_session_id = websocket.query_params.get("session_id")
-            await websocket.send_json(RealtimeServerEvent(type="voice_state", session_id=active_session_id, payload={"state": "connected"}).model_dump())
+            await send_model(
+                RealtimeServerEvent(
+                    type="voice_state",
+                    session_id=active_session_id,
+                    payload={"state": "connected"},
+                )
+            )
             while True:
                 raw = await websocket.receive_text()
                 event = VoiceClientEvent.model_validate_json(raw)
                 if event.session_id:
                     active_session_id = event.session_id
+
+                async def send_voice_event(event_type: str, payload: Optional[dict] = None) -> None:
+                    await send_model(
+                        RealtimeServerEvent(
+                            type=event_type,
+                            session_id=active_session_id,
+                            payload=payload or {},
+                        )
+                    )
+
                 if event.type == "voice_start":
-                    draft_text = ""
-                    await websocket.send_json(RealtimeServerEvent(type="voice_state", session_id=active_session_id, payload={"state": "listening"}).model_dump())
+                    draft.reset()
+                    draft.state = "listening"
+                    await send_voice_event("voice_state", {"state": "listening"})
                 elif event.type == "voice_chunk":
-                    piece = f" chunk{event.sequence or 0}"
-                    draft_text = (draft_text + piece).strip()
-                    await websocket.send_json(RealtimeServerEvent(type="voice_partial", session_id=active_session_id, payload={"text": draft_text}).model_dump())
+                    revision = draft.revision
+                    session_for_chunk = active_session_id
+                    chunk_audio_base64 = event.audio_base64
+                    chunk_mime_type = event.mime_type
+                    chunk_sequence = event.sequence
+
+                    async def process_chunk() -> None:
+                        try:
+                            partial_text = await draft.transcribe_chunk(
+                                audio_base64=chunk_audio_base64,
+                                mime_type=chunk_mime_type,
+                                sequence=chunk_sequence,
+                                revision=revision,
+                            )
+                            if revision != draft.revision:
+                                return
+                            draft.state = "listening"
+                            await send_model(
+                                RealtimeServerEvent(
+                                    type="voice_partial",
+                                    session_id=session_for_chunk,
+                                    payload={"text": partial_text},
+                                )
+                            )
+                        except Exception as exc:
+                            if revision != draft.revision:
+                                return
+                            draft.state = "error"
+                            await send_model(
+                                RealtimeServerEvent(
+                                    type="error",
+                                    session_id=session_for_chunk,
+                                    payload={"message": f"Voice transcription failed: {str(exc)}"},
+                                )
+                            )
+
+                    task = asyncio.create_task(process_chunk())
+                    draft.register_task(task)
                 elif event.type in {"voice_pause", "voice_resume"}:
-                    await websocket.send_json(RealtimeServerEvent(type="voice_state", session_id=active_session_id, payload={"state": event.type.replace('voice_', '')}).model_dump())
+                    draft.state = event.type.replace("voice_", "")
+                    await send_voice_event("voice_state", {"state": draft.state})
                 elif event.type == "voice_commit":
+                    draft.state = "finalizing"
+                    await send_voice_event("voice_state", {"state": "finalizing"})
+                    await draft.wait_for_pending()
+                    draft_text = draft.transcript().strip()
+                    if not draft_text:
+                        draft.reset()
+                        await send_voice_event("warning", {"message": "No speech detected"})
+                        await send_voice_event("voice_state", {"state": "idle"})
+                        continue
                     runtime = bridge.load_runtime_session(active_session_id)
+                    await send_voice_event("voice_state", {"state": "generating"})
+
+                    async def emit(event_data: dict) -> None:
+                        kind = event_data.get("type")
+                        if kind == "assistant_delta":
+                            await send_model(
+                                RealtimeServerEvent(
+                                    type="assistant_delta",
+                                    session_id=active_session_id,
+                                    payload={"delta": event_data.get("delta", "")},
+                                )
+                            )
+                        elif kind == "tool_use":
+                            await send_model(
+                                RealtimeServerEvent(
+                                    type="tool_event",
+                                    session_id=active_session_id,
+                                    payload={
+                                        "tool_name": event_data.get("tool_name"),
+                                        "tool_args": event_data.get("tool_args"),
+                                        "tool_result": event_data.get("tool_result"),
+                                        "duration_ms": event_data.get("duration_ms"),
+                                    },
+                                )
+                            )
+                        elif kind == "log":
+                            await send_model(
+                                RealtimeServerEvent(
+                                    type="log",
+                                    session_id=active_session_id,
+                                    payload={"message": event_data.get("message", "")},
+                                )
+                            )
+                        elif kind == "status":
+                            await send_model(
+                                RealtimeServerEvent(
+                                    type="status",
+                                    session_id=active_session_id,
+                                    payload={"message": event_data.get("message", "")},
+                                )
+                            )
+
                     result = await run_app_chat_turn(
                         runtime,
-                        user_message=draft_text or "Voice message",
+                        user_message=draft_text,
                         source_format="app_voice_transcript",
+                        interrupt_policy=event.interrupt_policy or "none",
+                        log_callback=emit,
                     )
+                    if result.get("busy"):
+                        await send_voice_event("warning", {"message": "Session is already processing another message"})
+                        continue
+                    if result.get("steering"):
+                        await send_model(
+                            RealtimeServerEvent(
+                                type="voice_final",
+                                session_id=active_session_id,
+                                payload={"text": draft_text},
+                            )
+                        )
+                        await send_voice_event(
+                            "status",
+                            {
+                                "message": (
+                                    "Beta steering accepted"
+                                    if result.get("steering_status") == "armed"
+                                    else "Beta steering queued for next safe boundary"
+                                )
+                            },
+                        )
+                        draft.reset()
+                        continue
                     final_session_id = result.get("session_id") or runtime.session_manager.get_current_session_id() or active_session_id
-                    await websocket.send_json(RealtimeServerEvent(type="voice_final", session_id=final_session_id, payload={"text": draft_text or "Voice message"}).model_dump())
-                    await websocket.send_json(RealtimeServerEvent(type="assistant_final", session_id=final_session_id, payload={"text": result.get("assistant_text", "")}).model_dump())
-                    draft_text = ""
+                    await send_model(
+                        RealtimeServerEvent(
+                            type="voice_final",
+                            session_id=final_session_id,
+                            payload={"text": draft_text},
+                        )
+                    )
+                    await send_model(
+                        RealtimeServerEvent(
+                            type="assistant_final",
+                            session_id=final_session_id,
+                            payload={
+                                "text": result.get("assistant_text", ""),
+                                "duration_seconds": result.get("duration_seconds"),
+                                "input_tokens": result.get("input_tokens"),
+                                "output_tokens": result.get("output_tokens"),
+                                "total_tokens": result.get("total_tokens"),
+                            },
+                        )
+                    )
+                    assistant_audio = None
+                    assistant_text = str(result.get("assistant_text", "") or "").strip()
+                    if assistant_text:
+                        await send_voice_event("voice_state", {"state": "synthesizing"})
+                        loop = asyncio.get_running_loop()
+                        try:
+                            assistant_audio = await loop.run_in_executor(None, synthesize_assistant_audio, assistant_text)
+                        except Exception as exc:
+                            await send_voice_event("warning", {"message": f"Assistant audio unavailable: {str(exc)}"})
+
+                    if assistant_audio:
+                        await send_voice_event("voice_state", {"state": "speaking"})
+                        await send_model(
+                            RealtimeServerEvent(
+                                type="assistant_audio",
+                                session_id=final_session_id,
+                                payload=assistant_audio,
+                            )
+                        )
+                    else:
+                        await send_voice_event("voice_state", {"state": "idle"})
+                    draft.reset()
                 elif event.type == "voice_cancel":
-                    draft_text = ""
-                    await websocket.send_json(RealtimeServerEvent(type="voice_state", session_id=active_session_id, payload={"state": "cancelled"}).model_dump())
+                    draft.reset()
+                    await send_voice_event("voice_state", {"state": "cancelled"})
         except WebSocketDisconnect:
             return
 
@@ -448,7 +790,7 @@ def start_embedded_app_server_if_enabled() -> None:
         return
 
     host = str(config.get("channels.app.host", "0.0.0.0"))
-    port = int(config.get("channels.app.port", 8765))
+    port = int(config.get("channels.app.port", 8787))
 
     def _run() -> None:
         import uvicorn
