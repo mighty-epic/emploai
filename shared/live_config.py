@@ -88,6 +88,18 @@ class LiveConfig:
                 'allowed_user_ids': [],
                 'max_file_size_mb': 10,
                 'allowed_file_types': ['txt', 'md', 'py', 'js', 'json', 'yaml', 'yml']
+            },
+            'channels': {
+                'telegram': {
+                    'enabled': True
+                },
+                'app': {
+                    'enabled': False,
+                    'host': '0.0.0.0',
+                    'port': 8787,
+                    'auth_mode': 'token',
+                    'push_notifications': False
+                }
             }
         }
     

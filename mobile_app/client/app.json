@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "EmploAI App",
+    "slug": "emploai-app",
+    "scheme": "emploai",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "android": {
+      "package": "com.emploai.app"
+    },
+    "plugins": [
+      "expo-router"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

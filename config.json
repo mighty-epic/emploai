@@ -41,6 +41,18 @@
     ]
   },
   "browser": {
-    "use_extension": true
+    "use_extension": false
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true
+    },
+    "app": {
+      "enabled": false,
+      "host": "0.0.0.0",
+      "port": 8787,
+      "auth_mode": "token",
+      "push_notifications": false
+    }
   }
 }

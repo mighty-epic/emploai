@@ -63,6 +63,7 @@ from telegram_messaging import safe_edit, safe_reply
 from restart_runtime import exec_current_process
 from telegram_session_state import get_session, track_command_usage
 from telegram_task_flow import run_task_flow
+from mobile_app.backend import start_embedded_app_server_if_enabled
 
 # ======================================================================================
 # 🔒 CONFIGURATION
@@ -287,6 +288,8 @@ def main():
     if runtime_error:
         logger.error(runtime_error)
         raise RuntimeError(runtime_error)
+
+    start_embedded_app_server_if_enabled()
 
     run_bot(
         bot_token=BOT_TOKEN,
