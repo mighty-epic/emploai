@@ -216,13 +216,14 @@ def create_app() -> FastAPI:
     @app.get("/api/app/devices", response_model=list[TrustedDeviceView])
     async def list_devices(authorization: Optional[str] = Header(default=None)) -> list[TrustedDeviceView]:
         auth = _resolve_token(authorization)
-        devices = _get_auth_store().list_devices(user_id=int(auth["user_id"]))
-        return [TrustedDeviceView(**device) for device in devices]
+        user_id = int(auth["user_id"])
+        return [TrustedDeviceView(**item) for item in _get_auth_store().list_devices(user_id=user_id)]
 
     @app.post("/api/app/devices/{device_id}/revoke", response_model=DeviceActionResponse)
     async def revoke_device(device_id: str, authorization: Optional[str] = Header(default=None)) -> DeviceActionResponse:
         auth = _resolve_token(authorization)
-        if not _get_auth_store().revoke_device(user_id=int(auth["user_id"]), device_id=device_id):
+        user_id = int(auth["user_id"])
+        if not _get_auth_store().revoke_device(user_id=user_id, device_id=device_id):
             raise HTTPException(status_code=404, detail="Device not found")
         return DeviceActionResponse(device_id=device_id, action="revoke")
 
@@ -816,95 +817,6 @@ def create_app() -> FastAPI:
                 pass
             return
 
-    @app.websocket("/ws/app/screen")
-    async def screen_ws(websocket: WebSocket) -> None:
-        await websocket.accept()
-        send_lock = asyncio.Lock()
-
-        async def send_model(event: RealtimeServerEvent) -> None:
-            async with send_lock:
-                await websocket.send_json(event.model_dump())
-
-        try:
-            token = websocket.query_params.get("token")
-            _resolve_ws_token(token)
-            fps_text = (websocket.query_params.get("fps") or "1").strip()
-            max_width_text = (websocket.query_params.get("max_width") or "1280").strip()
-            quality_text = (websocket.query_params.get("quality") or "72").strip()
-            try:
-                fps = max(0.2, min(5.0, float(fps_text)))
-            except ValueError:
-                fps = 1.0
-            try:
-                max_width = max(320, min(2560, int(max_width_text)))
-            except ValueError:
-                max_width = 1280
-            try:
-                quality = max(25, min(95, int(quality_text)))
-            except ValueError:
-                quality = 72
-
-            await send_model(
-                RealtimeServerEvent(
-                    type="screen_state",
-                    payload={"state": "connected"},
-                )
-            )
-            frame_interval = 1.0 / fps
-            while True:
-                try:
-                    snapshot = await asyncio.to_thread(
-                        capture_screen_snapshot,
-                        max_width=max_width,
-                        jpeg_quality=quality,
-                    )
-                except Exception as exc:
-                    await send_model(
-                        RealtimeServerEvent(
-                            type="error",
-                            payload={"message": f"Screen capture failed: {str(exc)}"},
-                        )
-                    )
-                    await send_model(
-                        RealtimeServerEvent(
-                            type="screen_state",
-                            payload={"state": "error"},
-                        )
-                    )
-                    return
-
-                await send_model(
-                    RealtimeServerEvent(
-                        type="screen_frame",
-                        payload={
-                            "image_base64": snapshot.get("image_base64", ""),
-                            "mime_type": snapshot.get("mime_type", "image/jpeg"),
-                            "width": snapshot.get("width"),
-                            "height": snapshot.get("height"),
-                            "backend": snapshot.get("backend"),
-                        },
-                    )
-                )
-                await send_model(
-                    RealtimeServerEvent(
-                        type="screen_state",
-                        payload={"state": "streaming"},
-                    )
-                )
-                await asyncio.sleep(frame_interval)
-        except WebSocketDisconnect:
-            return
-        except Exception as exc:
-            try:
-                await send_model(
-                    RealtimeServerEvent(
-                        type="error",
-                        payload={"message": f"Screen websocket failed: {str(exc)}"},
-                    )
-                )
-            except Exception:
-                pass
-            return
 
     return app
 
