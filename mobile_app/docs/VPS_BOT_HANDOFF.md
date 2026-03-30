@@ -1,22 +1,61 @@
 # VPS Bot Handoff
 
-This file defines the backend work that belongs on the VPS side.
+This file is the working brief for the bot that owns the VPS side of the mobile app rollout.
+
+## Goal
+- Make the VPS fully ready to serve the EmploAI mobile app as a real client.
+- Keep Telegram working.
+- Do not make the mobile app depend on Telegram as a gateway.
+- Do not block on text-to-speech. TTS is optional for v1.
 
 ## Ownership Boundary
 - The VPS bot owns everything under `mobile_app/backend`.
+- The VPS bot may update shared runtime code only when needed to support the app contract without breaking Telegram.
 - The phone app owns everything under `mobile_app/client`.
-- Shared runtime changes are allowed only when they are needed to support the app contract and do not break Telegram.
+- Do not change the mobile app UI/build flow unless a contract break makes coordination unavoidable.
 
-## Product Direction
-- The mobile app is a direct client for the VPS-hosted EmploAI backend.
-- Telegram remains available, but it is not the required gateway for mobile use.
-- The app should work from any phone that can reach the VPS over HTTPS and WebSocket.
+## Build Ownership
+- The mobile app binary should be built from the local machine, not on the VPS.
+- Preferred flow: trigger `eas build` from the local machine in `mobile_app/client`.
+- The VPS exists to host the backend API, realtime websockets, auth, voice processing, and screen capture.
+- The VPS bot should not spend time trying to package the Expo app for installation.
 
-## What The VPS Bot Must Build Or Preserve
-- Keep the app backend launchable from the existing runtime when `channels.app.enabled` is true.
-- Preserve the Telegram path while making the app a first-class client.
-- Keep auth, chat execution, voice STT, screenshots, and live screen feed on the VPS.
-- Do not require text-to-speech for v1 acceptance. TTS is optional.
+## What The VPS Bot Must Finish
+
+### 1. Backend runtime
+- Ensure the app backend starts when `channels.app.enabled` is true.
+- Keep embedded startup compatible with the existing agent runtime.
+- Do not regress Telegram behavior.
+
+### 2. Deployment and reachability
+- Make the app backend reachable from a physical phone over `https://`.
+- Make chat, voice, and screen websockets reachable over `wss://`.
+- Configure the reverse proxy so websocket upgrades work correctly.
+- Ensure the VPS process survives restart and comes back cleanly.
+- Provide the final public base URL the app should use.
+
+### 3. Auth and pairing
+- Keep persistent trusted-device pairing.
+- Keep `POST /api/app/pair/start` protected by either:
+  - a trusted device token, or
+  - `X-App-Pair-Secret` backed by `EMPLO_APP_PAIRING_SECRET`
+- Keep `POST /api/app/pair/complete` working for first-device bootstrap.
+- Make sure pairing survives VPS restarts.
+- Provide one reliable first-device bootstrap path:
+  - either a documented server-side command to mint a pairing token, or
+  - a protected API flow that can be triggered manually
+
+### 4. App-facing product surface
+- Chat must stream assistant text.
+- Voice must support chunked low-latency STT with partial transcript updates.
+- Screen capture must support both one-shot screenshot fetch and live frame feed.
+- Uploads must work with bearer auth and optional session binding.
+- Sessions and jobs endpoints must work from the app with the saved device token.
+
+### 5. Validation
+- Smoke test every required endpoint and websocket path from the VPS side.
+- Validate that the server contract still matches this document.
+- If anything in the contract changes, update this file before shipping the change.
 
 ## Required REST Contract
 
@@ -50,6 +89,7 @@ This file defines the backend work that belongs on the VPS side.
   - Response body:
     - `access_token`
     - `device_id`
+    - `expires_in_seconds`
     - optional metadata about the trusted device
 - `GET /api/app/devices`
   - Bearer auth required
@@ -158,29 +198,43 @@ This file defines the backend work that belongs on the VPS side.
 - Emit partial transcript updates while the user is speaking.
 - Finalize promptly when the user presses stop or the server detects an end boundary.
 - Do not require record-full-clip then upload for primary use.
-- TTS is not required for the app handoff and should not block shipment.
+- TTS is not required for this handoff and should not block shipment.
 
-## Deployment Requirements
-- The backend must run on the VPS behind TLS.
-- REST must be reachable from a phone over `https://`.
-- WebSocket must be reachable from a phone over `wss://`.
-- Reverse proxy must pass WebSocket upgrades correctly.
-- The app backend should bind according to `config.json`:
-  - `channels.app.enabled`
+## Required VPS Configuration
+- `channels.app.enabled` must be set to `true` in `config.json` on the VPS when testing the app.
+- The backend should bind according to:
   - `channels.app.host`
   - `channels.app.port`
+- Required env:
+  - `OPENAI_API_KEY`
+  - `EMPLO_APP_PAIRING_SECRET`
+- Optional env:
+  - any voice/STT tuning envs already supported by the backend
 
-## Environment Requirements
-- `OPENAI_API_KEY`
-- `EMPLO_APP_PAIRING_SECRET`
-- Optional voice tuning envs if STT needs them
-- Any existing model/provider envs already required by the main agent runtime
+## Deployment Deliverables From The VPS Bot
+- The final public app backend URL.
+- Confirmation that HTTPS works.
+- Confirmation that WSS works for:
+  - `/ws/app/chat`
+  - `/ws/app/voice`
+  - `/ws/app/screen`
+- Confirmation that a first-device pairing token can be created.
+- Confirmation that the app backend survives restart.
+- A short smoke-test report covering:
+  - health
+  - pairing
+  - chat
+  - voice partials
+  - screenshot
+  - live screen feed
+  - sessions
+  - jobs
 
 ## Non-Negotiable Compatibility Rule
 - Do not change request or event shapes without updating the phone app.
 - If the server contract must change, update this file first and coordinate the client change in the same cycle.
 
-## Acceptance Checklist
+## Definition Of Done
 - A physical Android phone can reach the VPS URL over HTTPS.
 - The phone can complete pairing with a short-lived token.
 - The phone can open chat and receive streamed assistant text.
@@ -188,3 +242,4 @@ This file defines the backend work that belongs on the VPS side.
 - The phone can refresh a screenshot and open the live screen feed.
 - The phone can upload attachments.
 - Sessions and jobs endpoints work with the saved bearer token.
+- Telegram still works after the app channel is enabled.
