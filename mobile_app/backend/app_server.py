@@ -163,7 +163,11 @@ def create_app() -> FastAPI:
         issued_at = int(record["issued_at"])
         payload = f"{pairing_id}:{issued_at}"
         token = f"{payload}:{_sign(payload)}"
-        return DevicePairStartResponse(pairing_id=pairing_id, pairing_token=token)
+        return DevicePairStartResponse(
+            pairing_id=pairing_id,
+            pairing_token=token,
+            expires_in_seconds=DEFAULT_PAIR_TTL_SECONDS,
+        )
 
     @app.post("/api/app/pair/complete", response_model=DevicePairCompleteResponse)
     async def pair_complete(request: DevicePairCompleteRequest) -> DevicePairCompleteResponse:
@@ -442,6 +446,15 @@ def create_app() -> FastAPI:
             except Exception:
                 pass
             return
+
+    @app.get("/api/app/screenshot/current", response_model=ScreenCaptureView)
+    async def current_screenshot(authorization: Optional[str] = Header(default=None)) -> ScreenCaptureView:
+        _resolve_token(authorization)
+        try:
+            snapshot = capture_screen_snapshot()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Screenshot unavailable: {str(exc)}") from exc
+        return ScreenCaptureView(**snapshot)
 
     @app.websocket("/ws/app/chat")
     async def chat_ws(websocket: WebSocket) -> None:
@@ -783,8 +796,7 @@ def create_app() -> FastAPI:
                                 payload=assistant_audio,
                             )
                         )
-                    else:
-                        await send_voice_event("voice_state", {"state": "idle"})
+                    await send_voice_event("voice_state", {"state": "idle"})
                     draft.reset()
                 elif event.type == "voice_cancel":
                     draft.reset()
@@ -798,6 +810,96 @@ def create_app() -> FastAPI:
                         type="error",
                         session_id=active_session_id,
                         payload={"message": f"Voice websocket failed: {str(exc)}"},
+                    )
+                )
+            except Exception:
+                pass
+            return
+
+    @app.websocket("/ws/app/screen")
+    async def screen_ws(websocket: WebSocket) -> None:
+        await websocket.accept()
+        send_lock = asyncio.Lock()
+
+        async def send_model(event: RealtimeServerEvent) -> None:
+            async with send_lock:
+                await websocket.send_json(event.model_dump())
+
+        try:
+            token = websocket.query_params.get("token")
+            _resolve_ws_token(token)
+            fps_text = (websocket.query_params.get("fps") or "1").strip()
+            max_width_text = (websocket.query_params.get("max_width") or "1280").strip()
+            quality_text = (websocket.query_params.get("quality") or "72").strip()
+            try:
+                fps = max(0.2, min(5.0, float(fps_text)))
+            except ValueError:
+                fps = 1.0
+            try:
+                max_width = max(320, min(2560, int(max_width_text)))
+            except ValueError:
+                max_width = 1280
+            try:
+                quality = max(25, min(95, int(quality_text)))
+            except ValueError:
+                quality = 72
+
+            await send_model(
+                RealtimeServerEvent(
+                    type="screen_state",
+                    payload={"state": "connected"},
+                )
+            )
+            frame_interval = 1.0 / fps
+            while True:
+                try:
+                    snapshot = await asyncio.to_thread(
+                        capture_screen_snapshot,
+                        max_width=max_width,
+                        jpeg_quality=quality,
+                    )
+                except Exception as exc:
+                    await send_model(
+                        RealtimeServerEvent(
+                            type="error",
+                            payload={"message": f"Screen capture failed: {str(exc)}"},
+                        )
+                    )
+                    await send_model(
+                        RealtimeServerEvent(
+                            type="screen_state",
+                            payload={"state": "error"},
+                        )
+                    )
+                    return
+
+                await send_model(
+                    RealtimeServerEvent(
+                        type="screen_frame",
+                        payload={
+                            "image_base64": snapshot.get("image_base64", ""),
+                            "mime_type": snapshot.get("mime_type", "image/jpeg"),
+                            "width": snapshot.get("width"),
+                            "height": snapshot.get("height"),
+                            "backend": snapshot.get("backend"),
+                        },
+                    )
+                )
+                await send_model(
+                    RealtimeServerEvent(
+                        type="screen_state",
+                        payload={"state": "streaming"},
+                    )
+                )
+                await asyncio.sleep(frame_interval)
+        except WebSocketDisconnect:
+            return
+        except Exception as exc:
+            try:
+                await send_model(
+                    RealtimeServerEvent(
+                        type="error",
+                        payload={"message": f"Screen websocket failed: {str(exc)}"},
                     )
                 )
             except Exception:
