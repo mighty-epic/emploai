@@ -32,6 +32,7 @@ class CronJob:
     run_count: int = 0
     error_count: int = 0
     timezone_offset_hours: Optional[int] = None
+    owner_user_id: Optional[int] = None
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -190,6 +191,7 @@ class CronScheduler:
         schedule_text: Optional[str] = None,
         run_immediately: bool = False,
         timezone_offset_hours: Optional[int] = None,
+        owner_user_id: Optional[int] = None,
     ) -> str:
         """
         Add a new recurring job.
@@ -224,6 +226,7 @@ class CronScheduler:
             interval_seconds=interval_seconds,
             enabled=enabled,
             timezone_offset_hours=timezone_offset_hours,
+            owner_user_id=owner_user_id,
         )
         
         async def _add():

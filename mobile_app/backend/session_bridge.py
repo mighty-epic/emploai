@@ -175,7 +175,8 @@ class AppSessionBridge:
                 "run_count": job.get("run_count"),
                 "error_count": job.get("error_count"),
                 "next_run_at": job.get("next_run") or job.get("next_run_at"),
-                "last_run_at": job.get("last_run_at"),
+                "last_run_at": job.get("last_run_at") or job.get("last_run"),
+                "owner_user_id": job.get("owner_user_id"),
             })
         return jobs
 

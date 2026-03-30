@@ -292,6 +292,7 @@ def create_app() -> FastAPI:
             prompt=request.prompt,
             interval_seconds=interval_seconds,
             schedule_text=request.schedule,
+            owner_user_id=int(auth["user_id"]),
         )
         bridge = _bridge_for_user(int(auth["user_id"]))
         try:

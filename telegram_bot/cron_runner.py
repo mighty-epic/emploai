@@ -48,6 +48,7 @@ async def run_cron_job_via_unified_flow(
     *,
     max_turns: int = 30,
     progress_callback: Optional[Callable[[str], None]] = None,
+    scheduled_job_id: Optional[str] = None,
 ) -> str:
     """Execute one cron prompt using the same unified tool-loop stack as live chat."""
     client, provider = session.get_client_for_model()
@@ -164,6 +165,10 @@ async def run_cron_job_via_unified_flow(
             "content": clean_response,
             "timestamp": datetime.now().isoformat(),
             "scheduled_job": True,
+            "scheduled_job_id": scheduled_job_id,
+            "channel": "system",
+            "source_format": "scheduled_job_result",
+            "display_label": "Scheduled Job",
         }
     )
     session.save_session()

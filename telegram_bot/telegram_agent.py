@@ -6,6 +6,7 @@ Default chat uses the unified auto agent for file ops, terminal, search,
 browser, and desktop automation.
 """
 
+import asyncio
 import logging
 import os
 import sys
@@ -64,6 +65,7 @@ from restart_runtime import exec_current_process
 from telegram_session_state import get_session, track_command_usage
 from telegram_task_flow import run_task_flow
 from mobile_app.backend import start_embedded_app_server_if_enabled
+from mobile_app.backend.cron_runtime import ensure_global_cron_scheduler_started
 
 # ======================================================================================
 # 🔒 CONFIGURATION
@@ -290,6 +292,7 @@ def main():
         raise RuntimeError(runtime_error)
 
     start_embedded_app_server_if_enabled()
+    asyncio.run(ensure_global_cron_scheduler_started())
 
     run_bot(
         bot_token=BOT_TOKEN,
