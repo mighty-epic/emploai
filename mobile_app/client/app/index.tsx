@@ -10,6 +10,7 @@ const screens = [
   { href: '/sessions' as const, label: 'Sessions', detail: 'Shared session list across the app and Telegram.' },
   { href: '/jobs' as const, label: 'Jobs', detail: 'Scheduler controls and run-now actions.' },
   { href: '/settings' as const, label: 'Settings', detail: 'Verify the backend connection and inspect device state.' },
+  { href: '/diagnostics' as const, label: 'Diagnostics', detail: 'Inspect request logs, websocket events, and connectivity failures.' },
 ];
 
 const emptyConfig: AppConfig = {

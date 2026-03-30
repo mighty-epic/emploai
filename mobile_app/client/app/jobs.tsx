@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { loadAppConfig } from '../lib/appConfig';
+import { requestJson } from '../lib/appHttp';
+import { describeError } from '../lib/diagnostics';
 
 type Job = {
   id: string;
@@ -48,14 +50,17 @@ export default function JobsScreen() {
     }
     setStatus('loading');
     try {
-      const response = await fetch(`${apiBaseUrl}/api/app/jobs`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const data = await requestJson<Job[]>({
+        scope: 'jobs.list',
+        url: `${apiBaseUrl}/api/app/jobs`,
+        init: {
+          headers: { Authorization: `Bearer ${token}` },
+        },
       });
-      const data = await response.json();
       setJobs(Array.isArray(data) ? data : []);
       setStatus('ready');
-    } catch {
-      setStatus('error');
+    } catch (error) {
+      setStatus(describeError(error));
     }
   };
 
@@ -68,20 +73,23 @@ export default function JobsScreen() {
     if (!apiBaseUrl || !token || !name.trim() || !prompt.trim() || !schedule.trim()) return;
     setStatus('creating');
     try {
-      const response = await fetch(`${apiBaseUrl}/api/app/jobs`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
+      await requestJson({
+        scope: 'jobs.create',
+        url: `${apiBaseUrl}/api/app/jobs`,
+        init: {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ name: name.trim(), prompt: prompt.trim(), schedule: schedule.trim() }),
         },
-        body: JSON.stringify({ name: name.trim(), prompt: prompt.trim(), schedule: schedule.trim() }),
       });
-      if (!response.ok) throw new Error('create failed');
       setName('');
       setPrompt('');
       await loadJobs();
-    } catch {
-      setStatus('error');
+    } catch (error) {
+      setStatus(describeError(error));
     }
   };
 
@@ -93,14 +101,17 @@ export default function JobsScreen() {
       const url = action === 'delete'
         ? `${apiBaseUrl}/api/app/jobs/${jobId}`
         : `${apiBaseUrl}/api/app/jobs/${jobId}/${action}`;
-      const response = await fetch(url, {
-        method,
-        headers: { Authorization: `Bearer ${token}` },
+      await requestJson({
+        scope: `jobs.${action}`,
+        url,
+        init: {
+          method,
+          headers: { Authorization: `Bearer ${token}` },
+        },
       });
-      if (!response.ok) throw new Error('action failed');
       await loadJobs();
-    } catch {
-      setStatus('error');
+    } catch (error) {
+      setStatus(describeError(error));
     }
   };
 

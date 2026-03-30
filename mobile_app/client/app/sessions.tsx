@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { loadAppConfig } from '../lib/appConfig';
+import { requestJson } from '../lib/appHttp';
+import { describeError } from '../lib/diagnostics';
 
 type SessionSummary = {
   id: string;
@@ -43,14 +45,17 @@ export default function SessionsScreen() {
     }
     setStatus('loading');
     try {
-      const response = await fetch(`${apiBaseUrl}/api/app/sessions`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const data = await requestJson<SessionSummary[]>({
+        scope: 'sessions.list',
+        url: `${apiBaseUrl}/api/app/sessions`,
+        init: {
+          headers: { Authorization: `Bearer ${token}` },
+        },
       });
-      const data = await response.json();
       setSessions(Array.isArray(data) ? data : []);
       setStatus('ready');
     } catch (error) {
-      setStatus('error');
+      setStatus(describeError(error));
     }
   };
 

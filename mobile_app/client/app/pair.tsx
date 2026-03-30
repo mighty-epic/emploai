@@ -3,6 +3,8 @@ import { Link, useRouter } from 'expo-router';
 import { Platform, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { isSupportedApiBaseUrl, loadAppConfig, normalizeApiBaseUrl, saveAppConfig } from '../lib/appConfig';
+import { requestJson } from '../lib/appHttp';
+import { describeError } from '../lib/diagnostics';
 
 export default function PairScreen() {
   const router = useRouter();
@@ -40,21 +42,21 @@ export default function PairScreen() {
     setStatus('pairing');
     setIsPairing(true);
     try {
-      const response = await fetch(`${normalizedBaseUrl}/api/app/pair/complete`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
+      const data = await requestJson<{ access_token?: string }>({
+        scope: 'pair.complete',
+        url: `${normalizedBaseUrl}/api/app/pair/complete`,
+        init: {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            pairing_token: pairingToken.trim(),
+            device_name: deviceName.trim() || 'My EmploAI Device',
+            device_platform: Platform.OS,
+          }),
         },
-        body: JSON.stringify({
-          pairing_token: pairingToken.trim(),
-          device_name: deviceName.trim() || 'My EmploAI Device',
-          device_platform: Platform.OS,
-        }),
       });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(String(data?.detail || 'Pairing failed'));
-      }
 
       await saveAppConfig({
         apiBaseUrl: normalizedBaseUrl,
@@ -64,8 +66,7 @@ export default function PairScreen() {
       setStatus('paired');
       router.replace('/chat');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'pairing error';
-      setStatus(message);
+      setStatus(describeError(error));
     } finally {
       setIsPairing(false);
     }
@@ -118,6 +119,7 @@ export default function PairScreen() {
             <Text style={styles.buttonText}>{isPairing ? 'Pairing...' : 'Complete Pairing'}</Text>
           </Pressable>
           <Link href="/settings" style={styles.link}>Open Settings</Link>
+          <Link href="/diagnostics" style={styles.link}>Open Diagnostics</Link>
         </View>
         <View style={styles.stepsCard}>
           <Text style={styles.stepsTitle}>What the VPS needs to provide</Text>

@@ -7,6 +7,8 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 
 import { buildWsBaseUrl, loadAppConfig } from '../lib/appConfig';
+import { requestJson } from '../lib/appHttp';
+import { describeError, logDiagnostic } from '../lib/diagnostics';
 
 const VOICE_SEGMENT_MS = 850;
 const SOCKET_RECONNECT_MS = 1600;
@@ -96,8 +98,10 @@ export default function ChatScreen() {
     if (!configLoaded || !apiBaseUrl) return;
 
     let active = true;
-    fetch(`${apiBaseUrl}/api/app/health`)
-      .then((response) => response.json())
+    requestJson<{ steering_beta_enabled?: boolean }>({
+      scope: 'chat.health',
+      url: `${apiBaseUrl}/api/app/health`,
+    })
       .then((data) => {
         if (!active) return;
         const enabled = Boolean(data?.steering_beta_enabled);
@@ -447,19 +451,20 @@ export default function ChatScreen() {
       } as any);
       if (sessionIdRef.current) form.append('session_id', sessionIdRef.current);
 
-      const response = await fetch(`${apiBaseUrl}/api/app/upload`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: form,
+      const data = await requestJson<{ filename?: string; session_id?: string }>({
+        scope: 'chat.upload',
+        url: `${apiBaseUrl}/api/app/upload`,
+        init: {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: form,
+        },
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(String(data?.detail || 'upload failed'));
       if (data.session_id) setSessionId(String(data.session_id));
       appendLog(`Attached: ${data.filename}`);
       setStatus('attachment ready');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'upload error';
-      setStatus(message);
+      setStatus(describeError(error));
     }
   };
 
@@ -475,20 +480,19 @@ export default function ChatScreen() {
 
     setScreenStatus('capturing');
     try {
-      const response = await fetch(`${apiBaseUrl}/api/app/screenshot/current`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
+      const data = await requestJson<Record<string, any>>({
+        scope: 'screen.capture',
+        url: `${apiBaseUrl}/api/app/screenshot/current`,
+        init: {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
         },
       });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(String(data?.detail || 'capture failed'));
-      }
       applyScreenPayload(data);
       setScreenStatus('ready');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'capture error';
-      setScreenStatus(message);
+      setScreenStatus(describeError(error));
     }
   };
 
@@ -526,6 +530,10 @@ export default function ChatScreen() {
         });
         segmentSequenceRef.current += 1;
         if (voiceWsRef.current && voiceWsRef.current.readyState === WebSocket.OPEN) {
+          logDiagnostic('voice.ws', 'sending voice chunk', {
+            sequence: segmentSequenceRef.current,
+            sessionId: sessionIdRef.current || null,
+          });
           voiceWsRef.current.send(JSON.stringify({
             type: 'voice_chunk',
             session_id: sessionIdRef.current,
@@ -535,9 +543,13 @@ export default function ChatScreen() {
           }));
         } else {
           setStatus('voice socket unavailable');
+          logDiagnostic('voice.ws', 'voice chunk dropped because socket was unavailable', {
+            readyState: voiceWsRef.current?.readyState ?? null,
+          }, 'warn');
         }
-      } catch {
+      } catch (error) {
         setStatus('voice upload error');
+        logDiagnostic('voice.ws', 'voice chunk upload preparation failed', describeError(error), 'error');
       } finally {
         try {
           await FileSystem.deleteAsync(uri, { idempotent: true });
@@ -623,10 +635,12 @@ export default function ChatScreen() {
         type: 'voice_start',
         session_id: sessionIdRef.current,
       }));
+      logDiagnostic('voice.ws', 'sent voice_start', { sessionId: sessionIdRef.current || null });
 
       await startSegmentRecording();
-    } catch {
-      setStatus('voice start error');
+    } catch (error) {
+      setStatus(describeError(error) || 'voice start error');
+      logDiagnostic('voice.ws', 'voice start failed', describeError(error), 'error');
       setVoiceState('error');
       setIsRecording(false);
       setIsVoiceBusy(false);
@@ -641,6 +655,10 @@ export default function ChatScreen() {
     await finishCurrentSegment(false);
 
     if (voiceWsRef.current && voiceWsRef.current.readyState === WebSocket.OPEN) {
+      logDiagnostic('voice.ws', commit ? 'sent voice_commit' : 'sent voice_cancel', {
+        sessionId: sessionIdRef.current || null,
+        interruptPolicy: commit ? interruptPolicy : 'none',
+      });
       voiceWsRef.current.send(JSON.stringify({
         type: commit ? 'voice_commit' : 'voice_cancel',
         session_id: sessionIdRef.current,
@@ -694,37 +712,75 @@ export default function ChatScreen() {
 
     const connectChatSocket = () => {
       if (disposed) return;
-      const ws = new WebSocket(buildWsUrl('/ws/app/chat'));
+      const url = buildWsUrl('/ws/app/chat');
+      logDiagnostic('chat.ws', 'connecting', { url });
+      const ws = new WebSocket(url);
       chatWsRef.current = ws;
-      ws.onopen = () => setStatus('connected');
-      ws.onclose = () => {
+      ws.onopen = () => {
+        logDiagnostic('chat.ws', 'connected', { url });
+        setStatus('connected');
+      };
+      ws.onclose = (event) => {
+        logDiagnostic('chat.ws', 'closed', {
+          code: event.code,
+          reason: event.reason || '<empty>',
+          wasClean: event.wasClean,
+        }, event.wasClean ? 'info' : 'warn');
         if (chatWsRef.current === ws) chatWsRef.current = null;
         if (!disposed) {
           setStatus('chat reconnecting');
           chatReconnectRef.current = setTimeout(connectChatSocket, SOCKET_RECONNECT_MS);
         }
       };
-      ws.onerror = () => setStatus('chat error');
+      ws.onerror = () => {
+        logDiagnostic('chat.ws', 'error', { readyState: ws.readyState }, 'error');
+        setStatus('chat error');
+      };
       ws.onmessage = (event) => {
-        handleRealtimeEvent(JSON.parse(event.data) as ChatEvent, 'chat');
+        try {
+          const payload = JSON.parse(event.data) as ChatEvent;
+          logDiagnostic('chat.ws', 'message', { type: payload.type || 'unknown' });
+          handleRealtimeEvent(payload, 'chat');
+        } catch (error) {
+          logDiagnostic('chat.ws', 'message parse failed', describeError(error), 'error');
+        }
       };
     };
 
     const connectVoiceSocket = () => {
       if (disposed) return;
-      const ws = new WebSocket(buildWsUrl('/ws/app/voice'));
+      const url = buildWsUrl('/ws/app/voice');
+      logDiagnostic('voice.ws', 'connecting', { url });
+      const ws = new WebSocket(url);
       voiceWsRef.current = ws;
-      ws.onopen = () => setVoiceState('ready');
-      ws.onclose = () => {
+      ws.onopen = () => {
+        logDiagnostic('voice.ws', 'connected', { url });
+        setVoiceState('ready');
+      };
+      ws.onclose = (event) => {
+        logDiagnostic('voice.ws', 'closed', {
+          code: event.code,
+          reason: event.reason || '<empty>',
+          wasClean: event.wasClean,
+        }, event.wasClean ? 'info' : 'warn');
         if (voiceWsRef.current === ws) voiceWsRef.current = null;
         if (!disposed) {
           setVoiceState('reconnecting');
           voiceReconnectRef.current = setTimeout(connectVoiceSocket, SOCKET_RECONNECT_MS);
         }
       };
-      ws.onerror = () => setVoiceState('error');
+      ws.onerror = () => {
+        logDiagnostic('voice.ws', 'error', { readyState: ws.readyState }, 'error');
+        setVoiceState('error');
+      };
       ws.onmessage = (event) => {
-        handleRealtimeEvent(JSON.parse(event.data) as ChatEvent, 'voice');
+        try {
+          const payload = JSON.parse(event.data) as ChatEvent;
+          logDiagnostic('voice.ws', 'message', { type: payload.type || 'unknown' });
+          handleRealtimeEvent(payload, 'voice');
+        } catch (error) {
+          logDiagnostic('voice.ws', 'message parse failed', describeError(error), 'error');
+        }
       };
     };
 
@@ -787,13 +843,21 @@ export default function ChatScreen() {
         max_width: '960',
         quality: '55',
       });
-      const ws = new WebSocket(`${base}/ws/app/screen?${params.toString()}`);
+      const url = `${base}/ws/app/screen?${params.toString()}`;
+      logDiagnostic('screen.ws', 'connecting', { url });
+      const ws = new WebSocket(url);
       screenWsRef.current = ws;
       ws.onopen = () => {
+        logDiagnostic('screen.ws', 'connected', { url });
         setScreenLiveState('connected');
         setScreenStatus('live connected');
       };
-      ws.onclose = () => {
+      ws.onclose = (event) => {
+        logDiagnostic('screen.ws', 'closed', {
+          code: event.code,
+          reason: event.reason || '<empty>',
+          wasClean: event.wasClean,
+        }, event.wasClean ? 'info' : 'warn');
         if (screenWsRef.current === ws) {
           screenWsRef.current = null;
         }
@@ -804,11 +868,18 @@ export default function ChatScreen() {
         }
       };
       ws.onerror = () => {
+        logDiagnostic('screen.ws', 'error', { readyState: ws.readyState }, 'error');
         setScreenLiveState('error');
         setScreenStatus('live error');
       };
       ws.onmessage = (event) => {
-        handleRealtimeEvent(JSON.parse(event.data) as ChatEvent, 'screen');
+        try {
+          const payload = JSON.parse(event.data) as ChatEvent;
+          logDiagnostic('screen.ws', 'message', { type: payload.type || 'unknown' });
+          handleRealtimeEvent(payload, 'screen');
+        } catch (error) {
+          logDiagnostic('screen.ws', 'message parse failed', describeError(error), 'error');
+        }
       };
     };
 
@@ -831,6 +902,11 @@ export default function ChatScreen() {
     const trimmed = input.trim();
     if (!trimmed || !chatWsRef.current || chatWsRef.current.readyState !== WebSocket.OPEN) return;
     appendUserMessage(trimmed);
+    logDiagnostic('chat.ws', 'sending chat message', {
+      sessionId: sessionIdRef.current || null,
+      interruptPolicy,
+      textPreview: trimmed.slice(0, 140),
+    });
     chatWsRef.current.send(JSON.stringify({
       text: trimmed,
       session_id: sessionIdRef.current,
@@ -848,6 +924,7 @@ export default function ChatScreen() {
         <Text style={styles.meta}>Voice: {voiceState}</Text>
         <Text style={styles.meta}>Backend: {apiBaseUrl || 'not set'}</Text>
         <Text style={styles.meta}>Session: {sessionId || 'none'}</Text>
+        <Link href="/diagnostics" style={styles.diagnosticsLink}>Open Diagnostics</Link>
       </View>
 
       {(!apiBaseUrl || !token) ? (
@@ -861,6 +938,7 @@ export default function ChatScreen() {
           <View style={styles.setupActions}>
             <Link href="/pair" style={styles.setupLink}>Open Pair</Link>
             <Link href="/settings" style={styles.setupLink}>Open Settings</Link>
+            <Link href="/diagnostics" style={styles.setupLink}>Open Diagnostics</Link>
           </View>
         </View>
       ) : null}
@@ -1005,6 +1083,7 @@ const styles = StyleSheet.create({
   header: { gap: 4 },
   title: { color: '#fff', fontSize: 24, fontWeight: '700' },
   meta: { color: '#9aa9c7', fontSize: 13 },
+  diagnosticsLink: { color: '#7cc7ff', fontSize: 14, fontWeight: '600' },
   setupCard: { backgroundColor: '#16253f', borderRadius: 16, padding: 12, gap: 8 },
   setupTitle: { color: '#fff', fontWeight: '700', fontSize: 15 },
   setupText: { color: '#d9e7ff', fontSize: 14, lineHeight: 20 },

@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'expo-router';
 import { Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { isSupportedApiBaseUrl, loadAppConfig, normalizeApiBaseUrl, saveAppConfig } from '../lib/appConfig';
+import { requestJson } from '../lib/appHttp';
+import { describeError } from '../lib/diagnostics';
 
 type DeviceStatus = {
   user_id?: number;
@@ -64,10 +67,10 @@ export default function SettingsScreen() {
 
     setStatus('verifying');
     try {
-      const healthResponse = await fetch(`${normalizedBaseUrl}/api/app/health`);
-      if (!healthResponse.ok) {
-        throw new Error('backend unavailable');
-      }
+      await requestJson({
+        scope: 'settings.health',
+        url: `${normalizedBaseUrl}/api/app/health`,
+      });
 
       if (!accessToken.trim()) {
         setDeviceStatus(null);
@@ -75,22 +78,21 @@ export default function SettingsScreen() {
         return;
       }
 
-      const meResponse = await fetch(`${normalizedBaseUrl}/api/app/me`, {
-        headers: {
-          Authorization: `Bearer ${accessToken.trim()}`,
+      const meData = await requestJson<DeviceStatus>({
+        scope: 'settings.me',
+        url: `${normalizedBaseUrl}/api/app/me`,
+        init: {
+          headers: {
+            Authorization: `Bearer ${accessToken.trim()}`,
+          },
         },
       });
-      const meData = await meResponse.json();
-      if (!meResponse.ok) {
-        throw new Error(String(meData?.detail || 'token invalid'));
-      }
 
       setDeviceStatus(meData);
       setStatus('connected');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'verify error';
       setDeviceStatus(null);
-      setStatus(message);
+      setStatus(describeError(error));
     }
   };
 
@@ -156,6 +158,7 @@ export default function SettingsScreen() {
           <Pressable style={styles.dangerButton} onPress={() => void clearToken()}>
             <Text style={styles.buttonText}>Clear Token</Text>
           </Pressable>
+          <Link href="/diagnostics" style={styles.link}>Open Diagnostics</Link>
         </View>
       </View>
     </SafeAreaView>
@@ -177,6 +180,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   actions: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  link: { color: '#7cc7ff', fontWeight: '600', alignSelf: 'center' },
   primaryButton: {
     alignSelf: 'flex-start',
     backgroundColor: '#3b82f6',

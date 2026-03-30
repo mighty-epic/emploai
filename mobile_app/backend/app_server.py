@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import threading
@@ -53,6 +54,7 @@ TOKEN_TTL_SECONDS = 60 * 60 * 24 * 180
 _auth_store: Optional[AppAuthStore] = None
 _server_thread: Optional[threading.Thread] = None
 _server_started = False
+logger = logging.getLogger(__name__)
 
 
 def _secret() -> str:
@@ -132,6 +134,21 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def log_http_requests(request, call_next):
+        started_at = time.perf_counter()
+        client_host = request.client.host if request.client else "unknown"
+        try:
+            response = await call_next(request)
+        except Exception:
+            duration_ms = int((time.perf_counter() - started_at) * 1000)
+            logger.exception("[app] %s %s from %s failed after %sms", request.method, request.url.path, client_host, duration_ms)
+            raise
+
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        logger.info("[app] %s %s from %s -> %s (%sms)", request.method, request.url.path, client_host, response.status_code, duration_ms)
+        return response
 
     @app.get("/api/app/health")
     async def health() -> dict:
@@ -375,6 +392,7 @@ def create_app() -> FastAPI:
     @app.websocket("/ws/app/screen")
     async def screen_ws(websocket: WebSocket) -> None:
         await websocket.accept()
+        logger.info("[app] websocket /ws/app/screen connected from %s", websocket.client.host if websocket.client else "unknown")
         send_lock = asyncio.Lock()
 
         async def send_model(event: RealtimeServerEvent) -> None:
@@ -438,6 +456,7 @@ def create_app() -> FastAPI:
                 )
                 await asyncio.sleep(interval_seconds)
         except WebSocketDisconnect:
+            logger.info("[app] websocket /ws/app/screen disconnected")
             return
         except Exception as exc:
             try:
@@ -463,6 +482,7 @@ def create_app() -> FastAPI:
     @app.websocket("/ws/app/chat")
     async def chat_ws(websocket: WebSocket) -> None:
         await websocket.accept()
+        logger.info("[app] websocket /ws/app/chat connected from %s", websocket.client.host if websocket.client else "unknown")
         send_lock = asyncio.Lock()
 
         async def send_model(event: RealtimeServerEvent) -> None:
@@ -580,6 +600,7 @@ def create_app() -> FastAPI:
                     )
                 )
         except WebSocketDisconnect:
+            logger.info("[app] websocket /ws/app/chat disconnected")
             return
         except Exception as exc:
             try:
@@ -597,6 +618,7 @@ def create_app() -> FastAPI:
     @app.websocket("/ws/app/voice")
     async def voice_ws(websocket: WebSocket) -> None:
         await websocket.accept()
+        logger.info("[app] websocket /ws/app/voice connected from %s", websocket.client.host if websocket.client else "unknown")
         send_lock = asyncio.Lock()
 
         async def send_model(event: RealtimeServerEvent) -> None:
@@ -806,6 +828,7 @@ def create_app() -> FastAPI:
                     draft.reset()
                     await send_voice_event("voice_state", {"state": "cancelled"})
         except WebSocketDisconnect:
+            logger.info("[app] websocket /ws/app/voice disconnected")
             return
         except Exception as exc:
             try:
