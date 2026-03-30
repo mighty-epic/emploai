@@ -15,6 +15,7 @@
       ]
     },
     "plugins": [
+      "./plugins/withCleartextTraffic",
       "expo-router",
       [
         "expo-av",
