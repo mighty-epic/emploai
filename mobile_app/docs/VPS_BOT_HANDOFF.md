@@ -211,6 +211,71 @@ This file is the working brief for the bot that owns the VPS side of the mobile 
 - Optional env:
   - any voice/STT tuning envs already supported by the backend
 
+## First Device Pairing Runbook
+The VPS bot should be able to take the user from "app installed" to "phone paired" without making the user guess the server steps.
+
+### Step 1. Enable and restart the app backend
+- Set `channels.app.enabled` to `true` on the VPS.
+- Restart the main agent process so the embedded app backend starts.
+- Confirm the backend is listening on the configured host/port.
+
+### Step 2. Verify the public app URL
+- Confirm the final public base URL that the phone should use.
+- Verify:
+  - `GET https://YOUR_HOST/api/app/health`
+- The health response should show at least:
+  - `ok: true`
+  - `enabled: true`
+  - `pairing_bootstrap_enabled: true`
+
+### Step 3. Mint one first-device pairing token
+- Use `POST /api/app/pair/start` with the header:
+  - `X-App-Pair-Secret: <EMPLO_APP_PAIRING_SECRET>`
+- Minimal JSON body:
+  - `{"device_name":"My Phone"}`
+- The VPS bot should return the resulting `pairing_token` to the user.
+- Pairing tokens are short-lived, so mint the token close to when the user will paste it into the app.
+
+### Step 4. Tell the user exactly what to enter in the app
+- `Backend URL`: the public HTTPS base URL
+- `Pairing token`: the minted short-lived token
+- `Device name`: any label the user wants
+
+### Step 5. Post-pair verification
+- After the user completes pairing in the app, the VPS bot should be ready to verify:
+  - `GET /api/app/me`
+  - `GET /api/app/sessions`
+  - websocket reachability for:
+    - `/ws/app/chat`
+    - `/ws/app/voice`
+    - `/ws/app/screen`
+
+### PowerShell example
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "https://YOUR_HOST/api/app/pair/start" `
+  -Headers @{ "X-App-Pair-Secret" = "YOUR_PAIRING_SECRET" } `
+  -ContentType "application/json" `
+  -Body '{"device_name":"My Phone"}'
+```
+
+### curl example
+```bash
+curl -X POST "https://YOUR_HOST/api/app/pair/start" \
+  -H "Content-Type: application/json" \
+  -H "X-App-Pair-Secret: YOUR_PAIRING_SECRET" \
+  -d '{"device_name":"My Phone"}'
+```
+
+## What The VPS Bot Should Hand Back To The User
+When the VPS bot is done with pairing setup, it should reply with only the useful facts:
+- the final public backend URL
+- whether `/api/app/health` is healthy
+- one fresh `pairing_token`
+- whether websocket routes are confirmed reachable
+- any blocker that still prevents the phone from pairing
+
 ## Deployment Deliverables From The VPS Bot
 - The final public app backend URL.
 - Confirmation that HTTPS works.
