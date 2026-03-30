@@ -114,7 +114,8 @@ export default function SettingsScreen() {
       <View style={styles.card}>
         <Text style={styles.title}>Settings</Text>
         <Text style={styles.help}>
-          This app should point to the VPS app backend over HTTPS. Save the URL here once, then verify the device token.
+          This app should point to the app backend. Use HTTPS for VPS access, or http://LAN-IP:8787 for same-Wi-Fi local
+          testing. Save the URL here once, then verify the device token.
         </Text>
         <Text style={styles.text}>Backend URL</Text>
         <TextInput
@@ -123,7 +124,7 @@ export default function SettingsScreen() {
           onChangeText={setApiBaseUrl}
           autoCapitalize="none"
           autoCorrect={false}
-          placeholder="https://your-vps-host"
+          placeholder="https://your-vps-host or http://192.168.x.x:8787"
           placeholderTextColor="#7f8aa3"
         />
         <Text style={styles.text}>Access token</Text>

@@ -76,7 +76,8 @@ export default function PairScreen() {
       <View style={styles.card}>
         <Text style={styles.title}>Pair Device</Text>
         <Text style={styles.help}>
-          Save the VPS HTTPS URL, then paste the short-lived pairing token created on the server.
+          Save the backend URL, then paste the short-lived pairing token created on the server. Use HTTPS for VPS access, or
+          http://LAN-IP:8787 for same-Wi-Fi local testing.
         </Text>
         <Text style={styles.text}>Backend URL</Text>
         <TextInput
@@ -85,7 +86,7 @@ export default function PairScreen() {
           onChangeText={setApiBaseUrl}
           autoCapitalize="none"
           autoCorrect={false}
-          placeholder="https://your-vps-host"
+          placeholder="https://your-vps-host or http://192.168.x.x:8787"
           placeholderTextColor="#7f8aa3"
         />
         <Text style={styles.text}>Device name</Text>
@@ -110,7 +111,7 @@ export default function PairScreen() {
         />
         <Text style={styles.meta}>Status: {status}</Text>
         <Text style={styles.help}>
-          The token should come from the VPS app backend. This screen stores the device token locally once pairing succeeds.
+          The token should come from the app backend. This screen stores the device token locally once pairing succeeds.
         </Text>
         <View style={styles.actions}>
           <Pressable style={[styles.button, isPairing ? styles.buttonDisabled : null]} onPress={() => void pairDevice()} disabled={isPairing}>
@@ -120,7 +121,7 @@ export default function PairScreen() {
         </View>
         <View style={styles.stepsCard}>
           <Text style={styles.stepsTitle}>What the VPS needs to provide</Text>
-          <Text style={styles.step}>1. HTTPS URL reachable from the phone.</Text>
+          <Text style={styles.step}>1. HTTPS URL for VPS use, or an HTTP LAN URL for same-network local testing.</Text>
           <Text style={styles.step}>2. `POST /api/app/pair/complete` enabled.</Text>
           <Text style={styles.step}>3. A short-lived pairing token for this device.</Text>
           <Text style={styles.step}>4. A bearer token response after pairing succeeds.</Text>
