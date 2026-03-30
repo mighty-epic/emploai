@@ -8,8 +8,9 @@
     "android": {
       "package": "com.emploai.app",
       "permissions": [
-        "RECORD_AUDIO",
-        "CAMERA"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
       ]
     },
     "plugins": [
@@ -31,6 +32,13 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "880cab00-fe4a-4f39-a921-5ab1f0811d6c"
+      }
+    },
+    "owner": "mighty123"
   }
 }
