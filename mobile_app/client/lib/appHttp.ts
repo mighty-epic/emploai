@@ -98,6 +98,16 @@ function detailFromPayload(payload: any, fallback: string) {
   return fallback;
 }
 
+function isAbortLikeError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  if (error.name === 'AbortError') {
+    return true;
+  }
+  return /aborted/i.test(error.message);
+}
+
 export async function requestJson<T>({ scope, url, init, timeoutMs = 15000 }: JsonRequestOptions): Promise<T> {
   const method = (init?.method || 'GET').toUpperCase();
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : undefined;
@@ -145,12 +155,17 @@ export async function requestJson<T>({ scope, url, init, timeoutMs = 15000 }: Js
     return payload as T;
   } catch (error) {
     const rawMessage = describeError(error);
-    const hint = rawMessage.includes('Network request failed')
+    const timedOut = isAbortLikeError(error);
+    const hint = timedOut
+      ? `The request did not finish within ${timeoutMs}ms. The server may still be working, or the device may not be receiving the response.`
+      : rawMessage.includes('Network request failed')
       ? 'Check phone-browser access to this URL, Windows firewall, same-network routing, and Android cleartext support for http:// URLs.'
       : undefined;
     const message = error instanceof AppRequestError
       ? error.message
-      : `${method} ${url} failed: ${rawMessage}`;
+      : timedOut
+        ? `${method} ${url} timed out after ${timeoutMs}ms`
+        : `${method} ${url} failed: ${rawMessage}`;
     logDiagnostic(scope, `${method} ${url} failed`, { message, hint }, 'error');
     throw new Error(hint ? `${message} ${hint}` : message);
   } finally {

@@ -45,6 +45,7 @@ export default function PairScreen() {
       const data = await requestJson<{ access_token?: string }>({
         scope: 'pair.complete',
         url: `${normalizedBaseUrl}/api/app/pair/complete`,
+        timeoutMs: 60000,
         init: {
           method: 'POST',
           headers: {
@@ -113,6 +114,9 @@ export default function PairScreen() {
         <Text style={styles.meta}>Status: {status}</Text>
         <Text style={styles.help}>
           The token should come from the app backend. This screen stores the device token locally once pairing succeeds.
+        </Text>
+        <Text style={styles.help}>
+          Pairing waits up to 60 seconds before timing out so slower first-run responses do not get cut off early.
         </Text>
         <View style={styles.actions}>
           <Pressable style={[styles.button, isPairing ? styles.buttonDisabled : null]} onPress={() => void pairDevice()} disabled={isPairing}>
