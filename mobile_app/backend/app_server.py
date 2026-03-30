@@ -47,8 +47,8 @@ from single_agent.cron_scheduler import get_scheduler, parse_schedule_with_error
 
 APP_SECRET_ENV = "EMPLO_APP_SECRET"
 PAIRING_SECRET_ENV = "EMPLO_APP_PAIRING_SECRET"
-DEFAULT_PAIR_TTL_SECONDS = 300
-TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30
+DEFAULT_PAIR_TTL_SECONDS = 60 * 30
+TOKEN_TTL_SECONDS = 60 * 60 * 24 * 180
 
 _auth_store: Optional[AppAuthStore] = None
 _server_thread: Optional[threading.Thread] = None
@@ -141,6 +141,8 @@ def create_app() -> FastAPI:
             "channel": "app",
             "enabled": bool(config.get("channels.app.enabled", False)),
             "pairing_bootstrap_enabled": bool(os.getenv(PAIRING_SECRET_ENV, "").strip()),
+            "pairing_token_ttl_seconds": DEFAULT_PAIR_TTL_SECONDS,
+            "access_token_ttl_seconds": TOKEN_TTL_SECONDS,
             "steering_beta_enabled": bool(
                 os.getenv("EMPLO_APP_STEERING_BETA_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
                 or config.get("channels.app.steering_beta", False)
