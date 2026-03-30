@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import time
 
 from cli.models.session import Session
 from cli.session_manager import SessionManager
@@ -163,21 +164,26 @@ class AppSessionBridge:
 
     def list_jobs(self) -> List[Dict[str, Any]]:
         scheduler = get_scheduler()
-        status = scheduler.get_status()
         jobs = []
-        for job in status.get("jobs", []):
+        for job in scheduler.jobs.values():
+            owner_user_id = getattr(job, "owner_user_id", None)
+            if owner_user_id not in (None, self.user_id):
+                continue
             jobs.append({
-                "id": job.get("id", ""),
-                "name": job.get("name", ""),
-                "prompt": job.get("prompt", ""),
-                "schedule": job.get("schedule") or job.get("interval_description"),
-                "enabled": job.get("enabled", True),
-                "run_count": job.get("run_count"),
-                "error_count": job.get("error_count"),
-                "next_run_at": job.get("next_run") or job.get("next_run_at"),
-                "last_run_at": job.get("last_run_at") or job.get("last_run"),
-                "owner_user_id": job.get("owner_user_id"),
+                "id": job.id,
+                "name": job.name,
+                "prompt": job.prompt,
+                "schedule": job.schedule,
+                "enabled": job.enabled,
+                "run_count": job.run_count,
+                "error_count": job.error_count,
+                "next_run_at": datetime.fromtimestamp(job.next_run).isoformat() if job.next_run else None,
+                "last_run_at": datetime.fromtimestamp(job.last_run).isoformat() if job.last_run else None,
+                "interval_seconds": job.interval_seconds,
+                "due": bool(job.next_run and time.time() >= job.next_run),
+                "owner_user_id": owner_user_id,
             })
+        jobs.sort(key=lambda item: (item.get("next_run_at") is None, item.get("next_run_at") or ""))
         return jobs
 
     def get_job(self, job_id: str) -> Dict[str, Any]:
@@ -185,6 +191,39 @@ class AppSessionBridge:
             if job.get("id") == job_id:
                 return job
         raise KeyError(job_id)
+
+    def list_cron_feed(self) -> List[Dict[str, Any]]:
+        jobs_by_id = {job["id"]: job for job in self.list_jobs()}
+        feed: List[Dict[str, Any]] = []
+
+        for session in self.list_sessions():
+            for index, message in enumerate(session.chat_history):
+                if not message.get("scheduled_job"):
+                    continue
+
+                source_format = str(message.get("source_format") or "")
+                if source_format not in {"scheduled_job_announcement", "scheduled_job_result"}:
+                    continue
+
+                job_id = message.get("scheduled_job_id")
+                job_meta = jobs_by_id.get(str(job_id)) if job_id else None
+                feed.append({
+                    "id": f"{session.id}:{index}",
+                    "timestamp": message.get("timestamp") or message.get("created_at") or session.updated_at,
+                    "kind": "announcement" if source_format == "scheduled_job_announcement" else "result",
+                    "content": str(message.get("content", "")),
+                    "session_id": session.id,
+                    "session_name": session.name,
+                    "job_id": str(job_id) if job_id else None,
+                    "job_name": (
+                        str(message.get("scheduled_job_name"))
+                        if message.get("scheduled_job_name")
+                        else (job_meta.get("name") if job_meta else None)
+                    ),
+                })
+
+        feed.sort(key=lambda item: item.get("timestamp") or "", reverse=True)
+        return feed
 
     def attach_pending_file(
         self,

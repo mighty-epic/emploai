@@ -20,6 +20,7 @@ from mobile_app.backend.capture_runtime import capture_screen_snapshot
 from mobile_app.backend.models import (
     AppUserProfile,
     ChatSendRequest,
+    CronFeedItemView,
     CreateSessionRequest,
     CreateSessionResponse,
     DeviceActionResponse,
@@ -296,6 +297,12 @@ def create_app() -> FastAPI:
             return JobDetailView(**bridge.get_job(job_id))
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
+
+    @app.get("/api/app/cron/feed", response_model=list[CronFeedItemView])
+    async def cron_feed(authorization: Optional[str] = Header(default=None)) -> list[CronFeedItemView]:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        return [CronFeedItemView(**item) for item in bridge.list_cron_feed()]
 
     @app.post("/api/app/jobs", response_model=JobDetailView)
     async def create_job(request: JobCreateRequest, authorization: Optional[str] = Header(default=None)) -> JobDetailView:

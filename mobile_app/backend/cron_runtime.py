@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -42,6 +43,26 @@ async def cron_spawn_callback(job_id: str, prompt: str) -> None:
     job = scheduler.get_job(job_id)
     session = get_cron_runtime_session()
 
+    if job and job.owner_user_id:
+        try:
+            owner_session = TelegramSession(user_id=int(job.owner_user_id), workspace=_workspace())
+            owner_session.chat_history.append(
+                {
+                    "role": "system",
+                    "content": f"Scheduled job running: {job.name}",
+                    "timestamp": datetime.now().isoformat(),
+                    "scheduled_job": True,
+                    "scheduled_job_id": job_id,
+                    "scheduled_job_name": job.name,
+                    "channel": "system",
+                    "source_format": "scheduled_job_announcement",
+                    "display_label": "Scheduled Job",
+                }
+            )
+            owner_session.save_session()
+        except Exception:
+            pass
+
     result = await run_cron_job_via_unified_flow(
         session,
         prompt,
@@ -58,6 +79,7 @@ async def cron_spawn_callback(job_id: str, prompt: str) -> None:
                     "timestamp": session.chat_history[-1].get("timestamp"),
                     "scheduled_job": True,
                     "scheduled_job_id": job_id,
+                    "scheduled_job_name": job.name if job else None,
                     "channel": "system",
                     "source_format": "scheduled_job_result",
                     "display_label": "Scheduled Job",

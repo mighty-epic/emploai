@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
-ChannelType = Literal["telegram", "app"]
+ChannelType = Literal["telegram", "app", "system"]
 InterruptPolicy = Literal["none", "steer_now", "after_tool"]
 SourceFormat = Literal[
     "telegram_text",
@@ -12,6 +12,8 @@ SourceFormat = Literal[
     "app_voice_transcript",
     "app_file_upload",
     "app_system",
+    "scheduled_job_announcement",
+    "scheduled_job_result",
 ]
 
 
@@ -154,6 +156,21 @@ class ScheduledJobView(BaseModel):
     run_count: Optional[int] = None
     error_count: Optional[int] = None
     next_run_at: Optional[str] = None
+    last_run_at: Optional[str] = None
+    interval_seconds: Optional[int] = None
+    due: bool = False
+    owner_user_id: Optional[int] = None
+
+
+class CronFeedItemView(BaseModel):
+    id: str
+    timestamp: Optional[str] = None
+    kind: Literal["announcement", "result"]
+    content: str
+    session_id: Optional[str] = None
+    session_name: Optional[str] = None
+    job_id: Optional[str] = None
+    job_name: Optional[str] = None
 
 
 class JobActionResponse(BaseModel):
