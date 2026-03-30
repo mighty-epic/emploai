@@ -9,11 +9,14 @@ import base64
 from pathlib import Path
 from typing import Any, Dict, Callable, List, Optional
 
+PYAUTOGUI_IMPORT_ERROR = None
 try:
     import pyautogui
     PYAUTOGUI_AVAILABLE = True
-except ImportError:
+except Exception as exc:
+    pyautogui = None
     PYAUTOGUI_AVAILABLE = False
+    PYAUTOGUI_IMPORT_ERROR = exc
 
 try:
     from pywinauto import Desktop
@@ -47,6 +50,9 @@ from single_agent.cron_scheduler import CRON_TOOL_DEFINITIONS, parse_schedule_wi
 
 
 logger = logging.getLogger(__name__)
+
+if PYAUTOGUI_IMPORT_ERROR is not None:
+    logger.warning("pyautogui unavailable; desktop input tools disabled: %s", PYAUTOGUI_IMPORT_ERROR)
 
 # Linux compatibility: auto-detect or force via PLATFORM=linux env var
 try:

@@ -211,9 +211,9 @@ async def run_reserved_chat_turn(
         memory_context = _memory_context(session)
         custom_system_prompt = prompt_builder(
             session,
-            memory_context,
-            skills_index,
-            active_skills_context,
+            memory_context=memory_context,
+            skills_index=skills_index,
+            active_skills_context=active_skills_context,
         )
 
         messages: List[Dict[str, Any]] = [{"role": "system", "content": custom_system_prompt}]
