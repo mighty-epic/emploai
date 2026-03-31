@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'expo-router';
-import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { loadAppConfig } from '../../lib/appConfig';
 import { describeError } from '../../lib/diagnostics';
@@ -119,7 +120,7 @@ export default function CronScreen() {
   const dueJobs = jobs.filter((job) => job.due).length;
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={styles.container}>
       <AppDrawer
         visible={drawerOpen}
         onClose={() => setDrawerOpen(false)}
@@ -137,7 +138,7 @@ export default function CronScreen() {
             setDrawerOpen(true);
           }}
         >
-          <Text style={styles.topButtonText}>Menu</Text>
+          <Text style={styles.topButtonText}>Sidebar</Text>
         </Pressable>
         <View style={styles.titleBlock}>
           <Text style={styles.title}>Cron Center</Text>
@@ -286,7 +287,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#0b1020',
     paddingHorizontal: 16,
-    paddingTop: 14,
+    paddingTop: 8,
     gap: 12,
   },
   topBar: {

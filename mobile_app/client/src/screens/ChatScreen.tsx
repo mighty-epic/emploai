@@ -1,10 +1,11 @@
-import { Link, useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Image, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Audio } from 'expo-av';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { buildWsBaseUrl, loadAppConfig } from '../../lib/appConfig';
 import { requestJson } from '../../lib/appHttp';
@@ -104,6 +105,8 @@ export default function ChatScreen() {
   const [configLoaded, setConfigLoaded] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<DrawerTab>('chats');
+  const [pairPromptOpen, setPairPromptOpen] = useState(false);
+  const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false);
 
   const chatWsRef = useRef<WebSocket | null>(null);
   const voiceWsRef = useRef<WebSocket | null>(null);
@@ -196,7 +199,8 @@ export default function ChatScreen() {
 
   const createConversation = async () => {
     if (!apiBaseUrl || !token) {
-      setStatus('missing backend');
+      setStatus(apiBaseUrl ? 'pair this phone first' : 'add backend first');
+      setPairPromptOpen(true);
       return;
     }
 
@@ -764,12 +768,9 @@ export default function ChatScreen() {
   };
 
   const startVoiceCapture = async () => {
-    if (!configLoaded || !apiBaseUrl) {
-      setStatus('missing backend');
-      return;
-    }
-    if (!token) {
-      setStatus('missing token');
+    if (!configLoaded || !apiBaseUrl || !token) {
+      setStatus(apiBaseUrl ? 'pair this phone first' : 'add backend first');
+      setPairPromptOpen(true);
       return;
     }
     if (isVoiceBusy && !steeringArmed) {
@@ -1073,6 +1074,11 @@ export default function ChatScreen() {
   }, [apiBaseUrl, configLoaded, isScreenLive, token]);
 
   const send = () => {
+    if (setupMissing) {
+      setStatus(apiBaseUrl ? 'pair this phone first' : 'add backend first');
+      setPairPromptOpen(true);
+      return;
+    }
     const trimmed = input.trim();
     if (!trimmed || !chatWsRef.current || chatWsRef.current.readyState !== WebSocket.OPEN) return;
     appendUserMessage(trimmed);
@@ -1090,14 +1096,22 @@ export default function ChatScreen() {
     setVoiceDraft('');
   };
 
-  const statusCards = [
-    { label: 'Status', value: status },
+  const sessionUpdatedAt = sessions.find((item) => item.id === sessionId)?.updated_at;
+  const subtitle = setupMissing
+    ? (apiBaseUrl ? 'Tap the message field to finish pairing' : 'Tap the message field to connect this phone')
+    : (sessionId ? `Updated ${formatRelativeTime(sessionUpdatedAt)}` : 'Ready to chat');
+  const pairingPromptTitle = apiBaseUrl ? 'Finish pairing this phone' : 'Connect this phone';
+  const pairingPromptText = apiBaseUrl
+    ? 'This phone already knows the backend URL, but it still needs a trusted-device token before chat opens up.'
+    : 'Add the backend URL first, then complete trusted-device pairing. After that, chat stays as the main workspace.';
+  const workspaceStatus = [
+    { label: 'Connection', value: status },
     { label: 'Voice', value: voiceState },
-    { label: 'Session', value: sessionId ? `${sessionName} (${sessionId})` : 'None' },
+    { label: 'Session', value: sessionId ? sessionName : 'No session yet' },
   ];
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={styles.container}>
       <AppDrawer
         visible={drawerOpen}
         onClose={() => setDrawerOpen(false)}
@@ -1114,6 +1128,169 @@ export default function ChatScreen() {
         }}
       />
 
+      <Modal transparent visible={pairPromptOpen} animationType="fade" onRequestClose={() => setPairPromptOpen(false)}>
+        <View style={styles.modalOverlay}>
+          <Pressable style={styles.modalBackdrop} onPress={() => setPairPromptOpen(false)} />
+          <View style={styles.promptCard}>
+            <Text style={styles.promptTitle}>{pairingPromptTitle}</Text>
+            <Text style={styles.promptText}>{pairingPromptText}</Text>
+            <View style={styles.promptActions}>
+              <Pressable
+                style={styles.primaryButton}
+                onPress={() => {
+                  setPairPromptOpen(false);
+                  router.push('/pair');
+                }}
+              >
+                <Text style={styles.primaryButtonText}>Open Pair</Text>
+              </Pressable>
+              <Pressable
+                style={styles.secondaryButton}
+                onPress={() => {
+                  setPairPromptOpen(false);
+                  router.push('/settings');
+                }}
+              >
+                <Text style={styles.secondaryButtonText}>Settings</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal transparent visible={workspacePanelOpen} animationType="slide" onRequestClose={() => setWorkspacePanelOpen(false)}>
+        <View style={styles.sheetOverlay}>
+          <Pressable style={styles.sheetBackdrop} onPress={() => setWorkspacePanelOpen(false)} />
+          <SafeAreaView edges={['bottom']} style={styles.sheet}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.sheetHeader}>
+              <View style={styles.sheetHeading}>
+                <Text style={styles.sheetTitle}>Workspace</Text>
+                <Text style={styles.sheetSubtitle}>Status, tools, remote view, and recent run updates</Text>
+              </View>
+              <Pressable onPress={() => setWorkspacePanelOpen(false)}>
+                <Text style={styles.sheetClose}>Done</Text>
+              </Pressable>
+            </View>
+
+            <ScrollView contentContainerStyle={styles.sheetContent}>
+              <View style={styles.rowWrap}>
+                <Pressable
+                  style={styles.secondaryButton}
+                  onPress={() => {
+                    setWorkspacePanelOpen(false);
+                    void createConversation();
+                  }}
+                >
+                  <Text style={styles.secondaryButtonText}>New chat</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.secondaryButton}
+                  onPress={() => {
+                    void refreshSidebarData();
+                    setWorkspacePanelOpen(false);
+                  }}
+                >
+                  <Text style={styles.secondaryButtonText}>Refresh chats</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.secondaryButton}
+                  onPress={() => {
+                    setWorkspacePanelOpen(false);
+                    setDrawerTab('cron');
+                    setDrawerOpen(true);
+                  }}
+                >
+                  <Text style={styles.secondaryButtonText}>Open cron</Text>
+                </Pressable>
+              </View>
+
+              <CollapsibleSection title="Status" meta="Moved off the main chat to keep the screen clean" defaultExpanded={false}>
+                {workspaceStatus.map((item) => (
+                  <View key={item.label} style={styles.statusRowCompact}>
+                    <Text style={styles.statusRowLabel}>{item.label}</Text>
+                    <Text style={styles.statusRowValue}>{item.value}</Text>
+                  </View>
+                ))}
+              </CollapsibleSection>
+
+              <CollapsibleSection title="Remote view" meta={`${screenStatus} · ${screenLiveState}`} defaultExpanded={false}>
+                <View style={styles.rowWrap}>
+                  <Pressable style={styles.secondaryButton} onPress={() => void refreshScreenshot()}>
+                    <Text style={styles.secondaryButtonText}>Refresh screen</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.secondaryButton, isScreenLive ? styles.liveButton : null]}
+                    onPress={() => setIsScreenLive((prev) => !prev)}
+                  >
+                    <Text style={styles.secondaryButtonText}>{isScreenLive ? 'Stop live' : 'Start live'}</Text>
+                  </Pressable>
+                </View>
+                {screenPreview ? (
+                  <>
+                    <Image source={{ uri: screenPreview.uri }} style={styles.screenPreview} resizeMode="cover" />
+                    <Text style={styles.helperText}>
+                      {screenPreview.backend} · {screenPreview.width}x{screenPreview.height}
+                    </Text>
+                  </>
+                ) : (
+                  <Text style={styles.helperText}>No screenshot yet.</Text>
+                )}
+              </CollapsibleSection>
+
+              <CollapsibleSection title="Composer tools" meta="Uploads and steering" defaultExpanded={false}>
+                <View style={styles.rowWrap}>
+                  <Pressable style={styles.secondaryButton} onPress={() => void uploadAttachment('camera')}>
+                    <Text style={styles.secondaryButtonText}>Camera</Text>
+                  </Pressable>
+                  <Pressable style={styles.secondaryButton} onPress={() => void uploadAttachment('gallery')}>
+                    <Text style={styles.secondaryButtonText}>Gallery</Text>
+                  </Pressable>
+                  <Pressable style={styles.secondaryButton} onPress={() => void uploadAttachment('document')}>
+                    <Text style={styles.secondaryButtonText}>Document</Text>
+                  </Pressable>
+                </View>
+                {steeringBetaEnabled ? (
+                  <View style={styles.betaBlock}>
+                    <Text style={styles.helperText}>Beta steering</Text>
+                    <View style={styles.rowWrap}>
+                      <Pressable
+                        style={[styles.secondaryButton, interruptPolicy === 'none' ? styles.activeSecondary : null]}
+                        onPress={() => setInterruptPolicy('none')}
+                      >
+                        <Text style={styles.secondaryButtonText}>Standard</Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.secondaryButton, interruptPolicy === 'steer_now' ? styles.activeSecondary : null]}
+                        onPress={() => setInterruptPolicy('steer_now')}
+                      >
+                        <Text style={styles.secondaryButtonText}>Steer now</Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.secondaryButton, interruptPolicy === 'after_tool' ? styles.activeSecondary : null]}
+                        onPress={() => setInterruptPolicy('after_tool')}
+                      >
+                        <Text style={styles.secondaryButtonText}>After tool</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                ) : null}
+              </CollapsibleSection>
+
+              <CollapsibleSection title="Run feed" meta={toolLogs.length ? `${toolLogs.length} recent updates` : 'Quiet'} defaultExpanded={false}>
+                {toolLogs.length === 0 ? (
+                  <Text style={styles.helperText}>No tool or status updates yet.</Text>
+                ) : (
+                  toolLogs.slice(0, 8).map((entry, index) => (
+                    <Text key={`${entry}-${index}`} style={styles.logLine}>{entry}</Text>
+                  ))
+                )}
+              </CollapsibleSection>
+            </ScrollView>
+          </SafeAreaView>
+        </View>
+      </Modal>
+
       <View style={styles.topBar}>
         <Pressable
           style={styles.topButton}
@@ -1122,65 +1299,23 @@ export default function ChatScreen() {
             setDrawerOpen(true);
           }}
         >
-          <Text style={styles.topButtonText}>Menu</Text>
+          <Text style={styles.topButtonText}>Sidebar</Text>
         </Pressable>
         <View style={styles.titleBlock}>
           <Text style={styles.title}>{sessionName}</Text>
-          <Text style={styles.subtitle}>
-            {sessionId ? `Updated ${formatRelativeTime(sessions.find((item) => item.id === sessionId)?.updated_at)}` : 'Ready for a new conversation'}
-          </Text>
+          <Text style={styles.subtitle}>{subtitle}</Text>
         </View>
-        <Pressable style={styles.topButton} onPress={() => void refreshSidebarData()}>
-          <Text style={styles.topButtonText}>Refresh</Text>
+        <Pressable style={styles.plusButton} onPress={() => setWorkspacePanelOpen(true)}>
+          <Text style={styles.plusButtonText}>+</Text>
         </Pressable>
       </View>
-
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statusRow}>
-        {statusCards.map((card) => (
-          <View key={card.label} style={styles.statusChip}>
-            <Text style={styles.statusLabel}>{card.label}</Text>
-            <Text style={styles.statusValue}>{card.value}</Text>
-          </View>
-        ))}
-      </ScrollView>
-
-      {setupMissing ? (
-        <View style={styles.setupCard}>
-          <Text style={styles.setupTitle}>Setup required</Text>
-          <Text style={styles.setupText}>
-            {apiBaseUrl
-              ? 'This device still needs a saved token. Finish pairing before you start chatting.'
-              : 'Add the backend URL first, then pair this device. After that this screen becomes your main workspace.'}
-          </Text>
-          <View style={styles.setupActions}>
-            <Link href="/pair" style={styles.setupLink}>Open Pair</Link>
-            <Link href="/settings" style={styles.setupLink}>Open Settings</Link>
-            <Link href="/diagnostics" style={styles.setupLink}>Open Diagnostics</Link>
-          </View>
-        </View>
-      ) : null}
 
       <ScrollView style={styles.messages} contentContainerStyle={styles.messagesContent}>
         {messages.length === 0 ? (
           <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>Chat-first workspace</Text>
-            <Text style={styles.emptyText}>
-              Open an existing session from the sidebar or start typing here. Cron jobs run in the background and now live in their own sidebar tab instead of crowding the conversation.
+            <Text style={styles.emptyHint}>
+              {setupMissing ? 'Tap the message field to connect this phone.' : 'Your conversation will appear here.'}
             </Text>
-            <View style={styles.emptyActions}>
-              <Pressable style={styles.primaryButton} onPress={() => void createConversation()}>
-                <Text style={styles.primaryButtonText}>New chat</Text>
-              </Pressable>
-              <Pressable
-                style={styles.secondaryButton}
-                onPress={() => {
-                  setDrawerTab('cron');
-                  setDrawerOpen(true);
-                }}
-              >
-                <Text style={styles.secondaryButtonText}>Open Cron</Text>
-              </Pressable>
-            </View>
           </View>
         ) : (
           messages.map((message, index) => (
@@ -1216,83 +1351,11 @@ export default function ChatScreen() {
         </View>
       ) : null}
 
-      <View style={styles.utilityStack}>
-        <CollapsibleSection title="Remote view" meta={`${screenStatus} · ${screenLiveState}`}>
-          <View style={styles.rowWrap}>
-            <Pressable style={styles.secondaryButton} onPress={() => void refreshScreenshot()}>
-              <Text style={styles.secondaryButtonText}>Refresh screen</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.secondaryButton, isScreenLive ? styles.liveButton : null]}
-              onPress={() => setIsScreenLive((prev) => !prev)}
-            >
-              <Text style={styles.secondaryButtonText}>{isScreenLive ? 'Stop live' : 'Start live'}</Text>
-            </Pressable>
-          </View>
-          {screenPreview ? (
-            <>
-              <Image source={{ uri: screenPreview.uri }} style={styles.screenPreview} resizeMode="cover" />
-              <Text style={styles.helperText}>
-                {screenPreview.backend} · {screenPreview.width}x{screenPreview.height}
-              </Text>
-            </>
-          ) : (
-            <Text style={styles.helperText}>No screenshot yet.</Text>
-          )}
-        </CollapsibleSection>
-
-        <CollapsibleSection title="Composer tools" meta="Uploads, steering, and live controls">
-          <View style={styles.rowWrap}>
-            <Pressable style={styles.secondaryButton} onPress={() => void uploadAttachment('camera')}>
-              <Text style={styles.secondaryButtonText}>Camera</Text>
-            </Pressable>
-            <Pressable style={styles.secondaryButton} onPress={() => void uploadAttachment('gallery')}>
-              <Text style={styles.secondaryButtonText}>Gallery</Text>
-            </Pressable>
-            <Pressable style={styles.secondaryButton} onPress={() => void uploadAttachment('document')}>
-              <Text style={styles.secondaryButtonText}>Document</Text>
-            </Pressable>
-          </View>
-          {steeringBetaEnabled ? (
-            <View style={styles.betaBlock}>
-              <Text style={styles.helperText}>Beta steering</Text>
-              <View style={styles.rowWrap}>
-                <Pressable
-                  style={[styles.secondaryButton, interruptPolicy === 'none' ? styles.activeSecondary : null]}
-                  onPress={() => setInterruptPolicy('none')}
-                >
-                  <Text style={styles.secondaryButtonText}>Standard</Text>
-                </Pressable>
-                <Pressable
-                  style={[styles.secondaryButton, interruptPolicy === 'steer_now' ? styles.activeSecondary : null]}
-                  onPress={() => setInterruptPolicy('steer_now')}
-                >
-                  <Text style={styles.secondaryButtonText}>Steer now</Text>
-                </Pressable>
-                <Pressable
-                  style={[styles.secondaryButton, interruptPolicy === 'after_tool' ? styles.activeSecondary : null]}
-                  onPress={() => setInterruptPolicy('after_tool')}
-                >
-                  <Text style={styles.secondaryButtonText}>After tool</Text>
-                </Pressable>
-              </View>
-            </View>
-          ) : null}
-        </CollapsibleSection>
-
-        <CollapsibleSection title="Run feed" meta={toolLogs.length ? `${toolLogs.length} recent updates` : 'Quiet'}>
-          {toolLogs.length === 0 ? (
-            <Text style={styles.helperText}>No tool or status updates yet.</Text>
-          ) : (
-            toolLogs.slice(0, 8).map((entry, index) => (
-              <Text key={`${entry}-${index}`} style={styles.logLine}>{entry}</Text>
-            ))
-          )}
-        </CollapsibleSection>
-      </View>
-
       <View style={styles.composerShell}>
-        <View style={styles.voiceRow}>
+        <View style={styles.composerActionRow}>
+          <Pressable style={styles.plusButtonSmall} onPress={() => setWorkspacePanelOpen(true)}>
+            <Text style={styles.plusButtonSmallText}>+</Text>
+          </Pressable>
           {isRecording ? (
             <>
               <Pressable style={styles.voiceStopButton} onPress={() => void stopVoiceCapture(true)}>
@@ -1313,26 +1376,25 @@ export default function ChatScreen() {
               </Text>
             </Pressable>
           )}
-          <Pressable
-            style={styles.secondaryButton}
-            onPress={() => {
-              setDrawerTab('cron');
-              setDrawerOpen(true);
-            }}
-          >
-            <Text style={styles.secondaryButtonText}>Cron</Text>
-          </Pressable>
         </View>
 
         <View style={styles.inputRow}>
-          <TextInput
-            style={styles.input}
-            value={input}
-            onChangeText={setInput}
-            placeholder="Message EmploAI"
-            placeholderTextColor="#7f8aa3"
-            multiline
-          />
+          {setupMissing ? (
+            <Pressable style={[styles.input, styles.lockedInput]} onPress={() => setPairPromptOpen(true)}>
+              <Text style={styles.lockedInputText}>
+                {apiBaseUrl ? 'Tap to finish pairing' : 'Tap to add backend and pair'}
+              </Text>
+            </Pressable>
+          ) : (
+            <TextInput
+              style={styles.input}
+              value={input}
+              onChangeText={setInput}
+              placeholder="Message EmploAI"
+              placeholderTextColor="#7f8aa3"
+              multiline
+            />
+          )}
           <Pressable style={styles.sendButton} onPress={send}>
             <Text style={styles.sendButtonText}>Send</Text>
           </Pressable>
@@ -1347,8 +1409,93 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#0b1020',
     paddingHorizontal: 16,
-    paddingTop: 14,
+    paddingTop: 8,
     gap: 12,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(5, 8, 18, 0.6)',
+    justifyContent: 'center',
+    paddingHorizontal: 22,
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  promptCard: {
+    backgroundColor: '#111a31',
+    borderRadius: 24,
+    padding: 20,
+    gap: 12,
+  },
+  promptTitle: {
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  promptText: {
+    color: '#d7e3fb',
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  promptActions: {
+    flexDirection: 'row',
+    gap: 10,
+    flexWrap: 'wrap',
+    paddingTop: 4,
+  },
+  sheetOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(5, 8, 18, 0.42)',
+  },
+  sheetBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  sheet: {
+    backgroundColor: '#0f1730',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 10,
+    maxHeight: '82%',
+    gap: 12,
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 44,
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: '#41547f',
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  sheetHeading: {
+    flex: 1,
+    gap: 4,
+  },
+  sheetTitle: {
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  sheetSubtitle: {
+    color: '#92a6cd',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  sheetClose: {
+    color: '#7cc7ff',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  sheetContent: {
+    gap: 12,
+    paddingBottom: 10,
   },
   topBar: {
     flexDirection: 'row',
@@ -1372,90 +1519,44 @@ const styles = StyleSheet.create({
   },
   title: {
     color: '#ffffff',
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '700',
   },
   subtitle: {
     color: '#8fa2c8',
     fontSize: 13,
   },
-  statusRow: {
-    gap: 8,
-    paddingRight: 20,
+  plusButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#182342',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  statusChip: {
-    backgroundColor: '#141c33',
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    minWidth: 118,
-    gap: 4,
-  },
-  statusLabel: {
-    color: '#7f93bc',
-    fontSize: 11,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  statusValue: {
+  plusButtonText: {
     color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  setupCard: {
-    backgroundColor: '#16253f',
-    borderRadius: 18,
-    padding: 14,
-    gap: 8,
-  },
-  setupTitle: {
-    color: '#ffffff',
-    fontSize: 15,
     fontWeight: '700',
-  },
-  setupText: {
-    color: '#d9e7ff',
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  setupActions: {
-    flexDirection: 'row',
-    gap: 12,
-    flexWrap: 'wrap',
-  },
-  setupLink: {
-    color: '#7cc7ff',
-    fontSize: 14,
-    fontWeight: '700',
+    fontSize: 22,
   },
   messages: {
     flex: 1,
   },
   messagesContent: {
     gap: 12,
-    paddingBottom: 8,
+    paddingBottom: 12,
+    flexGrow: 1,
   },
   emptyState: {
-    backgroundColor: '#141c33',
-    borderRadius: 22,
-    padding: 18,
-    gap: 10,
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 30,
   },
-  emptyTitle: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  emptyText: {
-    color: '#d6e2fb',
+  emptyHint: {
+    color: '#6f82a8',
     fontSize: 15,
-    lineHeight: 22,
-  },
-  emptyActions: {
-    flexDirection: 'row',
-    gap: 10,
-    flexWrap: 'wrap',
-    paddingTop: 4,
+    textAlign: 'center',
   },
   bubble: {
     borderRadius: 18,
@@ -1511,13 +1612,28 @@ const styles = StyleSheet.create({
     color: '#dce8ff',
     fontSize: 14,
   },
-  utilityStack: {
-    gap: 10,
-  },
   rowWrap: {
     flexDirection: 'row',
     gap: 8,
     flexWrap: 'wrap',
+  },
+  statusRowCompact: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 6,
+  },
+  statusRowLabel: {
+    color: '#8fa2c8',
+    fontSize: 13,
+  },
+  statusRowValue: {
+    flex: 1,
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'right',
   },
   helperText: {
     color: '#a9bbdf',
@@ -1545,10 +1661,24 @@ const styles = StyleSheet.create({
     gap: 10,
     marginBottom: 8,
   },
-  voiceRow: {
+  composerActionRow: {
     flexDirection: 'row',
     gap: 8,
     flexWrap: 'wrap',
+    alignItems: 'center',
+  },
+  plusButtonSmall: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#182342',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  plusButtonSmallText: {
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: '700',
   },
   voiceStartButton: {
     backgroundColor: '#0f8f62',
@@ -1587,6 +1717,13 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     minHeight: 50,
     maxHeight: 110,
+  },
+  lockedInput: {
+    justifyContent: 'center',
+  },
+  lockedInputText: {
+    color: '#8ea2cb',
+    fontSize: 15,
   },
   sendButton: {
     backgroundColor: '#3b82f6',

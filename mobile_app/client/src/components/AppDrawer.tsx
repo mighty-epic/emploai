@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
+import { SafeAreaView as SafeAreaFrame } from 'react-native-safe-area-context';
 
 import type { ScheduledJob, SessionSummary } from '@/lib/appApi';
 import { formatRelativeTime } from '@/lib/time';
@@ -63,8 +64,7 @@ export function AppDrawer({
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
       <View style={styles.overlay}>
-        <Pressable style={styles.backdrop} onPress={onClose} />
-        <SafeAreaView style={styles.panel}>
+        <SafeAreaFrame edges={['top', 'bottom']} style={styles.panel}>
           <View style={styles.panelHeader}>
             <View style={styles.headerCopy}>
               <Text style={styles.brand}>EmploAI</Text>
@@ -166,7 +166,8 @@ export function AppDrawer({
               </View>
             ) : null}
           </ScrollView>
-        </SafeAreaView>
+        </SafeAreaFrame>
+        <Pressable style={styles.backdrop} onPress={onClose} />
       </View>
     </Modal>
   );
@@ -184,10 +185,11 @@ const styles = StyleSheet.create({
   panel: {
     width: 320,
     backgroundColor: '#0e1630',
-    borderLeftWidth: 1,
-    borderLeftColor: '#1e294b',
+    borderRightWidth: 1,
+    borderRightColor: '#1e294b',
     paddingHorizontal: 16,
     paddingBottom: 18,
+    paddingTop: 10,
     gap: 14,
   },
   panelHeader: {
