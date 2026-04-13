@@ -18,3 +18,7 @@ telegram_bot/single_agent/screenshots/
 emplo-own/
 git-push-test/
 agent_data/AGENTS.md
+
+# Windows beta release artifacts
+build/
+dist/
