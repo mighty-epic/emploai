@@ -3,15 +3,15 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $specPath = Join-Path $PSScriptRoot "EmploAI.spec"
 $distDir = Join-Path $repoRoot "dist"
-$releaseDir = Join-Path $distDir "EmploAI"
+$releaseExe = Join-Path $distDir "EmploAI.exe"
 $zipPath = Join-Path $distDir "EmploAI-windows-beta.zip"
 
 Push-Location $repoRoot
 try {
-    python -m pip install pyinstaller | Out-Host
+    python -m pip install "setuptools<81" "pyinstaller>=6.14,<7" | Out-Host
 
-    if (Test-Path $releaseDir) {
-        Remove-Item -Recurse -Force $releaseDir
+    if (Test-Path $releaseExe) {
+        Remove-Item -Force $releaseExe
     }
     if (Test-Path $zipPath) {
         Remove-Item -Force $zipPath
@@ -19,14 +19,19 @@ try {
 
     python -m PyInstaller --noconfirm --clean $specPath
 
-    Compress-Archive -Path (Join-Path $releaseDir "*") -DestinationPath $zipPath
+    if (-not (Test-Path $releaseExe)) {
+        throw "Expected build output not found: $releaseExe"
+    }
+
+    Compress-Archive -Path $releaseExe -DestinationPath $zipPath
 
     Write-Host ""
     Write-Host "Windows beta release created:"
-    Write-Host "  Folder: $releaseDir"
-    Write-Host "  Zip:    $zipPath"
+    Write-Host "  EXE: $releaseExe"
+    Write-Host "  Zip: $zipPath"
     Write-Host ""
-    Write-Host "Upload the zip to the GitHub release page. Testers can unzip it and run EmploAI.exe."
+    Write-Host "Upload EmploAI.exe to the GitHub release page if you want a single direct download."
+    Write-Host "Upload EmploAI-windows-beta.zip as the fallback asset."
 }
 finally {
     Pop-Location

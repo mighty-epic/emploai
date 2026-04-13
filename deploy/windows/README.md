@@ -1,12 +1,11 @@
 # Windows Beta Release
 
-This release path builds a portable Windows console app for EmploAI beta testers.
+This release path builds a single-file Windows console app for EmploAI beta testers.
 
 ## Beta tester experience
 
-1. Download the latest release zip from GitHub.
-2. Unzip it anywhere.
-3. Run `EmploAI.exe`.
+1. Download `EmploAI.exe` from the latest GitHub release.
+2. Run `EmploAI.exe`.
 4. A console window opens and stays open for logs.
 5. On first run, EmploAI prompts for:
    - Telegram bot token
@@ -27,7 +26,7 @@ powershell -ExecutionPolicy Bypass -File .\deploy\windows\build_beta_release.ps1
 
 That produces:
 
-- `dist\EmploAI\` — portable app folder
+- `dist\EmploAI.exe` — primary single-file release asset
 - `dist\EmploAI-windows-beta.zip` — release asset to upload to GitHub
 
 ## Re-run setup
@@ -56,4 +55,4 @@ That folder contains:
 
 ## Current scope
 
-This is a portable beta release path, not a full Windows installer yet. The GitHub release zip is the intended distribution format for now.
+This is a single-file beta release path, not a full MSI/installer yet. The intended GitHub release asset is `EmploAI.exe`.
