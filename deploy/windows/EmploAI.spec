@@ -28,6 +28,7 @@ for package_name in ("telegram_bot", "single_agent", "shared", "bot_core", "cli"
 datas = [
     (str(project_root / ".env.example"), "."),
     (str(project_root / "config.json"), "."),
+    (str(project_root / "deploy" / "windows" / "release_info.json"), "deploy/windows"),
 ]
 datas += collect_tree(project_root / "browser_extension", "browser_extension")
 datas += collect_tree(project_root / "skills", "skills")

@@ -1,0 +1,10 @@
+{
+  "version": "0.1.0-beta.2",
+  "release_tag": "v0.1.0-beta.2",
+  "msi_version": "0.1.2",
+  "channel": "beta",
+  "github_repo": "mighty-epic/emploai",
+  "primary_asset": "EmploAI.msi",
+  "portable_asset": "EmploAI.exe",
+  "update_check_interval_hours": 12
+}

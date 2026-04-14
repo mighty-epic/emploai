@@ -1,11 +1,15 @@
 # Windows Beta Release
 
-This release path builds a single-file Windows console app for EmploAI beta testers.
+This release path builds both:
+
+- `EmploAI.exe` — portable console runtime
+- `EmploAI.msi` — per-user Windows installer with upgrade support
 
 ## Beta tester experience
 
-1. Download `EmploAI.exe` from the latest GitHub release.
-2. Run `EmploAI.exe`.
+1. Download `EmploAI.msi` from the latest GitHub release.
+2. Run the installer.
+3. Launch `EmploAI` from the Start Menu.
 4. A console window opens and stays open for logs.
 5. On first run, EmploAI prompts for:
    - Telegram bot token
@@ -26,8 +30,18 @@ powershell -ExecutionPolicy Bypass -File .\deploy\windows\build_beta_release.ps1
 
 That produces:
 
-- `dist\EmploAI.exe` — primary single-file release asset
-- `dist\EmploAI-windows-beta.zip` — release asset to upload to GitHub
+- `dist\EmploAI.exe` — portable fallback asset
+- `dist\EmploAI.msi` — installer with in-place upgrade support
+
+If you also want the extra zip fallback, build with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\deploy\windows\build_beta_release.ps1 -IncludeZip
+```
+
+That additionally produces:
+
+- `dist\EmploAI-windows-beta.zip`
 
 ## Re-run setup
 
@@ -53,6 +67,12 @@ That folder contains:
 - `memory\`
 - `logs\`
 
-## Current scope
+## Updates
 
-This is a single-file beta release path, not a full MSI/installer yet. The intended GitHub release asset is `EmploAI.exe`.
+The installer path is designed for upgrades:
+
+- MSI upgrades replace the installed app in place
+- the runtime checks GitHub Releases for a newer MSI on startup
+- if found, it offers to download and launch the installer automatically
+
+The preferred GitHub release asset is `EmploAI.msi`.

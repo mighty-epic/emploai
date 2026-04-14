@@ -15,6 +15,7 @@ from deploy.windows.release_runtime import (
     run_first_run_setup,
     runtime_home,
 )
+from deploy.windows.release_update import maybe_install_update
 
 
 def _set_console_title() -> None:
@@ -45,6 +46,9 @@ def main() -> None:
         sys.path.insert(0, str(telegram_bot_dir))
     configure_process_environment(home, env_file)
     print_runtime_banner(home)
+
+    if maybe_install_update(home, root, args=set(sys.argv[1:])):
+        return
 
     from telegram_bot.telegram_agent import main as telegram_main
 
