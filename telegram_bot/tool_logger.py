@@ -4,6 +4,7 @@ Verbose tool logging for the Telegram agent.
 - File output: full details (excluding base64 data)
 """
 
+import os
 import logging
 import json
 import re
@@ -11,9 +12,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
-# Create logs directory
-LOGS_DIR = Path(__file__).parent / "logs"
-LOGS_DIR.mkdir(exist_ok=True)
+
+def _resolve_logs_dir() -> Path:
+    runtime_home = os.getenv("EMPLOAI_HOME", "").strip()
+    if runtime_home:
+        return Path(runtime_home).expanduser().resolve() / "logs"
+    return Path(__file__).parent / "logs"
+
+
+LOGS_DIR = _resolve_logs_dir()
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 # File logger - writes full output
 file_handler = logging.FileHandler(

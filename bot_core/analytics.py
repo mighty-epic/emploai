@@ -5,6 +5,7 @@ Tracks usage, skills, tokens, and provides insights
 
 import json
 import logging
+import os
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
@@ -13,6 +14,13 @@ from collections import defaultdict, Counter
 
 
 logger = logging.getLogger(__name__)
+
+
+def _default_storage_path() -> Path:
+    runtime_home = os.getenv("EMPLOAI_HOME", "").strip()
+    if runtime_home:
+        return Path(runtime_home).expanduser().resolve() / "data" / "analytics.json"
+    return Path(__file__).parent / "data" / "analytics.json"
 
 
 @dataclass
@@ -49,7 +57,7 @@ class AnalyticsTracker:
             storage_path: Path to store analytics data
         """
         if storage_path is None:
-            storage_path = Path(__file__).parent / "data" / "analytics.json"
+            storage_path = _default_storage_path()
         
         self.storage_path = Path(storage_path)
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
