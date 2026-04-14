@@ -8,13 +8,20 @@ import time
 
 from telegram.constants import ChatAction
 
-from telegram_unified_agent import (
-    build_unified_system_prompt,
-    get_auto_mode_extra_tools,
-    get_auto_mode_tool_handlers,
-)
-
-from telegram_messaging import safe_reply, safe_edit_message
+try:
+    from telegram_bot.telegram_unified_agent import (
+        build_unified_system_prompt,
+        get_auto_mode_extra_tools,
+        get_auto_mode_tool_handlers,
+    )
+    from telegram_bot.telegram_messaging import safe_reply, safe_edit_message
+except ImportError:
+    from telegram_unified_agent import (
+        build_unified_system_prompt,
+        get_auto_mode_extra_tools,
+        get_auto_mode_tool_handlers,
+    )
+    from telegram_messaging import safe_reply, safe_edit_message
 from bot_core.ui_helpers import InlineKeyboardHelper, ThinkingModeVisualizer
 from single_agent.agent import AGENT_TOOLS
 from shared import begin_chat_turn, merge_openai_tools, run_reserved_chat_turn

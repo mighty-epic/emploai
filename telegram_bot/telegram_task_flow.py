@@ -4,8 +4,15 @@ import asyncio
 
 from telegram.constants import ChatAction
 
-from telegram_messaging import safe_reply, safe_edit_message
-from telegram_unified_agent import build_unified_system_prompt, create_unified_agent_for_task
+try:
+    from telegram_bot.telegram_messaging import safe_reply, safe_edit_message
+    from telegram_bot.telegram_unified_agent import (
+        build_unified_system_prompt,
+        create_unified_agent_for_task,
+    )
+except ImportError:
+    from telegram_messaging import safe_reply, safe_edit_message
+    from telegram_unified_agent import build_unified_system_prompt, create_unified_agent_for_task
 from bot_core.ui_helpers import InlineKeyboardHelper
 
 

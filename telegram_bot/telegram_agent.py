@@ -15,10 +15,10 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
-    from linux import headed_linux_runtime_error
+    from telegram_bot.linux import headed_linux_runtime_error
 except ImportError:
     try:
-        from telegram_bot.linux import headed_linux_runtime_error
+        from linux import headed_linux_runtime_error
     except ImportError:
         def headed_linux_runtime_error() -> str | None:
             return None
@@ -30,7 +30,10 @@ from bot_core.hooks import HookEvent, HookType
 from bot_core.security import SecurityManager, rate_limited, authorized_only
 from bot_core.ui_helpers import InlineKeyboardHelper, MessageFormatter
 from cli.tui_constants import AVAILABLE_MODELS as _ALL_MODELS, MODEL_CONFIGS as _ALL_MODEL_CONFIGS
-from telegram_app import run_bot
+try:
+    from telegram_bot.telegram_app import run_bot
+except ImportError:
+    from telegram_app import run_bot
 
 # ======================================================================================
 # BETA MODE — restrict expensive models
@@ -52,20 +55,32 @@ if BETA_MODE:
 else:
     MODEL_CONFIGS = _ALL_MODEL_CONFIGS
     AVAILABLE_MODELS = _ALL_MODELS
-from telegram_callback_handlers import build_callback_handlers
-from telegram_chat_flow import run_chat_flow
-from telegram_commands_core import build_core_command_handlers
-from telegram_commands_session import build_session_command_handlers
-from telegram_commands_skills import build_skill_command_handlers
-from telegram_commands_tasks import build_task_command_handlers
-from telegram_commands_utility import build_utility_command_handlers
-from telegram_message_handlers import build_message_handlers
-from telegram_messaging import safe_edit, safe_reply
-from restart_runtime import exec_current_process
-from telegram_session_state import get_session, track_command_usage
-from telegram_task_flow import run_task_flow
-from mobile_app.backend import start_embedded_app_server_if_enabled
-from mobile_app.backend.cron_runtime import ensure_global_cron_scheduler_started
+try:
+    from telegram_bot.telegram_callback_handlers import build_callback_handlers
+    from telegram_bot.telegram_chat_flow import run_chat_flow
+    from telegram_bot.telegram_commands_core import build_core_command_handlers
+    from telegram_bot.telegram_commands_session import build_session_command_handlers
+    from telegram_bot.telegram_commands_skills import build_skill_command_handlers
+    from telegram_bot.telegram_commands_tasks import build_task_command_handlers
+    from telegram_bot.telegram_commands_utility import build_utility_command_handlers
+    from telegram_bot.telegram_message_handlers import build_message_handlers
+    from telegram_bot.telegram_messaging import safe_edit, safe_reply
+    from telegram_bot.restart_runtime import exec_current_process
+    from telegram_bot.telegram_session_state import get_session, track_command_usage
+    from telegram_bot.telegram_task_flow import run_task_flow
+except ImportError:
+    from telegram_callback_handlers import build_callback_handlers
+    from telegram_chat_flow import run_chat_flow
+    from telegram_commands_core import build_core_command_handlers
+    from telegram_commands_session import build_session_command_handlers
+    from telegram_commands_skills import build_skill_command_handlers
+    from telegram_commands_tasks import build_task_command_handlers
+    from telegram_commands_utility import build_utility_command_handlers
+    from telegram_message_handlers import build_message_handlers
+    from telegram_messaging import safe_edit, safe_reply
+    from restart_runtime import exec_current_process
+    from telegram_session_state import get_session, track_command_usage
+    from telegram_task_flow import run_task_flow
 
 # ======================================================================================
 # 🔒 CONFIGURATION
@@ -93,6 +108,24 @@ logger = logging.getLogger(__name__)
 def restart_process() -> None:
     """Re-exec the current Python process so the bot restarts in-place."""
     exec_current_process(script_path_fallback=os.path.abspath(__file__))
+
+
+def _safe_start_embedded_app_server() -> None:
+    try:
+        from mobile_app.backend import start_embedded_app_server_if_enabled
+
+        start_embedded_app_server_if_enabled()
+    except Exception:
+        logger.exception("Embedded app server startup failed; continuing without mobile app backend")
+
+
+async def _safe_start_cron_scheduler() -> None:
+    try:
+        from mobile_app.backend.cron_runtime import ensure_global_cron_scheduler_started
+
+        await ensure_global_cron_scheduler_started()
+    except Exception:
+        logger.exception("Cron scheduler startup failed; continuing without background cron runtime")
 
 
 # ======================================================================================
@@ -291,8 +324,8 @@ def main():
         logger.error(runtime_error)
         raise RuntimeError(runtime_error)
 
-    start_embedded_app_server_if_enabled()
-    asyncio.run(ensure_global_cron_scheduler_started())
+    _safe_start_embedded_app_server()
+    asyncio.run(_safe_start_cron_scheduler())
 
     run_bot(
         bot_token=BOT_TOKEN,
