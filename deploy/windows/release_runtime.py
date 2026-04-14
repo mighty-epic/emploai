@@ -14,6 +14,7 @@ from dotenv import dotenv_values, load_dotenv
 APP_NAME = "EmploAI"
 ENV_FILENAME = ".env"
 LOG_DIRNAME = "logs"
+EXTENSION_DIRNAME = "browser_extension"
 
 _ENV_ORDER = [
     "TELEGRAM_BOT_TOKEN",
@@ -142,6 +143,11 @@ def ensure_runtime_files(home: Path, source_root: Path) -> None:
     if example_src.exists() and not example_dst.exists():
         shutil.copyfile(example_src, example_dst)
 
+    extension_src = source_root / EXTENSION_DIRNAME
+    extension_dst = home / EXTENSION_DIRNAME
+    if extension_src.exists():
+        shutil.copytree(extension_src, extension_dst, dirs_exist_ok=True)
+
 
 def load_existing_env_values(path: Path) -> Dict[str, str]:
     if not path.exists():
@@ -219,6 +225,15 @@ def _print_setup_intro(home: Path, env_file: Path) -> None:
               2. Run /newbot and copy the bot token
               3. Open @userinfobot and send any message
               4. Copy your numeric Telegram user ID
+
+            Browser extension path for this beta build:
+              {home / EXTENSION_DIRNAME}
+
+            If you want the real Chrome extension bridge later:
+              1. Open chrome://extensions
+              2. Enable Developer mode
+              3. Click Load unpacked
+              4. Select the browser_extension folder above
 
             Your editable environment file will be stored at:
               {env_file}
@@ -312,4 +327,3 @@ def print_runtime_banner(home: Path) -> None:
     print(f"Runtime home: {home}")
     print("Logs stream in this console window. Press Ctrl+C to stop the bot.")
     print()
-

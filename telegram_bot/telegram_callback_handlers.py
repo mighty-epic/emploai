@@ -49,7 +49,10 @@ def build_callback_handlers(
                 session.live_config.set('browser.use_extension', enable, user.id)
                 session.live_config.save_config()
                 if enable:
-                    from telegram_unified_agent import _get_browser_tool
+                    try:
+                        from telegram_bot.telegram_unified_agent import _get_browser_tool
+                    except ImportError:
+                        from telegram_unified_agent import _get_browser_tool
                     _get_browser_tool(session)
             status = "✅ ENABLED" if enable else "⛔ DISABLED"
             await safe_edit(query, f"Browser bridge set to {status}.")

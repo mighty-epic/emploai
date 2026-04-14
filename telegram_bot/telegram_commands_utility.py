@@ -352,7 +352,10 @@ def build_utility_command_handlers(
             session.live_config.set('browser.use_extension', True, user.id)
             session.live_config.save_config()
             session.reset_browser_task_context(session.current_task_id)
-            from telegram_unified_agent import ensure_extension_bridge
+            try:
+                from telegram_bot.telegram_unified_agent import ensure_extension_bridge
+            except ImportError:
+                from telegram_unified_agent import ensure_extension_bridge
             ensure_extension_bridge(session)
             await safe_reply(update, "✅ Browser Extension Bridge enabled. Future browser tasks will use your real Chrome.")
             return
@@ -363,7 +366,10 @@ def build_utility_command_handlers(
             await safe_reply(update, "⛔ Browser Extension Bridge disabled. Reverting to headless Selenium.")
             return
 
-        from telegram_unified_agent import get_browser_bridge_status
+        try:
+            from telegram_bot.telegram_unified_agent import get_browser_bridge_status
+        except ImportError:
+            from telegram_unified_agent import get_browser_bridge_status
         bridge_status = get_browser_bridge_status(session)
 
         status = "✅ ENABLED (Using real Chrome)" if bridge_status["desired_backend"] == "extension" else "⛔ DISABLED (Using Selenium)"
