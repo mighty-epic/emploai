@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -13,6 +14,9 @@ _CRON_RUNTIME_SESSION: Optional[TelegramSession] = None
 
 
 def _workspace() -> Path:
+    runtime_home = os.getenv("EMPLOAI_HOME", "").strip()
+    if runtime_home:
+        return Path(runtime_home).expanduser().resolve()
     return Path(__file__).resolve().parents[2]
 
 
