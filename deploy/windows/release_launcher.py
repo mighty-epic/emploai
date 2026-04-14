@@ -40,6 +40,9 @@ def main() -> None:
         run_first_run_setup(home=home, env_file=env_file, existing=existing)
 
     sys.path.insert(0, str(root))
+    telegram_bot_dir = root / "telegram_bot"
+    if telegram_bot_dir.exists():
+        sys.path.insert(0, str(telegram_bot_dir))
     configure_process_environment(home, env_file)
     print_runtime_banner(home)
 
