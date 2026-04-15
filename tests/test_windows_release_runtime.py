@@ -1,11 +1,15 @@
 from pathlib import Path
 
 from deploy.windows.release_runtime import (
+    current_release_version,
     default_release_config,
     ensure_runtime_files,
     merge_env,
+    needs_versioned_setup,
     needs_first_run_setup,
+    load_release_state,
     render_env,
+    run_first_run_setup,
 )
 
 
@@ -76,3 +80,63 @@ def test_default_release_config_disables_app_channel():
     config = default_release_config()
     assert config["channels"]["telegram"]["enabled"] is True
     assert config["channels"]["app"]["enabled"] is False
+
+
+def test_needs_versioned_setup_triggers_on_new_release(tmp_path: Path):
+    source_root = tmp_path / "source"
+    deploy_dir = source_root / "deploy" / "windows"
+    deploy_dir.mkdir(parents=True)
+    (deploy_dir / "release_info.json").write_text('{"version":"0.1.0-beta.2"}', encoding="utf-8")
+
+    runtime_home = tmp_path / "runtime"
+    runtime_home.mkdir()
+    (runtime_home / "release_state.json").write_text(
+        '{"last_onboarded_version":"0.1.0-beta.1"}',
+        encoding="utf-8",
+    )
+
+    values = {
+        "TELEGRAM_BOT_TOKEN": "123:abc",
+        "ALLOWED_USER_IDS": "42",
+    }
+    assert current_release_version(source_root) == "0.1.0-beta.2"
+    assert needs_versioned_setup(values, home=runtime_home, source_root=source_root)
+
+
+def test_run_first_run_setup_saves_all_provider_keys_and_onboarded_version(tmp_path: Path):
+    source_root = tmp_path / "source"
+    deploy_dir = source_root / "deploy" / "windows"
+    deploy_dir.mkdir(parents=True)
+    (deploy_dir / "release_info.json").write_text('{"version":"0.1.0-beta.2"}', encoding="utf-8")
+
+    runtime_home = tmp_path / "runtime"
+    runtime_home.mkdir()
+    env_file = runtime_home / ".env"
+
+    answers = iter([
+        "123:abc",
+        "42",
+        "C:/Work",
+        "sk-openai",
+        "sk-ant",
+        "google-key",
+        "xai-key",
+        "deepseek-key",
+        "openrouter-key",
+    ])
+
+    merged = run_first_run_setup(
+        home=runtime_home,
+        env_file=env_file,
+        source_root=source_root,
+        existing={},
+        input_fn=lambda _prompt: next(answers),
+    )
+
+    assert merged["OPENAI_API_KEY"] == "sk-openai"
+    assert merged["ANTHROPIC_API_KEY"] == "sk-ant"
+    assert merged["GOOGLE_API_KEY"] == "google-key"
+    assert merged["XAI_API_KEY"] == "xai-key"
+    assert merged["DEEPSEEK_API_KEY"] == "deepseek-key"
+    assert merged["OPENROUTER_API_KEY"] == "openrouter-key"
+    assert load_release_state(runtime_home)["last_onboarded_version"] == "0.1.0-beta.2"

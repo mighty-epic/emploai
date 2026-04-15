@@ -291,23 +291,8 @@ def _current_headless_mode() -> str:
     return "headless" if os.getenv("HEADLESS", "true").strip().lower() in {"true", "1", "yes", "on"} else "headed"
 
 
-def _model_groups() -> list[dict[str, Any]]:
-    providers: dict[str, list[str]] = {}
-    for model in AVAILABLE_MODELS:
-        provider = str(MODEL_CONFIGS.get(model, {}).get("provider", "unknown"))
-        providers.setdefault(provider, []).append(model)
-
-    ordered_groups: list[dict[str, Any]] = []
-    for provider in ["anthropic", "openai", "google", "xai", "deepseek", "openrouter", "unknown"]:
-        models = sorted(providers.get(provider, []))
-        if models:
-            ordered_groups.append({"provider": provider, "models": models})
-
-    for provider, models in sorted(providers.items()):
-        if provider in {"anthropic", "openai", "google", "xai", "deepseek", "openrouter", "unknown"}:
-            continue
-        ordered_groups.append({"provider": provider, "models": sorted(models)})
-    return ordered_groups
+def _model_groups(runtime) -> list[dict[str, Any]]:
+    return runtime.get_available_model_groups(AVAILABLE_MODELS)
 
 
 def _estimate_message_tokens(message: Dict[str, Any]) -> int:
@@ -424,6 +409,7 @@ def _config_preview(runtime, limit: int = 18) -> list[dict[str, Any]]:
 
 
 def _agent_overview(runtime, *, history_count: int = 12, analytics_days: int = 7) -> dict[str, Any]:
+    runtime.ensure_current_model_available(AVAILABLE_MODELS)
     heartbeat = (
         runtime.heartbeat_manager.get_status()
         if runtime.heartbeat_manager
@@ -441,7 +427,7 @@ def _agent_overview(runtime, *, history_count: int = 12, analytics_days: int = 7
         "current_model": runtime.current_model,
         "current_variant": runtime.current_variant,
         "available_variants": runtime.get_available_variants(),
-        "model_groups": _model_groups(),
+        "model_groups": _model_groups(runtime),
         "max_turns": runtime.max_turns,
         "workspace": str(runtime.workspace),
         "auto_reply_enabled": bool(runtime.auto_reply_enabled),
@@ -509,11 +495,12 @@ def _set_workspace(runtime, workspace_value: str) -> None:
 
 
 def _configure_runtime(runtime, request: AgentConfigureRequest) -> None:
+    runtime.ensure_current_model_available(AVAILABLE_MODELS)
     should_save_session = False
 
     if request.model is not None:
-        if request.model not in AVAILABLE_MODELS:
-            raise HTTPException(status_code=400, detail="Unknown model")
+        if request.model not in runtime.get_available_models(AVAILABLE_MODELS):
+            raise HTTPException(status_code=400, detail="Model is unavailable for configured providers")
         runtime.current_model = request.model
         should_save_session = True
 

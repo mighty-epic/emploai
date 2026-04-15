@@ -9,13 +9,14 @@ This release path builds both:
 
 1. Download `EmploAI.msi` from the latest GitHub release.
 2. Run the installer.
-3. Launch `EmploAI` from the Start Menu.
+3. On first install, keep `Launch EmploAI now` checked on the installer finish page.
+4. Launch `EmploAI` from the Start Menu any time after that.
 4. A console window opens and stays open for logs.
 5. On first run, EmploAI prompts for:
    - Telegram bot token
    - allowed Telegram user ID(s)
    - workspace root
-   - optional OpenAI / Anthropic API keys
+   - optional provider API keys (OpenAI, Anthropic, Google, xAI, DeepSeek, OpenRouter)
 6. The runtime files are stored under `%LOCALAPPDATA%\EmploAI`.
 
 The executable is intentionally console-based. There is no separate desktop UI in this beta flow.
@@ -72,7 +73,8 @@ That folder contains:
 The installer path is designed for upgrades:
 
 - MSI upgrades replace the installed app in place
-- the runtime checks GitHub Releases for a newer MSI on startup
-- if found, it offers to download and launch the installer automatically
+- the runtime checks GitHub Releases for a newer MSI on every startup
+- if found, it offers to download, install, and restart automatically
+- the updated MSI relaunches EmploAI after the upgrade completes
 
 The preferred GitHub release asset is `EmploAI.msi`.

@@ -6,5 +6,5 @@
   "github_repo": "mighty-epic/emploai",
   "primary_asset": "EmploAI.msi",
   "portable_asset": "EmploAI.exe",
-  "update_check_interval_hours": 12
+  "update_check_interval_hours": 0
 }

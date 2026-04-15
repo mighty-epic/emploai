@@ -19,7 +19,6 @@ COMMAND_HELP: Dict[str, str] = {
     "model": "Switch model: `/model`",
     "models": "List available models: `/models`",
     "task": "Compatibility alias. Send the request normally and the auto agent will handle it.",
-    "continue": "Resume paused task: `/continue`",
     "pause": "Pause running task: `/pause`",
     "stop": "Stop running task: `/stop`",
     "spawn": "Spawn sub-agent: `/spawn <prompt>`",
@@ -111,7 +110,6 @@ def build_core_command_handlers(
             "/model - Switch model\n"
             "/models - List all models\n\n"
             "**Automation & Control:**\n"
-            "/continue - Resume paused task\n"
             "/pause - Pause running task\n"
             "/stop - Stop running task\n"
             "/spawn <prompt> - Spawn parallel sub-agent\n"
@@ -197,28 +195,28 @@ def build_core_command_handlers(
         user = update.effective_user
 
         session = get_session(user.id)
+        session.ensure_current_model_available(AVAILABLE_MODELS)
         current = session.current_model
-
-        providers: Dict[str, list[str]] = {}
-        for model in AVAILABLE_MODELS:
-            config = MODEL_CONFIGS.get(model, {})
-            provider = config.get("provider", "unknown")
-            if provider not in providers:
-                providers[provider] = []
-            providers[provider].append(model)
+        model_groups = session.get_available_model_groups(AVAILABLE_MODELS)
+        if not model_groups:
+            await safe_reply(
+                update,
+                "❌ No model providers are configured.\n\nAdd at least one API key and restart EmploAI.",
+            )
+            return
 
         keyboard = []
-        for provider in ["anthropic", "openai", "google", "xai", "deepseek", "openrouter"]:
-            if provider in providers:
-                count = len(providers[provider])
-                keyboard.append(
-                    [
-                        InlineKeyboardButton(
-                            f"{provider.title()} ({count})",
-                            callback_data=f"provider:{provider}",
-                        )
-                    ]
-                )
+        for group in model_groups:
+            provider = group["provider"]
+            count = len(group["models"])
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        f"{provider.title()} ({count})",
+                        callback_data=f"provider:{provider}",
+                    )
+                ]
+            )
 
         reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -233,23 +231,25 @@ def build_core_command_handlers(
     async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """List all available models."""
         user = update.effective_user
-
-        providers: Dict[str, list[str]] = {}
-        for model in AVAILABLE_MODELS:
-            config = MODEL_CONFIGS.get(model, {})
-            provider = config.get("provider", "unknown")
-            if provider not in providers:
-                providers[provider] = []
-            providers[provider].append(model)
+        session = get_session(user.id)
+        session.ensure_current_model_available(AVAILABLE_MODELS)
+        model_groups = session.get_available_model_groups(AVAILABLE_MODELS)
+        if not model_groups:
+            await safe_reply(
+                update,
+                "❌ No model providers are configured.\n\nAdd at least one API key and restart EmploAI.",
+            )
+            return
 
         lines = ["**📋 Available Models**\n"]
-        for provider in ["anthropic", "openai", "google", "xai", "deepseek", "openrouter"]:
-            if provider in providers:
-                lines.append(f"\n**{provider.title()}:**")
-                for model in providers[provider][:5]:
-                    lines.append(f"  • {model}")
-                if len(providers[provider]) > 5:
-                    lines.append(f"  • ...and {len(providers[provider]) - 5} more")
+        for group in model_groups:
+            provider = group["provider"]
+            models = group["models"]
+            lines.append(f"\n**{provider.title()}:**")
+            for model in models[:5]:
+                lines.append(f"  • {model}")
+            if len(models) > 5:
+                lines.append(f"  • ...and {len(models) - 5} more")
 
         lines.append("\n\nUse /model to switch models.")
         await safe_reply(update, "\n".join(lines))

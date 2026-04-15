@@ -7,6 +7,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $specPath = Join-Path $PSScriptRoot "EmploAI.spec"
 $wxsPath = Join-Path $PSScriptRoot "EmploAI.wxs"
+$licenseRtfPath = Join-Path $PSScriptRoot "InstallerLicense.rtf"
 $releaseInfoPath = Join-Path $PSScriptRoot "release_info.json"
 $distDir = Join-Path $repoRoot "dist"
 $releaseExe = Join-Path $distDir "EmploAI.exe"
@@ -60,8 +61,8 @@ try {
     $wixObj = Join-Path $distDir "EmploAI.wixobj"
     $candle = Join-Path $wixDir "candle.exe"
     $light = Join-Path $wixDir "light.exe"
-    & $candle -nologo "-dProductVersion=$($releaseInfo.msi_version)" "-dReleaseExe=$releaseExe" -out $wixObj $wxsPath
-    & $light -nologo -out $releaseMsi $wixObj
+    & $candle -nologo "-dProductVersion=$($releaseInfo.msi_version)" "-dReleaseExe=$releaseExe" "-dLicenseRtf=$licenseRtfPath" -out $wixObj $wxsPath
+    & $light -nologo -ext WixUIExtension -ext WixUtilExtension -out $releaseMsi $wixObj
 
     if (-not (Test-Path $releaseMsi)) {
         throw "Expected MSI output not found: $releaseMsi"

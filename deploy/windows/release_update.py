@@ -69,6 +69,12 @@ def load_release_info(bundle_root: Path) -> ReleaseInfo:
         return _default_release_info()
 
     defaults = _default_release_info()
+    raw_interval = raw.get("update_check_interval_hours")
+    if raw_interval in (None, ""):
+        interval_hours = defaults.update_check_interval_hours
+    else:
+        interval_hours = int(raw_interval)
+
     return ReleaseInfo(
         version=str(raw.get("version") or defaults.version),
         release_tag=str(raw.get("release_tag") or defaults.release_tag),
@@ -77,7 +83,7 @@ def load_release_info(bundle_root: Path) -> ReleaseInfo:
         github_repo=str(raw.get("github_repo") or defaults.github_repo),
         primary_asset=str(raw.get("primary_asset") or defaults.primary_asset),
         portable_asset=str(raw.get("portable_asset") or defaults.portable_asset),
-        update_check_interval_hours=int(raw.get("update_check_interval_hours") or defaults.update_check_interval_hours),
+        update_check_interval_hours=interval_hours,
     )
 
 
@@ -121,6 +127,8 @@ def _parse_iso8601(value: str | None) -> Optional[datetime]:
 
 def should_check_for_updates(home: Path, interval_hours: int, *, force: bool = False) -> bool:
     if force:
+        return True
+    if interval_hours <= 0:
         return True
     state = load_release_state(home)
     last_checked_at = _parse_iso8601(state.get("last_checked_at"))
@@ -215,22 +223,58 @@ def _download_update_asset(home: Path, update: AvailableUpdate) -> Path:
     return target_path
 
 
-def _launch_msi_update(installer_path: Path) -> None:
-    cmd = (
-        f'timeout /t 2 /nobreak >nul & '
-        f'msiexec.exe /i "{installer_path}" /passive /norestart'
+def _default_restart_executable() -> Path:
+    local_appdata = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA") or str(Path.home())
+    return Path(local_appdata) / "Programs" / "EmploAI" / "EmploAI.exe"
+
+
+def _write_update_script(home: Path, installer_path: Path, restart_executable: Path) -> Path:
+    updates_dir = home / UPDATES_DIRNAME
+    updates_dir.mkdir(parents=True, exist_ok=True)
+    script_path = updates_dir / "apply_update_and_restart.cmd"
+    script_path.write_text(
+        "\r\n".join(
+            [
+                "@echo off",
+                "setlocal",
+                "timeout /t 2 /nobreak >nul",
+                f'msiexec.exe /i "{installer_path}" /passive /norestart',
+                "set MSI_EXIT=%ERRORLEVEL%",
+                'if "%MSI_EXIT%"=="0" goto relaunch',
+                'if "%MSI_EXIT%"=="1641" goto relaunch',
+                'if "%MSI_EXIT%"=="3010" goto relaunch',
+                "exit /b %MSI_EXIT%",
+                ":relaunch",
+                "timeout /t 2 /nobreak >nul",
+                f'if exist "{restart_executable}" start "" "{restart_executable}"',
+                "exit /b 0",
+            ]
+        )
+        + "\r\n",
+        encoding="utf-8",
     )
+    return script_path
+
+
+def _launch_msi_update(home: Path, installer_path: Path, restart_executable: Path) -> None:
+    script_path = _write_update_script(home, installer_path, restart_executable)
     creationflags = 0
     for flag_name in ("DETACHED_PROCESS", "CREATE_NEW_PROCESS_GROUP"):
         creationflags |= int(getattr(subprocess, flag_name, 0))
     subprocess.Popen(
-        ["cmd.exe", "/c", cmd],
+        ["cmd.exe", "/c", str(script_path)],
         close_fds=True,
         creationflags=creationflags,
     )
 
 
-def maybe_install_update(home: Path, bundle_root: Path, *, args: set[str]) -> bool:
+def maybe_install_update(
+    home: Path,
+    bundle_root: Path,
+    *,
+    args: set[str],
+    restart_executable: Path | None = None,
+) -> bool:
     if "--skip-update-check" in args or os.getenv("EMPLOAI_SKIP_UPDATE_CHECK", "").strip():
         return False
 
@@ -268,7 +312,8 @@ def maybe_install_update(home: Path, bundle_root: Path, *, args: set[str]) -> bo
         print(f"Downloaded update asset to {installer_path}. Launch it manually to update.")
         return False
 
+    restart_path = restart_executable or _default_restart_executable()
     print(f"Launching installer: {installer_path}")
-    _launch_msi_update(installer_path)
-    print("The updater has started. EmploAI will exit so the MSI can replace the current install.")
+    _launch_msi_update(home, installer_path, restart_path)
+    print("The updater has started. EmploAI will exit so the MSI can replace the current install, then restart on the new version.")
     return True

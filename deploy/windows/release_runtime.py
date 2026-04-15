@@ -15,6 +15,7 @@ APP_NAME = "EmploAI"
 ENV_FILENAME = ".env"
 LOG_DIRNAME = "logs"
 EXTENSION_DIRNAME = "browser_extension"
+RELEASE_STATE_FILENAME = "release_state.json"
 
 _ENV_ORDER = [
     "TELEGRAM_BOT_TOKEN",
@@ -160,6 +161,42 @@ def load_existing_env_values(path: Path) -> Dict[str, str]:
     }
 
 
+def _release_info_path(source_root: Path) -> Path:
+    return source_root / "deploy" / "windows" / "release_info.json"
+
+
+def current_release_version(source_root: Path) -> str:
+    info_path = _release_info_path(source_root)
+    if not info_path.exists():
+        return "0.0.0-beta.0"
+    try:
+        payload = json.loads(info_path.read_text(encoding="utf-8"))
+    except Exception:
+        return "0.0.0-beta.0"
+    return str(payload.get("version") or "0.0.0-beta.0")
+
+
+def _release_state_path(home: Path) -> Path:
+    return home / RELEASE_STATE_FILENAME
+
+
+def load_release_state(home: Path) -> Dict[str, object]:
+    path = _release_state_path(home)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_release_state(home: Path, state: Mapping[str, object]) -> None:
+    _release_state_path(home).write_text(
+        json.dumps(dict(state), indent=2),
+        encoding="utf-8",
+    )
+
+
 def merge_env(existing: Mapping[str, str], updates: Mapping[str, str]) -> Dict[str, str]:
     merged = dict(existing)
     for key, value in updates.items():
@@ -194,6 +231,16 @@ def needs_first_run_setup(values: Mapping[str, str]) -> bool:
     return not values.get("TELEGRAM_BOT_TOKEN") or not values.get("ALLOWED_USER_IDS")
 
 
+def needs_versioned_setup(values: Mapping[str, str], *, home: Path, source_root: Path) -> bool:
+    if needs_first_run_setup(values):
+        return True
+
+    release_version = current_release_version(source_root)
+    state = load_release_state(home)
+    last_onboarded_version = str(state.get("last_onboarded_version") or "")
+    return last_onboarded_version != release_version
+
+
 def _prompt_nonempty(prompt: str, input_fn: Callable[[str], str]) -> str:
     while True:
         value = input_fn(prompt).strip()
@@ -207,7 +254,26 @@ def _prompt_with_default(prompt: str, default: str, input_fn: Callable[[str], st
     return value or default
 
 
-def _print_setup_intro(home: Path, env_file: Path) -> None:
+def _prompt_secret(
+    label: str,
+    *,
+    existing: str,
+    input_fn: Callable[[str], str],
+) -> str:
+    if existing:
+        prompt = f"{label} [configured; Enter=keep, -=clear]: "
+    else:
+        prompt = f"{label} [optional; Enter=skip]: "
+    value = input_fn(prompt).strip()
+    if not value:
+        return existing
+    if value == "-":
+        return ""
+    return value
+
+
+def _print_setup_intro(home: Path, env_file: Path, *, source_root: Path) -> None:
+    release_version = current_release_version(source_root)
     print("=" * 72)
     print(f"{APP_NAME} Beta Setup")
     print("=" * 72)
@@ -217,8 +283,12 @@ def _print_setup_intro(home: Path, env_file: Path) -> None:
             This beta build stores its runtime files here:
               {home}
 
+            Release version:
+              {release_version}
+
             The bot runs in this console window and prints logs here directly.
             You can re-run setup later by launching the exe with `--setup`.
+            EmploAI reopens setup once after each installed update so you can review keys and configuration.
 
             Telegram setup:
               1. Open Telegram and talk to @BotFather
@@ -247,10 +317,11 @@ def run_first_run_setup(
     *,
     home: Path,
     env_file: Path,
+    source_root: Path,
     existing: Mapping[str, str],
     input_fn: Callable[[str], str] = input,
 ) -> Dict[str, str]:
-    _print_setup_intro(home, env_file)
+    _print_setup_intro(home, env_file, source_root=source_root)
 
     updates: Dict[str, str] = {}
     token_default = existing.get("TELEGRAM_BOT_TOKEN", "")
@@ -271,23 +342,36 @@ def run_first_run_setup(
     workspace = _prompt_with_default("Workspace root for file operations", workspace_default, input_fn)
     updates["DEFAULT_WORKSPACE"] = workspace
 
-    openai_default = existing.get("OPENAI_API_KEY", "")
-    openai_prompt = (
-        "OpenAI API key (recommended for first run, press Enter to skip)"
-        if not openai_default
-        else "OpenAI API key"
+    updates["OPENAI_API_KEY"] = _prompt_secret(
+        "OpenAI API key",
+        existing=existing.get("OPENAI_API_KEY", ""),
+        input_fn=input_fn,
     )
-    openai_value = input_fn(f"{openai_prompt}{f' [{openai_default}]' if openai_default else ''}: ").strip()
-    updates["OPENAI_API_KEY"] = openai_value or openai_default
-
-    anthropic_default = existing.get("ANTHROPIC_API_KEY", "")
-    anthropic_prompt = (
-        "Anthropic API key (optional, press Enter to skip)"
-        if not anthropic_default
-        else "Anthropic API key"
+    updates["ANTHROPIC_API_KEY"] = _prompt_secret(
+        "Anthropic API key",
+        existing=existing.get("ANTHROPIC_API_KEY", ""),
+        input_fn=input_fn,
     )
-    anthropic_value = input_fn(f"{anthropic_prompt}{f' [{anthropic_default}]' if anthropic_default else ''}: ").strip()
-    updates["ANTHROPIC_API_KEY"] = anthropic_value or anthropic_default
+    updates["GOOGLE_API_KEY"] = _prompt_secret(
+        "Google API key (Gemini)",
+        existing=existing.get("GOOGLE_API_KEY", ""),
+        input_fn=input_fn,
+    )
+    updates["XAI_API_KEY"] = _prompt_secret(
+        "xAI API key (Grok)",
+        existing=existing.get("XAI_API_KEY", ""),
+        input_fn=input_fn,
+    )
+    updates["DEEPSEEK_API_KEY"] = _prompt_secret(
+        "DeepSeek API key",
+        existing=existing.get("DEEPSEEK_API_KEY", ""),
+        input_fn=input_fn,
+    )
+    updates["OPENROUTER_API_KEY"] = _prompt_secret(
+        "OpenRouter API key",
+        existing=existing.get("OPENROUTER_API_KEY", ""),
+        input_fn=input_fn,
+    )
 
     updates.setdefault("MAX_REQUESTS_PER_MINUTE", existing.get("MAX_REQUESTS_PER_MINUTE", "30"))
     updates.setdefault("MAX_REQUESTS_PER_HOUR", existing.get("MAX_REQUESTS_PER_HOUR", "200"))
@@ -296,10 +380,21 @@ def run_first_run_setup(
 
     merged = merge_env(existing, updates)
     save_env(env_file, merged)
+    state = load_release_state(home)
+    state["last_onboarded_version"] = current_release_version(source_root)
+    save_release_state(home, state)
 
     print()
     print(f"Saved setup to {env_file}")
-    if not merged.get("OPENAI_API_KEY") and not merged.get("ANTHROPIC_API_KEY"):
+    configured_keys = [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_API_KEY",
+        "XAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "OPENROUTER_API_KEY",
+    ]
+    if not any(merged.get(key) for key in configured_keys):
         print("Warning: no model API key was configured. The bot will start, but model calls will fail until you add one.")
     print()
     return merged

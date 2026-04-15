@@ -39,6 +39,12 @@ from shared import (
     EnhancedSkillsManager, enhance_skill_registry,
     UnifiedAgent,
 )
+from shared.model_availability import (
+    enabled_providers_from_clients,
+    filter_models_by_provider_access,
+    first_available_model,
+    group_models_by_provider,
+)
 
 from openai import OpenAI
 from anthropic import Anthropic
@@ -215,6 +221,7 @@ class TelegramSession:
         self.enhanced_skills = enhance_skill_registry(self.skill_registry)
 
         self._init_clients()
+        self.ensure_current_model_available()
         
         if self.gemini_openai_client:
             from cli.agent_tools.context_manager import ContextManager, DEFAULT_CONTEXT_SIZES
@@ -367,6 +374,46 @@ class TelegramSession:
         variant_info = MODEL_VARIANTS.get(self.current_model, {"variants": ["standard"]})
         return variant_info.get("variants", ["standard"])
 
+    def get_enabled_providers(self) -> set[str]:
+        """Return providers that currently have configured credentials."""
+        return enabled_providers_from_clients(
+            openai_client=self.openai_client,
+            anthropic_client=self.anthropic_client,
+            google_client=self.google_client or self.gemini_openai_client,
+            xai_client=self.xai_client,
+            deepseek_client=self.deepseek_client,
+            openrouter_client=self.openrouter_client,
+        )
+
+    def get_available_models(self, candidate_models: Optional[List[str]] = None) -> List[str]:
+        """Return models filtered to providers that currently have credentials."""
+        source_models = candidate_models or list(MODEL_CONFIGS.keys())
+        return filter_models_by_provider_access(
+            source_models,
+            MODEL_CONFIGS,
+            self.get_enabled_providers(),
+        )
+
+    def get_available_model_groups(self, candidate_models: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Return filtered model groups by provider."""
+        return group_models_by_provider(
+            self.get_available_models(candidate_models),
+            MODEL_CONFIGS,
+        )
+
+    def ensure_current_model_available(self, candidate_models: Optional[List[str]] = None) -> bool:
+        """Move off an unavailable model when its provider is not configured."""
+        available_models = self.get_available_models(candidate_models)
+        preferred = first_available_model(available_models, self.current_model)
+        if preferred is None or preferred == self.current_model:
+            return False
+
+        self.current_model = preferred
+        available_variants = self.get_available_variants()
+        if self.current_variant not in available_variants:
+            self.current_variant = available_variants[0] if available_variants else "standard"
+        return True
+
     def get_client_for_model(self):
         """Get the appropriate LLM client for the current model."""
         config = MODEL_CONFIGS.get(self.current_model, {})
@@ -411,6 +458,7 @@ class TelegramSession:
 
         # Update session with current runtime state
         session_obj.chat_history = self.chat_history
+        session_obj.workspace = str(self.workspace)
         session_obj.model = self.current_model
         session_obj.variant = self.current_variant
         session_obj.agent_mode = "auto"
@@ -428,6 +476,10 @@ class TelegramSession:
 
         # Sync to runtime state
         self.chat_history = session_obj.chat_history
+        if session_obj.workspace:
+            self.workspace = Path(session_obj.workspace)
+            if self.tool_executor:
+                self.tool_executor.workspace = self.workspace
         self.current_model = session_obj.model
         self.current_variant = session_obj.variant
         self.agent_mode = "auto"

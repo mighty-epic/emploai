@@ -10,7 +10,7 @@ from deploy.windows.release_runtime import (
     ensure_runtime_files,
     env_path,
     load_existing_env_values,
-    needs_first_run_setup,
+    needs_versioned_setup,
     print_runtime_banner,
     run_first_run_setup,
     runtime_home,
@@ -37,8 +37,8 @@ def main() -> None:
 
     existing = load_existing_env_values(env_file)
     force_setup = "--setup" in sys.argv[1:]
-    if force_setup or needs_first_run_setup(existing):
-        run_first_run_setup(home=home, env_file=env_file, existing=existing)
+    if force_setup or needs_versioned_setup(existing, home=home, source_root=root):
+        run_first_run_setup(home=home, env_file=env_file, source_root=root, existing=existing)
 
     sys.path.insert(0, str(root))
     telegram_bot_dir = root / "telegram_bot"
@@ -47,7 +47,8 @@ def main() -> None:
     configure_process_environment(home, env_file)
     print_runtime_banner(home)
 
-    if maybe_install_update(home, root, args=set(sys.argv[1:])):
+    restart_executable = Path(sys.executable).resolve() if getattr(sys, "frozen", False) else None
+    if maybe_install_update(home, root, args=set(sys.argv[1:]), restart_executable=restart_executable):
         return
 
     from telegram_bot.telegram_agent import main as telegram_main

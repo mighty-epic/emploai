@@ -16,9 +16,13 @@
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of EmploAI is already installed." />
     <MediaTemplate EmbedCab="yes" />
+    <UIRef Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
 
-    <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="ARPNOREPAIR" Value="1" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch EmploAI now" />
+    <Property Id="WixShellExecTarget" Value="[#EmploAIExeFile]" />
+    <CustomAction Id="LaunchInstalledApplication" BinaryKey="WixCA" DllEntry="WixShellExec" Impersonate="yes" />
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="LocalAppDataFolder">
@@ -36,6 +40,14 @@
       <ComponentRef Id="InstallRootCleanupComponent" />
       <ComponentRef Id="StartMenuShortcutComponent" />
     </Feature>
+
+    <UI>
+      <Publish
+        Dialog="ExitDialog"
+        Control="Finish"
+        Event="DoAction"
+        Value="LaunchInstalledApplication">WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed AND NOT WIX_UPGRADE_DETECTED</Publish>
+    </UI>
   </Product>
 
   <Fragment>

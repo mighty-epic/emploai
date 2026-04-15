@@ -229,19 +229,26 @@ def build_callback_handlers(
             await safe_edit(query, f"✅ Variant set to: **{variant}**")
         elif data.startswith("provider:"):
             provider = data.split(":")[1]
+            session.ensure_current_model_available(AVAILABLE_MODELS)
+            model_groups = {
+                group["provider"]: group["models"]
+                for group in session.get_available_model_groups(AVAILABLE_MODELS)
+            }
+            provider_models = model_groups.get(provider, [])
+            if not provider_models:
+                await safe_edit(query, "❌ No models are available for that provider.")
+                return
 
             keyboard = []
-            for model in AVAILABLE_MODELS:
-                config = MODEL_CONFIGS.get(model, {})
-                if config.get("provider") == provider:
-                    is_current = "✓ " if model == session.current_model else ""
-                    keyboard.append(
-                        [
-                            InlineKeyboardButton(
-                                f"{is_current}{model}", callback_data=f"model:{model}"
-                            )
-                        ]
-                    )
+            for model in provider_models:
+                is_current = "✓ " if model == session.current_model else ""
+                keyboard.append(
+                    [
+                        InlineKeyboardButton(
+                            f"{is_current}{model}", callback_data=f"model:{model}"
+                        )
+                    ]
+                )
 
             keyboard.append(
                 [InlineKeyboardButton("« Back", callback_data="model:back")]
@@ -255,33 +262,27 @@ def build_callback_handlers(
             model = data.split(":")[1]
 
             if model == "back":
-                providers = {}
-                for available_model in AVAILABLE_MODELS:
-                    config = MODEL_CONFIGS.get(available_model, {})
-                    provider = config.get("provider", "unknown")
-                    if provider not in providers:
-                        providers[provider] = []
-                    providers[provider].append(available_model)
+                session.ensure_current_model_available(AVAILABLE_MODELS)
+                model_groups = session.get_available_model_groups(AVAILABLE_MODELS)
+                if not model_groups:
+                    await safe_edit(
+                        query,
+                        "❌ No model providers are configured.\n\nAdd at least one API key and restart EmploAI.",
+                    )
+                    return
 
                 keyboard = []
-                for provider in [
-                    "anthropic",
-                    "openai",
-                    "google",
-                    "xai",
-                    "deepseek",
-                    "openrouter",
-                ]:
-                    if provider in providers:
-                        count = len(providers[provider])
-                        keyboard.append(
-                            [
-                                InlineKeyboardButton(
-                                    f"{provider.title()} ({count})",
-                                    callback_data=f"provider:{provider}",
-                                )
-                            ]
-                        )
+                for group in model_groups:
+                    provider = group["provider"]
+                    count = len(group["models"])
+                    keyboard.append(
+                        [
+                            InlineKeyboardButton(
+                                f"{provider.title()} ({count})",
+                                callback_data=f"provider:{provider}",
+                            )
+                        ]
+                    )
 
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await safe_edit(
@@ -290,6 +291,13 @@ def build_callback_handlers(
                     reply_markup=reply_markup,
                 )
             else:
+                available_models = session.get_available_models(AVAILABLE_MODELS)
+                if model not in available_models:
+                    await safe_edit(
+                        query,
+                        "❌ That model is unavailable because its provider is not configured.",
+                    )
+                    return
                 session.current_model = model
                 available = session.get_available_variants()
                 if session.current_variant not in available:
