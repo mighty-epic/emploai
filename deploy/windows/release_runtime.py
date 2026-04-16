@@ -16,6 +16,7 @@ ENV_FILENAME = ".env"
 LOG_DIRNAME = "logs"
 EXTENSION_DIRNAME = "browser_extension"
 RELEASE_STATE_FILENAME = "release_state.json"
+EXTENSION_GUIDE_FILENAME = "HOW_TO_LOAD_BROWSER_EXTENSION.txt"
 
 _ENV_ORDER = [
     "TELEGRAM_BOT_TOKEN",
@@ -59,6 +60,10 @@ def runtime_home() -> Path:
         or str(Path.home())
     )
     return (Path(base) / APP_NAME).resolve()
+
+
+def extension_path(home: Path) -> Path:
+    return home / EXTENSION_DIRNAME
 
 
 def env_path(home: Path) -> Path:
@@ -145,9 +150,27 @@ def ensure_runtime_files(home: Path, source_root: Path) -> None:
         shutil.copyfile(example_src, example_dst)
 
     extension_src = source_root / EXTENSION_DIRNAME
-    extension_dst = home / EXTENSION_DIRNAME
+    extension_dst = extension_path(home)
     if extension_src.exists():
         shutil.copytree(extension_src, extension_dst, dirs_exist_ok=True)
+
+    guide_path = home / EXTENSION_GUIDE_FILENAME
+    guide_path.write_text(
+        "\n".join(
+            [
+                "EmploAI Chrome Extension Setup",
+                "",
+                "1. Open chrome://extensions",
+                "2. Enable Developer mode",
+                "3. Click Load unpacked",
+                f"4. Select this folder: {extension_dst}",
+                "",
+                "After loading it in Chrome, start EmploAI and use /bridge on.",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def load_existing_env_values(path: Path) -> Dict[str, str]:
@@ -297,13 +320,19 @@ def _print_setup_intro(home: Path, env_file: Path, *, source_root: Path) -> None
               4. Copy your numeric Telegram user ID
 
             Browser extension path for this beta build:
-              {home / EXTENSION_DIRNAME}
+              {extension_path(home)}
+
+            Bundled OCR engine:
+              Tesseract OCR is included with this Windows build.
 
             If you want the real Chrome extension bridge later:
               1. Open chrome://extensions
               2. Enable Developer mode
               3. Click Load unpacked
               4. Select the browser_extension folder above
+
+            A guide file is also written here:
+              {home / EXTENSION_GUIDE_FILENAME}
 
             Your editable environment file will be stored at:
               {env_file}
@@ -420,5 +449,18 @@ def print_runtime_banner(home: Path) -> None:
     print(f"{APP_NAME} Beta Runtime")
     print("=" * 72)
     print(f"Runtime home: {home}")
+    print("Bundled OCR engine: Tesseract OCR")
+    print(f"Chrome extension folder: {extension_path(home)}")
+    print(f"Extension setup guide: {home / EXTENSION_GUIDE_FILENAME}")
+    print("If you want the real Chrome bridge, load that folder via chrome://extensions.")
     print("Logs stream in this console window. Press Ctrl+C to stop the bot.")
     print()
+
+
+def open_extension_directory(home: Path) -> Path:
+    target = extension_path(home)
+    if os.name == "nt":
+        os.startfile(str(target))
+    else:
+        raise RuntimeError("Extension directory opening is only implemented for Windows builds.")
+    return target

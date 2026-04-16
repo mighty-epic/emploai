@@ -14,6 +14,7 @@ import time
 from typing import Dict, Any, Optional, List, Callable
 from pathlib import Path
 from dataclasses import dataclass
+from shared.tesseract_runtime import configure_pytesseract_runtime, normalize_tesseract_error
 
 try:
     from openai import OpenAI
@@ -53,6 +54,7 @@ try:
     from PIL import Image
     import mss
     import base64
+    configure_pytesseract_runtime(pytesseract)
     TESSERACT_AVAILABLE = True
 except ImportError:
     TESSERACT_AVAILABLE = False
@@ -482,7 +484,7 @@ class RefinedAgent:
     def _ocr_screen(self) -> Dict:
         """OCR screen for text and coordinates."""
         if not TESSERACT_AVAILABLE:
-            return {"error": "OCR not available"}
+            return {"error": "OCR tools unavailable (missing Pillow/pytesseract)"}
         
         try:
             with mss.mss() as sct:
@@ -519,7 +521,7 @@ class RefinedAgent:
                     "total_elements": len(elements)
                 }
         except Exception as e:
-            return {"error": str(e)}
+            return {"error": normalize_tesseract_error(e, pytesseract_module=pytesseract)}
     
     def _observe_desktop(self) -> Dict:
         """List open windows."""

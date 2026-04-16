@@ -28,6 +28,8 @@ try:
     import mss
     from PIL import Image
     import pytesseract
+    from shared.tesseract_runtime import configure_pytesseract_runtime, normalize_tesseract_error
+    configure_pytesseract_runtime(pytesseract)
     TESSERACT_AVAILABLE = True
 except ImportError:
     TESSERACT_AVAILABLE = False
@@ -1342,7 +1344,7 @@ def _execute_ocr_screen(session, args: Dict) -> str:
             text_summary = "\n".join([f"'{e['text']}' at ({e['x']}, {e['y']})" for e in elements[:100]])
             return f"OCR Elements found:\n{text_summary}"
     except Exception as e:
-        return f"Error performing OCR: {str(e)}"
+        return f"Error performing OCR: {normalize_tesseract_error(e, pytesseract_module=pytesseract)}"
 
 
 def _execute_observe_desktop(session, args: Dict) -> str:

@@ -1,4 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
@@ -33,6 +34,10 @@ datas = [
 datas += collect_tree(project_root / "browser_extension", "browser_extension")
 datas += collect_tree(project_root / "skills", "skills")
 datas += collect_tree(project_root / ".agents", ".agents")
+
+tesseract_bundle = os.environ.get("EMPLOAI_TESSERACT_BUNDLE", "").strip()
+if tesseract_bundle:
+    datas += collect_tree(Path(tesseract_bundle), "vendor/tesseract")
 
 
 a = Analysis(

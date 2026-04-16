@@ -13,6 +13,8 @@ $distDir = Join-Path $repoRoot "dist"
 $releaseExe = Join-Path $distDir "EmploAI.exe"
 $releaseMsi = Join-Path $distDir "EmploAI.msi"
 $zipPath = Join-Path $distDir "EmploAI-windows-beta.zip"
+$vendorDir = Join-Path $repoRoot "build\\windows-vendor"
+$tesseractBundleDir = Join-Path $vendorDir "tesseract"
 $toolsDir = Join-Path $repoRoot ".tools"
 $wixDir = Join-Path $toolsDir "wix314"
 $wixZip = Join-Path $toolsDir "wix314-binaries.zip"
@@ -33,10 +35,59 @@ function Ensure-WixToolset {
     Expand-Archive -Path $wixZip -DestinationPath $wixDir -Force
 }
 
+function Resolve-TesseractRoot {
+    if ($env:EMPLOAI_TESSERACT_ROOT) {
+        $candidate = $env:EMPLOAI_TESSERACT_ROOT
+        if (Test-Path (Join-Path $candidate "tesseract.exe")) {
+            return (Resolve-Path $candidate).Path
+        }
+        throw "EMPLOAI_TESSERACT_ROOT is set but does not contain tesseract.exe: $candidate"
+    }
+
+    $command = Get-Command tesseract -ErrorAction SilentlyContinue
+    if ($command -and $command.Source) {
+        return Split-Path -Parent $command.Source
+    }
+
+    $defaults = @(
+        "C:\\Program Files\\Tesseract-OCR",
+        "C:\\Program Files (x86)\\Tesseract-OCR"
+    )
+    foreach ($candidate in $defaults) {
+        if (Test-Path (Join-Path $candidate "tesseract.exe")) {
+            return $candidate
+        }
+    }
+
+    throw "Tesseract OCR was not found on the build machine. Install Tesseract or set EMPLOAI_TESSERACT_ROOT before building the Windows release."
+}
+
+function Prepare-TesseractBundle {
+    $sourceRoot = Resolve-TesseractRoot
+    $tessdataSource = Join-Path $sourceRoot "tessdata"
+
+    if (-not (Test-Path $tessdataSource)) {
+        throw "Tesseract tessdata directory not found: $tessdataSource"
+    }
+
+    if (Test-Path $tesseractBundleDir) {
+        Remove-Item -Recurse -Force $tesseractBundleDir
+    }
+
+    New-Item -ItemType Directory -Force -Path $tesseractBundleDir | Out-Null
+    Copy-Item (Join-Path $sourceRoot "tesseract.exe") $tesseractBundleDir -Force
+    Get-ChildItem $sourceRoot -Filter *.dll | Copy-Item -Destination $tesseractBundleDir -Force
+    Copy-Item $tessdataSource (Join-Path $tesseractBundleDir "tessdata") -Recurse -Force
+
+    $env:EMPLOAI_TESSERACT_BUNDLE = $tesseractBundleDir
+    Write-Host "Bundling Tesseract OCR from: $sourceRoot"
+}
+
 Push-Location $repoRoot
 try {
     python -m pip install "setuptools<81" "pyinstaller>=6.14,<7" | Out-Host
     $releaseInfo = Get-Content $releaseInfoPath | ConvertFrom-Json
+    Prepare-TesseractBundle
 
     if (Test-Path $releaseExe) {
         Remove-Item -Force $releaseExe

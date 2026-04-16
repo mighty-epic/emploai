@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
 
 from openai import OpenAI
+from shared.tesseract_runtime import configure_pytesseract_runtime, normalize_tesseract_error
 
 # ============================================================
 # TOOL AVAILABILITY CHECKS
@@ -50,6 +51,7 @@ try:
     import pytesseract
     from PIL import Image
     import mss
+    configure_pytesseract_runtime(pytesseract)
     TESSERACT_AVAILABLE = True
 except ImportError:
     TESSERACT_AVAILABLE = False
@@ -358,7 +360,7 @@ class SingleAgent:
     def _ocr_screen(self) -> Dict:
         """OCR the entire screen. Returns text with bounding box coordinates."""
         if not TESSERACT_AVAILABLE:
-            return {"error": "Tesseract not available"}
+            return {"error": "OCR tools unavailable (missing Pillow/pytesseract)"}
         try:
             with mss.mss() as sct:
                 screenshot = sct.grab(sct.monitors[1])
@@ -401,7 +403,7 @@ class SingleAgent:
                     "total_elements": len(elements)
                 }
         except Exception as e:
-            return {"error": str(e)}
+            return {"error": normalize_tesseract_error(e, pytesseract_module=pytesseract)}
     
     def _observe_browser(self) -> Dict:
         """Get browser state with extended element visibility."""

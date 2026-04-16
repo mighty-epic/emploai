@@ -1,21 +1,41 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="utf-8">
   <style>
-    body { width: 200px; padding: 10px; font-family: sans-serif; background: #1a1a1a; color: white; }
-    h2 { font-size: 14px; margin-top: 0; color: #22c55e; }
-    .status { font-size: 12px; margin-bottom: 10px; }
-    .dot { height: 8px; width: 8px; background-color: #bbb; border-radius: 50%; display: inline-block; margin-right: 5px; }
+    body { width: 280px; padding: 14px; font-family: Segoe UI, sans-serif; background: #111827; color: #f9fafb; }
+    h2 { font-size: 14px; margin: 0 0 10px; color: #22c55e; }
+    .status { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 8px; font-weight: 600; }
+    .dot { height: 10px; width: 10px; background-color: #9ca3af; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
     .connected { background-color: #22c55e; }
+    .connecting { background-color: #f59e0b; }
     .disconnected { background-color: #ef4444; }
+    .detail { font-size: 11px; line-height: 1.4; color: #d1d5db; margin: 0 0 12px; }
+    .meta { display: grid; grid-template-columns: 86px 1fr; gap: 6px 8px; font-size: 11px; margin-bottom: 12px; }
+    .meta-label { color: #9ca3af; }
+    .meta-value { color: #f3f4f6; word-break: break-word; }
+    button { width: 100%; border: 0; border-radius: 8px; padding: 9px 10px; background: #22c55e; color: #052e16; font-weight: 700; cursor: pointer; }
+    button:disabled { background: #374151; color: #d1d5db; cursor: default; }
+    .footnote { font-size: 10px; line-height: 1.4; color: #9ca3af; margin-top: 10px; }
   </style>
 </head>
 <body>
   <h2>EmploAI Bridge</h2>
   <div class="status">
     <span class="dot" id="status-dot"></span>
-    <span id="status-text">Connecting...</span>
+    <span id="status-text">Checking bridge...</span>
   </div>
-  <p style="font-size: 10px;">This extension connects your browser to the Telegram Agent.</p>
+  <p class="detail" id="detail-text">This extension connects automatically to the local EmploAI bot on this machine.</p>
+  <div class="meta">
+    <div class="meta-label">Bridge</div>
+    <div class="meta-value" id="server-value">ws://127.0.0.1:8765</div>
+    <div class="meta-label">Socket</div>
+    <div class="meta-value" id="socket-value">checking</div>
+    <div class="meta-label">Heartbeat</div>
+    <div class="meta-value" id="heartbeat-value">unknown</div>
+  </div>
+  <button id="reconnect-button" type="button">Retry now</button>
+  <p class="footnote">If this stays disconnected, make sure the bot is running on this same machine and the bridge is enabled.</p>
+  <script src="popup.js"></script>
 </body>
 </html>

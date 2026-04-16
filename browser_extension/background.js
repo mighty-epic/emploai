@@ -6,6 +6,49 @@ const SERVER_URL = "ws://127.0.0.1:8765";
 const HEARTBEAT_INTERVAL_MS = 10000;
 const RECONNECT_DELAY_MS = 1000;
 const snapshotRefRegistry = new Map();
+let lastConnectAttemptAt = null;
+let lastConnectedAt = null;
+let lastDisconnectedAt = null;
+let lastHeartbeatSentAt = null;
+let lastHeartbeatAckAt = null;
+let lastSocketError = null;
+
+function getSocketStateLabel() {
+    if (!socket) {
+        return reconnectTimer ? "reconnecting" : "disconnected";
+    }
+
+    switch (socket.readyState) {
+        case WebSocket.CONNECTING:
+            return "connecting";
+        case WebSocket.OPEN:
+            return "connected";
+        case WebSocket.CLOSING:
+            return "closing";
+        case WebSocket.CLOSED:
+            return reconnectTimer ? "reconnecting" : "disconnected";
+        default:
+            return "disconnected";
+    }
+}
+
+function getBridgeStatus() {
+    return {
+        connected: !!socket && socket.readyState === WebSocket.OPEN,
+        connecting: !!socket && socket.readyState === WebSocket.CONNECTING,
+        reconnectScheduled: !!reconnectTimer,
+        heartbeatActive: !!heartbeatTimer,
+        serverUrl: SERVER_URL,
+        heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
+        socketState: getSocketStateLabel(),
+        lastConnectAttemptAt,
+        lastConnectedAt,
+        lastDisconnectedAt,
+        lastHeartbeatSentAt,
+        lastHeartbeatAckAt,
+        lastSocketError
+    };
+}
 
 function clearReconnectTimer() {
     if (reconnectTimer) {
@@ -38,6 +81,7 @@ function sendHeartbeat() {
     }
 
     try {
+        lastHeartbeatSentAt = Date.now();
         socket.send(JSON.stringify({
             type: "heartbeat",
             timestamp: Date.now()
@@ -122,6 +166,7 @@ function connect() {
     }
 
     stopHeartbeat();
+    lastConnectAttemptAt = Date.now();
 
     try {
         socket = new WebSocket(SERVER_URL);
@@ -129,6 +174,8 @@ function connect() {
         socket.onopen = () => {
             console.log("Connected to EmploAI Bridge Server");
             clearReconnectTimer();
+            lastConnectedAt = Date.now();
+            lastSocketError = null;
             chrome.action.setBadgeText({ text: "ON" });
             chrome.action.setBadgeBackgroundColor({ color: "#22c55e" });
             startHeartbeat();
@@ -147,6 +194,7 @@ function connect() {
             }
 
             if (message.type === "heartbeat_ack") {
+                lastHeartbeatAckAt = Date.now();
                 return;
             }
 
@@ -177,18 +225,37 @@ function connect() {
         socket.onclose = () => {
             socket = null;
             stopHeartbeat();
+            lastDisconnectedAt = Date.now();
             chrome.action.setBadgeText({ text: "OFF" });
             chrome.action.setBadgeBackgroundColor({ color: "#ef4444" });
             scheduleReconnect();
         };
 
         socket.onerror = (error) => {
+            lastSocketError = error?.message || "Socket connection failed";
             // Silently fail, onclose will retry
         };
     } catch (e) {
+        lastSocketError = e?.message || "Failed to create bridge socket";
         scheduleReconnect();
     }
 }
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === "emploai_popup_status") {
+        sendResponse(getBridgeStatus());
+        return false;
+    }
+
+    if (message?.type === "emploai_popup_reconnect") {
+        clearReconnectTimer();
+        connect();
+        sendResponse(getBridgeStatus());
+        return false;
+    }
+
+    return false;
+});
 
 async function handleCommand(command) {
     const { action, params = {} } = command;

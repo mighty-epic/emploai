@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Callable, Dict
 
 from telegram import BotCommand
+from telegram.error import NetworkError
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 
@@ -50,6 +52,10 @@ COMMAND_ORDER = [
     "bridge",
 ]
 
+POLLING_BOOTSTRAP_RETRIES = -1
+NETWORK_ERROR_LOG_INTERVAL_SECONDS = 15.0
+_last_network_error_log_at = 0.0
+
 
 def build_bot_commands() -> list[BotCommand]:
     return [
@@ -62,7 +68,6 @@ def build_bot_commands() -> list[BotCommand]:
         BotCommand("workspace", "Set workspace path"),
         BotCommand("headless", "Toggle browser mode"),
         BotCommand("security", "Security status"),
-        BotCommand("continue", "Resume paused task"),
         BotCommand("pause", "Pause running task"),
         BotCommand("stop", "Stop running task"),
         BotCommand("spawn", "Spawn parallel sub-agent"),
@@ -92,6 +97,47 @@ async def post_init(application: Application):
     """Set bot commands menu after initialization."""
     await application.bot.set_my_commands(build_bot_commands())
     print("[OK] Bot commands menu registered")
+
+
+def is_network_error(error: BaseException) -> bool:
+    return isinstance(error, NetworkError)
+
+
+def format_network_error_message(error: BaseException) -> str:
+    message = str(error).strip() or error.__class__.__name__
+    lowered = message.lower()
+    if "getaddrinfo failed" in lowered:
+        return "Telegram unreachable: DNS lookup failed. Check internet/DNS; retrying automatically."
+    if "timed out" in lowered or "timeout" in lowered:
+        return "Telegram unreachable: connection timed out. Retrying automatically."
+    return f"Telegram unreachable: {message}. Retrying automatically."
+
+
+async def application_error_handler(_update: object, context) -> None:
+    global _last_network_error_log_at
+
+    error = context.error
+    if error is None:
+        return
+
+    if is_network_error(error):
+        now = time.monotonic()
+        if now - _last_network_error_log_at >= NETWORK_ERROR_LOG_INTERVAL_SECONDS:
+            _last_network_error_log_at = now
+            print(f"[WARN] {format_network_error_message(error)}")
+        return
+
+    logging.error(
+        "Unhandled Telegram application error",
+        exc_info=(type(error), error, error.__traceback__),
+    )
+
+
+def build_polling_kwargs() -> dict[str, object]:
+    return {
+        "drop_pending_updates": True,
+        "bootstrap_retries": POLLING_BOOTSTRAP_RETRIES,
+    }
 
 
 def register_handlers(
@@ -140,6 +186,8 @@ def run_bot(
         .build()
     )
 
+    application.add_error_handler(application_error_handler)
+
     register_handlers(
         application,
         command_handlers=command_handlers,
@@ -148,4 +196,4 @@ def run_bot(
     )
 
     print("[INFO] Starting polling (dropping pending updates)...")
-    application.run_polling(drop_pending_updates=True)
+    application.run_polling(**build_polling_kwargs())

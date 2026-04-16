@@ -11,6 +11,7 @@ from deploy.windows.release_runtime import (
     env_path,
     load_existing_env_values,
     needs_versioned_setup,
+    open_extension_directory,
     print_runtime_banner,
     run_first_run_setup,
     runtime_home,
@@ -34,6 +35,11 @@ def main() -> None:
     home = runtime_home()
     env_file = env_path(home)
     ensure_runtime_files(home, root)
+
+    if "--open-extension-dir" in sys.argv[1:]:
+        opened = open_extension_directory(home)
+        print(f"Opened extension folder: {opened}")
+        return
 
     existing = load_existing_env_values(env_file)
     force_setup = "--setup" in sys.argv[1:]

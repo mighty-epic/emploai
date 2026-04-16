@@ -29,6 +29,11 @@ From the repo root on Windows PowerShell:
 powershell -ExecutionPolicy Bypass -File .\deploy\windows\build_beta_release.ps1
 ```
 
+The build now bundles the native Tesseract OCR engine into the EXE/MSI. The build machine must either:
+
+- have Tesseract installed on PATH, or
+- set `EMPLOAI_TESSERACT_ROOT` to a folder containing `tesseract.exe` and `tessdata\`
+
 That produces:
 
 - `dist\EmploAI.exe` — portable fallback asset

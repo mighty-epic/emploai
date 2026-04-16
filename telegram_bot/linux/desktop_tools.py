@@ -22,6 +22,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Dict, Iterable, Tuple
+from shared.tesseract_runtime import configure_pytesseract_runtime, normalize_tesseract_error
 
 try:
     from PIL import Image, ImageEnhance, ImageFilter, ImageOps
@@ -33,6 +34,7 @@ except ImportError:  # pragma: no cover - exercised via feature checks
 
 try:
     import pytesseract
+    configure_pytesseract_runtime(pytesseract)
 except ImportError:  # pragma: no cover - exercised via feature checks
     pytesseract = None
 
@@ -682,7 +684,7 @@ def _execute_ocr_screen(session, args: Dict) -> Dict[str, object]:
         }
         return result
     except Exception as e:
-        return {"error": f"Error performing OCR: {str(e)}"}
+        return {"error": f"Error performing OCR: {normalize_tesseract_error(e, pytesseract_module=pytesseract)}"}
 
 
 # ==========================================================================
