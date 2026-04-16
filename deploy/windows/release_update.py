@@ -16,7 +16,7 @@ from packaging.version import InvalidVersion, Version
 RELEASE_INFO_FILENAME = "release_info.json"
 UPDATE_STATE_FILENAME = "release_state.json"
 UPDATES_DIRNAME = "updates"
-DEFAULT_REPO = "mighty-epic/emploai"
+DEFAULT_REPO = "mighty-epic/emploai-releases"
 DEFAULT_PRIMARY_ASSET = "EmploAI.msi"
 DEFAULT_PORTABLE_ASSET = "EmploAI.exe"
 DEFAULT_CHANNEL = "beta"
