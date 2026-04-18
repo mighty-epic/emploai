@@ -1,7 +1,7 @@
 {
-  "version": "0.1.0-beta.4",
-  "release_tag": "v0.1.0-beta.4",
-  "msi_version": "0.1.4",
+  "version": "0.1.0-beta.5",
+  "release_tag": "v0.1.0-beta.5",
+  "msi_version": "0.1.5",
   "channel": "beta",
   "github_repo": "mighty-epic/emploai-releases",
   "primary_asset": "EmploAI.msi",
