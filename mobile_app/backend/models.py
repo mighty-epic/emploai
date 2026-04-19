@@ -195,6 +195,201 @@ class DeviceActionResponse(BaseModel):
     action: str
 
 
+class ModelProviderGroup(BaseModel):
+    provider: str
+    models: List[str] = Field(default_factory=list)
+
+
+class AgentHistoryItemView(BaseModel):
+    role: str
+    timestamp: Optional[str] = None
+    preview: str
+    display_label: Optional[str] = None
+
+
+class PendingFileView(BaseModel):
+    filename: str
+    mime_type: Optional[str] = None
+    size: Optional[int] = None
+    source_format: Optional[str] = None
+    uploaded_at: Optional[str] = None
+
+
+class ContextUsageView(BaseModel):
+    model: str
+    max_tokens: int
+    estimated_tokens: int
+    usage_percent: float
+    message_count: int
+
+
+class HeartbeatStatusView(BaseModel):
+    enabled: bool = False
+    running: bool = False
+    interval_seconds: int = 0
+    check_count: int = 0
+    last_heartbeat: Optional[str] = None
+
+
+class MemorySummaryView(BaseModel):
+    memory_file_exists: bool = False
+    daily_log_count: int = 0
+    oldest_log: Optional[str] = None
+    newest_log: Optional[str] = None
+
+
+class AnalyticsSummaryView(BaseModel):
+    period_days: int = 7
+    total_events: int = 0
+    total_messages: int = 0
+    total_commands: int = 0
+    total_tokens: int = 0
+    avg_tokens_per_message: float = 0.0
+    top_skills: Dict[str, int] = Field(default_factory=dict)
+    top_commands: Dict[str, int] = Field(default_factory=dict)
+    model_usage: Dict[str, Dict[str, int]] = Field(default_factory=dict)
+    daily_activity: Dict[str, int] = Field(default_factory=dict)
+
+
+class SecuritySummaryView(BaseModel):
+    allowed_users_count: int = 0
+    rate_limited_users: int = 0
+    security_events_24h: int = 0
+    warning_events_24h: int = 0
+    error_events_24h: int = 0
+    max_requests_per_minute: int = 0
+    max_requests_per_hour: int = 0
+
+
+class ConfigEntryView(BaseModel):
+    key: str
+    value: Any
+
+
+class MemorySearchResultView(BaseModel):
+    source: str
+    line: Optional[int] = None
+    content: str
+
+
+class AgentOverviewView(BaseModel):
+    session_id: Optional[str] = None
+    current_model: str
+    current_variant: str
+    available_variants: List[str] = Field(default_factory=list)
+    model_groups: List[ModelProviderGroup] = Field(default_factory=list)
+    max_turns: int
+    workspace: str = ""
+    auto_reply_enabled: bool = True
+    verbose_mode: bool = True
+    bridge_enabled: bool = False
+    headless_mode: Literal["headless", "headed"] = "headless"
+    heartbeat: HeartbeatStatusView = Field(default_factory=HeartbeatStatusView)
+    context_usage: ContextUsageView
+    history: List[AgentHistoryItemView] = Field(default_factory=list)
+    pending_files: List[PendingFileView] = Field(default_factory=list)
+    memory_summary: MemorySummaryView = Field(default_factory=MemorySummaryView)
+    analytics: AnalyticsSummaryView = Field(default_factory=AnalyticsSummaryView)
+    security: SecuritySummaryView = Field(default_factory=SecuritySummaryView)
+    config_preview: List[ConfigEntryView] = Field(default_factory=list)
+
+
+class AgentConfigureRequest(BaseModel):
+    model: Optional[str] = None
+    variant: Optional[str] = None
+    max_turns: Optional[int] = None
+    workspace: Optional[str] = None
+    auto_reply_enabled: Optional[bool] = None
+    verbose_mode: Optional[bool] = None
+    bridge_enabled: Optional[bool] = None
+    heartbeat_enabled: Optional[bool] = None
+    heartbeat_interval_seconds: Optional[int] = None
+    headless_mode: Optional[Literal["headless", "headed"]] = None
+
+
+class AgentActionResponse(BaseModel):
+    ok: bool = True
+    action: str
+    message: Optional[str] = None
+
+
+class MemorySearchRequest(BaseModel):
+    query: str
+
+
+class MemorySearchResponse(BaseModel):
+    query: str
+    results: List[MemorySearchResultView] = Field(default_factory=list)
+
+
+class MemoryNoteRequest(BaseModel):
+    note: str
+
+
+class ConfigListResponse(BaseModel):
+    items: List[ConfigEntryView] = Field(default_factory=list)
+
+
+class ConfigUpdateRequest(BaseModel):
+    key: str
+    value: Any
+
+
+class SkillSummaryView(BaseModel):
+    name: str
+    description: str
+    user_invocable: bool = False
+    available: bool = True
+    active: bool = False
+    unavailable_reason: Optional[str] = None
+
+
+class SkillListResponse(BaseModel):
+    items: List[SkillSummaryView] = Field(default_factory=list)
+
+
+class SkillActivateRequest(BaseModel):
+    name: str
+    active: bool = True
+
+
+class SkillValidationView(BaseModel):
+    name: str
+    valid: bool = False
+    errors: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    scripts_count: int = 0
+    references_count: int = 0
+    assets_count: int = 0
+
+
+class SubAgentTaskView(BaseModel):
+    id: str
+    prompt: str
+    status: str
+    created_at: Optional[str] = None
+    headless: bool = True
+    max_turns: int = 20
+    result: Optional[str] = None
+    error: Optional[str] = None
+    completed_at: Optional[str] = None
+    turns_used: int = 0
+
+
+class SubAgentListResponse(BaseModel):
+    total_tasks: int = 0
+    running: int = 0
+    completed: int = 0
+    failed: int = 0
+    tasks: List[SubAgentTaskView] = Field(default_factory=list)
+
+
+class SubAgentSpawnRequest(BaseModel):
+    prompt: str
+    headless: bool = True
+    max_turns: int = 30
+
+
 class VoiceClientEvent(BaseModel):
     type: Literal[
         "voice_start",

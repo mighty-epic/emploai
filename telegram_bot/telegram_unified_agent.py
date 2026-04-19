@@ -732,14 +732,22 @@ def build_browser_runtime_prompt(session) -> str:
         else:
             availability_rule = (
                 "Real Chrome is NOT available now. Do NOT assume browser_* tools "
-                "can use the extension or the user's Chrome. Use Selenium-backed "
-                "browser_* tools until Chrome plus the extension bridge is restored."
+                "can use the extension or the user's Chrome. Selenium-backed "
+                "browser_* tools control only the agent-owned browser instance."
             )
     else:
         availability_rule = (
             "Extension mode is disabled. Use Selenium-backed browser_* tools and "
-            "do NOT rely on the user's Chrome until the bridge is enabled again."
+            "do NOT rely on the user's Chrome until the bridge is enabled again. "
+            "Selenium is never the same thing as the user's current Chrome page or session."
         )
+
+    user_chrome_rule = (
+        "If the task is about the user's existing Chrome tab, page, or logged-in session and "
+        "Real Chrome available now is NO, browser_* tools are unavailable for that task. "
+        "Do NOT use Selenium as a substitute. Use describe_screen, ocr_screen, click, "
+        "type_text, hotkey, and other desktop actions instead."
+    )
 
     if status["task_tab_available"]:
         task_tab_rule = "A task tab is already pinned for this task. Reuse it."
@@ -769,8 +777,10 @@ def build_browser_runtime_prompt(session) -> str:
             f"- Last known page: {last_page}",
             "Rules:",
             f"- {availability_rule}",
+            f"- {user_chrome_rule}",
             f"- {task_tab_rule}",
             "- Never claim the extension is active unless Real Chrome available now is YES.",
+            "- When you need to visually locate buttons or understand layout, prefer describe_screen before ocr_screen.",
         ]
     )
 

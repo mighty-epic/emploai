@@ -69,6 +69,164 @@ export type CronFeedItem = {
   job_name?: string | null;
 };
 
+export type ModelProviderGroup = {
+  provider: string;
+  models: string[];
+};
+
+export type AgentHistoryItem = {
+  role: string;
+  timestamp?: string | null;
+  preview: string;
+  display_label?: string | null;
+};
+
+export type PendingFile = {
+  filename: string;
+  mime_type?: string | null;
+  size?: number | null;
+  source_format?: string | null;
+  uploaded_at?: string | null;
+};
+
+export type ContextUsage = {
+  model: string;
+  max_tokens: number;
+  estimated_tokens: number;
+  usage_percent: number;
+  message_count: number;
+};
+
+export type HeartbeatStatus = {
+  enabled: boolean;
+  running: boolean;
+  interval_seconds: number;
+  check_count: number;
+  last_heartbeat?: string | null;
+};
+
+export type MemorySummary = {
+  memory_file_exists: boolean;
+  daily_log_count: number;
+  oldest_log?: string | null;
+  newest_log?: string | null;
+};
+
+export type AnalyticsSummary = {
+  period_days: number;
+  total_events: number;
+  total_messages: number;
+  total_commands: number;
+  total_tokens: number;
+  avg_tokens_per_message: number;
+  top_skills: Record<string, number>;
+  top_commands: Record<string, number>;
+  model_usage: Record<string, { input: number; output: number }>;
+  daily_activity: Record<string, number>;
+};
+
+export type SecuritySummary = {
+  allowed_users_count: number;
+  rate_limited_users: number;
+  security_events_24h: number;
+  warning_events_24h: number;
+  error_events_24h: number;
+  max_requests_per_minute: number;
+  max_requests_per_hour: number;
+};
+
+export type ConfigEntry = {
+  key: string;
+  value: unknown;
+};
+
+export type AgentOverview = {
+  session_id?: string | null;
+  current_model: string;
+  current_variant: string;
+  available_variants: string[];
+  model_groups: ModelProviderGroup[];
+  max_turns: number;
+  workspace: string;
+  auto_reply_enabled: boolean;
+  verbose_mode: boolean;
+  bridge_enabled: boolean;
+  headless_mode: 'headless' | 'headed';
+  heartbeat: HeartbeatStatus;
+  context_usage: ContextUsage;
+  history: AgentHistoryItem[];
+  pending_files: PendingFile[];
+  memory_summary: MemorySummary;
+  analytics: AnalyticsSummary;
+  security: SecuritySummary;
+  config_preview: ConfigEntry[];
+};
+
+export type AgentConfigurePayload = {
+  model?: string;
+  variant?: string;
+  max_turns?: number;
+  workspace?: string;
+  auto_reply_enabled?: boolean;
+  verbose_mode?: boolean;
+  bridge_enabled?: boolean;
+  heartbeat_enabled?: boolean;
+  heartbeat_interval_seconds?: number;
+  headless_mode?: 'headless' | 'headed';
+};
+
+export type AgentAction = {
+  ok: boolean;
+  action: string;
+  message?: string | null;
+};
+
+export type SkillSummary = {
+  name: string;
+  description: string;
+  user_invocable: boolean;
+  available: boolean;
+  active: boolean;
+  unavailable_reason?: string | null;
+};
+
+export type SkillValidation = {
+  name: string;
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  scripts_count: number;
+  references_count: number;
+  assets_count: number;
+};
+
+export type SubAgentTask = {
+  id: string;
+  prompt: string;
+  status: string;
+  created_at?: string | null;
+  headless: boolean;
+  max_turns: number;
+  result?: string | null;
+  error?: string | null;
+  completed_at?: string | null;
+  turns_used: number;
+};
+
+export type SubAgentStatus = {
+  total_tasks: number;
+  running: number;
+  completed: number;
+  failed: number;
+  tasks: SubAgentTask[];
+};
+
+export type MemorySearchResult = {
+  source: string;
+  line?: number | null;
+  content: string;
+};
+
 function authHeaders(token: string) {
   return { Authorization: `Bearer ${token}` };
 }
@@ -155,6 +313,275 @@ export async function actOnJob(apiBaseUrl: string, token: string, jobId: string,
     url,
     init: {
       method,
+      headers: authHeaders(token),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function fetchAgentOverview(
+  apiBaseUrl: string,
+  token: string,
+  params?: { sessionId?: string; historyCount?: number; analyticsDays?: number }
+) {
+  const query = new URLSearchParams();
+  if (params?.sessionId) query.set('session_id', params.sessionId);
+  if (params?.historyCount) query.set('history_count', String(params.historyCount));
+  if (params?.analyticsDays) query.set('analytics_days', String(params.analyticsDays));
+
+  return requestJson<AgentOverview>({
+    scope: 'agent.overview',
+    url: `${apiBaseUrl}/api/app/agent/overview${query.size ? `?${query.toString()}` : ''}`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function configureAgent(
+  apiBaseUrl: string,
+  token: string,
+  payload: AgentConfigurePayload,
+  sessionId?: string
+) {
+  const query = new URLSearchParams();
+  if (sessionId) query.set('session_id', sessionId);
+
+  return requestJson<AgentAction>({
+    scope: 'agent.configure',
+    url: `${apiBaseUrl}/api/app/agent/configure${query.size ? `?${query.toString()}` : ''}`,
+    init: {
+      method: 'POST',
+      headers: {
+        ...authHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function fetchAgentConfig(apiBaseUrl: string, token: string, key?: string, sessionId?: string) {
+  const query = new URLSearchParams();
+  if (key) query.set('key', key);
+  if (sessionId) query.set('session_id', sessionId);
+
+  return requestJson<{ items: ConfigEntry[] }>({
+    scope: 'agent.config.list',
+    url: `${apiBaseUrl}/api/app/agent/config${query.size ? `?${query.toString()}` : ''}`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function updateAgentConfig(
+  apiBaseUrl: string,
+  token: string,
+  payload: { key: string; value: unknown },
+  sessionId?: string
+) {
+  const query = new URLSearchParams();
+  if (sessionId) query.set('session_id', sessionId);
+
+  return requestJson<ConfigEntry>({
+    scope: 'agent.config.update',
+    url: `${apiBaseUrl}/api/app/agent/config${query.size ? `?${query.toString()}` : ''}`,
+    init: {
+      method: 'POST',
+      headers: {
+        ...authHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function searchAgentMemory(apiBaseUrl: string, token: string, query: string, sessionId?: string) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+
+  return requestJson<{ query: string; results: MemorySearchResult[] }>({
+    scope: 'agent.memory.search',
+    url: `${apiBaseUrl}/api/app/agent/memory/search${params.size ? `?${params.toString()}` : ''}`,
+    init: {
+      method: 'POST',
+      headers: {
+        ...authHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query }),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function appendAgentMemoryNote(apiBaseUrl: string, token: string, note: string, sessionId?: string) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+
+  return requestJson<AgentAction>({
+    scope: 'agent.memory.note',
+    url: `${apiBaseUrl}/api/app/agent/memory/note${params.size ? `?${params.toString()}` : ''}`,
+    init: {
+      method: 'POST',
+      headers: {
+        ...authHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ note }),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function clearAgentPendingFiles(apiBaseUrl: string, token: string, sessionId?: string) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+
+  return requestJson<AgentAction>({
+    scope: 'agent.files.clear',
+    url: `${apiBaseUrl}/api/app/agent/files/clear${params.size ? `?${params.toString()}` : ''}`,
+    init: {
+      method: 'POST',
+      headers: authHeaders(token),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function forgetLastAgentMessage(apiBaseUrl: string, token: string, sessionId?: string) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+
+  return requestJson<AgentAction>({
+    scope: 'agent.forget',
+    url: `${apiBaseUrl}/api/app/agent/forget-last${params.size ? `?${params.toString()}` : ''}`,
+    init: {
+      method: 'POST',
+      headers: authHeaders(token),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function resetAgentContext(apiBaseUrl: string, token: string, sessionId?: string) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+
+  return requestJson<AgentAction>({
+    scope: 'agent.reset',
+    url: `${apiBaseUrl}/api/app/agent/reset${params.size ? `?${params.toString()}` : ''}`,
+    init: {
+      method: 'POST',
+      headers: authHeaders(token),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function fetchAgentSkills(apiBaseUrl: string, token: string, sessionId?: string) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+
+  return requestJson<{ items: SkillSummary[] }>({
+    scope: 'agent.skills.list',
+    url: `${apiBaseUrl}/api/app/agent/skills${params.size ? `?${params.toString()}` : ''}`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function activateAgentSkill(
+  apiBaseUrl: string,
+  token: string,
+  payload: { name: string; active?: boolean },
+  sessionId?: string
+) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+
+  return requestJson<AgentAction>({
+    scope: 'agent.skills.activate',
+    url: `${apiBaseUrl}/api/app/agent/skills/activate${params.size ? `?${params.toString()}` : ''}`,
+    init: {
+      method: 'POST',
+      headers: {
+        ...authHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function validateAgentSkill(apiBaseUrl: string, token: string, name: string, sessionId?: string) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+
+  return requestJson<SkillValidation>({
+    scope: 'agent.skills.validate',
+    url: `${apiBaseUrl}/api/app/agent/skills/validate${params.size ? `?${params.toString()}` : ''}`,
+    init: {
+      method: 'POST',
+      headers: {
+        ...authHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name, active: true }),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function fetchSubAgents(apiBaseUrl: string, token: string, sessionId?: string) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+
+  return requestJson<SubAgentStatus>({
+    scope: 'agent.subagents.list',
+    url: `${apiBaseUrl}/api/app/agent/subagents${params.size ? `?${params.toString()}` : ''}`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function spawnSubAgent(
+  apiBaseUrl: string,
+  token: string,
+  payload: { prompt: string; headless?: boolean; max_turns?: number },
+  sessionId?: string
+) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+
+  return requestJson<AgentAction>({
+    scope: 'agent.subagents.spawn',
+    url: `${apiBaseUrl}/api/app/agent/subagents${params.size ? `?${params.toString()}` : ''}`,
+    init: {
+      method: 'POST',
+      headers: {
+        ...authHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function controlAgentRun(
+  apiBaseUrl: string,
+  token: string,
+  action: 'pause' | 'stop' | 'restart',
+  sessionId?: string
+) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+
+  return requestJson<AgentAction>({
+    scope: `agent.control.${action}`,
+    url: `${apiBaseUrl}/api/app/agent/control/${action}${params.size ? `?${params.toString()}` : ''}`,
+    init: {
+      method: 'POST',
       headers: authHeaders(token),
     },
     timeoutMs: 30000,

@@ -142,26 +142,27 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
                     "IMPORTANT REMINDER: You are an autonomous agent with full computer control. "
                     "When I ask you to do something, DO IT immediately using your tools. "
                     "Do not explain what you would do — just do it. "
-                    "Do not ask me for permission or credentials — get them yourself. "
                     "Do not list what you can't do — find a way. "
-                    "If you need to sign up for a service, open the browser and sign up. "
                     "If you need to install something, install it. "
-                    "Use the cheapest verification tool that fits the environment: browser tool results and browser_snapshot first for webpages, "
-                    "describe_screen or ocr_screen only for browser chrome, desktop apps, or when DOM tools fail. "
-                    "Never chain multiple browser edits without verifying the resulting page state. "
-                    "Do not repeat already-completed steps. "
+                    "Use browser DOM tools only when they are actually available for the current browser context. "
+                    "If the task is in the user's real Chrome and the extension bridge is unavailable, do NOT use browser_* tools for that page — "
+                    "switch to describe_screen plus atomic desktop actions, and use ocr_screen only when you need exact text coordinates or a fallback click. "
+                    "Use the cheapest verification tool that fits the environment. "
+                    "Never chain multiple browser or desktop edits without verifying the resulting state. "
+                    "If a method fails and the state has not changed, do not repeat it — choose a different method. "
                     "Only declare done after the requested result is verified. "
+                    "Before you finish, quickly assess what worked, what failed, and save only durable reusable lessons to memory. "
                     "Act first. Report results after."
                 ),
             },
             {
                 "role": "assistant",
                 "content": (
-                    "Understood. I will act immediately on every request — no explanations, no permission-seeking, "
-                    "no listing limitations. I'll use my tools to execute tasks directly, sign up for services myself "
-                    "if needed, install packages, write scripts, and verify each step with the lowest-waste tool that can prove it worked. "
-                    "For webpages I will stay in the task tab, prefer ref-based DOM tools, avoid repeating completed steps, "
-                    "and only finish after the deliverable is verified. Ready for your task."
+                    "Understood. I will act immediately, verify each step, and use only the tools that match the current environment. "
+                    "If the task is in the user's Chrome without the extension bridge, I will not pretend Selenium or browser_* tools control that page; "
+                    "I will switch to visual observation and atomic desktop actions instead. "
+                    "I will avoid retrying failed methods unless state changed, and before finishing I will preserve only durable lessons worth remembering. "
+                    "Ready for your task."
                 ),
             },
         ]
@@ -173,10 +174,13 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
             "content": (
                 "TASK EXECUTION CONTRACT:\n"
                 "- For complex tasks, keep a short internal checklist and complete one verified step at a time.\n"
-                "- Do not repeat a step once the requested state is already verified.\n"
-                "- For webpage DOM actions, rely on browser tool results and browser_snapshot first. Use describe_screen or ocr_screen only for browser chrome, desktop apps, or when DOM tools are unavailable.\n"
+                "- Do not repeat a step once the requested state is already verified, and do not retry a failed method unless the page or app state changed.\n"
+                "- For webpage DOM actions, rely on browser tool results and browser_snapshot only when the current browser context actually supports them.\n"
+                "- If the task is in the user's real Chrome and the extension bridge is unavailable, browser_* tools do NOT control that page; use describe_screen first, then ocr_screen only for exact text coordinates or fallback clicks.\n"
+                "- Prefer describe_screen for visual discovery, button finding, and layout understanding. Use ocr_screen mainly for exact text extraction and coordinate fallback.\n"
                 "- Prefer ref-based browser tools over focus-dependent typing or synthetic keypresses.\n"
                 "- Use browser_wait_for instead of blind delays when waiting for navigation or confirmation text.\n"
+                "- Before final completion, assess what worked vs failed. Save only durable reusable lessons to memory.\n"
                 "- A task is done only when the requested file, page state, or deliverable is verified.\n"
                 "- End with a short completion report that states what is done, the proof, and any remaining blocker."
             ),

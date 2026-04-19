@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import uuid
 from datetime import datetime
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -56,14 +55,15 @@ def build_session_command_handlers(
         session = get_session(user.id)
         track_command_usage(session, "new")
 
-        new_session_id = str(uuid.uuid4())[:8]
-        session.chat_history = []
-        # Create a new session in session manager
+        if session.is_processing:
+            await safe_reply(update, "⚠️ Finish or stop the current task before switching sessions.")
+            return
+
         new_session_obj = session.session_manager.create_session(
             workspace=session.workspace,
             name=f"New Session {datetime.now().strftime('%H:%M')}"
         )
-        session.session_manager.set_current_session(new_session_obj.id)
+        session.load_session_by_id(new_session_obj.id)
         
         # Clear agent histories
         if session.unified_agent:

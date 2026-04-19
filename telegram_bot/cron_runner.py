@@ -14,6 +14,7 @@ from cli.agent_tools.loop import run_tool_loop
 from cli.agent_tools.adapters import to_anthropic_format
 from cli.tui_constants import MODEL_CONFIGS
 from single_agent.agent import AGENT_TOOLS
+from shared import current_session_id
 from telegram_bot.telegram_unified_agent import (
     build_unified_system_prompt,
     get_auto_mode_extra_tools,
@@ -77,7 +78,18 @@ async def run_cron_job_via_unified_flow(
     memory_context = ""
     if session.memory_manager:
         try:
-            memory_context = session.memory_manager.load_context()
+            build_prompt_context = getattr(session.memory_manager, "build_prompt_context", None)
+            if callable(build_prompt_context):
+                memory_context = build_prompt_context(
+                    session_id=current_session_id(session),
+                    recent_days=7,
+                    recent_chars=3000,
+                    long_term_chars=4000,
+                )
+            else:
+                get_long_term_context = getattr(session.memory_manager, "get_long_term_context", None)
+                if callable(get_long_term_context):
+                    memory_context = get_long_term_context()
         except Exception:
             memory_context = ""
 

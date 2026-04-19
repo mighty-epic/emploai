@@ -257,7 +257,7 @@ Once the bot is running, these commands are available in Telegram:
 | Command | Description |
 |---|---|
 | `/task <instruction>` | Run a multi-turn automation task |
-| `/continue` | Resume a paused task |
+| `/continue` | Disabled legacy command |
 | `/pause` | Pause a running task |
 | `/stop` | Stop a running task |
 | `/spawn <instruction>` | Spawn a parallel sub-agent |

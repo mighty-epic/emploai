@@ -161,6 +161,7 @@ class TelegramSession:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     workspace: Path = field(default_factory=lambda: Path.cwd())
+    create_new_session_on_init: bool = True
 
     def refresh_system_info(self):
         """Update system info string with current windows and hardware state."""
@@ -199,16 +200,8 @@ class TelegramSession:
         # Initialize existing managers - isolation by user_id
         user_base_path = Path.home() / ".agentshell" / f"user_{self.user_id}"
         self.session_manager = SessionManager(base_path=user_base_path)
-        
-        # Always create a new session on bot/session initialization as requested.
-        # This ensures a fresh start whenever the agent is "loaded".
-        # Old sessions can still be loaded via /session if needed.
-        self.session = self.session_manager.create_session(
-            workspace=self.workspace,
-            name=f"Session {datetime.datetime.now().strftime('%H:%M')}"
-        )
-        self.session_manager.set_current_session(self.session.id)
-        self.load_session_by_id(self.session.id)
+
+        self._initialize_runtime_session()
         
         self.config_manager = get_config_manager()
         # Initialize skills and hooks systems
@@ -235,17 +228,87 @@ class TelegramSession:
             """Allow all path/command adjustments silently without user friction."""
             return True
 
+        self.rebuild_tool_executor(confirm_callback=path_confirm_callback)
+
+    def _initialize_runtime_session(self) -> None:
+        """Bootstrap runtime state from the current session or create a fresh one."""
+        current_id = self.session_manager.get_current_session_id() if self.session_manager else None
+        should_create = self.create_new_session_on_init or not current_id
+        target_session_id = current_id
+
+        if should_create:
+            self.session = self.session_manager.create_session(
+                workspace=self.workspace,
+                name=f"Session {datetime.datetime.now().strftime('%H:%M')}",
+                model=self.current_model,
+                variant=self.current_variant,
+                agent_mode="auto",
+            )
+            self.session_manager.set_current_session(self.session.id)
+            target_session_id = self.session.id
+
+        if not target_session_id:
+            return
+
+        try:
+            self.load_session_by_id(target_session_id)
+        except Exception:
+            if should_create:
+                raise
+            self.session = self.session_manager.create_session(
+                workspace=self.workspace,
+                name=f"Session {datetime.datetime.now().strftime('%H:%M')}",
+                model=self.current_model,
+                variant=self.current_variant,
+                agent_mode="auto",
+            )
+            self.session_manager.set_current_session(self.session.id)
+            self.load_session_by_id(self.session.id)
+
+    def rebuild_tool_executor(self, confirm_callback=None) -> ToolExecutor:
+        """Rebuild the tool executor while preserving session wiring."""
+        callback = confirm_callback
+        if callback is None and self.tool_executor:
+            callback = self.tool_executor.confirm_callback
+        if callback is None:
+            callback = lambda _msg: True
+
+        existing_handlers = {}
+        if self.tool_executor and getattr(self.tool_executor, "custom_tool_handlers", None):
+            existing_handlers = dict(self.tool_executor.custom_tool_handlers)
+
         self.tool_executor = ToolExecutor(
             self.workspace,
-            confirm_callback=path_confirm_callback,
+            confirm_callback=callback,
+            single_agent=self.single_agent,
             check_interruption=lambda: self.should_interrupt,
             get_interrupt_message=self.get_interrupt_message,
             clear_interrupt=self._clear_interrupt,
             activate_deferred_interrupts=self.activate_deferred_interrupts,
             has_deferred_interrupts=self.has_deferred_interrupts,
             skill_registry=self.skill_registry,
-            active_skills=self.active_skills
+            active_skills=self.active_skills,
         )
+        self.tool_executor.custom_tool_handlers = existing_handlers
+        return self.tool_executor
+
+    def set_workspace(self, workspace: Path, *, rebuild_tool_executor: bool = False) -> Path:
+        """Update the active workspace without dropping executor hooks."""
+        resolved = Path(workspace).expanduser().resolve()
+        current_workspace = self.workspace.expanduser().resolve()
+
+        if self.is_processing and resolved != current_workspace:
+            raise RuntimeError("Cannot change workspace while a task is still running")
+
+        self.workspace = resolved
+        if self.tool_executor and not rebuild_tool_executor:
+            self.tool_executor.workspace_path = resolved
+            self.tool_executor.single_agent = self.single_agent
+            self.tool_executor.skill_registry = self.skill_registry
+            self.tool_executor.active_skills = self.active_skills
+        elif rebuild_tool_executor:
+            self.rebuild_tool_executor()
+        return self.workspace
 
     def _clear_interrupt(self):
         """Consume one active interrupt and keep any queued steering intact."""
@@ -472,14 +535,19 @@ class TelegramSession:
         if not self.session_manager:
             return
 
+        current_id = self.session_manager.get_current_session_id()
+        if self.is_processing:
+            if current_id == session_id:
+                return
+            raise RuntimeError("Cannot switch sessions while a task is still running")
+
         session_obj = self.session_manager.load_session(session_id)
+        self.session = session_obj
 
         # Sync to runtime state
         self.chat_history = session_obj.chat_history
         if session_obj.workspace:
-            self.workspace = Path(session_obj.workspace)
-            if self.tool_executor:
-                self.tool_executor.workspace = self.workspace
+            self.set_workspace(Path(session_obj.workspace))
         self.current_model = session_obj.model
         self.current_variant = session_obj.variant
         self.agent_mode = "auto"
@@ -757,10 +825,21 @@ class TelegramSession:
 user_sessions: Dict[int, TelegramSession] = {}
 
 
-def get_session(user_id: int) -> TelegramSession:
-    """Get or create session for a user."""
+def get_session(
+    user_id: int,
+    *,
+    workspace: Optional[Path] = None,
+    create_new_session: bool = True,
+) -> TelegramSession:
+    """Get or create the live runtime session for a user."""
     if user_id not in user_sessions:
-        user_sessions[user_id] = TelegramSession(user_id=user_id)
+        init_kwargs: Dict[str, Any] = {
+            "user_id": user_id,
+            "create_new_session_on_init": create_new_session,
+        }
+        if workspace is not None:
+            init_kwargs["workspace"] = workspace
+        user_sessions[user_id] = TelegramSession(**init_kwargs)
     return user_sessions[user_id]
 
 

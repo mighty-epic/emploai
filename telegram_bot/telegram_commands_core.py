@@ -8,7 +8,6 @@ from typing import Any, Callable, Dict
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from cli.agent_tools.executor import ToolExecutor
 from cli.tui_constants import AGENT_MODE_LABELS, AVAILABLE_MODELS, MODEL_CONFIGS
 
 
@@ -85,7 +84,6 @@ def build_core_command_handlers(
             "Use /help to see available commands.",
         )
 
-    @rate_limited(security_manager)
     @rate_limited(security_manager)
     async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show available commands."""
@@ -280,7 +278,6 @@ def build_core_command_handlers(
         )
 
     @rate_limited(security_manager)
-    @rate_limited(security_manager)
     async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Set the workspace path."""
         user = update.effective_user
@@ -300,19 +297,13 @@ def build_core_command_handlers(
                 return
 
             if resolved_path and resolved_path.exists() and resolved_path.is_dir():
-                session.workspace = resolved_path
+                try:
+                    session.set_workspace(resolved_path)
+                except RuntimeError as exc:
+                    await safe_reply(update, f"⚠️ {str(exc)}")
+                    return
 
-                def path_confirm_callback(msg: str) -> bool:
-                    """Request user confirmation for path access"""
-                    logger.warning(
-                        f"[CONFIRM] Path access confirmation: {msg[:100]}..."
-                    )
-                    print(f"[CONFIRM REQUEST] {msg}")
-                    return True
-
-                session.tool_executor = ToolExecutor(
-                    session.workspace, confirm_callback=path_confirm_callback
-                )
+                session.save_session()
                 await safe_reply(update, f"✅ Workspace set to: `{session.workspace}`")
             else:
                 await safe_reply(

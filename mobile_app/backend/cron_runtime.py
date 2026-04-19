@@ -10,7 +10,7 @@ from single_agent.cron_scheduler import get_scheduler
 from telegram_bot.cron_runner import run_cron_job_via_unified_flow
 from telegram_bot.telegram_session_state import TelegramSession
 
-_CRON_RUNTIME_SESSION: Optional[TelegramSession] = None
+_CRON_RUNTIME_SESSIONS: dict[int, TelegramSession] = {}
 
 
 def _workspace() -> Path:
@@ -20,11 +20,17 @@ def _workspace() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def get_cron_runtime_session() -> TelegramSession:
-    global _CRON_RUNTIME_SESSION
-    if _CRON_RUNTIME_SESSION is None:
-        _CRON_RUNTIME_SESSION = TelegramSession(user_id=0, workspace=_workspace())
-    return _CRON_RUNTIME_SESSION
+def get_cron_runtime_session(user_id: int = 0) -> TelegramSession:
+    normalized_user_id = int(user_id or 0)
+    session = _CRON_RUNTIME_SESSIONS.get(normalized_user_id)
+    if session is None:
+        session = TelegramSession(
+            user_id=normalized_user_id,
+            workspace=_workspace(),
+            create_new_session_on_init=False,
+        )
+        _CRON_RUNTIME_SESSIONS[normalized_user_id] = session
+    return session
 
 
 async def cron_announcement_callback(message: str) -> None:
@@ -33,6 +39,7 @@ async def cron_announcement_callback(message: str) -> None:
         {
             "role": "system",
             "content": message,
+            "timestamp": datetime.now().isoformat(),
             "scheduled_job": True,
             "channel": "system",
             "source_format": "scheduled_job_announcement",
@@ -45,12 +52,12 @@ async def cron_announcement_callback(message: str) -> None:
 async def cron_spawn_callback(job_id: str, prompt: str) -> None:
     scheduler = get_scheduler()
     job = scheduler.get_job(job_id)
-    session = get_cron_runtime_session()
+    owner_user_id = int(job.owner_user_id) if job and job.owner_user_id is not None else 0
+    session = get_cron_runtime_session(owner_user_id)
 
     if job and job.owner_user_id:
         try:
-            owner_session = TelegramSession(user_id=int(job.owner_user_id), workspace=_workspace())
-            owner_session.chat_history.append(
+            session.chat_history.append(
                 {
                     "role": "system",
                     "content": f"Scheduled job running: {job.name}",
@@ -63,7 +70,7 @@ async def cron_spawn_callback(job_id: str, prompt: str) -> None:
                     "display_label": "Scheduled Job",
                 }
             )
-            owner_session.save_session()
+            session.save_session()
         except Exception:
             pass
 
@@ -75,12 +82,11 @@ async def cron_spawn_callback(job_id: str, prompt: str) -> None:
 
     if job and job.owner_user_id:
         try:
-            owner_session = TelegramSession(user_id=int(job.owner_user_id), workspace=_workspace())
-            owner_session.chat_history.append(
+            session.chat_history.append(
                 {
                     "role": "assistant",
                     "content": result,
-                    "timestamp": session.chat_history[-1].get("timestamp"),
+                    "timestamp": datetime.now().isoformat(),
                     "scheduled_job": True,
                     "scheduled_job_id": job_id,
                     "scheduled_job_name": job.name if job else None,
@@ -89,7 +95,7 @@ async def cron_spawn_callback(job_id: str, prompt: str) -> None:
                     "display_label": "Scheduled Job",
                 }
             )
-            owner_session.save_session()
+            session.save_session()
         except Exception:
             pass
 

@@ -108,10 +108,63 @@ class CronScheduler:
         """Start the scheduler loop."""
         if self._running:
             return
-        
+
+        await self._reconcile_missed_jobs_on_startup()
         self._running = True
         self._task = asyncio.create_task(self._scheduler_loop())
         print("[Cron] Scheduler started")
+
+    async def _reconcile_missed_jobs_on_startup(self) -> None:
+        """
+        Skip runs that became due while the scheduler process was offline.
+
+        On startup we advance any overdue jobs to their next future occurrence
+        instead of immediately executing missed runs.
+        """
+        now = time.time()
+        changed = False
+
+        async with self._lock:
+            for job in self.jobs.values():
+                if not job.enabled or not job.next_run or job.next_run > now:
+                    continue
+
+                original_next_run = job.next_run
+                job.next_run = self._next_future_run(job, now)
+                changed = True
+                print(
+                    "[Cron] Skipping missed run for "
+                    f"'{job.name}' while offline; next run rescheduled from "
+                    f"{datetime.fromtimestamp(original_next_run).isoformat()} to "
+                    f"{datetime.fromtimestamp(job.next_run).isoformat()}"
+                )
+
+            if changed:
+                self._save_jobs()
+
+    def _next_future_run(self, job: CronJob, now_ts: float) -> float:
+        """
+        Advance a job's stored run time until it is in the future.
+
+        This preserves recurring cadence for interval-based schedules and avoids
+        backfilling missed executions after a process restart.
+        """
+        interval = int(job.interval_seconds or 0)
+        if interval > 0 and job.next_run:
+            next_run = job.next_run
+            while next_run <= now_ts:
+                next_run += interval
+            return next_run
+
+        computed = compute_next_run(
+            job.schedule,
+            now_ts=now_ts,
+            timezone_offset_hours=job.timezone_offset_hours,
+        )
+        if computed and computed > now_ts:
+            return computed
+
+        return now_ts + max(self.check_interval, 1)
     
     async def stop(self) -> None:
         """Stop the scheduler loop."""

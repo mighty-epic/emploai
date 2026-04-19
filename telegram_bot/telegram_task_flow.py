@@ -48,9 +48,12 @@ async def run_task_flow(update, context, session, task_text: str) -> None:
     execution_contract = (
         "# Task Execution Contract\n"
         "- Complete one verified step at a time.\n"
-        "- Do not repeat steps that are already verified.\n"
-        "- Prefer browser DOM tools and task-owned tabs for webpage work.\n"
+        "- Do not repeat steps that are already verified, and do not retry a failed method unless the page or app state changed.\n"
+        "- Prefer browser DOM tools and task-owned tabs for webpage work only when the current browser context actually supports them.\n"
+        "- If the task is in the user's real Chrome and the extension bridge is unavailable, browser_* tools do NOT control that page; use describe_screen first, then ocr_screen only for exact text coordinates or fallback clicks.\n"
+        "- Prefer describe_screen for visual discovery, button finding, and layout understanding. Use ocr_screen mainly for exact text extraction and coordinate fallback.\n"
         "- Use browser_wait_for instead of blind waiting when possible.\n"
+        "- Before final completion, assess what worked vs failed and save only durable reusable lessons to memory.\n"
         "- The task is done only when the requested state, file, or deliverable is verified.\n"
         "- End with a short completion report: what is done, proof, and any remaining blocker."
     )

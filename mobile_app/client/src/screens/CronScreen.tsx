@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { loadAppConfig } from '../../lib/appConfig';
 import { describeError } from '../../lib/diagnostics';
+import { markCronFeedSeen } from '@/lib/cronInbox';
 import { AppDrawer, type DrawerTab } from '@/components/AppDrawer';
 import { CollapsibleSection } from '@/components/CollapsibleSection';
 import {
@@ -30,6 +31,7 @@ export default function CronScreen() {
   const [configLoaded, setConfigLoaded] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<DrawerTab>('cron');
+  const [cronUnreadCount, setCronUnreadCount] = useState(0);
   const [name, setName] = useState('');
   const [prompt, setPrompt] = useState('');
   const [schedule, setSchedule] = useState('every 1 hour');
@@ -47,7 +49,7 @@ export default function CronScreen() {
       });
   }, []);
 
-  const loadCronCenter = async () => {
+  const loadCronCenter = async (quiet = false) => {
     if (!apiBaseUrl) {
       setStatus('missing backend');
       return;
@@ -57,7 +59,9 @@ export default function CronScreen() {
       return;
     }
 
-    setStatus('loading');
+    if (!quiet) {
+      setStatus('loading');
+    }
     try {
       const [sessionList, jobList, feedItems] = await Promise.all([
         fetchSessions(apiBaseUrl, token),
@@ -67,6 +71,8 @@ export default function CronScreen() {
       setSessions(Array.isArray(sessionList) ? sessionList : []);
       setJobs(Array.isArray(jobList) ? jobList : []);
       setFeed(Array.isArray(feedItems) ? feedItems : []);
+      await markCronFeedSeen(Array.isArray(feedItems) ? feedItems : []);
+      setCronUnreadCount(0);
       setStatus('ready');
     } catch (error) {
       setStatus(describeError(error));
@@ -76,6 +82,16 @@ export default function CronScreen() {
   useEffect(() => {
     if (!configLoaded) return;
     void loadCronCenter();
+  }, [apiBaseUrl, configLoaded, token]);
+
+  useEffect(() => {
+    if (!configLoaded || !apiBaseUrl || !token) return;
+
+    const intervalId = setInterval(() => {
+      void loadCronCenter(true);
+    }, 8000);
+
+    return () => clearInterval(intervalId);
   }, [apiBaseUrl, configLoaded, token]);
 
   const createCronJob = async () => {
@@ -127,6 +143,7 @@ export default function CronScreen() {
         initialTab={drawerTab}
         sessions={sessions}
         jobs={jobs}
+        cronUnreadCount={cronUnreadCount}
         backendLabel={apiBaseUrl || 'Backend not configured'}
       />
 
@@ -205,22 +222,28 @@ export default function CronScreen() {
         </CollapsibleSection>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Job output feed</Text>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Cron chat</Text>
+            <Text style={styles.sectionHint}>Auto-refreshes every few seconds</Text>
+          </View>
           {feed.length === 0 ? (
-            <Text style={styles.empty}>No cron output yet.</Text>
+            <Text style={styles.empty}>No cron output yet. Background announcements and results will land here as a running transcript.</Text>
           ) : (
-            feed.map((item) => (
+            [...feed].reverse().map((item) => (
               <Pressable
                 key={item.id}
-                style={styles.feedCard}
+                style={[
+                  styles.feedBubble,
+                  item.kind === 'result' ? styles.feedBubbleResult : styles.feedBubbleAnnouncement,
+                ]}
                 onPress={() => openFeedSession(item)}
                 disabled={!item.session_id}
               >
                 <View style={styles.feedHeader}>
-                  <Text style={styles.feedKind}>{item.kind === 'announcement' ? 'Update' : 'Result'}</Text>
+                  <Text style={styles.feedKind}>{item.job_name || 'Scheduled job'}</Text>
                   <Text style={styles.feedTime}>{item.timestamp ? formatAbsoluteTime(item.timestamp) : 'unknown'}</Text>
                 </View>
-                <Text style={styles.feedTitle}>{item.job_name || 'Scheduled job'}</Text>
+                <Text style={styles.feedType}>{item.kind === 'announcement' ? 'Update' : 'Result'}</Text>
                 <Text style={styles.feedBody}>{item.content}</Text>
                 <Text style={styles.feedMeta}>
                   {item.session_name ? `Session: ${item.session_name}` : 'No linked session'}
@@ -367,10 +390,20 @@ const styles = StyleSheet.create({
   section: {
     gap: 10,
   },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+  },
   sectionTitle: {
     color: '#ffffff',
     fontSize: 17,
     fontWeight: '700',
+  },
+  sectionHint: {
+    color: '#8fa2c8',
+    fontSize: 12,
   },
   input: {
     backgroundColor: '#0f1730',
@@ -394,11 +427,19 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '700',
   },
-  feedCard: {
+  feedBubble: {
     backgroundColor: '#141c33',
     borderRadius: 18,
     padding: 14,
     gap: 8,
+  },
+  feedBubbleAnnouncement: {
+    borderLeftWidth: 3,
+    borderLeftColor: '#7cc7ff',
+  },
+  feedBubbleResult: {
+    borderLeftWidth: 3,
+    borderLeftColor: '#4ade80',
   },
   feedHeader: {
     flexDirection: 'row',
@@ -407,18 +448,19 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   feedKind: {
-    color: '#7cc7ff',
+    color: '#ffffff',
     fontWeight: '700',
-    fontSize: 12,
+    fontSize: 13,
   },
   feedTime: {
     color: '#8194b9',
     fontSize: 11,
   },
-  feedTitle: {
-    color: '#ffffff',
-    fontSize: 15,
+  feedType: {
+    color: '#7cc7ff',
+    fontSize: 11,
     fontWeight: '700',
+    textTransform: 'uppercase',
   },
   feedBody: {
     color: '#e8f0ff',

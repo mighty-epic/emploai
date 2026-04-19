@@ -98,6 +98,13 @@ function detailFromPayload(payload: any, fallback: string) {
   return fallback;
 }
 
+function tracebackFromPayload(payload: any) {
+  if (payload && typeof payload === 'object' && typeof payload.traceback === 'string') {
+    return previewText(payload.traceback, 1200);
+  }
+  return undefined;
+}
+
 function isAbortLikeError(error: unknown) {
   if (!(error instanceof Error)) {
     return false;
@@ -129,16 +136,19 @@ export async function requestJson<T>({ scope, url, init, timeoutMs = 15000 }: Js
     const text = await response.text();
     const payload = parseJsonText(text);
     const responsePreview = previewText(text);
+    const tracebackPreview = tracebackFromPayload(payload);
 
     logDiagnostic(scope, `${method} ${url} responded`, {
       status: response.status,
       ok: response.ok,
       body: responsePreview || '<empty>',
+      traceback: tracebackPreview,
     });
 
     if (!response.ok) {
+      const detail = detailFromPayload(payload, responsePreview || 'HTTP error');
       throw new AppRequestError(
-        `${method} ${url} failed with ${response.status}: ${detailFromPayload(payload, responsePreview || 'HTTP error')}`,
+        `${method} ${url} failed with ${response.status}: ${detail}${tracebackPreview ? ' (see Diagnostics for traceback)' : ''}`,
         url,
         response.status,
       );

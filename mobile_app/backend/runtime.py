@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from bot_core.ui_helpers import ThinkingModeVisualizer
 from single_agent.agent import AGENT_TOOLS
 from telegram_bot.telegram_unified_agent import (
     build_unified_system_prompt,
@@ -17,6 +18,59 @@ from shared.live_config import get_live_config
 
 
 STEERING_BETA_ENV = "EMPLO_APP_STEERING_BETA_ENABLED"
+
+
+def _kickstart_prelude() -> list[dict[str, str]]:
+    return [
+        {
+            "role": "user",
+            "content": (
+                "IMPORTANT REMINDER: You are an autonomous agent with full computer control. "
+                "When I ask you to do something, DO IT immediately using your tools. "
+                "Do not explain what you would do — just do it. "
+                "Do not list what you can't do — find a way. "
+                "If you need to install something, install it. "
+                "Use browser DOM tools only when they are actually available for the current browser context. "
+                "If the task is in the user's real Chrome and the extension bridge is unavailable, do NOT use browser_* tools for that page — "
+                "switch to describe_screen plus atomic desktop actions, and use ocr_screen only when you need exact text coordinates or a fallback click. "
+                "Use the cheapest verification tool that fits the environment. "
+                "Never chain multiple browser or desktop edits without verifying the resulting state. "
+                "If a method fails and the state has not changed, do not repeat it — choose a different method. "
+                "Only declare done after the requested result is verified. "
+                "Before you finish, quickly assess what worked, what failed, and save only durable reusable lessons to memory. "
+                "Act first. Report results after."
+            ),
+        },
+        {
+            "role": "assistant",
+            "content": (
+                "Understood. I will act immediately, verify each step, and use only the tools that match the current environment. "
+                "If the task is in the user's Chrome without the extension bridge, I will not pretend Selenium or browser_* tools control that page; "
+                "I will switch to visual observation and atomic desktop actions instead. "
+                "I will avoid retrying failed methods unless state changed, and before finishing I will preserve only durable lessons worth remembering. "
+                "Ready for your task."
+            ),
+        },
+    ]
+
+
+def _task_execution_contract() -> dict[str, str]:
+    return {
+        "role": "system",
+        "content": (
+            "TASK EXECUTION CONTRACT:\n"
+            "- For complex tasks, keep a short internal checklist and complete one verified step at a time.\n"
+            "- Do not repeat a step once the requested state is already verified, and do not retry a failed method unless the page or app state changed.\n"
+            "- For webpage DOM actions, rely on browser tool results and browser_snapshot only when the current browser context actually supports them.\n"
+            "- If the task is in the user's real Chrome and the extension bridge is unavailable, browser_* tools do NOT control that page; use describe_screen first, then ocr_screen only for exact text coordinates or fallback clicks.\n"
+            "- Prefer describe_screen for visual discovery, button finding, and layout understanding. Use ocr_screen mainly for exact text extraction and coordinate fallback.\n"
+            "- Prefer ref-based browser tools over focus-dependent typing or synthetic keypresses.\n"
+            "- Use browser_wait_for instead of blind delays when waiting for navigation or confirmation text.\n"
+            "- Before final completion, assess what worked vs failed. Save only durable reusable lessons to memory.\n"
+            "- A task is done only when the requested file, page state, or deliverable is verified.\n"
+            "- End with a short completion report that states what is done, the proof, and any remaining blocker."
+        ),
+    }
 
 
 def _truthy(value: object) -> bool:
@@ -123,15 +177,26 @@ async def run_app_chat_turn(
             "assistant_text": "",
         }
 
-    system_messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are operating through the EmploAI mobile app channel. "
-                "Prefer concise, stream-friendly replies and status updates that fit a phone UI."
-            ),
-        }
-    ]
+    prelude_messages = []
+    if len(session.chat_history) <= 3:
+        prelude_messages.extend(_kickstart_prelude())
+
+    system_messages = [_task_execution_contract()]
+    if session.agent_mode == "semi":
+        if session.single_agent and session.single_agent.messages:
+            summary = session._summarize_history(session.single_agent.messages)
+            if summary:
+                system_messages.insert(
+                    0,
+                    {
+                        "role": "system",
+                        "content": (
+                            "RECENT AUTOMATION CONTEXT:\n"
+                            f"{summary}\n\n"
+                            "(Use this context to understand what was done on the desktop/browser recently.)"
+                        ),
+                    },
+                )
 
     result = await run_reserved_chat_turn(
         session,
@@ -143,6 +208,7 @@ async def run_app_chat_turn(
             AGENT_TOOLS,
         ),
         system_messages=system_messages,
+        prelude_messages=prelude_messages,
         assistant_message_payload={
             "channel": "app",
             "source_format": "app_system",
@@ -150,13 +216,24 @@ async def run_app_chat_turn(
         },
         event_sink=log_callback,
         initialize_single_agent=lambda loop: session.init_single_agent(None, loop),
+        assistant_content_transform=lambda response: (
+            ThinkingModeVisualizer.extract_thinking_content(response)[0]
+            if ThinkingModeVisualizer.should_show_thinking(session.current_model, session.current_variant)
+            else response
+        ),
     )
+    thinking_content = None
+    if ThinkingModeVisualizer.should_show_thinking(session.current_model, session.current_variant):
+        _, thinking_content = ThinkingModeVisualizer.extract_thinking_content(result.raw_response)
+
     return {
         "ok": result.ok,
         "busy": result.busy,
         "steering": False,
         "session_id": result.session_id,
         "assistant_text": result.assistant_text,
+        "raw_response": result.raw_response,
+        "thinking_content": thinking_content,
         "duration_seconds": result.duration_seconds,
         "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,

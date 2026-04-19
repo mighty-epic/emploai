@@ -14,6 +14,7 @@ type Props = {
   initialTab?: DrawerTab;
   sessions: SessionSummary[];
   jobs: ScheduledJob[];
+  cronUnreadCount?: number;
   activeSessionId?: string;
   backendLabel?: string;
   onSelectSession?: (sessionId: string) => void;
@@ -26,6 +27,7 @@ export function AppDrawer({
   initialTab = 'chats',
   sessions,
   jobs,
+  cronUnreadCount = 0,
   activeSessionId,
   backendLabel,
   onSelectSession,
@@ -41,7 +43,7 @@ export function AppDrawer({
     }
   }, [initialTab, visible]);
 
-  const navigate = (path: '/chat' | '/cron' | '/pair' | '/settings' | '/diagnostics') => {
+  const navigate = (path: '/chat' | '/cron' | '/pair' | '/settings' | '/diagnostics' | '/agent') => {
     router.push(path);
     onClose();
   };
@@ -82,7 +84,14 @@ export function AppDrawer({
                 style={[styles.tabButton, tab === value ? styles.tabButtonActive : null]}
                 onPress={() => setTab(value)}
               >
-                <Text style={styles.tabText}>{value === 'chats' ? 'Chats' : value === 'cron' ? 'Cron' : 'System'}</Text>
+                <View style={styles.tabLabelRow}>
+                  <Text style={styles.tabText}>{value === 'chats' ? 'Chats' : value === 'cron' ? 'Cron' : 'System'}</Text>
+                  {value === 'cron' && cronUnreadCount > 0 ? (
+                    <View style={styles.tabBadge}>
+                      <Text style={styles.tabBadgeText}>{cronUnreadCount > 9 ? '9+' : String(cronUnreadCount)}</Text>
+                    </View>
+                  ) : null}
+                </View>
               </Pressable>
             ))}
           </View>
@@ -159,6 +168,10 @@ export function AppDrawer({
                   <Text style={styles.cardTitle}>Settings</Text>
                   <Text style={styles.cardBody}>Backend URL, token state, and device verification.</Text>
                 </Pressable>
+                <Pressable style={styles.navCard} onPress={() => navigate('/agent')}>
+                  <Text style={styles.cardTitle}>Agent controls</Text>
+                  <Text style={styles.cardBody}>Model, runtime, memory, config, analytics, and other Telegram-style controls.</Text>
+                </Pressable>
                 <Pressable style={styles.navCard} onPress={() => navigate('/diagnostics')}>
                   <Text style={styles.cardTitle}>Diagnostics</Text>
                   <Text style={styles.cardBody}>Request logs, socket events, and connectivity failures.</Text>
@@ -227,6 +240,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#16203d',
   },
+  tabLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   tabButtonActive: {
     backgroundColor: '#2d4674',
   },
@@ -234,6 +252,20 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '700',
     fontSize: 13,
+  },
+  tabBadge: {
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f97316',
+  },
+  tabBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '800',
   },
   content: {
     gap: 16,

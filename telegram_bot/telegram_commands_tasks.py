@@ -6,7 +6,6 @@ import asyncio
 import os
 
 from telegram import Update
-from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from single_agent.cron_scheduler import parse_schedule
@@ -45,64 +44,13 @@ def build_task_command_handlers(
 
     @rate_limited(security_manager)
     async def continue_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Continue a paused task."""
-        user = update.effective_user
-
-        session = get_session(user.id)
-
-        agent_to_continue = None
-        if session.refined_agent and session.refined_agent.current_task:
-            agent_to_continue = session.refined_agent
-        elif session.single_agent and session.single_agent.current_task:
-            agent_to_continue = session.single_agent
-
-        if not agent_to_continue:
-            await safe_reply(update, "No paused task to continue.")
-            return
-
-        async with session.lock:
-            if session.is_processing:
-                print(
-                    f"[DEBUG] Abandoning current processing (ID {session.current_task_id}) for continue"
-                )
-                session.should_interrupt = True
-                if session.single_agent:
-                    session.single_agent.stop()
-                if session.refined_agent:
-                    session.refined_agent.stop()
-                if session.unified_agent:
-                    session.unified_agent.stop()
-
-            session.current_task_id += 1
-            my_task_id = session.current_task_id
-            session.start_browser_task(my_task_id)
-            session.should_interrupt = False
-            session.is_processing = True
-
-        await safe_reply(update, f"▶️ **Resuming:** {agent_to_continue.current_task}")
-        await context.bot.send_chat_action(chat_id=user.id, action=ChatAction.TYPING)
-
-        loop = asyncio.get_running_loop()
-        try:
-            result = await loop.run_in_executor(
-                None,
-                lambda: agent_to_continue.continue_task(max_turns=session.max_turns),
-            )
-
-            if session.current_task_id != my_task_id:
-                print(
-                    f"[DEBUG] Continue {my_task_id} was abandoned, discarding result"
-                )
-                return
-
-            await safe_reply(update, f"🏁 **Finished**\n{result}")
-        except Exception as exc:
-            if session.current_task_id == my_task_id:
-                await safe_reply(update, f"🔥 CRITICAL ERROR: {str(exc)}")
-        finally:
-            async with session.lock:
-                if session.current_task_id == my_task_id:
-                    session.is_processing = False
+        """Disabled legacy resume command kept only for backwards compatibility."""
+        await safe_reply(
+            update,
+            "⚠️ `/continue` is disabled.\n\n"
+            "The current Telegram flow no longer creates resumable paused tasks. "
+            "Use a normal message to steer the active run or `/pause` and `/stop` for run control.",
+        )
 
     @rate_limited(security_manager)
     async def pause_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -112,7 +60,9 @@ def build_task_command_handlers(
         session = get_session(user.id)
 
         agent_to_pause = None
-        if session.refined_agent and session.refined_agent.current_task:
+        if session.unified_agent and session.unified_agent.current_task:
+            agent_to_pause = session.unified_agent
+        elif session.refined_agent and session.refined_agent.current_task:
             agent_to_pause = session.refined_agent
         elif session.single_agent and session.single_agent.current_task:
             agent_to_pause = session.single_agent

@@ -208,8 +208,6 @@ class InlineKeyboardHelper:
         if can_pause:
             actions.append({'text': '⏸ Pause', 'callback_data': f'pause:{task_id}'})
         
-        actions.append({'text': '⏭ Continue', 'callback_data': f'continue:{task_id}'})
-        
         return InlineKeyboardHelper.create_action_buttons(actions)
     
     @staticmethod

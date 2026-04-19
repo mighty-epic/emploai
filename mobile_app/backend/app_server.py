@@ -19,7 +19,6 @@ from fastapi.responses import JSONResponse
 
 from bot_core.ui_helpers import ThinkingModeVisualizer
 from bot_core.security import SecurityManager
-from cli.agent_tools.executor import ToolExecutor
 from cli.tui_constants import AVAILABLE_MODELS, MODEL_CONFIGS, MODEL_CONTEXT_SIZES
 from mobile_app.backend.auth_store import AppAuthStore
 from mobile_app.backend.capture_runtime import capture_screen_snapshot, get_capture_runtime_status
@@ -234,6 +233,20 @@ def _bridge_for_user(user_id: int) -> AppSessionBridge:
     return AppSessionBridge(user_id=user_id, workspace=workspace)
 
 
+def _resolve_pairing_user_id(pairing_id: str) -> int:
+    pairing = _get_auth_store().get_pairing(pairing_id)
+    if not pairing:
+        raise HTTPException(status_code=404, detail="Unknown pairing")
+
+    created_by = str(pairing.get("created_by") or "").strip()
+    if created_by.startswith("user:"):
+        try:
+            return int(created_by.split(":", 1)[1])
+        except ValueError:
+            pass
+    return _default_user_id()
+
+
 def _workspace_root() -> Path:
     runtime_home = os.getenv("EMPLOAI_HOME", "").strip()
     if runtime_home:
@@ -269,22 +282,11 @@ def _get_security_manager() -> Optional[SecurityManager]:
     return _security_manager
 
 
-def _tool_confirm_callback(_: str) -> bool:
-    return True
-
-
-def _build_tool_executor(runtime) -> ToolExecutor:
-    return ToolExecutor(
-        runtime.workspace,
-        confirm_callback=_tool_confirm_callback,
-        check_interruption=lambda: runtime.should_interrupt,
-        get_interrupt_message=runtime.get_interrupt_message,
-        clear_interrupt=runtime._clear_interrupt,
-        activate_deferred_interrupts=runtime.activate_deferred_interrupts,
-        has_deferred_interrupts=runtime.has_deferred_interrupts,
-        skill_registry=runtime.skill_registry,
-        active_skills=runtime.active_skills,
-    )
+def _load_runtime_session_or_409(bridge: AppSessionBridge, session_id: Optional[str] = None):
+    try:
+        return bridge.load_runtime_session(session_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _current_headless_mode() -> str:
@@ -484,14 +486,12 @@ def _set_workspace(runtime, workspace_value: str) -> None:
     if not resolved_path.exists() or not resolved_path.is_dir():
         raise HTTPException(status_code=400, detail="Workspace path does not exist or is not a directory")
 
-    runtime.workspace = resolved_path
-    runtime.tool_executor = _build_tool_executor(runtime)
+    try:
+        runtime.set_workspace(resolved_path)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    current_id = runtime.session_manager.get_current_session_id() if runtime.session_manager else None
-    if current_id:
-        current_session = runtime.session_manager.load_session(current_id)
-        current_session.workspace = str(resolved_path)
-        runtime.session_manager.save_session(current_session)
+    runtime.save_session()
 
 
 def _configure_runtime(runtime, request: AgentConfigureRequest) -> None:
@@ -747,7 +747,7 @@ def create_app() -> FastAPI:
         payload = f"{pairing_id}:{issued_at}"
         if not hmac.compare_digest(signature, _sign(payload)):
             raise HTTPException(status_code=400, detail="Invalid pairing token")
-        user_id = _default_user_id()
+        user_id = _resolve_pairing_user_id(pairing_id)
         try:
             result = _get_auth_store().complete_pairing(
                 pairing_id=pairing_id,
@@ -791,7 +791,7 @@ def create_app() -> FastAPI:
     ) -> AgentOverviewView:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        runtime = bridge.load_runtime_session(session_id)
+        runtime = _load_runtime_session_or_409(bridge, session_id)
         return AgentOverviewView(**_agent_overview(runtime, history_count=history_count, analytics_days=analytics_days))
 
     @app.post("/api/app/agent/configure", response_model=AgentActionResponse)
@@ -802,7 +802,7 @@ def create_app() -> FastAPI:
     ) -> AgentActionResponse:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        runtime = bridge.load_runtime_session(session_id)
+        runtime = _load_runtime_session_or_409(bridge, session_id)
         _configure_runtime(runtime, request)
         return AgentActionResponse(action="configure", message="Agent controls updated")
 
@@ -814,7 +814,7 @@ def create_app() -> FastAPI:
     ) -> ConfigListResponse:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        runtime = bridge.load_runtime_session(session_id)
+        runtime = _load_runtime_session_or_409(bridge, session_id)
         if not runtime.live_config:
             return ConfigListResponse(items=[])
 
@@ -834,7 +834,7 @@ def create_app() -> FastAPI:
     ) -> ConfigEntryView:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        runtime = bridge.load_runtime_session(session_id)
+        runtime = _load_runtime_session_or_409(bridge, session_id)
         if not runtime.live_config:
             raise HTTPException(status_code=503, detail="Live config is unavailable")
 
@@ -851,7 +851,7 @@ def create_app() -> FastAPI:
     ) -> MemorySearchResponse:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        runtime = bridge.load_runtime_session(session_id)
+        runtime = _load_runtime_session_or_409(bridge, session_id)
         if not runtime.memory_manager:
             raise HTTPException(status_code=503, detail="Memory manager not initialized")
 
@@ -870,7 +870,7 @@ def create_app() -> FastAPI:
     ) -> AgentActionResponse:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        runtime = bridge.load_runtime_session(session_id)
+        runtime = _load_runtime_session_or_409(bridge, session_id)
         if not runtime.memory_manager:
             raise HTTPException(status_code=503, detail="Memory manager not initialized")
 
@@ -890,7 +890,7 @@ def create_app() -> FastAPI:
     ) -> AgentActionResponse:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        runtime = bridge.load_runtime_session(session_id)
+        runtime = _load_runtime_session_or_409(bridge, session_id)
         runtime.pending_files = []
         runtime.save_session()
         return AgentActionResponse(action="clear_files", message="Pending files cleared")
@@ -902,7 +902,7 @@ def create_app() -> FastAPI:
     ) -> AgentActionResponse:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        runtime = bridge.load_runtime_session(session_id)
+        runtime = _load_runtime_session_or_409(bridge, session_id)
 
         removed = False
         for index in range(len(runtime.chat_history) - 1, -1, -1):
@@ -923,7 +923,7 @@ def create_app() -> FastAPI:
     ) -> AgentActionResponse:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        runtime = bridge.load_runtime_session(session_id)
+        runtime = _load_runtime_session_or_409(bridge, session_id)
 
         runtime.chat_history = []
         runtime.pending_files = []
@@ -942,7 +942,7 @@ def create_app() -> FastAPI:
     ) -> SkillListResponse:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        runtime = bridge.load_runtime_session(session_id)
+        runtime = _load_runtime_session_or_409(bridge, session_id)
         return SkillListResponse(items=[SkillSummaryView(**item) for item in _skill_items(runtime)])
 
     @app.post("/api/app/agent/skills/activate", response_model=AgentActionResponse)
@@ -953,7 +953,7 @@ def create_app() -> FastAPI:
     ) -> AgentActionResponse:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        runtime = bridge.load_runtime_session(session_id)
+        runtime = _load_runtime_session_or_409(bridge, session_id)
         registry = getattr(runtime, "skill_registry", None)
         if not registry:
             raise HTTPException(status_code=503, detail="Skill system is unavailable")
@@ -986,7 +986,7 @@ def create_app() -> FastAPI:
     ) -> SkillValidationView:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        runtime = bridge.load_runtime_session(session_id)
+        runtime = _load_runtime_session_or_409(bridge, session_id)
         registry = getattr(runtime, "skill_registry", None)
         if not registry:
             raise HTTPException(status_code=503, detail="Skill system is unavailable")
@@ -1014,7 +1014,7 @@ def create_app() -> FastAPI:
     ) -> SubAgentListResponse:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        runtime = bridge.load_runtime_session(session_id)
+        runtime = _load_runtime_session_or_409(bridge, session_id)
         spawn_tool = getattr(runtime, "spawn_tool", None)
         if not spawn_tool:
             return SubAgentListResponse()
@@ -1037,7 +1037,7 @@ def create_app() -> FastAPI:
     ) -> AgentActionResponse:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        runtime = bridge.load_runtime_session(session_id)
+        runtime = _load_runtime_session_or_409(bridge, session_id)
 
         prompt = request.prompt.strip()
         if not prompt:
@@ -1059,7 +1059,7 @@ def create_app() -> FastAPI:
     ) -> AgentActionResponse:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        runtime = bridge.load_runtime_session(session_id)
+        runtime = _load_runtime_session_or_409(bridge, session_id)
         agents = _active_task_agents(runtime)
         if not agents:
             return AgentActionResponse(action="pause", message="No task is currently running")
@@ -1075,7 +1075,7 @@ def create_app() -> FastAPI:
     ) -> AgentActionResponse:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        runtime = bridge.load_runtime_session(session_id)
+        runtime = _load_runtime_session_or_409(bridge, session_id)
         agents = _active_task_agents(runtime)
         if not agents:
             return AgentActionResponse(action="stop", message="No task is currently running")
@@ -1094,7 +1094,7 @@ def create_app() -> FastAPI:
     ) -> AgentActionResponse:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        runtime = bridge.load_runtime_session(session_id)
+        runtime = _load_runtime_session_or_409(bridge, session_id)
 
         async def _restart_later() -> None:
             await asyncio.sleep(1.0)
@@ -1145,7 +1145,7 @@ def create_app() -> FastAPI:
     async def send_chat(request: ChatSendRequest, authorization: Optional[str] = Header(default=None)) -> dict:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        runtime = bridge.load_runtime_session(request.session_id)
+        runtime = _load_runtime_session_or_409(bridge, request.session_id)
         result = await run_app_chat_turn(
             runtime,
             user_message=request.text,
@@ -1243,7 +1243,7 @@ def create_app() -> FastAPI:
     ) -> UploadResponse:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        runtime = bridge.load_runtime_session(session_id)
+        runtime = _load_runtime_session_or_409(bridge, session_id)
         upload_id = secrets.token_hex(10)
         data = await file.read()
         effective_session_id = runtime.session_manager.get_current_session_id()
@@ -1358,19 +1358,6 @@ def create_app() -> FastAPI:
                 pass
             return
 
-    @app.get("/api/app/screenshot/current", response_model=ScreenCaptureView)
-    async def current_screenshot(authorization: Optional[str] = Header(default=None)) -> ScreenCaptureView:
-        _resolve_token(authorization)
-        try:
-            snapshot = capture_screen_snapshot()
-        except Exception as exc:
-            _record_runtime_error(
-                f"Screenshot unavailable: {exc}",
-                traceback.format_exc(),
-            )
-            raise HTTPException(status_code=503, detail=f"Screenshot unavailable: {str(exc)}") from exc
-        return ScreenCaptureView(**snapshot)
-
     @app.websocket("/ws/app/chat")
     async def chat_ws(websocket: WebSocket) -> None:
         await websocket.accept()
@@ -1386,7 +1373,17 @@ def create_app() -> FastAPI:
             session_id = websocket.query_params.get("session_id")
             auth = _resolve_ws_token(token)
             bridge = _bridge_for_user(int(auth["user_id"]))
-            runtime = bridge.load_runtime_session(session_id)
+            try:
+                runtime = bridge.load_runtime_session(session_id)
+            except RuntimeError as exc:
+                await send_model(
+                    RealtimeServerEvent(
+                        type="error",
+                        session_id=session_id,
+                        payload={"message": str(exc)},
+                    )
+                )
+                return
             effective_session_id = runtime.session_manager.get_current_session_id()
             await send_model(
                 RealtimeServerEvent(
@@ -1404,7 +1401,17 @@ def create_app() -> FastAPI:
                     await send_model(RealtimeServerEvent(type="warning", message="Empty message ignored"))
                     continue
 
-                runtime = bridge.load_runtime_session(req_session_id)
+                try:
+                    runtime = bridge.load_runtime_session(req_session_id)
+                except RuntimeError as exc:
+                    await send_model(
+                        RealtimeServerEvent(
+                            type="warning",
+                            session_id=req_session_id,
+                            payload={"message": str(exc)},
+                        )
+                    )
+                    continue
 
                 async def emit(event: dict) -> None:
                     kind = event.get("type")
@@ -1642,7 +1649,13 @@ def create_app() -> FastAPI:
                         await send_voice_event("warning", {"message": "No speech detected"})
                         await send_voice_event("voice_state", {"state": "idle"})
                         continue
-                    runtime = bridge.load_runtime_session(active_session_id)
+                    try:
+                        runtime = bridge.load_runtime_session(active_session_id)
+                    except RuntimeError as exc:
+                        await send_voice_event("warning", {"message": str(exc)})
+                        await send_voice_event("voice_state", {"state": "idle"})
+                        draft.reset()
+                        continue
                     await send_voice_event("voice_state", {"state": "generating"})
 
                     async def emit(event_data: dict) -> None:

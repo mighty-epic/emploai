@@ -20,6 +20,30 @@ except ImportError:  # pragma: no cover
     mss = None
 
 
+def get_capture_runtime_status() -> Dict[str, object]:
+    issues: list[str] = []
+    backends: list[str] = []
+
+    if shutil.which("scrot"):
+        backends.append("scrot")
+        if Image is None:
+            issues.append("Pillow is required to process screenshots captured with scrot.")
+
+    if Image is not None and mss is not None:
+        backends.append("mss")
+    elif not shutil.which("scrot"):
+        if Image is None:
+            issues.append("Pillow is not installed, so screenshot capture is unavailable.")
+        if mss is None:
+            issues.append("The `mss` Python package is not installed, so screenshot capture is unavailable.")
+
+    return {
+        "ok": not issues,
+        "issues": issues,
+        "backends": backends,
+    }
+
+
 def _preferred_capture_path(prefix: str = "app_screen") -> Path:
     target_dir = Path("single_agent/screenshots")
     target_dir.mkdir(parents=True, exist_ok=True)

@@ -8,7 +8,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Set
 
-from openai import OpenAI
+try:
+    from openai import OpenAI
+except ImportError:  # pragma: no cover
+    OpenAI = None
 
 
 APP_STT_MODEL_ENV = "EMPLO_APP_STT_MODEL"
@@ -34,12 +37,34 @@ def _get_stt_client() -> Optional[OpenAI]:
     if _stt_client is not None:
         return _stt_client
 
+    if OpenAI is None:
+        return None
+
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return None
 
     _stt_client = OpenAI(api_key=api_key)
     return _stt_client
+
+
+def get_voice_runtime_status() -> Dict[str, object]:
+    issues: list[str] = []
+
+    if OpenAI is None:
+        issues.append("The `openai` Python package is not installed, so app voice transcription is unavailable.")
+    elif not os.getenv("OPENAI_API_KEY"):
+        issues.append("OPENAI_API_KEY is not configured, so app voice transcription is unavailable.")
+
+    tts_enabled = os.getenv(APP_TTS_ENABLED_ENV, "1").strip().lower() not in {"0", "false", "off", "no"}
+    if tts_enabled and OpenAI is None:
+        issues.append("Assistant audio is enabled but the `openai` Python package is missing.")
+
+    return {
+        "ok": not issues,
+        "issues": issues,
+        "tts_enabled": tts_enabled,
+    }
 
 
 def _normalize_transcript(text: str) -> str:
@@ -85,6 +110,8 @@ def _mime_for_audio_format(audio_format: str) -> str:
 def _transcribe_audio_bytes(data: bytes, mime_type: Optional[str]) -> str:
     client = _get_stt_client()
     if not client:
+        if OpenAI is None:
+            raise RuntimeError("The `openai` Python package is not installed, so app voice transcription is unavailable")
         raise RuntimeError("OPENAI_API_KEY is required for app voice transcription")
     if not data:
         return ""

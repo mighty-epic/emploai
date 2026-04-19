@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -9,24 +8,14 @@ import time
 from cli.models.session import Session
 from cli.session_manager import SessionManager
 from single_agent.cron_scheduler import get_scheduler
-from telegram_bot.telegram_session_state import TelegramSession
-
-
-@dataclass
-class AppRuntimeContext:
-    user_id: int
-    workspace: Path
-    session_manager: SessionManager
-
-
-_APP_SESSIONS: Dict[int, TelegramSession] = {}
+from telegram_bot.telegram_session_state import TelegramSession, get_session, user_sessions
 
 
 class AppSessionBridge:
     """Additive bridge for the mobile app channel.
 
-    This intentionally reuses the existing session store so app and Telegram can
-    operate over shared session history. It does not change Telegram behavior.
+    This reuses the Telegram runtime cache so app and Telegram operate over the
+    same live session object instead of parallel in-memory runtimes.
     """
 
     def __init__(self, *, user_id: int, workspace: Path):
@@ -58,27 +47,32 @@ class AppSessionBridge:
         return self.session_manager.load_session(session_id)
 
     def create_session(self, name: Optional[str] = None) -> Session:
-        return self.session_manager.create_session(
+        session = self.session_manager.create_session(
             name=name,
             workspace=self.workspace,
             agent_mode="auto",
         )
+        runtime = user_sessions.get(self.user_id)
+        if runtime and runtime.is_processing:
+            return session
+
+        self.session_manager.set_current_session(session.id)
+        if runtime:
+            runtime.load_session_by_id(session.id)
+        return session
 
     def get_or_create_runtime_session(self) -> TelegramSession:
-        runtime = _APP_SESSIONS.get(self.user_id)
-        if runtime is None:
-            runtime = TelegramSession(user_id=self.user_id, workspace=self.workspace)
-            _APP_SESSIONS[self.user_id] = runtime
-        return runtime
+        return get_session(
+            self.user_id,
+            workspace=self.workspace,
+            create_new_session=False,
+        )
 
     def load_runtime_session(self, session_id: Optional[str] = None) -> TelegramSession:
         runtime = self.get_or_create_runtime_session()
-        if session_id:
-            runtime.load_session_by_id(session_id)
-        else:
-            current_id = self.session_manager.get_current_session_id()
-            if current_id:
-                runtime.load_session_by_id(current_id)
+        target_session_id = session_id or self.session_manager.get_current_session_id()
+        if target_session_id:
+            runtime.load_session_by_id(target_session_id)
         return runtime
 
     def append_app_message(
