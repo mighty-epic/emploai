@@ -14,6 +14,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from mobile_app.backend.auth_store import AppAuthStore
 from mobile_app.backend.desktop_runtime import (
@@ -30,6 +31,8 @@ from mobile_app.backend.desktop_runtime import (
 )
 from mobile_app.backend.session_bridge import AppSessionBridge
 from mobile_app.backend.voice_pack_manager import (
+    HEBREW_PACK_ARCHIVE_URL_ENV,
+    HEBREW_PACK_REVISION_ENV,
     VOICE_ENGINE_ENGLISH,
     VOICE_ENGINE_HEBREW,
     VOICE_PACK_IDS,
@@ -46,6 +49,7 @@ from deploy.windows.release_runtime import (
     current_release_version,
     ensure_runtime_files,
     env_path,
+    apply_installer_voice_pack_preferences,
     load_existing_env_values,
     load_runtime_config,
     runtime_home,
@@ -57,6 +61,7 @@ from deploy.windows.release_update import check_for_updates, install_latest_upda
 
 RUNTIME_PID_FILENAME = "desktop_runtime.pid.json"
 RUNTIME_LOG_FILENAME = "desktop_runtime.log"
+VOICE_PACK_BOOTSTRAP_REPORT_FILENAME = "installer_voice_pack_bootstrap.json"
 
 
 def _json_print(payload: dict[str, Any]) -> int:
@@ -72,10 +77,51 @@ def _runtime_paths() -> tuple[Path, Path, Path]:
     return root, home, env_file
 
 
+def _release_info_payload(root: Path) -> dict[str, Any]:
+    info_path = root / "deploy" / "windows" / "release_info.json"
+    if not info_path.exists():
+        return {}
+    try:
+        payload = json.loads(info_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _default_hebrew_pack_archive_url(root: Path) -> str:
+    payload = _release_info_payload(root)
+    explicit_url = str(payload.get("hebrew_voice_pack_archive_url") or "").strip()
+    if explicit_url:
+        return explicit_url
+
+    github_repo = str(payload.get("github_repo") or "").strip().strip("/")
+    asset_name = str(payload.get("hebrew_voice_pack_asset") or "").strip()
+    release_tag = str(payload.get("hebrew_voice_pack_release_tag") or payload.get("release_tag") or "").strip()
+    if not (github_repo and asset_name and release_tag):
+        return ""
+    return f"https://github.com/{github_repo}/releases/download/{quote(release_tag)}/{quote(asset_name)}"
+
+
+def _configure_pack_source_environment(root: Path) -> None:
+    archive_url = os.getenv(HEBREW_PACK_ARCHIVE_URL_ENV, "").strip()
+    if not archive_url:
+        derived = _default_hebrew_pack_archive_url(root)
+        if derived:
+            os.environ[HEBREW_PACK_ARCHIVE_URL_ENV] = derived
+
+    payload = _release_info_payload(root)
+    revision = os.getenv(HEBREW_PACK_REVISION_ENV, "").strip()
+    if not revision:
+        configured_revision = str(payload.get("hebrew_voice_pack_revision") or "").strip()
+        if configured_revision:
+            os.environ[HEBREW_PACK_REVISION_ENV] = configured_revision
+
+
 def _prepare_environment() -> tuple[Path, Path, Path, dict[str, str]]:
     root, home, env_file = _runtime_paths()
     existing = load_existing_env_values(env_file)
     configure_process_environment(home, env_file)
+    _configure_pack_source_environment(root)
     return root, home, env_file, existing
 
 
@@ -87,6 +133,12 @@ def _runtime_log_path(home: Path) -> Path:
     log_dir = home / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir / RUNTIME_LOG_FILENAME
+
+
+def _voice_pack_bootstrap_report_path(home: Path) -> Path:
+    log_dir = home / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir / VOICE_PACK_BOOTSTRAP_REPORT_FILENAME
 
 
 def _default_user_id() -> int:
@@ -413,6 +465,7 @@ def _runtime_compatibility_issue(
 
 def _bootstrap_payload(*, launch_if_needed: bool = False, force_launch: bool = False) -> dict[str, Any]:
     root, home, env_file, existing = _prepare_environment()
+    apply_installer_voice_pack_preferences(home)
     try:
         ensure_requested_voice_packs(config_path=home / "config.json")
     except Exception:
@@ -523,6 +576,41 @@ def _bootstrap_payload(*, launch_if_needed: bool = False, force_launch: bool = F
         "releaseVersion": current_release_version(root),
         "setupState": setup_state,
     }
+
+
+def _bootstrap_installer_voice_packs() -> dict[str, Any]:
+    root, home, _, _ = _prepare_environment()
+    runtime_config = apply_installer_voice_pack_preferences(home)
+    voice_config = runtime_config.get("voice") if isinstance(runtime_config.get("voice"), dict) else {}
+    packs = voice_config.get("packs") if isinstance(voice_config.get("packs"), dict) else {}
+    requested_packs = [
+        pack_id
+        for pack_id, pack_state in packs.items()
+        if isinstance(pack_state, dict) and bool(pack_state.get("requested"))
+    ]
+    results = ensure_requested_voice_packs(config_path=home / "config.json")
+    payload: dict[str, Any] = {
+        "ok": bool(results.get("ok", False)),
+        "releaseVersion": current_release_version(root),
+        "runtimeHome": str(home),
+        "voiceConfig": voice_config,
+        "requestedPacks": requested_packs,
+        "installed": results.get("installed", []),
+        "errors": results.get("errors", {}),
+        "statuses": results.get("statuses", {}),
+        "completedAt": datetime.now(timezone.utc).isoformat(),
+    }
+    _voice_pack_bootstrap_report_path(home).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return payload
+
+
+def _set_voice_engine(engine: str) -> dict[str, Any]:
+    if engine not in {VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW, "none"}:
+        raise RuntimeError(f"Unsupported voice engine: {engine}")
+
+    _, home, _, _ = _prepare_environment()
+    update_voice_pack_preferences(home=home, default_engine=engine)
+    return _bootstrap_payload(launch_if_needed=False)
 
 
 def _process_exists(pid: int) -> bool:
@@ -748,6 +836,18 @@ def _build_parser() -> argparse.ArgumentParser:
     voice_pack_remove_parser = subparsers.add_parser("remove-voice-pack", help="remove a managed voice pack and print bootstrap JSON")
     voice_pack_remove_parser.add_argument("--pack", required=True, choices=VOICE_PACK_IDS)
 
+    voice_pack_bootstrap_parser = subparsers.add_parser(
+        "bootstrap-installer-voice-packs",
+        help="apply installer voice-pack selections and install any requested packs without failing the MSI",
+    )
+    voice_pack_bootstrap_parser.add_argument("--json-only", action="store_true")
+
+    voice_engine_parser = subparsers.add_parser(
+        "set-voice-engine",
+        help="set the default desktop voice engine without reopening the full setup form",
+    )
+    voice_engine_parser.add_argument("--engine", required=True, choices=[*VOICE_PACK_IDS, "none"])
+
     updates_parser = subparsers.add_parser("check-updates", help="check for release updates and print JSON")
     updates_parser.add_argument("--force", action="store_true")
 
@@ -802,6 +902,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "remove-voice-pack":
         return _json_print(_voice_pack_action(str(args.pack), install=False))
+
+    if args.command == "bootstrap-installer-voice-packs":
+        payload = _bootstrap_installer_voice_packs()
+        if not args.json_only:
+            print(
+                f"Installer voice pack bootstrap completed. Requested installs: {', '.join(payload.get('installed', [])) or 'none'}",
+                file=sys.stderr,
+            )
+        return _json_print(payload)
+
+    if args.command == "set-voice-engine":
+        return _json_print(_set_voice_engine(str(args.engine)))
 
     if args.command == "check-updates":
         root, home, _ = _runtime_paths()

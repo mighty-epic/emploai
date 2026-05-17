@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('emploaiDesktop', {
   voicePacks: {
     install: (packId) => ipcRenderer.invoke('emploai:voice-packs:install', packId),
     remove: (packId) => ipcRenderer.invoke('emploai:voice-packs:remove', packId),
+    setDefaultEngine: (engine) => ipcRenderer.invoke('emploai:voice-packs:set-default-engine', engine),
   },
   updates: {
     check: (payload) => ipcRenderer.invoke('emploai:updates:check', payload),

@@ -60,12 +60,6 @@ HEBREW_REQUIRED_MODEL_FILES = (
     "tokenizer_config.json",
     "vocab.json",
 )
-DEV_HEBREW_SOURCE_DIR_CANDIDATES = (
-    Path.home() / "Documents" / "Models" / "hebrew-whisper-small-continue-public-v1-runtime-ready",
-    Path.home() / "Documents" / "Models" / "hebrew-whisper-small-real-v2-runtime",
-)
-
-
 def managed_voice_packs_root() -> Path:
     return runtime_root() / MANAGED_VOICE_PACKS_DIRNAME
 
@@ -169,10 +163,6 @@ def _candidate_hebrew_source_dir() -> Path | None:
         candidate = Path(configured).expanduser().resolve()
         if _hebrew_pack_ready(candidate):
             return candidate
-    for candidate in DEV_HEBREW_SOURCE_DIR_CANDIDATES:
-        resolved = candidate.expanduser().resolve()
-        if _hebrew_pack_ready(resolved):
-            return resolved
     return None
 
 

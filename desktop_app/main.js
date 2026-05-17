@@ -260,6 +260,16 @@ async function removeVoicePack(packId) {
   return next;
 }
 
+async function setDefaultVoiceEngine(engine) {
+  const next = await runBackendJson(['set-voice-engine', '--engine', String(engine || '')]);
+  updateBootstrapCaches(next);
+  emitRuntimeEvent({
+    type: 'voice_engine_selected',
+    payload: next,
+  });
+  return next;
+}
+
 async function checkUpdates(force = false) {
   return runBackendJson(force ? ['check-updates', '--force'] : ['check-updates']);
 }
@@ -718,6 +728,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('emploai:setup:validate-field', async (_event, payload) => validateSetupField(payload?.field, payload?.value));
   ipcMain.handle('emploai:voice-packs:install', async (_event, packId) => installVoicePack(packId));
   ipcMain.handle('emploai:voice-packs:remove', async (_event, packId) => removeVoicePack(packId));
+  ipcMain.handle('emploai:voice-packs:set-default-engine', async (_event, engine) => setDefaultVoiceEngine(engine));
   ipcMain.handle('emploai:updates:check', async (_event, payload) => checkUpdates(Boolean(payload?.force)));
   ipcMain.handle('emploai:updates:install', async () => installUpdate());
   ipcMain.handle('emploai:shell:open-path', async (_event, targetPath) => openManagedPath(targetPath));

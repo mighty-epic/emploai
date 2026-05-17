@@ -373,6 +373,13 @@ def save_runtime_config(home: Path, payload: Mapping[str, object]) -> None:
     config_file.write_text(json.dumps(dict(payload), indent=2), encoding="utf-8")
 
 
+def apply_installer_voice_pack_preferences(home: Path) -> Dict[str, object]:
+    runtime_config = load_runtime_config(home)
+    _normalize_voice_config(runtime_config, installer_preferences=_read_installer_voice_pack_preferences())
+    save_runtime_config(home, runtime_config)
+    return runtime_config
+
+
 def _voice_pack_setup_payload(voice_config: Mapping[str, object], voice_status: Mapping[str, object]) -> Dict[str, object]:
     packs = voice_config.get("packs") if isinstance(voice_config.get("packs"), dict) else {}
     english_requested = _coerce_bool((packs.get(VOICE_ENGINE_ENGLISH) or {}).get("requested"), True)

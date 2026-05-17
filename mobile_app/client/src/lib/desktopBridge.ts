@@ -197,6 +197,7 @@ type DesktopBridge = {
   voicePacks?: {
     install: (packId: string) => Promise<DesktopBootstrap>;
     remove: (packId: string) => Promise<DesktopBootstrap>;
+    setDefaultEngine: (engine: string) => Promise<DesktopBootstrap>;
   };
   updates?: {
     check: (payload?: { force?: boolean }) => Promise<DesktopUpdateStatus>;
@@ -308,6 +309,16 @@ export async function removeDesktopVoicePack(packId: string) {
     return null;
   }
   const payload = await bridge.voicePacks.remove(packId);
+  bootstrapPromise = Promise.resolve(payload);
+  return payload;
+}
+
+export async function setDesktopVoiceDefaultEngine(engine: string) {
+  const bridge = getDesktopBridge();
+  if (!bridge?.voicePacks?.setDefaultEngine) {
+    return null;
+  }
+  const payload = await bridge.voicePacks.setDefaultEngine(engine);
   bootstrapPromise = Promise.resolve(payload);
   return payload;
 }
