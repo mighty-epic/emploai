@@ -19,6 +19,7 @@ test_outputs/whisper_cpp/
 emplo-own/
 git-push-test/
 agent_data/AGENTS.md
+m/
 
 # Windows beta release artifacts
 build/
