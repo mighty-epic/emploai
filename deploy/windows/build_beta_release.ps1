@@ -1,6 +1,8 @@
 param(
     [switch]$IncludeZip,
-    [switch]$BundleEnglishVoicePack
+    [switch]$BundleEnglishVoicePack,
+    [switch]$IncludeHebrewVoicePackArchive,
+    [string]$HebrewVoicePackSourceDir = $(if ($env:EMPLOAI_HEBREW_VOICE_PACK_SOURCE_DIR) { $env:EMPLOAI_HEBREW_VOICE_PACK_SOURCE_DIR } else { "" })
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,6 +37,7 @@ $desktopAppDir = Join-Path $repoRoot "desktop_app"
 $desktopRendererDir = Join-Path $desktopAppDir "renderer"
 $desktopBackendDir = Join-Path $desktopAppDir "backend"
 $clientDistDir = Join-Path $repoRoot "mobile_app\\client\\dist"
+$script:hebrewVoicePackAssetName = "hebrew-whisper-small-pass3-knesset-runtime-ready.zip"
 
 function Ensure-WixToolset {
     $candle = Join-Path $wixDir "candle.exe"
@@ -360,6 +363,30 @@ function Assert-BackendBundleShape {
     }
 }
 
+function Prepare-HebrewVoicePackArchive {
+    param(
+        [string]$SourceDir,
+        [string]$AssetName
+    )
+
+    if (-not $SourceDir) {
+        throw "IncludeHebrewVoicePackArchive was set but no Hebrew voice pack source directory was provided. Use -HebrewVoicePackSourceDir or EMPLOAI_HEBREW_VOICE_PACK_SOURCE_DIR."
+    }
+
+    $resolvedSource = (Resolve-Path $SourceDir).Path
+    if (-not (Test-Path (Join-Path $resolvedSource "model.safetensors"))) {
+        throw "Hebrew voice pack source directory does not look like a runtime-ready pack: $resolvedSource"
+    }
+
+    $archivePath = Join-Path $distDir $AssetName
+    if (Test-Path $archivePath) {
+        Remove-Item -Force $archivePath
+    }
+
+    Compress-Archive -Path (Join-Path $resolvedSource "*") -DestinationPath $archivePath
+    Write-Host "Bundled Hebrew voice pack archive: $archivePath"
+}
+
 Push-Location $repoRoot
 try {
     python -m pip install "setuptools<81" "pyinstaller>=6.14,<7" | Out-Host
@@ -368,12 +395,20 @@ try {
     Assert-LastExitCode "python -m pip install -r requirements.txt"
 
     $releaseInfo = Get-Content $releaseInfoPath | ConvertFrom-Json
+    if ($releaseInfo.hebrew_voice_pack_asset) {
+        $script:hebrewVoicePackAssetName = [string]$releaseInfo.hebrew_voice_pack_asset
+    }
     Prepare-TesseractBundle
     if ($BundleEnglishVoicePack) {
         Prepare-WhisperBundle
     } else {
         Remove-Item Env:EMPLOAI_WHISPER_BUNDLE -ErrorAction SilentlyContinue
         Write-Host "Skipping bundled English voice assets. Voice packs will download on first launch based on installer/app selection."
+    }
+    if ($IncludeHebrewVoicePackArchive) {
+        Prepare-HebrewVoicePackArchive -SourceDir $HebrewVoicePackSourceDir -AssetName $script:hebrewVoicePackAssetName
+    } else {
+        Write-Host "Skipping standalone Hebrew voice pack archive generation. MSI setup expects a downloadable asset named '$script:hebrewVoicePackAssetName' for pass-3 installs."
     }
 
     npm --prefix mobile_app/client install | Out-Host
@@ -454,11 +489,15 @@ try {
     if ($IncludeZip) {
         Write-Host "  Portable Zip: $portableZip"
     }
+    if ($IncludeHebrewVoicePackArchive) {
+        Write-Host "  Hebrew Voice Pack: $(Join-Path $distDir $script:hebrewVoicePackAssetName)"
+    }
     Write-Host ""
     Write-Host "Upload EmploAI.msi to the GitHub release page as the primary installer asset."
     if ($IncludeZip) {
         Write-Host "Upload EmploAI-portable.zip as the optional portable fallback asset."
     }
+    Write-Host "Upload $script:hebrewVoicePackAssetName to the same GitHub release so MSI-selected Hebrew installs can complete during setup."
 }
 finally {
     Pop-Location

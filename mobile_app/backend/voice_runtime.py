@@ -88,11 +88,12 @@ DEFAULT_DRAFT_CONFIDENCE = 0.82
 DEFAULT_DRAFT_MIN_CHARS = 10
 DEFAULT_KNOWN_TERMS = ("telegram_agent.py", ".env")
 DEFAULT_HEBREW_LANGUAGE = "he"
-HEBREW_DRAFT_INTERVAL_MS = 850
-HEBREW_DRAFT_MIN_MS = 850
+HEBREW_SEQUENCE_MS = 1200
+HEBREW_DRAFT_INTERVAL_MS = 1200
+HEBREW_DRAFT_MIN_MS = 1400
 HEBREW_DRAFT_CONFIDENCE = 0.82
 HEBREW_DRAFT_MIN_CHARS = 4
-HEBREW_FINAL_DISCARD_CONFIDENCE = 0.62
+HEBREW_FINAL_DISCARD_CONFIDENCE = 0.35
 DEFAULT_TTS_MODEL = "gpt-4o-mini-tts"
 DEFAULT_TTS_VOICE = "ash"
 DEFAULT_TTS_FORMAT = "mp3"
@@ -637,6 +638,11 @@ class VoiceDraftState:
             return HEBREW_FINAL_DISCARD_CONFIDENCE
         return None
 
+    def _sequence_duration_ms(self) -> int:
+        if _selected_voice_engine() == VOICE_ENGINE_HEBREW:
+            return HEBREW_SEQUENCE_MS
+        return 850
+
     def _should_run_draft(self, sequence: int) -> bool:
         if sequence <= self.last_draft_sequence:
             return False
@@ -651,7 +657,7 @@ class VoiceDraftState:
         duration_ms = int(total_samples * 1000 / max(1, self.sample_rate))
         if duration_ms < draft_min_ms:
             return False
-        sequence_gap_ms = (sequence - self.last_draft_sequence) * 850
+        sequence_gap_ms = (sequence - self.last_draft_sequence) * self._sequence_duration_ms()
         return sequence_gap_ms >= draft_interval_ms
 
     def register_task(self, task: asyncio.Task) -> None:

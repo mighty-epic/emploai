@@ -67,6 +67,11 @@ const VOICE_GATE_PREROLL_MS = 350;
 const VOICE_GATE_FRAME_MS = 30;
 const VOICE_GATE_MAX_MS = 30000;
 const VOICE_DEFERRED_FRAME_MAX_MS = 15000;
+const HEBREW_VOICE_SEGMENT_MS = 1200;
+const HEBREW_VOICE_GATE_DBFS = -44.0;
+const HEBREW_VOICE_GATE_RELEASE_MS = 900;
+const HEBREW_VOICE_GATE_PREROLL_MS = 300;
+const HEBREW_VOICE_GATE_MAX_MS = 3600;
 const SOCKET_RECONNECT_MS = 1600;
 const SIDEBAR_REFRESH_MS = 5000;
 const MAX_ACTIVITY_ITEMS = 40;
@@ -991,6 +996,13 @@ export function DesktopConversationView({
   const [keepRuntimeOnAppClose, setKeepRuntimeOnAppClose] = useState(false);
   const [savingCloseBehavior, setSavingCloseBehavior] = useState(false);
   const [contextUsageHovered, setContextUsageHovered] = useState(false);
+  const selectedVoiceEngine = voicePackState?.defaultEngine || voiceStatus?.selected_engine || VOICE_ENGINE_NONE;
+  const usingHebrewVoiceEngine = selectedVoiceEngine === VOICE_ENGINE_HEBREW;
+  const activeVoiceSegmentMs = usingHebrewVoiceEngine ? HEBREW_VOICE_SEGMENT_MS : VOICE_SEGMENT_MS;
+  const activeVoiceGateDbfs = usingHebrewVoiceEngine ? HEBREW_VOICE_GATE_DBFS : VOICE_GATE_DBFS;
+  const activeVoiceGateReleaseMs = usingHebrewVoiceEngine ? HEBREW_VOICE_GATE_RELEASE_MS : VOICE_GATE_RELEASE_MS;
+  const activeVoiceGatePrerollMs = usingHebrewVoiceEngine ? HEBREW_VOICE_GATE_PREROLL_MS : VOICE_GATE_PREROLL_MS;
+  const activeVoiceGateMaxMs = usingHebrewVoiceEngine ? HEBREW_VOICE_GATE_MAX_MS : VOICE_GATE_MAX_MS;
 
   useEffect(() => {
     setInterruptPolicy(normalizeInterruptPolicyValue(defaultInterruptPolicy));
@@ -1963,7 +1975,7 @@ export function DesktopConversationView({
     if (!samples.length) return;
     voiceChunkSamplesRef.current.push(samples);
     voiceChunkSampleCountRef.current += samples.length;
-    const chunkTarget = Math.max(1, Math.round(voiceSampleRateRef.current * VOICE_SEGMENT_MS / 1000));
+    const chunkTarget = Math.max(1, Math.round(voiceSampleRateRef.current * activeVoiceSegmentMs / 1000));
     if (force || voiceChunkSampleCountRef.current >= chunkTarget) {
       void flushVoiceChunk();
     }
@@ -2102,12 +2114,12 @@ export function DesktopConversationView({
 
     const gate = voiceGateStateRef.current;
     const frameDbfs = samplesDbfs(frame);
-    const aboveThreshold = frameDbfs >= VOICE_GATE_DBFS;
+    const aboveThreshold = frameDbfs >= activeVoiceGateDbfs;
     const attackFrames = Math.max(1, Math.ceil(VOICE_GATE_ATTACK_MS / VOICE_GATE_FRAME_MS));
-    const releaseFrames = Math.max(1, Math.ceil(VOICE_GATE_RELEASE_MS / VOICE_GATE_FRAME_MS));
-    const prerollFrames = Math.max(1, Math.ceil(VOICE_GATE_PREROLL_MS / VOICE_GATE_FRAME_MS));
+    const releaseFrames = Math.max(1, Math.ceil(activeVoiceGateReleaseMs / VOICE_GATE_FRAME_MS));
+    const prerollFrames = Math.max(1, Math.ceil(activeVoiceGatePrerollMs / VOICE_GATE_FRAME_MS));
     const minFrames = Math.max(1, Math.ceil(VOICE_GATE_MIN_MS / VOICE_GATE_FRAME_MS));
-    const maxFrames = Math.max(minFrames, Math.ceil(VOICE_GATE_MAX_MS / VOICE_GATE_FRAME_MS));
+    const maxFrames = Math.max(minFrames, Math.ceil(activeVoiceGateMaxMs / VOICE_GATE_FRAME_MS));
 
     if (!gate.recording) {
       if (voiceRunningRef.current || voiceRecordingRef.current) {
@@ -2782,7 +2794,7 @@ export function DesktopConversationView({
         chatWsRef.current = null;
       }
     };
-  }, [apiBaseUrl, sessionId, token]);
+  }, [apiBaseUrl, selectedVoiceEngine, sessionId, token]);
 
   useEffect(() => {
     if (!apiBaseUrl || !token) {
@@ -3614,7 +3626,6 @@ export function DesktopConversationView({
         ? `${voiceState} · processing`
         : voiceState;
   const voicePacks = voicePackState?.packs ?? [];
-  const selectedVoiceEngine = voicePackState?.defaultEngine || voiceStatus?.selected_engine || VOICE_ENGINE_NONE;
   const englishVoicePack = voicePacks.find((pack) => pack.id === VOICE_ENGINE_ENGLISH) ?? null;
   const hebrewVoicePack = voicePacks.find((pack) => pack.id === VOICE_ENGINE_HEBREW) ?? null;
   const selectedVoicePack = voicePacks.find((pack) => pack.id === selectedVoiceEngine) ?? null;
@@ -4717,46 +4728,58 @@ export function DesktopConversationView({
                   <View style={styles.voicePanelHeaderCopy}>
                     <Text style={styles.voiceLabel}>Mic / Voice State</Text>
                     <Text style={styles.voiceValue}>{voiceSummary}</Text>
-                    <Text style={styles.voiceHint}>
-                      Desktop voice uses local Whisper by default: base.en-q5_1 for final text and tiny.en for live drafts.
-                    </Text>
+                    <Text style={styles.voiceHint}>{selectedVoicePackSummary}</Text>
+                    {voicePackDiagnostics ? (
+                      <Text style={styles.voiceHint}>{voicePackDiagnostics}</Text>
+                    ) : null}
                   </View>
-                  <Pressable style={styles.voicePanelHeaderAction} onPress={hideVoicePanel}>
-                    <Text style={styles.voicePanelHeaderActionText}>Hide Voice</Text>
-                  </Pressable>
+                  <View style={styles.voicePanelHeaderActions}>
+                    <Pressable style={styles.voicePanelHeaderAction} onPress={() => onOpenSetup?.()}>
+                      <Text style={styles.voicePanelHeaderActionText}>Open Setup</Text>
+                    </Pressable>
+                    <Pressable style={styles.voicePanelHeaderAction} onPress={hideVoicePanel}>
+                      <Text style={styles.voicePanelHeaderActionText}>Hide Voice</Text>
+                    </Pressable>
+                  </View>
                 </View>
 
                 <View style={styles.voiceLanguageRow}>
                   <Pressable
                     style={[
                       styles.voiceLanguageChip,
-                      voiceLanguagePath === 'english' ? styles.voiceLanguageChipActive : null,
+                      selectedVoiceEngine === VOICE_ENGINE_ENGLISH ? styles.voiceLanguageChipActive : null,
+                      !englishVoicePack?.available || voiceEngineChanging ? styles.voiceModeChipDisabled : null,
                     ]}
-                    onPress={() => setVoiceLanguagePath('english')}
+                    onPress={() => {
+                      void handleVoiceEngineSelection(VOICE_ENGINE_ENGLISH);
+                    }}
                   >
                     <Text
                       style={[
                         styles.voiceLanguageChipText,
-                        voiceLanguagePath === 'english' ? styles.voiceLanguageChipTextActive : null,
+                        selectedVoiceEngine === VOICE_ENGINE_ENGLISH ? styles.voiceLanguageChipTextActive : null,
                       ]}
                     >
-                      English Path
+                      {voiceEngineChanging && selectedVoiceEngine !== VOICE_ENGINE_ENGLISH ? 'Switching…' : 'English Path'}
                     </Text>
                   </Pressable>
                   <Pressable
                     style={[
                       styles.voiceLanguageChip,
-                      voiceLanguagePath === 'hebrew' ? styles.voiceLanguageChipActive : null,
+                      selectedVoiceEngine === VOICE_ENGINE_HEBREW ? styles.voiceLanguageChipActive : null,
+                      !hebrewVoicePack?.available || voiceEngineChanging ? styles.voiceModeChipDisabled : null,
                     ]}
-                    onPress={() => setVoiceLanguagePath('hebrew')}
+                    onPress={() => {
+                      void handleVoiceEngineSelection(VOICE_ENGINE_HEBREW);
+                    }}
                   >
                     <Text
                       style={[
                         styles.voiceLanguageChipText,
-                        voiceLanguagePath === 'hebrew' ? styles.voiceLanguageChipTextActive : null,
+                        selectedVoiceEngine === VOICE_ENGINE_HEBREW ? styles.voiceLanguageChipTextActive : null,
                       ]}
                     >
-                      Hebrew Path
+                      {voiceEngineChanging && selectedVoiceEngine !== VOICE_ENGINE_HEBREW ? 'Switching…' : 'Hebrew Path'}
                     </Text>
                   </Pressable>
                 </View>
@@ -6624,6 +6647,10 @@ const styles = StyleSheet.create({
   voicePanelHeaderCopy: {
     flex: 1,
     gap: 5,
+  },
+  voicePanelHeaderActions: {
+    gap: 8,
+    alignSelf: 'flex-start',
   },
   voicePanelHeaderAction: {
     borderRadius: 999,

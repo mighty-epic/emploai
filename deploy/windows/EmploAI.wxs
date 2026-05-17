@@ -23,6 +23,18 @@
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch EmploAI now" />
     <CustomAction Id="SetLaunchTarget" Property="WixShellExecTarget" Value="[INSTALLDIR]EmploAI.exe" Execute="immediate" />
     <CustomAction Id="LaunchInstalledApplication" BinaryKey="WixCA" DllEntry="WixShellExec" Impersonate="yes" />
+    <CustomAction
+      Id="SetBootstrapInstallerVoicePacks"
+      Property="BootstrapInstallerVoicePacks"
+      Value="&quot;[INSTALLDIR]backend\EmploAIBackend.exe&quot; bootstrap-installer-voice-packs --json-only"
+      Execute="immediate" />
+    <CustomAction
+      Id="BootstrapInstallerVoicePacks"
+      BinaryKey="WixCA"
+      DllEntry="WixQuietExec"
+      Execute="deferred"
+      Return="ignore"
+      Impersonate="yes" />
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="LocalAppDataFolder">
@@ -46,14 +58,14 @@
       <Feature
         Id="EnglishVoicePackFeature"
         Title="English Voice Pack"
-        Description="Request the local English voice input pack. EmploAI downloads and prepares it on first launch."
+        Description="Install the local English voice input pack during setup so it is ready on first launch."
         Level="1">
         <ComponentRef Id="EnglishVoicePackSelectionComponent" />
       </Feature>
       <Feature
         Id="HebrewVoicePackFeature"
         Title="Hebrew Voice Pack"
-        Description="Request the local Hebrew voice input pack. EmploAI downloads and prepares it on first launch."
+        Description="Install the local Hebrew voice input pack during setup so it is ready on first launch."
         Level="2">
         <ComponentRef Id="HebrewVoicePackSelectionComponent" />
       </Feature>
@@ -73,6 +85,11 @@
         Event="DoAction"
         Value="LaunchInstalledApplication">WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed AND NOT WIX_UPGRADE_DETECTED</Publish>
     </UI>
+
+    <InstallExecuteSequence>
+      <Custom Action="SetBootstrapInstallerVoicePacks" After="WriteRegistryValues">NOT Installed AND NOT WIX_UPGRADE_DETECTED</Custom>
+      <Custom Action="BootstrapInstallerVoicePacks" After="SetBootstrapInstallerVoicePacks">NOT Installed AND NOT WIX_UPGRADE_DETECTED</Custom>
+    </InstallExecuteSequence>
   </Product>
 
   <Fragment>

@@ -1,10 +1,12 @@
 {
-  "version": "0.1.0-beta.8",
-  "release_tag": "v0.1.0-beta.8",
-  "msi_version": "0.1.8",
+  "version": "0.1.0-beta.9",
+  "release_tag": "v0.1.0-beta.9",
+  "msi_version": "0.1.9",
   "channel": "beta",
   "github_repo": "mighty-epic/emploai-releases",
   "primary_asset": "EmploAI.msi",
   "portable_asset": "EmploAI-portable.zip",
+  "hebrew_voice_pack_asset": "hebrew-whisper-small-pass3-knesset-runtime-ready.zip",
+  "hebrew_voice_pack_release_tag": "v0.1.0-beta.9",
   "update_check_interval_hours": 0
 }
