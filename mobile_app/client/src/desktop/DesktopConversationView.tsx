@@ -962,7 +962,7 @@ export function DesktopConversationView({
   const [voiceRunning, setVoiceRunning] = useState(false);
   const [voiceRecording, setVoiceRecording] = useState(false);
   const [voiceMode, setVoiceMode] = useState<VoiceCaptureMode>('push_to_talk');
-  const [voiceLanguagePath, setVoiceLanguagePath] = useState<'english' | 'hebrew'>('english');
+  const [voiceEngineChanging, setVoiceEngineChanging] = useState(false);
   const [alwaysOnEnabled, setAlwaysOnEnabled] = useState(false);
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const [sidebarSearch, setSidebarSearch] = useState('');
@@ -3613,6 +3613,21 @@ export function DesktopConversationView({
       : voiceRunning
         ? `${voiceState} · processing`
         : voiceState;
+  const voicePacks = voicePackState?.packs ?? [];
+  const selectedVoiceEngine = voicePackState?.defaultEngine || voiceStatus?.selected_engine || VOICE_ENGINE_NONE;
+  const englishVoicePack = voicePacks.find((pack) => pack.id === VOICE_ENGINE_ENGLISH) ?? null;
+  const hebrewVoicePack = voicePacks.find((pack) => pack.id === VOICE_ENGINE_HEBREW) ?? null;
+  const selectedVoicePack = voicePacks.find((pack) => pack.id === selectedVoiceEngine) ?? null;
+  const selectedVoicePackModel = voiceStatus?.stt_model || selectedVoicePack?.path || null;
+  const selectedVoicePackPath = selectedVoicePack?.path || null;
+  const selectedVoicePackSummary = selectedVoiceEngine === VOICE_ENGINE_NONE
+    ? 'Voice input is off. Open setup to re-enable a local path.'
+    : selectedVoicePack?.available
+      ? `${selectedVoicePack.title} ready${selectedVoicePackModel ? ` · ${selectedVoicePackModel}` : ''}`
+      : `${selectedVoicePack?.title || 'Selected voice path'} is not installed yet. Open setup to install it.`;
+  const voicePackDiagnostics = selectedVoicePack?.available && selectedVoicePackPath
+    ? `Installed pack path: ${selectedVoicePackPath}`
+    : voiceStatus?.issues?.[0] || null;
   const activitySummary = activity.length ? `${activity.length} recent events` : 'No recent runtime events';
   const referenceEntries = messages.reduce<ReferenceEntry[]>((items, message, index) => {
     if (!isReferenceSidebarMessage(message, sessionName)) {
@@ -3695,6 +3710,42 @@ export function DesktopConversationView({
       : voiceState === 'ready'
         ? 'Hold the push-to-talk button or switch to always-on local Whisper.'
         : `Voice ${voiceState}`;
+  const handleVoiceEngineSelection = async (engine: typeof VOICE_ENGINE_ENGLISH | typeof VOICE_ENGINE_HEBREW) => {
+    const targetPack = engine === VOICE_ENGINE_HEBREW ? hebrewVoicePack : englishVoicePack;
+    if (voiceEngineChanging) {
+      return;
+    }
+    if (voiceRecording || voiceRunning) {
+      setVoiceError('Finish the current voice capture before switching paths.');
+      pushActivity('Finish the current voice capture before switching paths.', 'warn');
+      return;
+    }
+    if (!targetPack?.available) {
+      const message = `${engine === VOICE_ENGINE_HEBREW ? 'Hebrew' : 'English'} voice pack is not ready yet. Open setup to install it.`;
+      setVoiceError(message);
+      pushActivity(message, 'warn');
+      onOpenSetup?.();
+      return;
+    }
+    if (selectedVoiceEngine === engine) {
+      return;
+    }
+
+    setVoiceEngineChanging(true);
+    setVoiceError(null);
+    try {
+      const switched = await onSelectVoiceEngine?.(engine);
+      if (switched === false) {
+        setVoiceError(`Could not switch to the ${engine === VOICE_ENGINE_HEBREW ? 'Hebrew' : 'English'} voice path.`);
+      }
+    } catch (error) {
+      const message = describeError(error);
+      setVoiceError(message);
+      pushActivity(`Voice path switch failed: ${message}`, 'error');
+    } finally {
+      setVoiceEngineChanging(false);
+    }
+  };
   const historyAvailable = Boolean(timelineEntries.length || referenceEntries.length);
   const commandSuggestionQuery = getCommandSuggestionQuery(input);
   const commandSuggestions = commandSuggestionQuery == null || dismissedCommandSuggestionInput === input
