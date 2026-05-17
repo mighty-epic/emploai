@@ -9,6 +9,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from single_agent.cron_scheduler import parse_schedule
+from shared.task_board import format_task_board_for_user, get_active_task_board, get_display_task_board, request_task_board_reassessment
 
 
 def build_task_command_handlers(
@@ -18,30 +19,7 @@ def build_task_command_handlers(
     get_session,
     track_command_usage,
     safe_reply,
-    run_task_flow,
-    run_chat_flow,
 ):
-    @rate_limited(security_manager)
-    async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Compatibility alias that forwards work into the normal auto chat flow."""
-        user = update.effective_user
-
-        session = get_session(user.id)
-        track_command_usage(session, "task")
-
-        if not context.args:
-            await safe_reply(
-                update,
-                "**Auto mode is always on.**\n\n"
-                "Send the request as a normal message and it will run through the unified agent.\n"
-                "You can still use `/task <request>` as a compatibility alias.",
-            )
-            return
-
-        task_text = " ".join(context.args)
-        session.last_task_text = task_text
-        await run_chat_flow(update, context, session, task_text)
-
     @rate_limited(security_manager)
     async def continue_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Disabled legacy resume command kept only for backwards compatibility."""
@@ -330,11 +308,41 @@ def build_task_command_handlers(
             f"New tasks will use {new_mode} mode.",
         )
 
+    @rate_limited(security_manager)
+    async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show the active managed task bulletin board."""
+        user = update.effective_user
+        session = get_session(user.id)
+        track_command_usage(session, "task")
+
+        board = get_display_task_board(session)
+        await safe_reply(update, format_task_board_for_user(board))
+
+    @rate_limited(security_manager)
+    async def reassess_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Force a reassessment of the active managed task bulletin board."""
+        user = update.effective_user
+        session = get_session(user.id)
+        track_command_usage(session, "reassess")
+
+        board = request_task_board_reassessment(session, "Manual reassessment requested by the user.")
+        if not board:
+            await safe_reply(update, "No active managed task.")
+            return
+
+        session.save_session()
+        await safe_reply(
+            update,
+            "Manual reassessment requested.\n\n"
+            "The active task board will be revised on the next task turn.",
+        )
+
     return {
-        "task_command": task_command,
         "continue_command": continue_command,
         "pause_command": pause_command,
         "stop_command": stop_command,
+        "task_command": task_command,
+        "reassess_command": reassess_command,
         "spawn_command": spawn_command,
         "subagents_command": subagents_command,
         "schedule_command": schedule_command,

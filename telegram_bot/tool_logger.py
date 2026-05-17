@@ -8,6 +8,7 @@ import os
 import logging
 import json
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
@@ -37,6 +38,39 @@ tool_logger = logging.getLogger("tool_calls")
 tool_logger.setLevel(logging.DEBUG)
 tool_logger.addHandler(file_handler)
 tool_logger.propagate = False  # Don't propagate to root logger
+
+
+def _console_print(line: str) -> None:
+    """Write a line to stdout without crashing on Windows codepages."""
+    stream = sys.stdout
+    if stream is None:
+        return
+
+    text = f"{line}\n"
+    try:
+        stream.write(text)
+        stream.flush()
+        return
+    except UnicodeEncodeError:
+        pass
+    except Exception:
+        return
+
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    safe_text = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+    try:
+        stream.write(safe_text)
+        stream.flush()
+        return
+    except Exception:
+        pass
+
+    fallback = text.encode("ascii", errors="replace").decode("ascii")
+    try:
+        stream.write(fallback)
+        stream.flush()
+    except Exception:
+        return
 
 
 def _truncate_value(value: Any, max_len: int = 200) -> str:
@@ -97,8 +131,8 @@ def log_tool_call(tool_name: str, args: Dict[str, Any], provider: str = None):
         args_str = args_str[:300] + "..."
     
     provider_tag = f"[{provider.upper()}]" if provider else ""
-    print(f"  🔧 {provider_tag} TOOL CALL: {tool_name}")
-    print(f"     Args: {args_str}")
+    _console_print(f"  🔧 {provider_tag} TOOL CALL: {tool_name}")
+    _console_print(f"     Args: {args_str}")
     
     # File output - full (minus base64)
     clean_args = _strip_base64(args)
@@ -136,7 +170,7 @@ def log_tool_result(tool_name: str, result: Any, duration_ms: float = None):
         result_str = _truncate_value(result, 200)
     
     duration_str = f" ({duration_ms:.0f}ms)" if duration_ms else ""
-    print(f"     {status}: {result_str}{duration_str}")
+    _console_print(f"     {status}: {result_str}{duration_str}")
     
     # File output - full (minus base64)
     clean_result = _strip_base64(result)
@@ -151,9 +185,9 @@ def log_tool_result(tool_name: str, result: Any, duration_ms: float = None):
 
 def log_conversation_turn(turn_num: int, provider: str, model: str):
     """Log start of a conversation turn."""
-    print(f"\n{'='*60}")
-    print(f"  🔄 Turn {turn_num} | Provider: {provider} | Model: {model}")
-    print(f"{'='*60}")
+    _console_print(f"\n{'='*60}")
+    _console_print(f"  🔄 Turn {turn_num} | Provider: {provider} | Model: {model}")
+    _console_print(f"{'='*60}")
     
     tool_logger.info(f"\n{'='*80}")
     tool_logger.info(f"TURN {turn_num} | Provider: {provider} | Model: {model}")
@@ -170,7 +204,7 @@ def log_model_response(response_text: str, tokens: Dict[str, int] = None):
     if tokens:
         tokens_str = f" | Tokens: {tokens.get('input', 0)} in, {tokens.get('output', 0)} out"
     
-    print(f"  💬 Response: {preview}{tokens_str}")
+    _console_print(f"  💬 Response: {preview}{tokens_str}")
     
     # File - full
     tool_logger.info(f"RESPONSE{tokens_str}\n{response_text}")

@@ -13,6 +13,7 @@ __pycache__/
 telegram_bot/jobs.json
 telegram_bot/logs/
 telegram_bot/single_agent/screenshots/
+test_outputs/whisper_cpp/
 
 # local scratch / clones
 emplo-own/
@@ -22,3 +23,9 @@ agent_data/AGENTS.md
 # Windows beta release artifacts
 build/
 dist/
+
+# desktop shell artifacts
+desktop_app/node_modules/
+desktop_app/backend/
+desktop_app/renderer/
+mobile_app/client/dist/

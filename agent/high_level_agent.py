@@ -50,12 +50,20 @@ MODELS = {
     "gpt-5": {"provider": "openai", "id": "gpt-5"},
     "gpt-5.1": {"provider": "openai", "id": "gpt-5.1"},
     "gpt-5.2": {"provider": "openai", "id": "gpt-5.2"},
+    "gpt-5.4": {"provider": "openai", "id": "gpt-5.4"},
+    "gpt-5.5": {"provider": "openai", "id": "gpt-5.5"},
+    "gpt-5.4-mini": {"provider": "openai", "id": "gpt-5.4-mini"},
     "gpt-4.1": {"provider": "openai", "id": "gpt-4.1"},
     "gpt-4o": {"provider": "openai", "id": "gpt-4o"},
     "gpt-4o-mini": {"provider": "openai", "id": "gpt-4o-mini"},
-    "claude-sonnet-4.5": {"provider": "anthropic", "id": "claude-sonnet-4-5-20250514"},
+    "claude-sonnet-4.5": {"provider": "anthropic", "id": "claude-sonnet-4-5-20250929"},
+    "claude-opus-4.5": {"provider": "anthropic", "id": "claude-opus-4-5-20250929"},
+    "claude-sonnet-4.6": {"provider": "anthropic", "id": "claude-sonnet-4-6"},
+    "claude-opus-4.6": {"provider": "anthropic", "id": "claude-opus-4-6"},
+    "claude-opus-4.7": {"provider": "anthropic", "id": "claude-opus-4-7"},
+    "claude-haiku-4.5": {"provider": "anthropic", "id": "claude-haiku-4-5-20251001"},
     "claude-opus": {"provider": "anthropic", "id": "claude-opus-4-20250514"},
-    "claude-haiku": {"provider": "anthropic", "id": "claude-haiku-4-20250514"},
+    "claude-haiku": {"provider": "anthropic", "id": "claude-haiku-4-5-20251001"},
     "claude-sonnet-3.5": {"provider": "anthropic", "id": "claude-3-5-sonnet-20241022"},
 }
 
@@ -89,6 +97,14 @@ class HighLevelAgent:
             "claude-3-5-haiku-20241022": "claude-haiku-3.5",
             "claude-sonnet-4-5": "claude-sonnet-4.5",
             "claude-opus-4-5": "claude-opus-4.5",
+            "claude-sonnet-4-6": "claude-sonnet-4.6",
+            "claude-opus-4-6": "claude-opus-4.6",
+            "claude-opus-4-7": "claude-opus-4.7",
+            "claude-haiku-4": "claude-haiku-4.5",
+            "gpt-5-5": "gpt-5.5",
+            "gpt-5-4-mini": "gpt-5.4-mini",
+            "chatgpt5.5": "gpt-5.5",
+            "chatgpt-5.5": "gpt-5.5",
         }
         return aliases.get(normalized, normalized)
 

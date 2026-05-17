@@ -14,11 +14,13 @@ from cli.model_prefs import _add_recent_model, _load_model_prefs, _toggle_favori
 
 
 def _format_context_size(tokens: int) -> str:
-    """Format context size as abbreviated string (e.g., 400K, 128K)."""
+    """Format context size as an abbreviated string without flooring away detail."""
     if tokens >= 1000000:
-        return f"{tokens // 1000000}M"
+        value = tokens / 1000000
+        return f"{value:.2f}".rstrip("0").rstrip(".") + "M"
     elif tokens >= 1000:
-        return f"{tokens // 1000}K"
+        value = tokens / 1000
+        return f"{value:.1f}".rstrip("0").rstrip(".") + "K"
     return str(tokens)
 
 

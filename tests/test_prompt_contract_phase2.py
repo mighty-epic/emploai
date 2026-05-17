@@ -1,6 +1,8 @@
 import inspect
+from pathlib import Path
 
-from cli.tui_constants import AUTOMATION_AGENT_PROMPT, UNIFIED_AGENT_PROMPT
+from cli.chat_processor_core import build_tui_auto_system_prompt
+from cli.tui_constants import UNIFIED_AGENT_PROMPT
 from mobile_app.backend import runtime as app_runtime
 
 
@@ -51,12 +53,14 @@ def test_telegram_chat_flow_keeps_same_browser_rule_in_startup_prompt():
     assert "Save only durable reusable lessons to memory." in source
 
 
-def test_automation_prompt_prefers_describe_screen_and_blocks_selenium_substitution():
-    assert (
-        "describe_screen: Take a screenshot and describe what's visible. Primary tool for visual discovery, buttons, and layout."
-    ) in AUTOMATION_AGENT_PROMPT
-    assert "Use ocr_screen when you need exact text coordinates for a physical click" in AUTOMATION_AGENT_PROMPT
-    assert (
-        "If the task is on the user's existing Chrome page and the extension bridge is not active there, "
-        "do NOT use Selenium as a substitute for that page; switch to describe_screen plus desktop actions instead"
-    ) in AUTOMATION_AGENT_PROMPT
+def test_tui_auto_prompt_resolves_runtime_blocks_and_system_info():
+    class DummyProcessor:
+        base_path = Path.cwd()
+
+    prompt = build_tui_auto_system_prompt(DummyProcessor(), skills_index="\n\n## TEST SKILLS")
+
+    assert prompt.startswith("# LIVE BROWSER RUNTIME STATUS")
+    assert "# LIVE DESKTOP RUNTIME STATUS" in prompt
+    assert "Real Chrome available now: NO" in prompt
+    assert "{{SYSTEM_INFO}}" not in prompt
+    assert "## TEST SKILLS" in prompt

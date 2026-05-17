@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 from telegram import BotCommand
 from telegram.error import NetworkError
@@ -18,9 +18,9 @@ COMMAND_ORDER = [
     "variant",
     "model",
     "models",
+    "planner",
     "settings",
     "workspace",
-    "task",
     "continue",
     "pause",
     "stop",
@@ -64,6 +64,7 @@ def build_bot_commands() -> list[BotCommand]:
         BotCommand("variant", "Set model variant"),
         BotCommand("model", "Switch AI model"),
         BotCommand("models", "List all models"),
+        BotCommand("planner", "Choose planner model"),
         BotCommand("settings", "Configure max turns"),
         BotCommand("workspace", "Set workspace path"),
         BotCommand("headless", "Toggle browser mode"),
@@ -174,14 +175,23 @@ def run_bot(
     command_handlers: Dict[str, Callable[..., Any]],
     callback_handler: Callable[..., Any],
     message_handlers: Dict[str, Callable[..., Any]],
+    on_application_ready: Optional[Callable[[Application], Any]] = None,
 ):
     print("Telegram CLI Agent Starting...")
     logging.info(f"Bot Token: {bot_token[:10]}...")
 
+    async def _post_init(application: Application):
+        await post_init(application)
+        if not on_application_ready:
+            return
+        maybe = on_application_ready(application)
+        if maybe is not None and hasattr(maybe, "__await__"):
+            await maybe
+
     application = (
         Application.builder()
         .token(bot_token)
-        .post_init(post_init)
+        .post_init(_post_init)
         .concurrent_updates(True)
         .build()
     )

@@ -39,6 +39,10 @@ tesseract_bundle = os.environ.get("EMPLOAI_TESSERACT_BUNDLE", "").strip()
 if tesseract_bundle:
     datas += collect_tree(Path(tesseract_bundle), "vendor/tesseract")
 
+whisper_bundle = os.environ.get("EMPLOAI_WHISPER_BUNDLE", "").strip()
+if whisper_bundle:
+    datas += collect_tree(Path(whisper_bundle), "vendor/whisper")
+
 
 a = Analysis(
     [str(project_root / "deploy" / "windows" / "release_launcher.py")],

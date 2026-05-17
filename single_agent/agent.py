@@ -41,11 +41,15 @@ try:
 except ImportError:
     PYAUTOGUI_AVAILABLE = False
 
+PYWINAUTO_IMPORT_ERROR = None
 try:
     from pywinauto import Desktop, Application
     PYWINAUTO_AVAILABLE = True
-except ImportError:
+except Exception as exc:
+    Desktop = None
+    Application = None
     PYWINAUTO_AVAILABLE = False
+    PYWINAUTO_IMPORT_ERROR = exc
 
 try:
     import pytesseract
@@ -89,12 +93,12 @@ AGENT_TOOLS = [
     {"type": "function", "function": {"name": "close_window", "description": "Close a window by title.", "parameters": {"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]}}},
     
     # --- INPUT TOOLS (Desktop) ---
-    {"type": "function", "function": {"name": "click", "description": "Click at screen coordinates. Use ocr_screen first to find coordinates of text. MANDATORY: After calling this, you MUST call describe_screen or ocr_screen to verify the click worked before taking any other action.", "parameters": {"type": "object", "properties": {"x": {"type": "integer", "description": "X coordinate on screen"}, "y": {"type": "integer", "description": "Y coordinate on screen"}}, "required": ["x", "y"]}}},
+    {"type": "function", "function": {"name": "click", "description": "Click at screen coordinates. Choose coordinates from the best observation tool for the situation. MANDATORY: After calling this, you MUST verify the result before taking any other action.", "parameters": {"type": "object", "properties": {"x": {"type": "integer", "description": "X coordinate on screen"}, "y": {"type": "integer", "description": "Y coordinate on screen"}}, "required": ["x", "y"]}}},
     {"type": "function", "function": {"name": "right_click", "description": "Right-click at screen coordinates.", "parameters": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}, "required": ["x", "y"]}}},
     {"type": "function", "function": {"name": "double_click", "description": "Double-click at screen coordinates.", "parameters": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}, "required": ["x", "y"]}}},
-    {"type": "function", "function": {"name": "type_text", "description": "Type text using keyboard. MANDATORY: After calling this, you MUST call describe_screen or ocr_screen to verify the text appeared correctly before taking any other action.", "parameters": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}},
+    {"type": "function", "function": {"name": "type_text", "description": "Type text using keyboard. MANDATORY: After calling this, you MUST verify the text appeared correctly before taking any other action.", "parameters": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}},
     {"type": "function", "function": {"name": "press_key", "description": "Press a single key (enter, tab, escape, f1, etc).", "parameters": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}}},
-    {"type": "function", "function": {"name": "hotkey", "description": "Press a key combination (e.g., ctrl+c, alt+tab, ctrl+shift+n). MANDATORY: After calling this, you MUST call describe_screen or ocr_screen to verify the action worked.", "parameters": {"type": "object", "properties": {"keys": {"type": "string", "description": "Keys separated by + (e.g., 'ctrl+c', 'alt+f4')"}}, "required": ["keys"]}}},
+    {"type": "function", "function": {"name": "hotkey", "description": "Press a key combination (e.g., ctrl+c, alt+tab, ctrl+shift+n). MANDATORY: After calling this, you MUST verify the action worked before taking any other action.", "parameters": {"type": "object", "properties": {"keys": {"type": "string", "description": "Keys separated by + (e.g., 'ctrl+c', 'alt+f4')"}}, "required": ["keys"]}}},
     {"type": "function", "function": {"name": "scroll", "description": "Scroll at current mouse position.", "parameters": {"type": "object", "properties": {"direction": {"type": "string", "enum": ["up", "down"]}, "amount": {"type": "integer", "default": 3}}}}},
     {"type": "function", "function": {"name": "drag_and_drop", "description": "Drag from one position to another.", "parameters": {"type": "object", "properties": {"start_x": {"type": "integer"}, "start_y": {"type": "integer"}, "end_x": {"type": "integer"}, "end_y": {"type": "integer"}}, "required": ["start_x", "start_y", "end_x", "end_y"]}}},
     
@@ -517,7 +521,7 @@ class SingleAgent:
         if not self.browser: return {"error": "Browser not initialized"}
         result = self.browser.click_by_ref(ref)
         if result.get("success"):
-            result["NEXT"] = "You MUST call describe_screen or ocr_screen NOW to verify the click worked."
+            result["NEXT"] = "You MUST verify the click result now before doing anything else."
         self._log(f"Browser click ref {ref}: {'Success' if result.get('success') else 'Failed'}")
         return result
 
@@ -718,7 +722,7 @@ class SingleAgent:
         if not PYAUTOGUI_AVAILABLE:
             return {"error": "PyAutoGUI not available"}
         if x is None or y is None:
-            return {"error": "You must provide x and y coordinates. Use ocr_screen first to find the coordinates of text you want to click."}
+            return {"error": "You must provide x and y coordinates. Use describe_screen or ocr_screen to locate the target before clicking."}
         try:
             x = int(float(str(x).split(",")[0].strip()))
             y = int(float(str(y).split(",")[0].strip()))
@@ -726,7 +730,7 @@ class SingleAgent:
             pyautogui.moveTo(x, y, duration=0.1)
             time.sleep(0.05)  # Small delay for stability
             pyautogui.click()
-            return {"success": True, "clicked": f"({x}, {y})", "NEXT": "You MUST call describe_screen or ocr_screen NOW to verify the click worked before doing anything else."}
+            return {"success": True, "clicked": f"({x}, {y})", "NEXT": "You MUST verify the click result now before doing anything else."}
         except Exception as e:
             return {"error": str(e)}
     
@@ -740,7 +744,7 @@ class SingleAgent:
             pyautogui.moveTo(x, y, duration=0.1)
             time.sleep(0.05)
             pyautogui.rightClick()
-            return {"success": True, "right_clicked": f"({x}, {y})", "NEXT": "You MUST call describe_screen or ocr_screen NOW to verify the action worked before doing anything else."}
+            return {"success": True, "right_clicked": f"({x}, {y})", "NEXT": "You MUST verify the action result now before doing anything else."}
         except Exception as e:
             return {"error": str(e)}
     
@@ -754,7 +758,7 @@ class SingleAgent:
             pyautogui.moveTo(x, y, duration=0.1)
             time.sleep(0.05)
             pyautogui.doubleClick()
-            return {"success": True, "double_clicked": f"({x}, {y})", "NEXT": "You MUST call describe_screen or ocr_screen NOW to verify the action worked before doing anything else."}
+            return {"success": True, "double_clicked": f"({x}, {y})", "NEXT": "You MUST verify the action result now before doing anything else."}
         except Exception as e:
             return {"error": str(e)}
     
@@ -763,14 +767,14 @@ class SingleAgent:
         if not PYAUTOGUI_AVAILABLE:
             return {"error": "PyAutoGUI not available"}
         pyautogui.write(text, interval=0.02)
-        return {"success": True, "typed": text, "NEXT": "You MUST call describe_screen or ocr_screen NOW to verify the text appeared correctly before doing anything else."}
+        return {"success": True, "typed": text, "NEXT": "You MUST verify the text appeared correctly now before doing anything else."}
     
     def _press_key(self, key: str) -> Dict:
         """Press single key."""
         if not PYAUTOGUI_AVAILABLE:
             return {"error": "PyAutoGUI not available"}
         pyautogui.press(key)
-        return {"success": True, "pressed": key, "NEXT": "You MUST call describe_screen or ocr_screen NOW to verify the action worked before doing anything else."}
+        return {"success": True, "pressed": key, "NEXT": "You MUST verify the action result now before doing anything else."}
     
     def _hotkey(self, keys: str) -> Dict:
         """Press key combination."""
@@ -778,7 +782,7 @@ class SingleAgent:
             return {"error": "PyAutoGUI not available"}
         key_list = [k.strip() for k in keys.split('+')]
         pyautogui.hotkey(*key_list)
-        return {"success": True, "hotkey": keys, "NEXT": "You MUST call describe_screen or ocr_screen NOW to verify the action worked before doing anything else."}
+        return {"success": True, "hotkey": keys, "NEXT": "You MUST verify the action result now before doing anything else."}
     
     def _scroll(self, direction: str, amount: int) -> Dict:
         """Scroll at mouse position."""

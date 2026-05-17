@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from telegram.constants import ParseMode
+from telegram.constants import ChatAction, ParseMode
 from telegram.ext import Application
 
 from cli.config_manager import get_config_manager
@@ -39,6 +39,7 @@ from shared import (
     EnhancedSkillsManager, enhance_skill_registry,
     UnifiedAgent,
 )
+from shared.channel_sync import get_channel_sync_hub
 from shared.model_availability import (
     enabled_providers_from_clients,
     filter_models_by_provider_access,
@@ -56,6 +57,44 @@ except ImportError:
 
 
 logger = logging.getLogger(__name__)
+_telegram_application: Optional[Application] = None
+_telegram_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+REAL_CHROME_TASK_HINTS = (
+    "my chrome",
+    "user's chrome",
+    "users chrome",
+    "real chrome",
+    "current chrome",
+    "existing chrome",
+    "my browser",
+    "current browser",
+    "existing browser",
+    "already open tab",
+    "current tab",
+    "existing tab",
+    "logged-in browser",
+    "logged in browser",
+    "logged-in session",
+    "logged in session",
+    "already logged in",
+    "my session",
+    "browser session",
+    "my profile",
+    "extension popup",
+    "chrome extension",
+    "browser extension",
+    "chrome://extensions",
+    "load unpacked",
+)
+
+
+def _task_requires_real_chrome(task_text: Optional[str]) -> bool:
+    normalized = " ".join(str(task_text or "").strip().lower().split())
+    if not normalized:
+        return False
+    return any(hint in normalized for hint in REAL_CHROME_TASK_HINTS)
 
 
 @dataclass
@@ -71,6 +110,7 @@ class BrowserTaskContext:
     last_title: Optional[str] = None
     last_snapshot_hash: Optional[str] = None
     healthy: bool = True
+    requires_real_chrome: bool = False
 
 
 @dataclass
@@ -79,6 +119,8 @@ class TelegramSession:
     user_id: int
     current_model: str = "gpt-5.2"
     current_variant: str = "standard"
+    planner_model: Optional[str] = None
+    default_planner_model: Optional[str] = None
     agent_mode: str = "auto"  # Default to auto for full autonomous behavior
     max_turns: int = 100
     chat_history: List[Dict] = field(default_factory=list)
@@ -117,6 +159,8 @@ class TelegramSession:
     # LLM Clients
     openai_client: Optional[OpenAI] = None
     anthropic_client: Optional[Anthropic] = None
+    google_client: Optional[Any] = None
+    gemini_openai_client: Optional[OpenAI] = None
     xai_client: Optional[OpenAI] = None
     deepseek_client: Optional[OpenAI] = None
     openrouter_client: Optional[OpenAI] = None
@@ -124,6 +168,7 @@ class TelegramSession:
     # Telegram context
     _app: Optional[Application] = None
     _loop: Optional[asyncio.AbstractEventLoop] = None
+    _channel_sync_subscription_id: Optional[str] = None
 
     # Environment
     system_info: str = field(default_factory=get_system_info)
@@ -150,9 +195,11 @@ class TelegramSession:
 
     # Conversation tracking
     last_user_message: Optional[str] = None
-    last_task_text: Optional[str] = None
     message_id_map: Dict[int, int] = field(default_factory=dict)
+    task_history: List[Dict[str, Any]] = field(default_factory=list)
+    active_task_id: Optional[str] = None
     active_skills: List[str] = field(default_factory=list)
+    last_context_compaction: Optional[Dict[str, Any]] = None
 
     # Wizard state
     wizard_state: Dict[str, Any] = field(default_factory=dict)
@@ -176,8 +223,11 @@ class TelegramSession:
         user_data_path = Path.home() / ".agentshell" / f"user_{self.user_id}"
         user_data_path.mkdir(parents=True, exist_ok=True)
         
-        # If workspace is still default (cwd), set it to the emploai project directory
-        if self.workspace == Path.cwd():
+        # If workspace is still the implicit cwd default in local/dev runs, switch
+        # to the repo root. Desktop/runtime builds set EMPLOAI_HOME and should keep
+        # their dedicated runtime home instead of leaking back to a repo checkout.
+        runtime_home = os.getenv("EMPLOAI_HOME", "").strip()
+        if self.workspace == Path.cwd() and not runtime_home:
             # telegram_agent.py runs from emploai/telegram_bot/, so parent is emploai/
             self.workspace = Path(__file__).resolve().parent.parent
             # Don't create dirs — workspace should already exist
@@ -196,6 +246,7 @@ class TelegramSession:
         # Initialize live config
         self.live_config = get_live_config(self.workspace / "config.json")
         self.live_config.import_from_env()  # Load from env vars
+        self.default_planner_model = str(os.getenv("PLANNER_MODEL", "")).strip() or None
 
         # Initialize existing managers - isolation by user_id
         user_base_path = Path.home() / ".agentshell" / f"user_{self.user_id}"
@@ -215,14 +266,21 @@ class TelegramSession:
 
         self._init_clients()
         self.ensure_current_model_available()
-        
-        if self.gemini_openai_client:
-            from cli.agent_tools.context_manager import ContextManager, DEFAULT_CONTEXT_SIZES
-            self.context_manager = ContextManager(
-                model_context_sizes=DEFAULT_CONTEXT_SIZES,
-                compression_client=self.gemini_openai_client,
-                compression_model="gemini-2.0-flash"
-            )
+
+        from cli.agent_tools.context_manager import ContextManager, DEFAULT_CONTEXT_SIZES
+        self.context_manager = ContextManager(
+            model_context_sizes=DEFAULT_CONTEXT_SIZES,
+            compression_client=self.gemini_openai_client,
+            compression_model="gemini-2.0-flash",
+            provider_clients={
+                "openai": self.openai_client,
+                "anthropic": self.anthropic_client,
+                "google": self.google_client,
+                "xai": self.xai_client,
+                "deepseek": self.deepseek_client,
+                "openrouter": self.openrouter_client,
+            },
+        )
 
         def path_confirm_callback(msg: str) -> bool:
             """Allow all path/command adjustments silently without user friction."""
@@ -243,6 +301,7 @@ class TelegramSession:
                 model=self.current_model,
                 variant=self.current_variant,
                 agent_mode="auto",
+                planner_model=self.planner_model or self.default_planner_model,
             )
             self.session_manager.set_current_session(self.session.id)
             target_session_id = self.session.id
@@ -261,6 +320,7 @@ class TelegramSession:
                 model=self.current_model,
                 variant=self.current_variant,
                 agent_mode="auto",
+                planner_model=self.planner_model or self.default_planner_model,
             )
             self.session_manager.set_current_session(self.session.id)
             self.load_session_by_id(self.session.id)
@@ -301,6 +361,32 @@ class TelegramSession:
             raise RuntimeError("Cannot change workspace while a task is still running")
 
         self.workspace = resolved
+        self.memory_manager = get_memory_manager(resolved)
+        self.context_loader = get_context_loader(resolved)
+        self.live_config = LiveConfig(resolved / "config.json")
+        self.live_config.import_from_env()
+
+        heartbeat_manager = getattr(self, "heartbeat_manager", None)
+        if heartbeat_manager and getattr(heartbeat_manager, "workspace", None) != resolved:
+            was_enabled = bool(getattr(heartbeat_manager, "enabled", False))
+            interval_seconds = int(getattr(heartbeat_manager, "interval_seconds", 1800) or 1800)
+            announcement_callback = getattr(heartbeat_manager, "announcement_callback", None)
+            agent_callback = getattr(heartbeat_manager, "agent_callback", None)
+            try:
+                heartbeat_manager.stop()
+            except Exception:
+                pass
+            from shared.heartbeat import get_heartbeat_manager
+
+            self.heartbeat_manager = get_heartbeat_manager(
+                workspace=resolved,
+                interval_seconds=interval_seconds,
+                announcement_callback=announcement_callback,
+                agent_callback=agent_callback,
+            )
+            if was_enabled:
+                self.heartbeat_manager.start()
+
         if self.tool_executor and not rebuild_tool_executor:
             self.tool_executor.workspace_path = resolved
             self.tool_executor.single_agent = self.single_agent
@@ -308,6 +394,8 @@ class TelegramSession:
             self.tool_executor.active_skills = self.active_skills
         elif rebuild_tool_executor:
             self.rebuild_tool_executor()
+        if getattr(self, "unified_agent", None):
+            self.unified_agent.workspace = resolved
         return self.workspace
 
     def _clear_interrupt(self):
@@ -350,19 +438,33 @@ class TelegramSession:
     def get_browser_task_context(self) -> BrowserTaskContext:
         """Return the current task-scoped browser context, resetting if stale."""
         if self.browser_task_context.task_id != self.current_task_id:
-            self.browser_task_context = BrowserTaskContext(task_id=self.current_task_id)
+            self.browser_task_context = self._new_browser_task_context(self.current_task_id)
         return self.browser_task_context
 
     def reset_browser_task_context(self, task_id: Optional[int] = None) -> BrowserTaskContext:
         """Reset browser backend and task-owned tab tracking."""
         resolved_task_id = self.current_task_id if task_id is None else task_id
-        self.browser_task_context = BrowserTaskContext(task_id=resolved_task_id)
+        self.browser_task_context = self._new_browser_task_context(resolved_task_id)
         return self.browser_task_context
 
-    def start_browser_task(self, task_id: int) -> BrowserTaskContext:
+    def start_browser_task(self, task_id: int, task_text: Optional[str] = None) -> BrowserTaskContext:
         """Create a fresh browser context for a newly started task."""
-        self.browser_task_context = BrowserTaskContext(task_id=task_id)
+        self.browser_task_context = self._new_browser_task_context(task_id, task_text=task_text)
         return self.browser_task_context
+
+    def _new_browser_task_context(
+        self,
+        task_id: int,
+        *,
+        task_text: Optional[str] = None,
+    ) -> BrowserTaskContext:
+        scoped_task_text = task_text
+        if scoped_task_text is None:
+            scoped_task_text = self.last_user_message
+        return BrowserTaskContext(
+            task_id=task_id,
+            requires_real_chrome=_task_requires_real_chrome(scoped_task_text),
+        )
 
     def update_browser_task_context(self, result: Optional[Dict[str, Any]], *, owned_tab: bool = False) -> BrowserTaskContext:
         """Apply browser action results back into the current task context."""
@@ -457,6 +559,22 @@ class TelegramSession:
             self.get_enabled_providers(),
         )
 
+    def get_supported_planner_models(self, candidate_models: Optional[List[str]] = None) -> List[str]:
+        """Return models that can be used by the lightweight planner helper."""
+        available = self.get_available_models(candidate_models)
+        supported: List[str] = []
+        for model in available:
+            config = MODEL_CONFIGS.get(model, {})
+            provider = str(config.get("provider", "unknown"))
+            api = str(config.get("api", "chat"))
+            if provider == "google":
+                if self.gemini_openai_client is not None:
+                    supported.append(model)
+                continue
+            if provider in {"openai", "anthropic", "xai", "deepseek", "openrouter"} and api != "responses":
+                supported.append(model)
+        return supported
+
     def get_available_model_groups(self, candidate_models: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """Return filtered model groups by provider."""
         return group_models_by_provider(
@@ -476,6 +594,25 @@ class TelegramSession:
         if self.current_variant not in available_variants:
             self.current_variant = available_variants[0] if available_variants else "standard"
         return True
+
+    def get_client_for_specific_model(self, model_name: str):
+        """Get the appropriate client for an arbitrary configured model."""
+        config = MODEL_CONFIGS.get(model_name, {})
+        provider = config.get("provider", "anthropic")
+
+        if provider == "openai":
+            return self.openai_client, provider
+        if provider == "anthropic":
+            return self.anthropic_client, provider
+        if provider == "xai":
+            return self.xai_client, provider
+        if provider == "deepseek":
+            return self.deepseek_client, provider
+        if provider == "openrouter":
+            return self.openrouter_client, provider
+        if provider == "google":
+            return self.gemini_openai_client or self.google_client, provider
+        return None, provider
 
     def get_client_for_model(self):
         """Get the appropriate LLM client for the current model."""
@@ -516,6 +653,7 @@ class TelegramSession:
                 model=self.current_model,
                 variant=self.current_variant,
                 agent_mode=self.agent_mode,
+                planner_model=self.planner_model or self.default_planner_model,
                 workspace=self.workspace
             )
 
@@ -525,7 +663,11 @@ class TelegramSession:
         session_obj.model = self.current_model
         session_obj.variant = self.current_variant
         session_obj.agent_mode = "auto"
+        session_obj.planner_model = self.planner_model
+        session_obj.task_history = self.task_history
+        session_obj.active_task_id = self.active_task_id
         session_obj.active_skills = self.active_skills
+        session_obj.last_context_compaction = self.last_context_compaction
 
         # Save to disk
         self.session_manager.save_session(session_obj)
@@ -550,8 +692,12 @@ class TelegramSession:
             self.set_workspace(Path(session_obj.workspace))
         self.current_model = session_obj.model
         self.current_variant = session_obj.variant
+        self.planner_model = session_obj.planner_model
         self.agent_mode = "auto"
+        self.task_history = session_obj.task_history
+        self.active_task_id = session_obj.active_task_id
         self.active_skills = session_obj.active_skills
+        self.last_context_compaction = session_obj.last_context_compaction
 
         # Clear specific agent histories to avoid context leaks
         if self.single_agent:
@@ -661,8 +807,7 @@ class TelegramSession:
 
     def init_single_agent(self, app: Application, loop: asyncio.AbstractEventLoop):
         """Initialize SingleAgent with Telegram logger bridge."""
-        self._app = app
-        self._loop = loop
+        self.bind_telegram_runtime(app, loop)
 
         def logger_func(text: str):
             print(f"[AGENT] {text}")
@@ -767,6 +912,85 @@ class TelegramSession:
             cron_scheduler=self.cron_scheduler,
         )
 
+    def bind_telegram_runtime(
+        self,
+        app: Application,
+        loop: Optional[asyncio.AbstractEventLoop] = None,
+    ) -> None:
+        self._app = app
+        self._loop = loop or self._loop
+        if self._loop is None:
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+        if self._channel_sync_subscription_id:
+            return
+
+        async def _callback(event: Dict[str, Any]) -> None:
+            await self._handle_channel_sync_event(event)
+
+        self._channel_sync_subscription_id = get_channel_sync_hub().subscribe(
+            user_id=self.user_id,
+            channel="telegram",
+            callback=_callback,
+            loop=self._loop,
+        )
+
+    async def _safe_send_bot_message(self, text: str) -> None:
+        if not self._app:
+            return
+        if len(text) > 4000:
+            text = text[:3900] + "... (truncated)"
+        try:
+            await self._app.bot.send_message(
+                chat_id=self.user_id,
+                text=text,
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        except Exception:
+            try:
+                clean_text = text.replace("*", "").replace("_", "").replace("`", "")
+                await self._app.bot.send_message(chat_id=self.user_id, text=clean_text)
+            except Exception:
+                logger.exception("Failed to mirror synchronized message to Telegram")
+
+    async def _handle_channel_sync_event(self, event: Dict[str, Any]) -> None:
+        if not self._app:
+            return
+
+        event_session_id = str(event.get("session_id") or "").strip()
+        current_id = self.session_manager.get_current_session_id() if self.session_manager else None
+        if not event_session_id or event_session_id != current_id:
+            return
+
+        origin_channel = str(event.get("origin_channel") or "").strip().lower()
+        if origin_channel == "telegram":
+            return
+
+        payload = event.get("payload") or {}
+        event_type = str(event.get("type") or "").strip()
+
+        if event_type == "user_message":
+            message = payload.get("message") or {}
+            text = str(message.get("content") or "").strip()
+            if not text:
+                return
+            display_label = str(message.get("display_label") or "App").strip() or "App"
+            try:
+                await self._app.bot.send_chat_action(chat_id=self.user_id, action=ChatAction.TYPING)
+            except Exception:
+                pass
+            await self._safe_send_bot_message(f"📲 *{display_label}*\n\n{text}")
+            return
+
+        if event_type == "assistant_final":
+            text = str(payload.get("text") or "").strip()
+            if not text:
+                return
+            await self._safe_send_bot_message(text)
+            return
+
     async def _send_log(self, message: str):
         """Send agent log to Telegram and print detailed log to console."""
         if "[TOOL]" in message:
@@ -825,6 +1049,15 @@ class TelegramSession:
 user_sessions: Dict[int, TelegramSession] = {}
 
 
+def set_telegram_application(application: Application) -> None:
+    global _telegram_application, _telegram_loop
+    _telegram_application = application
+    try:
+        _telegram_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _telegram_loop = None
+
+
 def get_session(
     user_id: int,
     *,
@@ -840,7 +1073,10 @@ def get_session(
         if workspace is not None:
             init_kwargs["workspace"] = workspace
         user_sessions[user_id] = TelegramSession(**init_kwargs)
-    return user_sessions[user_id]
+    session = user_sessions[user_id]
+    if _telegram_application is not None and _telegram_loop is not None:
+        session.bind_telegram_runtime(_telegram_application, _telegram_loop)
+    return session
 
 
 def track_command_usage(session: TelegramSession, command: str) -> None:

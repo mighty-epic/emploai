@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import List, Dict, Any, Callable
 from cli.tui_constants import ChatMessage, SYSTEM_PROMPT, RESPONSE_MAX_TOKENS
-from .adapters import get_tools_for_provider
+from .adapters import build_tools_for_provider, normalize_provider
 from .definitions import TOOL_RUN_COMMAND
 
 # Try to import verbose tool logger (only available in telegram_bot context)
@@ -49,6 +49,7 @@ def run_tool_loop(
     append_stream = callbacks.get("append_stream", lambda *args: None)
     begin_stream = callbacks.get("begin_stream", lambda *args: None)
     finish_stream = callbacks.get("finish_stream", lambda *args: None)
+    provider = normalize_provider(provider)
     
     max_turns = 100
     total_usage = {"input": 0, "output": 0}
@@ -66,6 +67,16 @@ def run_tool_loop(
         messages.append({"role": "system", "content": effective_system})
 
     for turn in range(max_turns):
+        before_model_turn_cb = callbacks.get("before_model_turn")
+        if before_model_turn_cb:
+            injected_messages = before_model_turn_cb(turn, messages)
+            if isinstance(injected_messages, dict):
+                injected_messages = [injected_messages]
+            if injected_messages:
+                for injected in injected_messages:
+                    if isinstance(injected, dict) and injected.get("role") and injected.get("content") is not None:
+                        messages.append(injected)
+
         # Check for interruption at start of turn
         if tool_executor.check_interruption and tool_executor.check_interruption():
             # Get the interrupting message if available
@@ -84,15 +95,7 @@ def run_tool_loop(
                 final_response = assistant_text + "\n\n[Interrupted by user]"
                 break
             
-        if provider == "anthropic":
-            tools = get_tools_for_provider("anthropic")
-            if extra_tools:
-                from .adapters import to_anthropic_format
-                tools.extend(to_anthropic_format(extra_tools))
-        else:
-            tools = get_tools_for_provider("openai")
-            if extra_tools:
-                tools.extend(extra_tools)
+        tools = build_tools_for_provider(provider, extra_tools)
             
         assistant_text = ""
         # Because streaming tool calls are chunks, we must accumulate them
@@ -381,6 +384,7 @@ def run_tool_loop(
         # --- EXECUTE TOOLS ---
         interrupted_batch = False
         batch_results = []
+        post_tool_messages: List[Dict[str, Any]] = []
         
         for i, tc in enumerate(formatted_tc):
             if tool_executor.check_interruption and tool_executor.check_interruption():
@@ -429,7 +433,13 @@ def run_tool_loop(
             # Notify external callback (e.g. Telegram verbose mode)
             on_tool_use_cb = callbacks.get("on_tool_use")
             if on_tool_use_cb:
-                on_tool_use_cb(name, args, result, duration_ms)
+                tool_messages = on_tool_use_cb(name, args, result, duration_ms)
+                if isinstance(tool_messages, dict):
+                    post_tool_messages.append(tool_messages)
+                elif isinstance(tool_messages, list):
+                    for item in tool_messages:
+                        if isinstance(item, dict):
+                            post_tool_messages.append(item)
 
             # Group result
             batch_results.append({
@@ -516,6 +526,9 @@ def run_tool_loop(
             activated_deferred = tool_executor.activate_deferred_interrupts()
             if activated_deferred:
                 log("  ↪ Applying deferred steering after tool boundary.")
+
+        if post_tool_messages:
+            messages.extend(post_tool_messages)
 
     return LoopResult(
         content=final_response,

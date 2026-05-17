@@ -66,8 +66,7 @@ try:
     from telegram_bot.telegram_message_handlers import build_message_handlers
     from telegram_bot.telegram_messaging import safe_edit, safe_reply
     from telegram_bot.restart_runtime import exec_current_process
-    from telegram_bot.telegram_session_state import get_session, track_command_usage
-    from telegram_bot.telegram_task_flow import run_task_flow
+    from telegram_bot.telegram_session_state import get_session, set_telegram_application, track_command_usage
 except ImportError:
     from telegram_callback_handlers import build_callback_handlers
     from telegram_chat_flow import run_chat_flow
@@ -79,8 +78,7 @@ except ImportError:
     from telegram_message_handlers import build_message_handlers
     from telegram_messaging import safe_edit, safe_reply
     from restart_runtime import exec_current_process
-    from telegram_session_state import get_session, track_command_usage
-    from telegram_task_flow import run_task_flow
+    from telegram_session_state import get_session, set_telegram_application, track_command_usage
 
 # ======================================================================================
 # 🔒 CONFIGURATION
@@ -114,7 +112,8 @@ def _safe_start_embedded_app_server() -> None:
     try:
         from mobile_app.backend import start_embedded_app_server_if_enabled
 
-        start_embedded_app_server_if_enabled()
+        force_enabled = os.getenv("EMPLOAI_DESKTOP_FORCE_APP_SERVER", "").strip().lower() in {"1", "true", "yes", "on"}
+        start_embedded_app_server_if_enabled(force=force_enabled)
     except Exception:
         logger.exception("Embedded app server startup failed; continuing without mobile app backend")
 
@@ -148,6 +147,7 @@ mode_command = _core_command_handlers["mode_command"]
 variant_command = _core_command_handlers["variant_command"]
 model_command = _core_command_handlers["model_command"]
 models_command = _core_command_handlers["models_command"]
+planner_command = _core_command_handlers["planner_command"]
 settings_command = _core_command_handlers["settings_command"]
 workspace_command = _core_command_handlers["workspace_command"]
 
@@ -158,14 +158,13 @@ _task_command_handlers = build_task_command_handlers(
     get_session=get_session,
     track_command_usage=track_command_usage,
     safe_reply=safe_reply,
-    run_task_flow=run_task_flow,
-    run_chat_flow=run_chat_flow,
 )
 
-task_command = _task_command_handlers["task_command"]
 continue_command = _task_command_handlers["continue_command"]
 pause_command = _task_command_handlers["pause_command"]
 stop_command = _task_command_handlers["stop_command"]
+task_command = _task_command_handlers["task_command"]
+reassess_command = _task_command_handlers["reassess_command"]
 spawn_command = _task_command_handlers["spawn_command"]
 subagents_command = _task_command_handlers["subagents_command"]
 schedule_command = _task_command_handlers["schedule_command"]
@@ -186,6 +185,7 @@ _session_command_handlers = build_session_command_handlers(
 session_command = _session_command_handlers["session_command"]
 new_command = _session_command_handlers["new_command"]
 reset_command = _session_command_handlers["reset_command"]
+compact_command = _session_command_handlers["compact_command"]
 context_command = _session_command_handlers["context_command"]
 security_command = _session_command_handlers["security_command"]
 
@@ -233,7 +233,6 @@ _callback_handlers = build_callback_handlers(
     allowed_user_id=ALLOWED_USER_ID,
     get_session=get_session,
     safe_edit=safe_edit,
-    run_task_flow=run_task_flow,
     run_chat_flow=run_chat_flow,
     stop_command=stop_command,
     pause_command=pause_command,
@@ -275,15 +274,18 @@ command_handlers = {
     "variant": variant_command,
     "model": model_command,
     "models": models_command,
+    "planner": planner_command,
     "settings": settings_command,
     "workspace": workspace_command,
-    "task": task_command,
     "continue": continue_command,
     "pause": pause_command,
     "stop": stop_command,
+    "task": task_command,
+    "reassess": reassess_command,
     "session": session_command,
     "new": new_command,
     "reset": reset_command,
+    "compact": compact_command,
     "context": context_command,
     "spawn": spawn_command,
     "subagents": subagents_command,
@@ -332,6 +334,7 @@ def main():
         command_handlers=command_handlers,
         callback_handler=button_callback,
         message_handlers=message_handlers,
+        on_application_ready=set_telegram_application,
     )
 
 

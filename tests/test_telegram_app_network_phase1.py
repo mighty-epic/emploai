@@ -1,7 +1,9 @@
 from telegram.error import NetworkError
 
 from telegram_bot.telegram_app import (
+    COMMAND_ORDER,
     POLLING_BOOTSTRAP_RETRIES,
+    build_bot_commands,
     build_polling_kwargs,
     format_network_error_message,
     is_network_error,
@@ -14,6 +16,11 @@ def test_build_polling_kwargs_retries_bootstrap_forever():
     assert kwargs["drop_pending_updates"] is True
     assert kwargs["bootstrap_retries"] == POLLING_BOOTSTRAP_RETRIES
     assert kwargs["bootstrap_retries"] == -1
+
+
+def test_task_command_is_not_registered_anymore():
+    assert "task" not in COMMAND_ORDER
+    assert all(command.command != "task" for command in build_bot_commands())
 
 
 def test_network_error_detection_and_formatting_for_dns_failure():

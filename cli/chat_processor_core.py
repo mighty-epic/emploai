@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from anthropic import Anthropic
 from openai import OpenAI
@@ -18,6 +19,7 @@ except ImportError:
 from cli.config_manager import get_config_manager
 from cli.models.session import Session
 from cli.session_manager import SessionManager
+from bot_core.system_info import get_system_info
 from cli.tui_constants import (
     AGENT_MODES,
     DEFAULT_AGENT_MODE,
@@ -28,6 +30,50 @@ from cli.tui_constants import (
 from single_agent.agent import SingleAgent
 from cli.agent_tools.executor import ToolExecutor
 from skills import get_skill_registry
+from telegram_bot.telegram_unified_agent import build_unified_system_prompt
+
+
+class _PromptConfig(dict):
+    def get(self, key, default=None):
+        return super().get(key, default)
+
+
+@dataclass
+class _TuiBrowserTaskContext:
+    task_id: int = 0
+    backend: Optional[str] = None
+    primary_tab_id: Optional[Any] = None
+    primary_window_id: Optional[Any] = None
+    owned_tab_ids: List[Any] = field(default_factory=list)
+    last_url: Optional[str] = None
+    last_title: Optional[str] = None
+    last_snapshot_hash: Optional[str] = None
+    healthy: bool = True
+    requires_real_chrome: bool = False
+
+
+class _TuiPromptSession:
+    def __init__(self, system_info: str):
+        self.live_config = _PromptConfig({"browser.use_extension": False})
+        self.user_id = 0
+        self.refined_agent = None
+        self.browser_tool = None
+        self.extension_tool = None
+        self.current_task_id = 0
+        self.browser_task_context = _TuiBrowserTaskContext(task_id=0)
+        self.system_info = system_info
+        self.context_loader = None
+
+    def get_browser_task_context(self):
+        return self.browser_task_context
+
+
+def build_tui_auto_system_prompt(processor, *, skills_index: str = "") -> str:
+    prompt_session = _TuiPromptSession(system_info=get_system_info())
+    return build_unified_system_prompt(
+        prompt_session,
+        skills_index=skills_index,
+    )
 
 
 def initialize(
@@ -102,7 +148,7 @@ def initialize(
     processor.total_tokens_used = 0
     processor.max_tokens = MODEL_CONTEXT_SIZES.get(processor.current_model, 128000)
 
-    # Context summary for semi mode (shared between agents)
+    # Legacy context summary buffers from the older split-agent flow.
     processor._cli_context_summary = ""
     processor._task_context_summary = ""
 
@@ -172,8 +218,9 @@ def set_variant(processor, variant: str) -> bool:
 
 
 def cycle_agent_mode(processor) -> str:
-    """Cycle through agent modes: manual -> semi -> auto -> manual."""
-    current_idx = AGENT_MODES.index(processor.agent_mode)
+    """Cycle through agent modes: manual -> auto -> manual."""
+    current_mode = processor.agent_mode if processor.agent_mode in AGENT_MODES else DEFAULT_AGENT_MODE
+    current_idx = AGENT_MODES.index(current_mode)
     next_idx = (current_idx + 1) % len(AGENT_MODES)
     processor.agent_mode = AGENT_MODES[next_idx]
     auto_save_session(processor)
@@ -273,9 +320,6 @@ def get_context_for_task_agent(processor) -> str:
     """Get context to inject into Task Agent based on agent mode."""
     if processor.agent_mode == "manual":
         return ""  # No context sharing
-    if processor.agent_mode == "semi":
-        # Return summarized context
-        return generate_context_summary(processor, processor.chat_history)
 
     # auto
     # Return full history (subject to context limits)

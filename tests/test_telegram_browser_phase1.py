@@ -273,6 +273,33 @@ def test_offline_extension_preflights_directly_to_selenium():
     assert session.browser_tool.navigate_calls == [None]
 
 
+def test_user_chrome_task_with_disabled_bridge_blocks_browser_tools_instead_of_falling_back():
+    session = DummySession(use_extension=False)
+    session.browser_tool = FakeSeleniumBrowser()
+    session.browser_task_context.requires_real_chrome = True
+
+    message = _execute_browser_navigate(session, {"url": "https://blocked.example"})
+
+    assert "browser_* tools are blocked for this task" in message
+    assert "desktop tools instead" in message
+    assert session.browser_tool.navigate_calls == []
+    assert session.get_browser_task_context().backend is None
+
+
+def test_user_chrome_task_with_offline_bridge_blocks_browser_tools_instead_of_falling_back():
+    session = DummySession()
+    session.extension_tool = FakeOfflineExtensionBrowser()
+    session.browser_tool = FakeSeleniumBrowser()
+    session.browser_task_context.requires_real_chrome = True
+
+    message = _execute_browser_navigate(session, {"url": "https://blocked.example"})
+
+    assert "browser_* tools are blocked for this task" in message
+    assert "not connected and healthy" in message
+    assert session.browser_tool.navigate_calls == []
+    assert session.get_browser_task_context().backend is None
+
+
 def test_system_prompt_starts_with_live_browser_runtime_status():
     session = DummySession()
     session.extension_tool = FakeOfflineExtensionBrowser()
@@ -282,6 +309,7 @@ def test_system_prompt_starts_with_live_browser_runtime_status():
     assert prompt.startswith("# LIVE BROWSER RUNTIME STATUS")
     assert "# LIVE DESKTOP RUNTIME STATUS" in prompt
     assert "- Active Windows: none" in prompt
+    assert "Task depends on user's Chrome: NO" in prompt
     assert "Real Chrome available now: NO" in prompt
     assert "Do NOT assume browser_* tools can use the extension" in prompt
     assert "Do NOT spend a turn on observe_desktop or focus_window" in prompt

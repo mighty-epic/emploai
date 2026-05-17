@@ -1,5 +1,6 @@
 import base64
 import importlib
+import platform as platform_module
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -29,8 +30,19 @@ def test_telegram_unified_agent_imports_as_package(monkeypatch):
     assert callable(module.create_unified_agent_for_task)
 
 
-def test_platform_override_enables_linux_desktop_handlers(monkeypatch):
+def test_windows_host_ignores_linux_platform_override(monkeypatch):
+    monkeypatch.setattr(platform_module, "system", lambda: "Windows")
     monkeypatch.setenv("PLATFORM", "linux")
+
+    module = _reload_telegram_unified_agent()
+
+    assert module.LINUX_MODE is False
+    assert module._LINUX_DESKTOP_OVERRIDES == {}
+
+
+def test_linux_host_ignores_windows_platform_override(monkeypatch):
+    monkeypatch.setattr(platform_module, "system", lambda: "Linux")
+    monkeypatch.setenv("PLATFORM", "windows")
 
     module = _reload_telegram_unified_agent()
     handlers = module.get_auto_mode_tool_handlers(session=None)

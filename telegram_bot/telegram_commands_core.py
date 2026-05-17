@@ -9,6 +9,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from cli.tui_constants import AGENT_MODE_LABELS, AVAILABLE_MODELS, MODEL_CONFIGS
+from shared.channel_sync import get_channel_sync_hub
 
 
 COMMAND_HELP: Dict[str, str] = {
@@ -17,7 +18,7 @@ COMMAND_HELP: Dict[str, str] = {
     "variant": "Set model variant: `/variant` (standard/thinking)",
     "model": "Switch model: `/model`",
     "models": "List available models: `/models`",
-    "task": "Compatibility alias. Send the request normally and the auto agent will handle it.",
+    "planner": "Set planner model: `/planner`, `/planner <model>`, or `/planner auto`",
     "pause": "Pause running task: `/pause`",
     "stop": "Stop running task: `/stop`",
     "spawn": "Spawn sub-agent: `/spawn <prompt>`",
@@ -26,8 +27,11 @@ COMMAND_HELP: Dict[str, str] = {
     "jobs": "List scheduled jobs: `/jobs`",
     "job_remove": "Remove job: `/job_remove <job_id>`",
     "session": "Manage sessions: `/session`",
+    "task": "Show the active managed task board: `/task`",
+    "reassess": "Force a reassessment of the active task board: `/reassess`",
     "history": "Show recent conversation history: `/history [count]`",
     "reset": "Clear chat history: `/reset`",
+    "compact": "Compact the current session context: `/compact`",
     "context": "Show token usage: `/context`",
     "settings": "Configure max turns: `/settings`",
     "workspace": "Set workspace path: `/workspace <path>`",
@@ -76,6 +80,7 @@ def build_core_command_handlers(
             "🧠 **Emploai Agent Connected**\n\n"
             f"**Model:** {session.current_model}\n"
             f"**Variant:** {session.current_variant}\n"
+            f"**Planner:** {session.planner_model or 'automatic'}\n"
             f"**Mode:** {mode_label}\n"
             f"**Max Turns:** {session.max_turns}\n"
             f"**Workspace:** `{session.workspace}`\n\n"
@@ -107,6 +112,7 @@ def build_core_command_handlers(
             "/variant - Set model variant\n"
             "/model - Switch model\n"
             "/models - List all models\n\n"
+            "/planner - Set planner model\n\n"
             "**Automation & Control:**\n"
             "/pause - Pause running task\n"
             "/stop - Stop running task\n"
@@ -118,7 +124,10 @@ def build_core_command_handlers(
             "/job_remove <id> - Remove a scheduled job\n\n"
             "**Session & Memory:**\n"
             "/session - Manage sessions\n"
+            "/task - Show the active task board\n"
+            "/reassess - Force a task reassessment\n"
             "/reset - Clear chat history\n"
+            "/compact - Compact the current context\n"
             "/context - Show token usage\n"
             "/memory [query] - Search memory\n"
             "/memory_update <note> - Add note to memory\n\n"
@@ -225,6 +234,98 @@ def build_core_command_handlers(
             reply_markup=reply_markup,
         )
 
+    def _publish_session_config_sync(session, setting: str) -> None:
+        try:
+            session.save_session()
+            session_id = session.session_manager.get_current_session_id() if session.session_manager else None
+            if not session_id:
+                return
+            get_channel_sync_hub().publish(
+                user_id=session.user_id,
+                event={
+                    "type": "session_config",
+                    "session_id": session_id,
+                    "origin_channel": "telegram",
+                    "payload": {
+                        "setting": setting,
+                        "model": session.current_model,
+                        "variant": session.current_variant,
+                        "planner_model": getattr(session, "planner_model", None),
+                        "max_turns": session.max_turns,
+                    },
+                },
+            )
+        except Exception:
+            logger.exception("Failed to publish Telegram session config sync")
+
+    def _resolve_planner_model(session: Any, raw: str) -> str | None:
+        supported = session.get_supported_planner_models(AVAILABLE_MODELS)
+        target = raw.strip().lower()
+        exact = next((item for item in supported if item.lower() == target), None)
+        if exact:
+            return exact
+        prefix_matches = [item for item in supported if item.lower().startswith(target)]
+        if len(prefix_matches) == 1:
+            return prefix_matches[0]
+        contains_matches = [item for item in supported if target in item.lower()]
+        if len(contains_matches) == 1:
+            return contains_matches[0]
+        return None
+
+    @rate_limited(security_manager)
+    async def planner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show or switch the lightweight planner model."""
+        user = update.effective_user
+        session = get_session(user.id)
+        session.ensure_current_model_available(AVAILABLE_MODELS)
+        track_command_usage(session, "planner")
+
+        supported = session.get_supported_planner_models(AVAILABLE_MODELS)
+        current = session.planner_model or "automatic cheapest supported planner"
+
+        if not context.args or context.args[0].lower() in {"status", "list"}:
+            lines = [
+                "**Planner Model**",
+                "",
+                f"Current: {current}",
+            ]
+            if supported:
+                lines.extend(["", "Supported planner models:"])
+                lines.extend([f"• {model}" for model in supported])
+                lines.extend([
+                    "",
+                    "Use `/planner <model-id>` to pin one, or `/planner auto` to let the runtime choose automatically.",
+                ])
+            else:
+                lines.extend(["", "No supported planner models are available from the configured providers."])
+            await safe_reply(update, "\n".join(lines))
+            return
+
+        arg = context.args[0].strip().lower()
+        if arg in {"auto", "none", "default", "clear", "off"}:
+            session.planner_model = None
+            _publish_session_config_sync(session, "planner_model")
+            await safe_reply(update, "✅ Planner model reset to automatic cheapest supported selection.")
+            return
+
+        resolved = _resolve_planner_model(session, " ".join(context.args))
+        if not resolved:
+            if supported:
+                message = "❌ Could not resolve that planner model.\n\n" + "\n".join(
+                    [f"• {model}" for model in supported[:20]]
+                )
+            else:
+                message = "❌ No supported planner models are available right now."
+            await safe_reply(
+                update,
+                message,
+            )
+            return
+
+        session.planner_model = resolved
+        _publish_session_config_sync(session, "planner_model")
+        await safe_reply(update, f"✅ Planner model pinned to `{resolved}`.")
+
     @rate_limited(security_manager)
     async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """List all available models."""
@@ -304,6 +405,7 @@ def build_core_command_handlers(
                     return
 
                 session.save_session()
+                _publish_session_config_sync(session, "workspace")
                 await safe_reply(update, f"✅ Workspace set to: `{session.workspace}`")
             else:
                 await safe_reply(
@@ -323,6 +425,7 @@ def build_core_command_handlers(
         "variant_command": variant_command,
         "model_command": model_command,
         "models_command": models_command,
+        "planner_command": planner_command,
         "settings_command": settings_command,
         "workspace_command": workspace_command,
     }

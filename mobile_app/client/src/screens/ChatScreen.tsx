@@ -18,6 +18,7 @@ import {
   type SkillSummary,
   type SkillValidation,
   type SubAgentStatus,
+  activateSession,
   activateAgentSkill,
   appendAgentMemoryNote,
   clearAgentPendingFiles,
@@ -93,6 +94,10 @@ type PendingOutboundMessage = {
   interruptPolicy: InterruptPolicy;
   expiresAt: number;
 };
+
+function createClientId() {
+  return `app-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 function normalizeRouteSessionId(value: string | string[] | undefined) {
   if (Array.isArray(value)) {
@@ -205,6 +210,7 @@ export default function ChatScreen() {
   const chatWsRef = useRef<WebSocket | null>(null);
   const voiceWsRef = useRef<WebSocket | null>(null);
   const screenWsRef = useRef<WebSocket | null>(null);
+  const appClientIdRef = useRef(createClientId());
   const composerInputRef = useRef<TextInput | null>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const assistantSoundRef = useRef<Audio.Sound | null>(null);
@@ -251,6 +257,33 @@ export default function ChatScreen() {
     setSessionId(detail.id);
     setSessionName(detail.name);
     setMessages(detail.messages.map((message) => toChatMessage(message)));
+  };
+
+  const syncOverviewFromSessionDetail = (detail: SessionDetail) => {
+    setAgentOverview((previous) => {
+      if (!previous) {
+        return previous;
+      }
+      return {
+        ...previous,
+        session_id: detail.id,
+        current_model: detail.model,
+        current_variant: detail.variant,
+      };
+    });
+  };
+
+  const applySessionSync = (payload?: Record<string, any>) => {
+    const detail = payload?.session as SessionDetail | undefined;
+    const syncedSessions = payload?.sessions as SessionSummary[] | undefined;
+    if (Array.isArray(syncedSessions)) {
+      setSessions(syncedSessions);
+    }
+    if (detail?.id) {
+      applySessionDetail(detail);
+      syncOverviewFromSessionDetail(detail);
+      void refreshAgentControls(detail.id);
+    }
   };
 
   const refreshSidebarData = async () => {
@@ -400,7 +433,7 @@ export default function ChatScreen() {
 
     setStatus('loading session');
     try {
-      const detail = await fetchSessionDetail(apiBaseUrl, token, nextSessionId);
+      const detail = await activateSession(apiBaseUrl, token, nextSessionId);
       applySessionDetail(detail);
       if (!options?.keepLogs) {
         setToolLogs([]);
@@ -467,7 +500,9 @@ export default function ChatScreen() {
 
         const nextSessionId = requestedSessionId || profile.current_session_id || sessionsData[0]?.id || undefined;
         if (nextSessionId) {
-          const detail = await fetchSessionDetail(apiBaseUrl, token, nextSessionId);
+          const detail = requestedSessionId && requestedSessionId !== profile.current_session_id
+            ? await activateSession(apiBaseUrl, token, nextSessionId)
+            : await fetchSessionDetail(apiBaseUrl, token, nextSessionId);
           if (cancelled) return;
           applySessionDetail(detail);
           setStatus('connected');
@@ -815,7 +850,7 @@ export default function ChatScreen() {
   };
 
   const handleRealtimeEvent = (data: ChatEvent, channel: 'chat' | 'voice' | 'screen') => {
-    if (data.session_id) {
+    if (data.type === 'session_snapshot' && data.session_id) {
       setSessionId(data.session_id);
     }
 
@@ -839,8 +874,37 @@ export default function ChatScreen() {
       return;
     }
 
+    if (data.type === 'user_message') {
+      const message = data.payload?.message as SessionMessage | undefined;
+      if (message) {
+        setMessages((prev) => [...prev, toChatMessage(message)]);
+      }
+      return;
+    }
+
+    if (data.type === 'session_sync') {
+      applySessionSync(data.payload);
+      if (channel !== 'screen') {
+        setStatus('connected');
+      }
+      return;
+    }
+
     if (data.type === 'assistant_final') {
-      applyAssistantFinal(String(data.payload?.text || ''));
+      const message = data.payload?.message as SessionMessage | undefined;
+      if (message) {
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.role === 'assistant') {
+            next[next.length - 1] = toChatMessage(message);
+            return next;
+          }
+          return [...next, toChatMessage(message)];
+        });
+      } else {
+        applyAssistantFinal(String(data.payload?.text || ''));
+      }
       if (channel !== 'voice') {
         setIsVoiceBusy(false);
       }
@@ -1281,7 +1345,7 @@ export default function ChatScreen() {
 
     const buildWsUrl = (path: string) => {
       const base = buildWsBaseUrl(apiBaseUrl);
-      const params = new URLSearchParams({ token });
+      const params = new URLSearchParams({ token, client_id: appClientIdRef.current });
       if (sessionIdRef.current) params.set('session_id', sessionIdRef.current);
       return `${base}${path}?${params.toString()}`;
     };

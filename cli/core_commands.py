@@ -24,13 +24,12 @@ def help(context, args, result_cls):
         "MODEL & AGENT COMMANDS:",
         "  /model                        Open model selector",
         "  /variant [name]               Show/set model variant (standard, thinking)",
-        "  /mode [name]                  Show/set agent mode (manual, semi, auto)",
+        "  /mode [name]                  Show/set agent mode (manual, auto)",
         "  /context                      Show context usage",
         "  /reset                        Reset chat history",
         "",
         "AGENT MODES:",
         "  manual  - CLI and Task agents are independent",
-        "  semi    - Agents share summarized context",
         "  auto    - Unified agent with merged capabilities",
         "",
         "FILE COMMANDS:",
@@ -155,7 +154,6 @@ def mode(context, args, result_cls):
             "",
             "Available modes:",
             "  manual - CLI and Task agents are completely independent",
-            "  semi   - Agents share summarized context (bidirectional)",
             "  auto   - Unified agent with merged CLI + Task capabilities",
             "",
             "Use Tab to cycle through modes or /mode <name> to set directly.",
@@ -163,6 +161,10 @@ def mode(context, args, result_cls):
         return result_cls(True, "\n".join(lines))
 
     new_mode = args[0].lower()
+    if new_mode == "semi":
+        context.agent_mode = "auto"
+        context.update_status()
+        return result_cls(True, "Agent mode set to: [AUTO] (`semi` is retired and now maps to auto)")
     if new_mode not in AGENT_MODES:
         return result_cls(False, f"Unknown mode: {new_mode}. Available: {', '.join(AGENT_MODES)}")
 

@@ -25,6 +25,7 @@ except ImportError:
 from bot_core.ui_helpers import InlineKeyboardHelper, ThinkingModeVisualizer
 from single_agent.agent import AGENT_TOOLS
 from shared import begin_chat_turn, merge_openai_tools, run_reserved_chat_turn
+from shared.task_board import TASK_BOARD_INTERNAL_TOOL_NAME
 
 
 logger = logging.getLogger(__name__)
@@ -94,6 +95,9 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
         session,
         user_message=user_message,
         user_message_payload={
+            "channel": "telegram",
+            "source_format": "telegram_text",
+            "display_label": "Telegram",
             "message_id": message_id,
             "retry": is_retry,
         },
@@ -118,10 +122,15 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
 
     if reservation.context_compressed:
         logger.info("[ContextManager] Compression complete")
+        compaction = reservation.context_compaction or {}
+        compaction_msg = compaction.get("message") or (
+            "I summarized earlier conversation history to keep the live Telegram session within context limits."
+        )
         await safe_reply(
             update,
-            "🔘 *Memory Compressed*\n"
-            "I summarized earlier conversation history to keep the live Telegram session within context limits."
+            "**🔘 Context Compacted**\n\n"
+            f"{compaction_msg}\n\n"
+            "Use `/context` to inspect the updated usage.",
         )
 
     if is_retry and session.analytics_tracker:
@@ -172,33 +181,24 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
         {
             "role": "system",
             "content": (
-                "TASK EXECUTION CONTRACT:\n"
-                "- For complex tasks, keep a short internal checklist and complete one verified step at a time.\n"
-                "- Do not repeat a step once the requested state is already verified, and do not retry a failed method unless the page or app state changed.\n"
-                "- For webpage DOM actions, rely on browser tool results and browser_snapshot only when the current browser context actually supports them.\n"
-                "- If the task is in the user's real Chrome and the extension bridge is unavailable, browser_* tools do NOT control that page; use describe_screen first, then ocr_screen only for exact text coordinates or fallback clicks.\n"
+            "TASK EXECUTION CONTRACT:\n"
+            "- For complex tasks, keep a short internal checklist and complete one verified step at a time.\n"
+            "- The managed task board is runtime-owned. Do not try to create, rewrite, or complete it yourself.\n"
+            f"- Use {TASK_BOARD_INTERNAL_TOOL_NAME} only after the same concrete method has genuinely failed three times, or when the task truly requires credentials, 2FA, or account choice from the user.\n"
+            "- The runtime will create, reassess, and complete the board. Your job is to execute the task and report proof.\n"
+            "- Do not repeat a step once the requested state is already verified, and do not retry a failed method unless the page or app state changed.\n"
+            "- For webpage DOM actions, rely on browser tool results and browser_snapshot only when the current browser context actually supports them.\n"
+            "- If the task is in the user's real Chrome and the extension bridge is unavailable, browser_* tools do NOT control that page; use describe_screen first, then ocr_screen only for exact text coordinates or fallback clicks.\n"
                 "- Prefer describe_screen for visual discovery, button finding, and layout understanding. Use ocr_screen mainly for exact text extraction and coordinate fallback.\n"
                 "- Prefer ref-based browser tools over focus-dependent typing or synthetic keypresses.\n"
                 "- Use browser_wait_for instead of blind delays when waiting for navigation or confirmation text.\n"
+                "- Ask the user only for true user-dependent blockers such as credentials, 2FA, or account choice. All other failures should continue autonomously.\n"
                 "- Before final completion, assess what worked vs failed. Save only durable reusable lessons to memory.\n"
                 "- A task is done only when the requested file, page state, or deliverable is verified.\n"
                 "- End with a short completion report that states what is done, the proof, and any remaining blocker."
             ),
         }
     ]
-
-    if session.agent_mode == "semi":
-        if session.single_agent and session.single_agent.messages:
-            summary = session._summarize_history(session.single_agent.messages)
-            if summary:
-                system_messages.insert(0, {
-                    "role": "system",
-                    "content": (
-                        "RECENT AUTOMATION CONTEXT:\n"
-                        f"{summary}\n\n"
-                        "(Use this context to understand what was done on the desktop/browser recently.)"
-                    )
-                })
 
     progress_message = None
     controls = InlineKeyboardHelper.create_action_buttons([
@@ -228,6 +228,19 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
                     float(event.get("duration_ms") or 0.0),
                 )
                 await _send_verbose_to_telegram(session, msg)
+                return
+            if event_type == "task_board":
+                summary = str(event.get("summary") or "").strip()
+                board = event.get("board") or {}
+                lines = ["Task board update"]
+                if board.get("main_goal"):
+                    lines.append(f"Goal: {board['main_goal']}")
+                if summary:
+                    lines.append(summary)
+                if board.get("progress_summary"):
+                    lines.append(f"Progress: {board['progress_summary']}")
+                await safe_reply(update, "\n".join(lines))
+                return
 
         result = await run_reserved_chat_turn(
             session,
@@ -240,7 +253,11 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
             ),
             system_messages=system_messages,
             prelude_messages=prelude_messages,
-            assistant_message_payload={},
+            assistant_message_payload={
+                "channel": "telegram",
+                "source_format": "telegram_response",
+                "display_label": "Telegram",
+            },
             event_sink=event_sink,
             initialize_single_agent=lambda current_loop: session.init_single_agent(
                 context.application,
@@ -300,6 +317,16 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
                         session.save_session()
         else:
             await safe_reply(update, "Done (no text response)")
+
+        if result.context_compressed and not reservation.context_compressed:
+            compaction = result.context_compaction or {}
+            compaction_msg = compaction.get("message") or "Context compacted."
+            await safe_reply(
+                update,
+                "**🔘 Context Compacted**\n\n"
+                f"{compaction_msg}\n\n"
+                "Use `/context` to inspect the updated usage.",
+            )
 
         success = True
 

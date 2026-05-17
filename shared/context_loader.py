@@ -3,11 +3,25 @@ Context Loader - Load workspace context files (AGENTS.md, SOUL.md, etc.)
 Similar to Moltbot's workspace context system
 """
 
+import os
 from pathlib import Path
 from typing import Dict, Optional
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_context_root(workspace: Path) -> Path:
+    """Resolve the durable context root.
+
+    Desktop/runtime builds set EMPLOAI_HOME so the live agent uses the packaged
+    runtime context files instead of any repo checkout it happened to launch
+    from.
+    """
+    configured = os.getenv("EMPLOAI_HOME", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return Path(workspace).expanduser().resolve()
 
 
 class ContextLoader:
@@ -31,9 +45,47 @@ class ContextLoader:
     }
     
     def __init__(self, workspace: Path):
-        self.workspace = Path(workspace)
+        self.workspace = resolve_context_root(Path(workspace))
         self._cache: Dict[str, Optional[str]] = {}
         self._initialized = False
+
+    @staticmethod
+    def _exact_child(directory: Path, filename: str) -> Optional[Path]:
+        """Return a child path only when the filename matches exactly."""
+        try:
+            for child in directory.iterdir():
+                if child.name == filename:
+                    return child
+        except OSError:
+            return None
+        return None
+
+    def _bundled_agent_data_dir(self) -> Optional[Path]:
+        candidate = self.workspace / "telegram_bot" / "agent_data"
+        return candidate if candidate.is_dir() else None
+
+    def _candidate_directories(self) -> list[Path]:
+        candidates = [
+            self.workspace,
+            self.workspace / "agent_data",
+        ]
+        bundled = self._bundled_agent_data_dir()
+        if bundled is not None:
+            candidates.append(bundled)
+        return candidates
+
+    def _resolve_context_path(self, filename: str) -> Optional[Path]:
+        for directory in self._candidate_directories():
+            match = self._exact_child(directory, filename)
+            if match is not None:
+                return match
+        return None
+
+    def _writable_context_dir(self) -> Path:
+        bundled = self._bundled_agent_data_dir()
+        if bundled is not None:
+            return bundled
+        return self.workspace / "agent_data"
     
     def initialize_workspace(self):
         """Create default context files if they don't exist."""
@@ -45,14 +97,13 @@ class ContextLoader:
             'TOOLS.md': self._get_tools_template(),
             'IDENTITY.md': self._get_identity_template(),
         }
-        
-        # Prepare agent_data directory for a clean root
-        agent_data_dir = self.workspace / "agent_data"
+
+        agent_data_dir = self._writable_context_dir()
         agent_data_dir.mkdir(parents=True, exist_ok=True)
-        
+
         for filename, template in templates.items():
-            filepath = agent_data_dir / filename
-            if not filepath.exists():
+            if self._resolve_context_path(filename) is None:
+                filepath = agent_data_dir / filename
                 filepath.write_text(template, encoding='utf-8')
                 logger.info(f"Created {filename} in agent_data/")
         
@@ -67,13 +118,9 @@ class ContextLoader:
         if not filename:
             logger.warning(f"Unknown context key: {key}")
             return None
-        
-        filepath = self.workspace / filename
-        # Check in agent_data/ subdirectory as well for a cleaner root
-        if not filepath.exists():
-            filepath = self.workspace / "agent_data" / filename
-            
-        if not filepath.exists():
+
+        filepath = self._resolve_context_path(filename)
+        if filepath is None:
             logger.debug(f"Context file not found: {filename} (checked root and agent_data/)")
             self._cache[key] = None
             return None
@@ -88,13 +135,9 @@ class ContextLoader:
 
     def load_optional_context_file(self, filename: str) -> Optional[str]:
         """Load an optional markdown context file from the workspace root or agent_data/."""
-        candidates = [
-            self.workspace / filename,
-            self.workspace / "agent_data" / filename,
-        ]
-
-        for filepath in candidates:
-            if not filepath.exists():
+        for directory in self._candidate_directories():
+            filepath = self._exact_child(directory, filename)
+            if filepath is None:
                 continue
             try:
                 return filepath.read_text(encoding='utf-8')
@@ -117,12 +160,9 @@ class ContextLoader:
         if not filename:
             logger.warning(f"Unknown context key: {key}")
             return
-        
-        filepath = self.workspace / filename
-        # Prefer agent_data/ if it exists and we're in cleanup mode
-        agent_data_dir = self.workspace / "agent_data"
-        if agent_data_dir.exists():
-            filepath = agent_data_dir / filename
+
+        filepath = self._writable_context_dir() / filename
+        filepath.parent.mkdir(parents=True, exist_ok=True)
             
         try:
             filepath.write_text(content, encoding='utf-8')
@@ -336,7 +376,7 @@ _context_loaders: Dict[str, ContextLoader] = {}
 
 def get_context_loader(workspace: Path) -> ContextLoader:
     """Get or create a context loader for a workspace."""
-    key = str(workspace.resolve())
+    key = str(resolve_context_root(workspace))
     if key not in _context_loaders:
         _context_loaders[key] = ContextLoader(workspace)
     return _context_loaders[key]

@@ -5,6 +5,7 @@ import { SafeAreaView as SafeAreaFrame } from 'react-native-safe-area-context';
 
 import type { ScheduledJob, SessionSummary } from '@/lib/appApi';
 import { formatRelativeTime } from '@/lib/time';
+import { isDesktopEnvironment } from '@/lib/desktopBridge';
 
 export type DrawerTab = 'chats' | 'cron' | 'system';
 
@@ -36,6 +37,7 @@ export function AppDrawer({
   const router = useRouter();
   const pathname = usePathname();
   const [tab, setTab] = useState<DrawerTab>(initialTab);
+  const desktopMode = isDesktopEnvironment();
 
   useEffect(() => {
     if (visible) {
@@ -160,14 +162,23 @@ export function AppDrawer({
             {tab === 'system' ? (
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>System</Text>
-                <Pressable style={styles.navCard} onPress={() => navigate('/pair')}>
-                  <Text style={styles.cardTitle}>Pair device</Text>
-                  <Text style={styles.cardBody}>Finish trusted-device pairing or re-pair this phone.</Text>
-                </Pressable>
-                <Pressable style={styles.navCard} onPress={() => navigate('/settings')}>
-                  <Text style={styles.cardTitle}>Settings</Text>
-                  <Text style={styles.cardBody}>Backend URL, token state, and device verification.</Text>
-                </Pressable>
+                {!desktopMode ? (
+                  <>
+                    <Pressable style={styles.navCard} onPress={() => navigate('/pair')}>
+                      <Text style={styles.cardTitle}>Pair device</Text>
+                      <Text style={styles.cardBody}>Finish trusted-device pairing or re-pair this phone.</Text>
+                    </Pressable>
+                    <Pressable style={styles.navCard} onPress={() => navigate('/settings')}>
+                      <Text style={styles.cardTitle}>Settings</Text>
+                      <Text style={styles.cardBody}>Backend URL, token state, and device verification.</Text>
+                    </Pressable>
+                  </>
+                ) : (
+                  <View style={styles.navCard}>
+                    <Text style={styles.cardTitle}>Desktop-local bootstrap</Text>
+                    <Text style={styles.cardBody}>Pairing and backend URL entry are disabled in desktop mode.</Text>
+                  </View>
+                )}
                 <Pressable style={styles.navCard} onPress={() => navigate('/agent')}>
                   <Text style={styles.cardTitle}>Agent controls</Text>
                   <Text style={styles.cardBody}>Model, runtime, memory, config, analytics, and other Telegram-style controls.</Text>

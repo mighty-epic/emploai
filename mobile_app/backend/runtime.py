@@ -6,12 +6,14 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from bot_core.ui_helpers import ThinkingModeVisualizer
-from single_agent.agent import AGENT_TOOLS
+from single_agent.tool_manifest import AGENT_TOOLS
+from shared.channel_sync import get_channel_sync_hub
 from telegram_bot.telegram_unified_agent import (
     build_unified_system_prompt,
     get_auto_mode_extra_tools,
     get_auto_mode_tool_handlers,
 )
+from shared.task_board import TASK_BOARD_INTERNAL_TOOL_NAME
 
 from shared import begin_chat_turn, merge_openai_tools, run_reserved_chat_turn
 from shared.live_config import get_live_config
@@ -60,12 +62,16 @@ def _task_execution_contract() -> dict[str, str]:
         "content": (
             "TASK EXECUTION CONTRACT:\n"
             "- For complex tasks, keep a short internal checklist and complete one verified step at a time.\n"
+            "- The managed task board is runtime-owned. Do not try to create, rewrite, or complete it yourself.\n"
+            f"- Use {TASK_BOARD_INTERNAL_TOOL_NAME} only after the same concrete method has genuinely failed three times, or when the task truly requires credentials, 2FA, or account choice from the user.\n"
+            "- The runtime will create, reassess, and complete the board. Your job is to execute the task and report proof.\n"
             "- Do not repeat a step once the requested state is already verified, and do not retry a failed method unless the page or app state changed.\n"
             "- For webpage DOM actions, rely on browser tool results and browser_snapshot only when the current browser context actually supports them.\n"
             "- If the task is in the user's real Chrome and the extension bridge is unavailable, browser_* tools do NOT control that page; use describe_screen first, then ocr_screen only for exact text coordinates or fallback clicks.\n"
             "- Prefer describe_screen for visual discovery, button finding, and layout understanding. Use ocr_screen mainly for exact text extraction and coordinate fallback.\n"
             "- Prefer ref-based browser tools over focus-dependent typing or synthetic keypresses.\n"
             "- Use browser_wait_for instead of blind delays when waiting for navigation or confirmation text.\n"
+            "- Ask the user only for true user-dependent blockers such as credentials, 2FA, or account choice. All other failures should continue autonomously.\n"
             "- Before final completion, assess what worked vs failed. Save only durable reusable lessons to memory.\n"
             "- A task is done only when the requested file, page state, or deliverable is verified.\n"
             "- End with a short completion report that states what is done, the proof, and any remaining blocker."
@@ -92,12 +98,38 @@ def _steering_beta_enabled(session: Any) -> bool:
     return bool(config.get("channels.app.steering_beta", False))
 
 
+def _publish_app_message_sync(
+    session: Any,
+    *,
+    session_id: Optional[str],
+    message: Dict[str, Any],
+) -> None:
+    user_id = getattr(session, "user_id", None)
+    if user_id is None or not session_id:
+        return
+
+    get_channel_sync_hub().publish(
+        user_id=user_id,
+        event={
+            "type": "user_message",
+            "session_id": session_id,
+            "origin_channel": message.get("channel"),
+            "source_client_id": message.get("source_client_id"),
+            "payload": {
+                "message": message,
+                "text": message.get("content", ""),
+            },
+        },
+    )
+
+
 async def _request_app_steering(
     session: Any,
     *,
     user_message: str,
     source_format: str,
     interrupt_policy: str,
+    source_client_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     policy = _normalize_interrupt_policy(interrupt_policy)
     if policy == "none" or not _steering_beta_enabled(session):
@@ -110,18 +142,18 @@ async def _request_app_steering(
         timestamp = datetime.now().isoformat()
         display_label = "App Voice Steering" if source_format == "app_voice_transcript" else "App Steering"
         session.last_user_message = user_message
-        session.chat_history.append(
-            {
-                "role": "user",
-                "content": user_message,
-                "timestamp": timestamp,
-                "channel": "app",
-                "source_format": source_format,
-                "display_label": display_label,
-                "interrupt_policy": policy,
-                "steering_beta": True,
-            }
-        )
+        steering_message = {
+            "role": "user",
+            "content": user_message,
+            "timestamp": timestamp,
+            "channel": "app",
+            "source_format": source_format,
+            "display_label": display_label,
+            "interrupt_policy": policy,
+            "steering_beta": True,
+            "source_client_id": source_client_id,
+        }
+        session.chat_history.append(steering_message)
 
         if hasattr(session, "queue_interrupt"):
             session.queue_interrupt(user_message, deferred=(policy == "after_tool"))
@@ -130,15 +162,23 @@ async def _request_app_steering(
             session.interrupt_message = user_message
 
         session.save_session()
+        current_session_id = session.session_manager.get_current_session_id() if getattr(session, "session_manager", None) else None
+        _publish_app_message_sync(
+            session,
+            session_id=current_session_id,
+            message=steering_message,
+        )
 
     return {
         "ok": True,
         "busy": False,
         "steering": True,
-        "session_id": session.session_manager.get_current_session_id() if getattr(session, "session_manager", None) else None,
+        "session_id": current_session_id,
         "assistant_text": "",
         "steering_policy": policy,
         "steering_status": "queued" if policy == "after_tool" else "armed",
+        "context_compressed": False,
+        "context_compaction": None,
     }
 
 
@@ -148,6 +188,7 @@ async def run_app_chat_turn(
     user_message: str,
     source_format: str = "app_text",
     interrupt_policy: str = "none",
+    source_client_id: Optional[str] = None,
     log_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
 ) -> Dict[str, Any]:
     steering_result = await _request_app_steering(
@@ -155,6 +196,7 @@ async def run_app_chat_turn(
         user_message=user_message,
         source_format=source_format,
         interrupt_policy=interrupt_policy,
+        source_client_id=source_client_id,
     )
     if steering_result is not None:
         return steering_result
@@ -167,6 +209,7 @@ async def run_app_chat_turn(
             "channel": "app",
             "source_format": source_format,
             "display_label": display_label,
+            "source_client_id": source_client_id,
         },
     )
     if reservation.busy:
@@ -182,21 +225,6 @@ async def run_app_chat_turn(
         prelude_messages.extend(_kickstart_prelude())
 
     system_messages = [_task_execution_contract()]
-    if session.agent_mode == "semi":
-        if session.single_agent and session.single_agent.messages:
-            summary = session._summarize_history(session.single_agent.messages)
-            if summary:
-                system_messages.insert(
-                    0,
-                    {
-                        "role": "system",
-                        "content": (
-                            "RECENT AUTOMATION CONTEXT:\n"
-                            f"{summary}\n\n"
-                            "(Use this context to understand what was done on the desktop/browser recently.)"
-                        ),
-                    },
-                )
 
     result = await run_reserved_chat_turn(
         session,
@@ -211,8 +239,9 @@ async def run_app_chat_turn(
         prelude_messages=prelude_messages,
         assistant_message_payload={
             "channel": "app",
-            "source_format": "app_system",
+            "source_format": "app_response",
             "display_label": "App",
+            "source_client_id": source_client_id,
         },
         event_sink=log_callback,
         initialize_single_agent=lambda loop: session.init_single_agent(None, loop),
@@ -238,4 +267,6 @@ async def run_app_chat_turn(
         "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,
         "total_tokens": result.total_tokens,
+        "context_compressed": bool(reservation.context_compressed or result.context_compressed),
+        "context_compaction": result.context_compaction or reservation.context_compaction,
     }

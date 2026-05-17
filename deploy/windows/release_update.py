@@ -18,7 +18,7 @@ UPDATE_STATE_FILENAME = "release_state.json"
 UPDATES_DIRNAME = "updates"
 DEFAULT_REPO = "mighty-epic/emploai-releases"
 DEFAULT_PRIMARY_ASSET = "EmploAI.msi"
-DEFAULT_PORTABLE_ASSET = "EmploAI.exe"
+DEFAULT_PORTABLE_ASSET = "EmploAI-portable.zip"
 DEFAULT_CHANNEL = "beta"
 DEFAULT_INTERVAL_HOURS = 12
 GITHUB_API_ROOT = "https://api.github.com"
@@ -43,6 +43,18 @@ class AvailableUpdate:
     asset_name: str
     asset_url: str
     published_at: str | None
+
+
+def serialize_available_update(update: AvailableUpdate | None) -> dict[str, Any] | None:
+    if update is None:
+        return None
+    return {
+        "version": update.version,
+        "tagName": update.tag_name,
+        "assetName": update.asset_name,
+        "assetUrl": update.asset_url,
+        "publishedAt": update.published_at,
+    }
 
 
 def _default_release_info() -> ReleaseInfo:
@@ -102,7 +114,9 @@ def load_release_state(home: Path) -> dict[str, Any]:
 
 
 def save_release_state(home: Path, state: dict[str, Any]) -> None:
-    _release_state_path(home).write_text(json.dumps(state, indent=2), encoding="utf-8")
+    path = _release_state_path(home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
 def _normalize_release_version(raw: str) -> Version:
@@ -268,6 +282,107 @@ def _launch_msi_update(home: Path, installer_path: Path, restart_executable: Pat
     )
 
 
+def check_for_updates(home: Path, bundle_root: Path, *, force: bool = False) -> dict[str, Any]:
+    info = load_release_info(bundle_root)
+    state = load_release_state(home)
+    result: dict[str, Any] = {
+        "ok": True,
+        "currentVersion": info.version,
+        "releaseTag": info.release_tag,
+        "channel": info.channel,
+        "repo": info.github_repo,
+        "intervalHours": info.update_check_interval_hours,
+        "checked": False,
+        "updateAvailable": False,
+        "update": None,
+        "lastCheckedAt": state.get("last_checked_at"),
+        "lastError": state.get("last_error"),
+    }
+
+    if not should_check_for_updates(home, info.update_check_interval_hours, force=force):
+        return result
+
+    state["last_checked_at"] = datetime.now(timezone.utc).isoformat()
+    result["checked"] = True
+    result["lastCheckedAt"] = state["last_checked_at"]
+
+    try:
+        update = find_available_update(info)
+    except Exception as exc:
+        state["last_error"] = str(exc)
+        save_release_state(home, state)
+        result["ok"] = False
+        result["lastError"] = str(exc)
+        return result
+
+    state.pop("last_error", None)
+    save_release_state(home, state)
+    result["lastError"] = None
+    result["updateAvailable"] = update is not None
+    result["update"] = serialize_available_update(update)
+    return result
+
+
+def install_available_update(
+    home: Path,
+    update: AvailableUpdate,
+    *,
+    restart_executable: Path | None = None,
+) -> dict[str, Any]:
+    installer_path = _download_update_asset(home, update)
+    if installer_path.suffix.lower() != ".msi":
+        return {
+            "ok": False,
+            "launched": False,
+            "update": serialize_available_update(update),
+            "installerPath": str(installer_path),
+            "message": f"Downloaded update asset to {installer_path}. Launch it manually to update.",
+        }
+
+    restart_path = restart_executable or _default_restart_executable()
+    _launch_msi_update(home, installer_path, restart_path)
+    return {
+        "ok": True,
+        "launched": True,
+        "update": serialize_available_update(update),
+        "installerPath": str(installer_path),
+        "restartExecutable": str(restart_path),
+        "message": "The updater has started. EmploAI will exit so the MSI can replace the current install, then restart on the new version.",
+    }
+
+
+def install_latest_update(
+    home: Path,
+    bundle_root: Path,
+    *,
+    restart_executable: Path | None = None,
+) -> dict[str, Any]:
+    info = load_release_info(bundle_root)
+    try:
+        update = find_available_update(info)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "launched": False,
+            "update": None,
+            "message": str(exc),
+        }
+
+    if update is None:
+        return {
+            "ok": True,
+            "launched": False,
+            "update": None,
+            "message": "No newer release was found.",
+        }
+
+    return install_available_update(
+        home,
+        update,
+        restart_executable=restart_executable,
+    )
+
+
 def maybe_install_update(
     home: Path,
     bundle_root: Path,
@@ -278,42 +393,43 @@ def maybe_install_update(
     if "--skip-update-check" in args or os.getenv("EMPLOAI_SKIP_UPDATE_CHECK", "").strip():
         return False
 
-    info = load_release_info(bundle_root)
     force = "--check-updates" in args or "--force-update-check" in args
-    if not should_check_for_updates(home, info.update_check_interval_hours, force=force):
+    status = check_for_updates(home, bundle_root, force=force)
+    if not status.get("checked") and not force:
         return False
 
-    state = load_release_state(home)
-    state["last_checked_at"] = datetime.now(timezone.utc).isoformat()
-
-    try:
-        update = find_available_update(info)
-    except Exception as exc:
-        state["last_error"] = str(exc)
-        save_release_state(home, state)
+    if not status.get("ok", False):
         if force:
-            print(f"Update check failed: {exc}")
+            print(f"Update check failed: {status.get('lastError')}")
         return False
 
-    save_release_state(home, state)
-
-    if update is None:
+    update_payload = status.get("update")
+    if not update_payload:
         if force:
             print("No newer release was found.")
         return False
+
+    update = AvailableUpdate(
+        version=str(update_payload["version"]),
+        tag_name=str(update_payload["tagName"]),
+        asset_name=str(update_payload["assetName"]),
+        asset_url=str(update_payload["assetUrl"]),
+        published_at=update_payload.get("publishedAt"),
+    )
 
     print(f"Update available: {update.tag_name} ({update.asset_name})")
     choice = input("Install update now? [Y/n]: ").strip().lower()
     if choice not in {"", "y", "yes"}:
         return False
 
-    installer_path = _download_update_asset(home, update)
-    if installer_path.suffix.lower() != ".msi":
-        print(f"Downloaded update asset to {installer_path}. Launch it manually to update.")
-        return False
-
-    restart_path = restart_executable or _default_restart_executable()
-    print(f"Launching installer: {installer_path}")
-    _launch_msi_update(home, installer_path, restart_path)
-    print("The updater has started. EmploAI will exit so the MSI can replace the current install, then restart on the new version.")
-    return True
+    result = install_available_update(
+        home,
+        update,
+        restart_executable=restart_executable,
+    )
+    message = str(result.get("message") or "").strip()
+    if result.get("installerPath"):
+        print(f"Launching installer: {result['installerPath']}")
+    if message:
+        print(message)
+    return bool(result.get("launched"))

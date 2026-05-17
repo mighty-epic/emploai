@@ -29,7 +29,8 @@ class SessionManager:
         workspace: Optional[Path] = None,
         model: str = "claude-haiku-4.5",
         variant: str = "standard",
-        agent_mode: str = "auto"
+        agent_mode: str = "auto",
+        planner_model: Optional[str] = None,
     ) -> Session:
         """Create a new session.
         
@@ -39,6 +40,7 @@ class SessionManager:
             model: Model to use.
             variant: Model variant.
             agent_mode: Agent mode setting.
+            planner_model: Dedicated planner model override.
             
         Returns:
             The created Session object.
@@ -59,6 +61,7 @@ class SessionManager:
             model=model,
             variant=variant,
             agent_mode=agent_mode,
+            planner_model=planner_model,
         )
         
         self._save_session(session)
@@ -67,11 +70,12 @@ class SessionManager:
         
         return session
     
-    def load_session(self, session_id: str) -> Session:
+    def load_session(self, session_id: str, *, set_current: bool = True) -> Session:
         """Load a session by ID.
         
         Args:
             session_id: The session ID to load.
+            set_current: Whether to mark the session as the active session.
             
         Returns:
             The loaded Session object.
@@ -88,8 +92,8 @@ class SessionManager:
         session = Session.from_dict(data)
         self.current_session = session
         
-        # Update current session in index
-        self.set_current_session(session_id)
+        if set_current:
+            self.set_current_session(session_id)
         
         return session
     
@@ -155,7 +159,7 @@ class SessionManager:
             session_id: The session ID to rename.
             new_name: The new name for the session.
         """
-        session = self.load_session(session_id)
+        session = self.load_session(session_id, set_current=False)
         session.name = new_name
         self.save_session(session)
     
@@ -269,7 +273,7 @@ class SessionManager:
         Returns:
             Exported session as string.
         """
-        session = self.load_session(session_id)
+        session = self.load_session(session_id, set_current=False)
         
         if format == "markdown":
             lines = [

@@ -9,6 +9,7 @@ from cli.models.session import Session
 from cli.session_manager import SessionManager
 from single_agent.cron_scheduler import get_scheduler
 from telegram_bot.telegram_session_state import TelegramSession, get_session, user_sessions
+from shared.session_timeline import append_timeline_event, create_timeline_event
 
 
 class AppSessionBridge:
@@ -24,11 +25,17 @@ class AppSessionBridge:
         self.base_path = Path.home() / ".agentshell" / f"user_{self.user_id}"
         self.session_manager = SessionManager(base_path=self.base_path)
 
+    def _load_session(self, session_id: str, *, set_current: bool) -> Session:
+        try:
+            return self.session_manager.load_session(session_id, set_current=set_current)
+        except TypeError:
+            return self.session_manager.load_session(session_id)
+
     def list_sessions(self) -> List[Session]:
         sessions = []
         for summary in self.session_manager.list_sessions():
             try:
-                sessions.append(self.session_manager.load_session(summary.id))
+                sessions.append(self._load_session(summary.id, set_current=False))
             except Exception:
                 continue
         sessions.sort(key=lambda s: s.updated_at, reverse=True)
@@ -39,26 +46,104 @@ class AppSessionBridge:
         if not current_id:
             return None
         try:
-            return self.session_manager.load_session(current_id)
+            return self._load_session(current_id, set_current=False)
         except Exception:
             return None
 
     def get_session(self, session_id: str) -> Session:
-        return self.session_manager.load_session(session_id)
+        return self._load_session(session_id, set_current=False)
 
-    def create_session(self, name: Optional[str] = None) -> Session:
+    def session_file_path(self, session_id: str) -> Path:
+        return self.session_manager.sessions_dir / f"{session_id}.json"
+
+    def session_index_path(self) -> Path:
+        return self.session_manager.sessions_dir / "index.json"
+
+    def _runtime(self) -> Optional[TelegramSession]:
+        return user_sessions.get(self.user_id)
+
+    def _assert_runtime_can_switch(
+        self,
+        runtime: Optional[TelegramSession],
+        *,
+        target_session_id: Optional[str] = None,
+    ) -> None:
+        if not runtime or not runtime.is_processing:
+            return
+
+        current_id = runtime.session_manager.get_current_session_id() if runtime.session_manager else None
+        if target_session_id and str(current_id or "") == str(target_session_id):
+            return
+
+        raise RuntimeError("Finish or stop the current task before switching sessions.")
+
+    def _persist_runtime_before_switch(self, runtime: Optional[TelegramSession]) -> None:
+        if not runtime:
+            return
+        runtime.save_session()
+
+    def _session_defaults(self, runtime: Optional[TelegramSession]) -> Dict[str, Any]:
+        if runtime:
+            planner_model = getattr(runtime, "planner_model", None)
+            if planner_model is None:
+                planner_model = getattr(runtime, "default_planner_model", None)
+            return {
+                "workspace": getattr(runtime, "workspace", self.workspace),
+                "model": getattr(runtime, "current_model", "claude-haiku-4.5"),
+                "variant": getattr(runtime, "current_variant", "standard"),
+                "agent_mode": "auto",
+                "planner_model": planner_model,
+            }
+
+        current = self.get_current_session()
+        if current:
+            return {
+                "workspace": Path(current.workspace) if current.workspace else self.workspace,
+                "model": current.model,
+                "variant": current.variant,
+                "agent_mode": current.agent_mode or "auto",
+                "planner_model": current.planner_model,
+            }
+
+        return {
+            "workspace": self.workspace,
+            "model": "claude-haiku-4.5",
+            "variant": "standard",
+            "agent_mode": "auto",
+            "planner_model": None,
+        }
+
+    def create_session(self, name: Optional[str] = None, workspace: Optional[Path] = None) -> Session:
+        runtime = self._runtime()
+        self._assert_runtime_can_switch(runtime)
+        self._persist_runtime_before_switch(runtime)
+
+        defaults = self._session_defaults(runtime)
+        target_workspace = Path(workspace).expanduser().resolve() if workspace else defaults["workspace"]
         session = self.session_manager.create_session(
             name=name,
-            workspace=self.workspace,
-            agent_mode="auto",
+            workspace=target_workspace,
+            model=defaults["model"],
+            variant=defaults["variant"],
+            agent_mode=defaults["agent_mode"],
+            planner_model=defaults["planner_model"],
         )
-        runtime = user_sessions.get(self.user_id)
-        if runtime and runtime.is_processing:
-            return session
 
         self.session_manager.set_current_session(session.id)
         if runtime:
             runtime.load_session_by_id(session.id)
+            return runtime.session
+        return self._load_session(session.id, set_current=False)
+
+    def activate_session(self, session_id: str) -> Session:
+        session = self._load_session(session_id, set_current=False)
+        runtime = self._runtime()
+        self._assert_runtime_can_switch(runtime, target_session_id=session_id)
+        self._persist_runtime_before_switch(runtime)
+        self.session_manager.set_current_session(session_id)
+        if runtime:
+            runtime.load_session_by_id(session_id)
+            return runtime.session
         return session
 
     def get_or_create_runtime_session(self) -> TelegramSession:
@@ -85,7 +170,7 @@ class AppSessionBridge:
         display_label: Optional[str] = None,
         extra: Optional[Dict[str, Any]] = None,
     ) -> Session:
-        session = self.session_manager.load_session(session_id)
+        session = self._load_session(session_id, set_current=False)
         payload: Dict[str, Any] = {
             "role": role,
             "content": content,
@@ -122,6 +207,19 @@ class AppSessionBridge:
             "raw": message,
         }
 
+    def build_timeline_event_view(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": str(event.get("id", "")),
+            "kind": str(event.get("kind", "note")),
+            "title": str(event.get("title", "Event")),
+            "content": str(event.get("content", "")),
+            "tone": str(event.get("tone", "neutral")),
+            "timestamp": event.get("timestamp"),
+            "channel": event.get("channel"),
+            "source_format": event.get("source_format"),
+            "metadata": dict(event.get("metadata") or {}),
+        }
+
     def summarize_session(self, session: Session) -> Dict[str, Any]:
         latest_preview = None
         origin_channels = []
@@ -151,9 +249,82 @@ class AppSessionBridge:
             "updated_at": session.updated_at,
             "model": session.model,
             "variant": session.variant,
+            "planner_model": session.planner_model,
             "agent_mode": session.agent_mode,
             "workspace": session.workspace,
             "messages": [self.build_message_view(m) for m in session.chat_history],
+            "timeline_events": [self.build_timeline_event_view(item) for item in session.event_timeline],
+            "task_board": self.task_board_view(session),
+            "completed_task_boards": self.completed_task_boards_view(session),
+        }
+
+    def append_timeline_event(
+        self,
+        *,
+        session_id: str,
+        kind: str,
+        title: str,
+        content: str,
+        tone: str = "neutral",
+        channel: Optional[str] = None,
+        source_format: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        runtime = self._runtime()
+        current_id = None
+        if runtime and getattr(runtime, "session_manager", None):
+            current_id = runtime.session_manager.get_current_session_id()
+
+        if runtime and current_id and str(current_id) == str(session_id):
+            target_session = runtime.session
+            event = append_timeline_event(
+                target_session,
+                event=create_timeline_event(
+                    kind=kind,
+                    title=title,
+                    content=content,
+                    tone=tone,
+                    channel=channel,
+                    source_format=source_format,
+                    metadata=metadata,
+                ),
+            )
+            runtime.save_session()
+            return self.build_timeline_event_view(event)
+
+        session = self._load_session(session_id, set_current=False)
+        event = append_timeline_event(
+            session,
+            event=create_timeline_event(
+                kind=kind,
+                title=title,
+                content=content,
+                tone=tone,
+                channel=channel,
+                source_format=source_format,
+                metadata=metadata,
+            ),
+        )
+        self.session_manager.save_session(session)
+        return self.build_timeline_event_view(event)
+
+    def task_board_view(self, session: Session) -> Optional[Dict[str, Any]]:
+        from shared.task_board import get_display_task_board, task_board_view
+
+        return task_board_view(get_display_task_board(session))
+
+    def completed_task_boards_view(self, session: Session) -> List[Dict[str, Any]]:
+        from shared.task_board import completed_task_board_views
+
+        return completed_task_board_views(session)
+
+    def build_session_sync_payload(self, session_id: str) -> Dict[str, Any]:
+        session = self.get_session(session_id)
+        current = self.get_current_session()
+        return {
+            "session": self.detailed_session_view(session),
+            "sessions": [self.summarize_session(item) for item in self.list_sessions()],
+            "current_session_id": current.id if current else None,
         }
 
     def list_jobs(self) -> List[Dict[str, Any]]:

@@ -57,9 +57,21 @@ class SessionMessageView(BaseModel):
     content: str
     timestamp: Optional[str] = None
     channel: Optional[ChannelType] = None
-    source_format: Optional[SourceFormat] = None
+    source_format: Optional[str] = None
     display_label: Optional[str] = None
     raw: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SessionTimelineEventView(BaseModel):
+    id: str
+    kind: str
+    title: str
+    content: str
+    tone: Literal["neutral", "accent", "warn", "error"] = "neutral"
+    timestamp: Optional[str] = None
+    channel: Optional[ChannelType] = None
+    source_format: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class SessionSummaryView(BaseModel):
@@ -81,17 +93,45 @@ class SessionDetailView(BaseModel):
     updated_at: str
     model: str
     variant: str
+    planner_model: Optional[str] = None
     agent_mode: str
     workspace: str = ""
     messages: List[SessionMessageView] = Field(default_factory=list)
+    timeline_events: List[SessionTimelineEventView] = Field(default_factory=list)
+    task_board: Optional["TaskBoardView"] = None
+    completed_task_boards: List["TaskBoardView"] = Field(default_factory=list)
 
 
 class CreateSessionRequest(BaseModel):
     name: Optional[str] = None
+    workspace: Optional[str] = None
 
 
 class CreateSessionResponse(BaseModel):
     session: SessionDetailView
+
+
+class SessionSearchRequest(BaseModel):
+    query: str
+    limit: int = 40
+
+
+class SessionSearchResultView(BaseModel):
+    kind: Literal["project", "session", "message"]
+    project_path: str
+    project_name: str
+    session_id: Optional[str] = None
+    session_name: Optional[str] = None
+    message_index: Optional[int] = None
+    message_role: Optional[str] = None
+    timestamp: Optional[str] = None
+    snippet: str = ""
+    match_reason: str
+    score: float
+
+
+class SessionSearchResponse(BaseModel):
+    results: List[SessionSearchResultView] = Field(default_factory=list)
 
 
 class ChatSendRequest(BaseModel):
@@ -215,12 +255,89 @@ class PendingFileView(BaseModel):
     uploaded_at: Optional[str] = None
 
 
+class ContextCompactionView(BaseModel):
+    applied: bool = False
+    reason: str = "manual"
+    model_id: str
+    provider: str
+    before_tokens: int = 0
+    after_tokens: int = 0
+    before_usage_percent: float = 0.0
+    after_usage_percent: float = 0.0
+    preserved_user_messages: int = 0
+    preserved_agent_messages: int = 0
+    summary_source_messages: int = 0
+    summary_tokens: int = 0
+    summary_strategy: str = "local"
+    summary_message: str = ""
+    message: str = ""
+    threshold_percent: float = 40.0
+    created_at: Optional[str] = None
+
+
 class ContextUsageView(BaseModel):
     model: str
     max_tokens: int
     estimated_tokens: int
     usage_percent: float
     message_count: int
+    threshold_percent: float = 40.0
+    needs_compaction: bool = False
+    compaction_state: Literal["ok", "needs_compaction", "compacted"] = "ok"
+    last_compaction: Optional[ContextCompactionView] = None
+
+
+class TaskBoardSubGoalView(BaseModel):
+    id: str
+    title: str
+    status: Literal["open", "in_progress", "done", "blocked"] = "open"
+    completion_reason: Optional[str] = None
+    completion_evidence: Optional[str] = None
+
+
+class TaskBoardView(BaseModel):
+    task_id: str
+    status: Literal["active", "completed", "blocked", "paused"] = "active"
+    state: Literal["idle", "candidate", "active", "reassessing", "blocked_waiting_user", "completed_collapsed"] = "active"
+    display_mode: Literal["active", "completed_collapsed"] = "active"
+    main_goal: str
+    goal_locked: bool = True
+    sub_goals: List[TaskBoardSubGoalView] = Field(default_factory=list)
+    current_focus: Optional[str] = None
+    next_method: Optional[str] = None
+    pending_reassessment_reason: Optional[str] = None
+    progress_summary: Optional[str] = None
+    completed_sub_goals: int = 0
+    total_sub_goals: int = 0
+    turn_count: int = 0
+    model_turn_count: int = 0
+    tool_call_count: int = 0
+    reassessment_count: int = 0
+    latest_summary: Optional[str] = None
+    completion_summary: Optional[str] = None
+    verification_status: Literal["open", "done"] = "open"
+    verification_summary: Optional[str] = None
+    collapsed_title: Optional[str] = None
+    collapsed_completed_at: Optional[str] = None
+    collapsed_completion_summary: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+class TaskBoardResponse(BaseModel):
+    task_board: Optional[TaskBoardView] = None
+
+
+class TimelineEventAppendRequest(BaseModel):
+    kind: str
+    title: str
+    content: str
+    tone: Literal["neutral", "accent", "warn", "error"] = "neutral"
+    channel: Optional[ChannelType] = None
+    source_format: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    source_client_id: Optional[str] = None
 
 
 class HeartbeatStatusView(BaseModel):
@@ -276,6 +393,8 @@ class AgentOverviewView(BaseModel):
     session_id: Optional[str] = None
     current_model: str
     current_variant: str
+    planner_model: Optional[str] = None
+    available_planner_models: List[str] = Field(default_factory=list)
     available_variants: List[str] = Field(default_factory=list)
     model_groups: List[ModelProviderGroup] = Field(default_factory=list)
     max_turns: int
@@ -292,11 +411,14 @@ class AgentOverviewView(BaseModel):
     analytics: AnalyticsSummaryView = Field(default_factory=AnalyticsSummaryView)
     security: SecuritySummaryView = Field(default_factory=SecuritySummaryView)
     config_preview: List[ConfigEntryView] = Field(default_factory=list)
+    task_board: Optional[TaskBoardView] = None
+    completed_task_boards: List[TaskBoardView] = Field(default_factory=list)
 
 
 class AgentConfigureRequest(BaseModel):
     model: Optional[str] = None
     variant: Optional[str] = None
+    planner_model: Optional[str] = None
     max_turns: Optional[int] = None
     workspace: Optional[str] = None
     auto_reply_enabled: Optional[bool] = None
@@ -404,6 +526,7 @@ class VoiceClientEvent(BaseModel):
     audio_base64: Optional[str] = None
     sequence: Optional[int] = None
     interrupt_policy: Optional[InterruptPolicy] = None
+    auto_send: Optional[bool] = None
 
 
 class RealtimeServerEvent(BaseModel):

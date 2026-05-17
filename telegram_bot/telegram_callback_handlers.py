@@ -2,8 +2,41 @@
 
 from __future__ import annotations
 
+import logging
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
+
+from shared.channel_sync import get_channel_sync_hub
+
+
+logger = logging.getLogger(__name__)
+
+
+def _publish_session_config_sync(session, setting: str) -> None:
+    """Persist Telegram-side control changes and notify app clients."""
+    try:
+        session.save_session()
+        session_id = session.session_manager.get_current_session_id() if session.session_manager else None
+        if not session_id:
+            return
+        get_channel_sync_hub().publish(
+            user_id=session.user_id,
+            event={
+                "type": "session_config",
+                "session_id": session_id,
+                "origin_channel": "telegram",
+                "payload": {
+                    "setting": setting,
+                    "model": session.current_model,
+                    "variant": session.current_variant,
+                    "planner_model": getattr(session, "planner_model", None),
+                    "max_turns": session.max_turns,
+                },
+            },
+        )
+    except Exception:
+        logger.exception("Failed to publish Telegram session config sync")
 
 
 def build_callback_handlers(
@@ -11,7 +44,6 @@ def build_callback_handlers(
     allowed_user_id,
     get_session,
     safe_edit,
-    run_task_flow,
     run_chat_flow,
     stop_command,
     pause_command,
@@ -38,6 +70,7 @@ def build_callback_handlers(
                 session.auto_reply_enabled = setting == "on"
                 if session.auto_reply_enabled:
                     session.auto_reply_notice_sent = False
+            _publish_session_config_sync(session, "auto_reply_enabled")
             status = "✅ ON" if session.auto_reply_enabled else "⛔ OFF"
             await safe_edit(query, f"Auto-reply set to {status}.")
             return
@@ -54,6 +87,7 @@ def build_callback_handlers(
                     except ImportError:
                         from telegram_unified_agent import _get_browser_tool
                     _get_browser_tool(session)
+            _publish_session_config_sync(session, "bridge_enabled")
             status = "✅ ENABLED" if enable else "⛔ DISABLED"
             await safe_edit(query, f"Browser bridge set to {status}.")
             return
@@ -62,6 +96,7 @@ def build_callback_handlers(
             setting = data.split(":")[1]
             async with session.lock:
                 session.verbose_mode = setting == "on"
+            _publish_session_config_sync(session, "verbose_mode")
             status = "✅ ON" if session.verbose_mode else "⛔ OFF"
             await safe_edit(query, f"🔍 Verbose tool logging set to {status}.")
             return
@@ -170,10 +205,7 @@ def build_callback_handlers(
 
         if data.startswith("retry:"):
             action = data.split(":")[1]
-            if action == "task" and session.last_task_text:
-                await safe_edit(query, "🔄 Retrying task...")
-                await run_chat_flow(update, context, session, session.last_task_text)
-            elif action == "message" and session.last_user_message:
+            if action in {"task", "message"} and session.last_user_message:
                 await safe_edit(query, "🔄 Retrying message...")
                 await run_chat_flow(
                     update,
@@ -226,6 +258,7 @@ def build_callback_handlers(
             variant = data.split(":")[1]
             async with session.lock:
                 session.current_variant = variant
+            _publish_session_config_sync(session, "variant")
             await safe_edit(query, f"✅ Variant set to: **{variant}**")
         elif data.startswith("provider:"):
             provider = data.split(":")[1]
@@ -303,15 +336,21 @@ def build_callback_handlers(
                 if session.current_variant not in available:
                     session.current_variant = available[0] if available else "standard"
 
+                _publish_session_config_sync(session, "model")
                 await safe_edit(query, f"✅ Model switched to: **{model}**")
         elif data.startswith("turns:"):
             turns = int(data.split(":")[1])
             session.max_turns = turns
+            _publish_session_config_sync(session, "max_turns")
             await safe_edit(query, f"✅ Max turns set to: **{turns}**")
         elif data.startswith("session:"):
             session_id = data.split(":")[1]
 
             if session_id == "new":
+                if session.is_processing:
+                    await safe_edit(query, "⚠️ Finish or stop the current task before switching sessions.")
+                    return
+
                 # Save current if exists
                 session.save_session()
                 
@@ -327,12 +366,20 @@ def build_callback_handlers(
                 await safe_edit(query, f"✅ Created and switched to new session: **{new_sess.name}**")
             else:
                 try:
+                    if session.is_processing:
+                        current_id = session.session_manager.get_current_session_id() if session.session_manager else None
+                        if str(current_id or "") != str(session_id):
+                            await safe_edit(query, "⚠️ Finish or stop the current task before switching sessions.")
+                            return
+
                     # Save current before switching
                     session.save_session()
                     
                     # Load the requested one
                     session.load_session_by_id(session_id)
                     await safe_edit(query, f"✅ Switched to session: **{session.session_manager.current_session.name}**")
+                except RuntimeError as exc:
+                    await safe_edit(query, f"⚠️ {exc}")
                 except Exception as exc:
                     await safe_edit(query, f"❌ Failed to switch session: {exc}")
         elif data == "close":

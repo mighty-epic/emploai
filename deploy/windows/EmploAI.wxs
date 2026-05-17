@@ -16,12 +16,12 @@
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of EmploAI is already installed." />
     <MediaTemplate EmbedCab="yes" />
-    <UIRef Id="WixUI_Minimal" />
+    <UIRef Id="WixUI_FeatureTree" />
     <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
 
     <Property Id="ARPNOREPAIR" Value="1" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch EmploAI now" />
-    <Property Id="WixShellExecTarget" Value="[#EmploAIExeFile]" />
+    <CustomAction Id="SetLaunchTarget" Property="WixShellExecTarget" Value="[INSTALLDIR]EmploAI.exe" Execute="immediate" />
     <CustomAction Id="LaunchInstalledApplication" BinaryKey="WixCA" DllEntry="WixShellExec" Impersonate="yes" />
 
     <Directory Id="TARGETDIR" Name="SourceDir">
@@ -35,36 +35,80 @@
       </Directory>
     </Directory>
 
-    <Feature Id="ProductFeature" Title="EmploAI" Level="1">
-      <ComponentRef Id="EmploAIExeComponent" />
-      <ComponentRef Id="InstallRootCleanupComponent" />
-      <ComponentRef Id="StartMenuShortcutComponent" />
+    <Feature Id="ProductFeature" Title="EmploAI" Level="1" Display="expand">
+      <Feature Id="CoreFeature" Title="EmploAI Desktop App" Level="1" Absent="disallow" Display="hidden">
+        <ComponentGroupRef Id="EmploAIReleaseFiles" />
+        <ComponentRef Id="InstallMetadataComponent" />
+        <ComponentRef Id="InstallRootCleanupComponent" />
+        <ComponentRef Id="StartMenuShortcutComponent" />
+        <ComponentRef Id="VoicePackSelectionSchemaComponent" />
+      </Feature>
+      <Feature
+        Id="EnglishVoicePackFeature"
+        Title="English Voice Pack"
+        Description="Request the local English voice input pack. EmploAI downloads and prepares it on first launch."
+        Level="1">
+        <ComponentRef Id="EnglishVoicePackSelectionComponent" />
+      </Feature>
+      <Feature
+        Id="HebrewVoicePackFeature"
+        Title="Hebrew Voice Pack"
+        Description="Request the local Hebrew voice input pack. EmploAI downloads and prepares it on first launch."
+        Level="2">
+        <ComponentRef Id="HebrewVoicePackSelectionComponent" />
+      </Feature>
     </Feature>
 
     <UI>
       <Publish
         Dialog="ExitDialog"
         Control="Finish"
+        Order="1"
+        Event="DoAction"
+        Value="SetLaunchTarget">WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed AND NOT WIX_UPGRADE_DETECTED</Publish>
+      <Publish
+        Dialog="ExitDialog"
+        Control="Finish"
+        Order="2"
         Event="DoAction"
         Value="LaunchInstalledApplication">WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed AND NOT WIX_UPGRADE_DETECTED</Publish>
     </UI>
   </Product>
 
   <Fragment>
-    <Component Id="EmploAIExeComponent" Guid="D55E8A77-2EE1-4FC9-B927-AACACB541C03" Directory="INSTALLDIR">
-      <RemoveFolder Id="RemoveInstallDir" On="uninstall" />
-      <File
-        Id="EmploAIExeFile"
-        Name="EmploAI.exe"
-        Source="$(var.ReleaseExe)"
-        Checksum="yes" />
+    <Component Id="VoicePackSelectionSchemaComponent" Guid="938D57F0-E1E2-48E4-B893-14C1D44AE44A" Directory="INSTALLDIR">
       <RegistryValue
         Root="HKCU"
-        Key="Software\MightyEpic\EmploAI"
-        Name="InstallPath"
-        Type="string"
-        Value="[INSTALLDIR]"
+        Key="Software\MightyEpic\EmploAI\VoicePacks"
+        Name="SelectionSchemaVersion"
+        Type="integer"
+        Value="1"
         KeyPath="yes" />
+    </Component>
+
+    <Component Id="EnglishVoicePackSelectionComponent" Guid="3C4FF8A7-E680-4DAB-8D5F-81F58A79B23B" Directory="INSTALLDIR">
+      <RegistryValue
+        Root="HKCU"
+        Key="Software\MightyEpic\EmploAI\VoicePacks"
+        Name="EnglishRequested"
+        Type="integer"
+        Value="1"
+        KeyPath="yes" />
+    </Component>
+
+    <Component Id="HebrewVoicePackSelectionComponent" Guid="7001F6F5-1A27-4EFD-896F-4AA0B0453CB0" Directory="INSTALLDIR">
+      <RegistryValue
+        Root="HKCU"
+        Key="Software\MightyEpic\EmploAI\VoicePacks"
+        Name="HebrewRequested"
+        Type="integer"
+        Value="1"
+        KeyPath="yes" />
+    </Component>
+
+    <Component Id="InstallMetadataComponent" Guid="D55E8A77-2EE1-4FC9-B927-AACACB541C03" Directory="INSTALLDIR">
+      <RemoveFolder Id="RemoveInstallDir" On="uninstall" />
+      <RegistryValue Root="HKCU" Key="Software\MightyEpic\EmploAI" Name="InstallPath" Type="string" Value="[INSTALLDIR]" KeyPath="yes" />
     </Component>
 
     <Component Id="InstallRootCleanupComponent" Guid="04E762B7-23D8-4680-9007-CFA5E8024030" Directory="ProgramsFolderDir">

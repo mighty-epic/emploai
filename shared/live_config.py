@@ -89,6 +89,22 @@ class LiveConfig:
                 'max_file_size_mb': 10,
                 'allowed_file_types': ['txt', 'md', 'py', 'js', 'json', 'yaml', 'yml']
             },
+            'voice': {
+                'selection_source': 'default',
+                'default_engine': 'english_local',
+                'packs': {
+                    'english_local': {
+                        'requested': True,
+                        'display_name': 'English voice pack',
+                        'placeholder': False
+                    },
+                    'hebrew_local': {
+                        'requested': False,
+                        'display_name': 'Hebrew voice pack',
+                        'placeholder': False
+                    }
+                }
+            },
             'channels': {
                 'telegram': {
                     'enabled': True
@@ -99,6 +115,14 @@ class LiveConfig:
                     'port': 8787,
                     'auth_mode': 'token',
                     'push_notifications': False
+                },
+                'desktop': {
+                    'enabled': True,
+                    'host': '127.0.0.1',
+                    'port': 8787,
+                    'auto_start': True,
+                    'keep_runtime_on_app_close': False,
+                    'attach_timeout_seconds': 20
                 }
             }
         }

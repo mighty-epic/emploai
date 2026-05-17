@@ -527,88 +527,6 @@ If a task depends on an existing logged-in session, prefer that session. If cred
 - NEVER chain multiple click+type without observing between them
 - Blind rapid-fire clicking is FORBIDDEN"""
 
-AUTOMATION_AGENT_PROMPT = r"""You are the AUTOMATION agent in a dual-agent system. You handle screen, browser, and desktop interactions.
-
-# YOUR ROLE
-You are the "HANDS" - you execute physical tasks on the computer. The "BRAIN" agent (another AI) delegates tasks to you.
-You receive tasks like "[Automation Task] Open Chrome and go to google.com" and you execute them using your tools.
-
-# YOUR TOOLS
-
-VISION:
-- describe_screen: Take a screenshot and describe what's visible. Primary tool for visual discovery, buttons, and layout.
-- ocr_screen: Extract all readable text with coordinates. Use mainly for exact text lookup and coordinate fallback.
-   * Underlying Mechanics: Takes a screenshot (mss), analyzes it with Tesseract OCR, returns bounding boxes.
-
-BROWSER (Selenium Chrome):
-- open_browser: Open Chrome and navigate to URL
-   * Underlying Mechanics: Launches a new chromedriver instance.
-- observe_browser: Get page title, URL, clickable elements
-   * Underlying Mechanics: Queries the DOM for visible interactive elements.
-- browser_snapshot: Get ARIA snapshot of interactive elements with [ref=N] IDs
-- browser_click_ref: Click element by its [ref=N] ID from browser_snapshot (PRIMARY click method)
-   * Underlying Mechanics: Finds element by ARIA reference ID and fires click event. Reliable and immune to text ambiguity.
-- browser_type: Type into focused input field
-- browser_press_key: Press key (enter, tab, escape)
-- browser_scroll: Scroll page up/down
-- switch_tab, close_tab, go_back, go_forward
-- browser_list_tabs, browser_activate_tab
-- browser_extension_toggle: Toggle between Selenium and Native Extension bridge (use `enable=True` for real Chrome)
-
-DESKTOP:
-- open_app: Open application via Win+R
-   * Underlying Mechanics: OS-level 'Run' command.
-- observe_desktop: List open windows
-   * Underlying Mechanics: Queries Windows API for window handles.
-- focus_window, minimize_window, maximize_window, close_window
-   * Underlying Mechanics: Sends OS window management commands.
-
-INPUT (Physical Simulation):
-- click, right_click, double_click: Click at x,y coordinates
-   * Underlying Mechanics: Physically moves mouse cursor and clicks (pyautogui). Risks clicking wrong thing if screen changed.
-- type_text: Type with keyboard
-   * Underlying Mechanics: Simulates physical keypresses on the active window.
-- press_key: Press single key
-- hotkey: Key combination (ctrl+c, alt+tab)
-- scroll: Scroll at mouse position
-- drag_and_drop: Drag from A to B
-
-CLIPBOARD:
-- get_clipboard, set_clipboard
-
-UTILITY:
-- wait: Pause for N seconds
-
-# EXECUTION RULES
-
-1. ALWAYS OBSERVE FIRST
-   - Before clicking, prefer describe_screen to understand layout and locate the target
-   - Use ocr_screen when you need exact text coordinates for a physical click
-   - Never guess positions - always verify
-
-2. BROWSER STATE AWARENESS
-   - Use observe_browser before browser actions to confirm page state
-   - If no browser is open, use open_browser first
-   - browser_* tools only work when the current browser context actually supports them
-   - If the task is on the user's existing Chrome page and the extension bridge is not active there, do NOT use Selenium as a substitute for that page; switch to describe_screen plus desktop actions instead
-
-3. DESKTOP STATE AWARENESS  
-   - Use observe_desktop to see what windows exist
-   - Use focus_window before interacting with a specific app
-   - Desktop click() only works on the focused window
-
-4. REPORT CLEARLY
-   - After completing a task, describe what you did and what you see now
-   - If something failed, explain what went wrong
-   - Your response goes back to the Brain agent who will interpret it for the user
-
-5. STAY FOCUSED
-   - Only do what was asked in the [Automation Task]
-   - Don't make assumptions about what else to do
-   - If the task is unclear, do what you can and report limitations
-
-Be precise and action-oriented. Execute the task and report results."""
-
 SUMMARY_SYSTEM_PROMPT = "You are a concise assistant that summarizes conversations for later use."
 SUMMARY_INSTRUCTION = (
     "Summarize the conversation so far for continuation. "
@@ -625,25 +543,30 @@ MODEL_CONFIGS = {
     "gpt-5": {"provider": "openai", "id": "gpt-5", "context": 400000, "reasoning": True},
     "gpt-5.1": {"provider": "openai", "id": "gpt-5.1-2025-11-13", "context": 400000, "reasoning": True},
     "gpt-5.2": {"provider": "openai", "id": "gpt-5.2-2025-12-11", "context": 400000, "reasoning": True},
-    "gpt-5.4": {"provider": "openai", "id": "gpt-5.4-2026-03-05", "context": 400000, "reasoning": True, "api": "responses"},
+    "gpt-5.5": {"provider": "openai", "id": "gpt-5.5", "context": 1000000, "reasoning": True, "api": "responses"},
+    "gpt-5.4": {"provider": "openai", "id": "gpt-5.4-2026-03-05", "context": 1050000, "reasoning": True, "api": "responses"},
+    "gpt-5.4-mini": {"provider": "openai", "id": "gpt-5.4-mini", "context": 400000, "reasoning": True, "api": "responses"},
     "gpt-5.1-codex-max": {"provider": "openai", "id": "gpt-5.1-codex-max", "context": 400000, "reasoning": True, "api": "responses"},
     "gpt-5.2-codex": {"provider": "openai", "id": "gpt-5.2-codex", "context": 400000, "reasoning": True, "api": "responses"},
-    "gpt-4.1": {"provider": "openai", "id": "gpt-4.1", "context": 128000},
+    "gpt-4.1": {"provider": "openai", "id": "gpt-4.1", "context": 1047576},
     "gpt-4o": {"provider": "openai", "id": "gpt-4o", "context": 128000},
     "gpt-4o-mini": {"provider": "openai", "id": "gpt-4o-mini", "context": 128000},
     "claude-sonnet-4.5": {"provider": "anthropic", "id": "claude-sonnet-4-5-20250929", "context": 200000},
     "claude-opus-4.5": {"provider": "anthropic", "id": "claude-opus-4-5-20250929", "context": 200000},
+    "claude-sonnet-4.6": {"provider": "anthropic", "id": "claude-sonnet-4-6", "context": 1000000},
+    "claude-opus-4.6": {"provider": "anthropic", "id": "claude-opus-4-6", "context": 1000000},
+    "claude-opus-4.7": {"provider": "anthropic", "id": "claude-opus-4-7", "context": 1000000},
     "claude-haiku-4.5": {"provider": "anthropic", "id": "claude-haiku-4-5-20251001", "context": 200000},
     "claude-sonnet-4": {"provider": "anthropic", "id": "claude-sonnet-4-20250514", "context": 200000},
     "claude-opus-4": {"provider": "anthropic", "id": "claude-opus-4-20250514", "context": 200000},
-    "claude-haiku-4": {"provider": "anthropic", "id": "claude-haiku-4-20250514", "context": 200000},
+    "claude-haiku-4": {"provider": "anthropic", "id": "claude-haiku-4-5-20251001", "context": 200000},
     # Gemini
-    "gemini-3-pro": {"provider": "google", "id": "gemini-3-pro", "context": 2000000},
-    "gemini-3-flash": {"provider": "google", "id": "gemini-3-flash", "context": 1000000},
-    "gemini-2.5-pro": {"provider": "google", "id": "gemini-2.5-pro", "context": 2000000},
-    "gemini-2.5-flash": {"provider": "google", "id": "gemini-2.5-flash", "context": 1000000},
-    "gemini-2.0-flash": {"provider": "google", "id": "gemini-2.0-flash", "context": 1000000},
-    "gemini-1.5-pro": {"provider": "google", "id": "gemini-1.5-pro", "context": 2000000},
+    "gemini-3-pro": {"provider": "google", "id": "gemini-3-pro", "context": 1048576},
+    "gemini-3-flash": {"provider": "google", "id": "gemini-3-flash", "context": 1048576},
+    "gemini-2.5-pro": {"provider": "google", "id": "gemini-2.5-pro", "context": 1048576},
+    "gemini-2.5-flash": {"provider": "google", "id": "gemini-2.5-flash", "context": 1048576},
+    "gemini-2.0-flash": {"provider": "google", "id": "gemini-2.0-flash", "context": 1048576},
+    "gemini-1.5-pro": {"provider": "google", "id": "gemini-1.5-pro", "context": 2097152},
     # xAI
     # xAI
     "grok-4.1-fast-reasoning": {"provider": "xai", "id": "grok-4-1-fast-reasoning", "context": 2000000, "reasoning": True},
@@ -658,8 +581,8 @@ MODEL_CONFIGS = {
     "grok-2": {"provider": "xai", "id": "grok-2-latest", "context": 128000},
     "grok-beta": {"provider": "xai", "id": "grok-beta", "context": 128000},
     # DeepSeek
-    "deepseek-chat": {"provider": "deepseek", "id": "deepseek-chat", "context": 64000},
-    "deepseek-reasoner": {"provider": "deepseek", "id": "deepseek-reasoner", "context": 64000, "reasoning": True},
+    "deepseek-chat": {"provider": "deepseek", "id": "deepseek-chat", "context": 128000},
+    "deepseek-reasoner": {"provider": "deepseek", "id": "deepseek-reasoner", "context": 128000, "reasoning": True},
     # OpenRouter
     "orb-gpt-4o": {"provider": "openrouter", "id": "openai/gpt-4o", "context": 128000},
     "orb-claude-3.5-sonnet": {"provider": "openrouter", "id": "anthropic/claude-3.5-sonnet", "context": 200000},
@@ -670,22 +593,19 @@ MODEL_CONFIGS = {
 # =============================================================================
 # Defines how CLI Agent and Task Agent interact
 # - manual: Completely isolated agents, no context sharing
-# - semi: Partial sync via intelligent summaries between agents
 # - auto: Unified agent with merged capabilities (CLI + Task tools)
 
-AGENT_MODES = ["manual", "semi", "auto"]
+AGENT_MODES = ["manual", "auto"]
 DEFAULT_AGENT_MODE = "manual"
 
 # Mode display colors (for TUI)
 AGENT_MODE_COLORS = {
     "manual": "#a855f7",  # Purple
-    "semi": "#3b82f6",    # Blue
     "auto": "#22c55e",    # Green
 }
 
 AGENT_MODE_LABELS = {
     "manual": "[MANUAL]",
-    "semi": "[SEMI]",
     "auto": "[AUTO]",
 }
 
@@ -699,6 +619,9 @@ MODEL_VARIANTS = {
     # Anthropic Claude - supports extended thinking
     "claude-sonnet-4.5": {"variants": ["standard", "thinking"], "default": "standard"},
     "claude-opus-4.5": {"variants": ["standard", "thinking"], "default": "standard"},
+    "claude-sonnet-4.6": {"variants": ["standard", "thinking"], "default": "standard"},
+    "claude-opus-4.6": {"variants": ["standard", "thinking"], "default": "standard"},
+    "claude-opus-4.7": {"variants": ["standard"], "default": "standard"},
     "claude-haiku-4.5": {"variants": ["standard"], "default": "standard"},  # Haiku doesn't support thinking
     "claude-sonnet-4": {"variants": ["standard", "thinking"], "default": "standard"},
     "claude-opus-4": {"variants": ["standard", "thinking"], "default": "standard"},
@@ -707,7 +630,9 @@ MODEL_VARIANTS = {
     "gpt-5": {"variants": ["low", "medium", "high"], "default": "medium"},
     "gpt-5.1": {"variants": ["low", "medium", "high"], "default": "medium"},
     "gpt-5.2": {"variants": ["low", "medium", "high"], "default": "medium"},
+    "gpt-5.5": {"variants": ["standard"], "default": "standard"},
     "gpt-5.4": {"variants": ["standard"], "default": "standard"},
+    "gpt-5.4-mini": {"variants": ["standard"], "default": "standard"},
     # OpenAI Codex series - agentic coding models with xhigh support
     "gpt-5.1-codex-max": {"variants": ["low", "medium", "high", "xhigh"], "default": "medium"},
     "gpt-5.2-codex": {"variants": ["low", "medium", "high", "xhigh"], "default": "medium"},

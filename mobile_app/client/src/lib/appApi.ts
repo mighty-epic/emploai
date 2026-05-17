@@ -17,6 +17,7 @@ export type SessionSummary = {
   updated_at: string;
   model: string;
   message_count: number;
+  workspace?: string;
   latest_preview?: string | null;
   origin_channels: string[];
 };
@@ -31,6 +32,18 @@ export type SessionMessage = {
   raw?: Record<string, unknown>;
 };
 
+export type SessionTimelineEvent = {
+  id: string;
+  kind: string;
+  title: string;
+  content: string;
+  tone: 'neutral' | 'accent' | 'warn' | 'error';
+  timestamp?: string | null;
+  channel?: 'telegram' | 'app' | 'system' | null;
+  source_format?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
 export type SessionDetail = {
   id: string;
   name: string;
@@ -38,9 +51,27 @@ export type SessionDetail = {
   updated_at: string;
   model: string;
   variant: string;
+  planner_model?: string | null;
   agent_mode: string;
   workspace?: string;
   messages: SessionMessage[];
+  timeline_events: SessionTimelineEvent[];
+  task_board?: TaskBoard | null;
+  completed_task_boards: TaskBoard[];
+};
+
+export type SessionSearchResult = {
+  kind: 'project' | 'session' | 'message';
+  project_path: string;
+  project_name: string;
+  session_id?: string | null;
+  session_name?: string | null;
+  message_index?: number | null;
+  message_role?: string | null;
+  timestamp?: string | null;
+  snippet: string;
+  match_reason: string;
+  score: number;
 };
 
 export type ScheduledJob = {
@@ -89,12 +120,74 @@ export type PendingFile = {
   uploaded_at?: string | null;
 };
 
+export type ContextCompaction = {
+  applied: boolean;
+  reason: string;
+  model_id: string;
+  provider: string;
+  before_tokens: number;
+  after_tokens: number;
+  before_usage_percent: number;
+  after_usage_percent: number;
+  preserved_user_messages: number;
+  preserved_agent_messages: number;
+  summary_source_messages: number;
+  summary_tokens: number;
+  summary_strategy: string;
+  summary_message: string;
+  message: string;
+  threshold_percent: number;
+  created_at?: string | null;
+};
+
 export type ContextUsage = {
   model: string;
   max_tokens: number;
   estimated_tokens: number;
   usage_percent: number;
   message_count: number;
+  threshold_percent: number;
+  needs_compaction: boolean;
+  compaction_state: 'ok' | 'needs_compaction' | 'compacted';
+  last_compaction?: ContextCompaction | null;
+};
+
+export type TaskBoardSubGoal = {
+  id: string;
+  title: string;
+  status: 'open' | 'in_progress' | 'done' | 'blocked';
+  completion_reason?: string | null;
+  completion_evidence?: string | null;
+};
+
+export type TaskBoard = {
+  task_id: string;
+  status: 'active' | 'completed' | 'blocked' | 'paused';
+  state: 'idle' | 'candidate' | 'active' | 'reassessing' | 'blocked_waiting_user' | 'completed_collapsed';
+  display_mode: 'active' | 'completed_collapsed';
+  main_goal: string;
+  goal_locked: boolean;
+  sub_goals: TaskBoardSubGoal[];
+  current_focus?: string | null;
+  next_method?: string | null;
+  pending_reassessment_reason?: string | null;
+  progress_summary?: string | null;
+  completed_sub_goals: number;
+  total_sub_goals: number;
+  turn_count: number;
+  model_turn_count: number;
+  tool_call_count: number;
+  reassessment_count: number;
+  latest_summary?: string | null;
+  completion_summary?: string | null;
+  verification_status: 'open' | 'done';
+  verification_summary?: string | null;
+  collapsed_title?: string | null;
+  collapsed_completed_at?: string | null;
+  collapsed_completion_summary?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  completed_at?: string | null;
 };
 
 export type HeartbeatStatus = {
@@ -144,6 +237,8 @@ export type AgentOverview = {
   session_id?: string | null;
   current_model: string;
   current_variant: string;
+  planner_model?: string | null;
+  available_planner_models: string[];
   available_variants: string[];
   model_groups: ModelProviderGroup[];
   max_turns: number;
@@ -160,11 +255,14 @@ export type AgentOverview = {
   analytics: AnalyticsSummary;
   security: SecuritySummary;
   config_preview: ConfigEntry[];
+  task_board?: TaskBoard | null;
+  completed_task_boards: TaskBoard[];
 };
 
 export type AgentConfigurePayload = {
   model?: string;
   variant?: string;
+  planner_model?: string | null;
   max_turns?: number;
   workspace?: string;
   auto_reply_enabled?: boolean;
@@ -179,6 +277,17 @@ export type AgentAction = {
   ok: boolean;
   action: string;
   message?: string | null;
+};
+
+export type BridgeStatus = {
+  desired_backend?: string | null;
+  extension_ready?: boolean;
+  extension?: Record<string, unknown> | null;
+  task_backend?: string | null;
+  real_browser_available?: boolean;
+  task_tab_available?: boolean;
+  primary_tab_id?: string | number | null;
+  owned_tab_ids?: Array<string | number>;
 };
 
 export type SkillSummary = {
@@ -255,7 +364,67 @@ export async function fetchSessionDetail(apiBaseUrl: string, token: string, sess
   });
 }
 
-export async function createSession(apiBaseUrl: string, token: string, name?: string) {
+export async function searchSessions(
+  apiBaseUrl: string,
+  token: string,
+  query: string,
+  limit = 40,
+) {
+  return requestJson<{ results: SessionSearchResult[] }>({
+    scope: 'sessions.search',
+    url: `${apiBaseUrl}/api/app/sessions/search`,
+    init: {
+      method: 'POST',
+      headers: {
+        ...authHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query, limit }),
+    },
+  });
+}
+
+export async function appendSessionTimelineEvent(
+  apiBaseUrl: string,
+  token: string,
+  sessionId: string,
+  payload: {
+    kind: string;
+    title: string;
+    content: string;
+    tone?: 'neutral' | 'accent' | 'warn' | 'error';
+    channel?: 'telegram' | 'app' | 'system';
+    source_format?: string;
+    metadata?: Record<string, unknown>;
+    source_client_id?: string;
+  }
+) {
+  return requestJson<{ event: SessionTimelineEvent }>({
+    scope: 'session-timeline-append',
+    url: `${apiBaseUrl}/api/app/sessions/${encodeURIComponent(sessionId)}/timeline`,
+    init: {
+      method: 'POST',
+      headers: {
+        ...authHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function createSession(
+  apiBaseUrl: string,
+  token: string,
+  nameOrOptions?: string | { name?: string; workspace?: string },
+  workspaceArg?: string,
+) {
+  const payload = typeof nameOrOptions === 'string'
+    ? { name: nameOrOptions, workspace: workspaceArg }
+    : {
+        name: nameOrOptions?.name,
+        workspace: nameOrOptions?.workspace,
+      };
   return requestJson<{ session: SessionDetail }>({
     scope: 'sessions.create',
     url: `${apiBaseUrl}/api/app/sessions`,
@@ -265,8 +434,20 @@ export async function createSession(apiBaseUrl: string, token: string, name?: st
         ...authHeaders(token),
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(payload),
     },
+  });
+}
+
+export async function activateSession(apiBaseUrl: string, token: string, sessionId: string) {
+  return requestJson<SessionDetail>({
+    scope: 'sessions.activate',
+    url: `${apiBaseUrl}/api/app/sessions/${sessionId}/activate`,
+    init: {
+      method: 'POST',
+      headers: authHeaders(token),
+    },
+    timeoutMs: 30000,
   });
 }
 
@@ -336,6 +517,32 @@ export async function fetchAgentOverview(
   });
 }
 
+export async function fetchTaskBoard(apiBaseUrl: string, token: string, sessionId?: string) {
+  const query = new URLSearchParams();
+  if (sessionId) query.set('session_id', sessionId);
+
+  return requestJson<{ task_board?: TaskBoard | null }>({
+    scope: 'agent.taskboard.get',
+    url: `${apiBaseUrl}/api/app/agent/task-board${query.size ? `?${query.toString()}` : ''}`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function forceTaskBoardReassess(apiBaseUrl: string, token: string, sessionId?: string) {
+  const query = new URLSearchParams();
+  if (sessionId) query.set('session_id', sessionId);
+
+  return requestJson<AgentAction>({
+    scope: 'agent.taskboard.reassess',
+    url: `${apiBaseUrl}/api/app/agent/task-board/reassess${query.size ? `?${query.toString()}` : ''}`,
+    init: {
+      method: 'POST',
+      headers: authHeaders(token),
+    },
+    timeoutMs: 30000,
+  });
+}
+
 export async function configureAgent(
   apiBaseUrl: string,
   token: string,
@@ -357,6 +564,17 @@ export async function configureAgent(
       body: JSON.stringify(payload),
     },
     timeoutMs: 30000,
+  });
+}
+
+export async function fetchBridgeStatus(apiBaseUrl: string, token: string, sessionId?: string) {
+  const query = new URLSearchParams();
+  if (sessionId) query.set('session_id', sessionId);
+
+  return requestJson<BridgeStatus>({
+    scope: 'agent.bridge.status',
+    url: `${apiBaseUrl}/api/app/agent/bridge-status${query.size ? `?${query.toString()}` : ''}`,
+    init: { headers: authHeaders(token) },
   });
 }
 
@@ -471,6 +689,21 @@ export async function resetAgentContext(apiBaseUrl: string, token: string, sessi
   return requestJson<AgentAction>({
     scope: 'agent.reset',
     url: `${apiBaseUrl}/api/app/agent/reset${params.size ? `?${params.toString()}` : ''}`,
+    init: {
+      method: 'POST',
+      headers: authHeaders(token),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function compactAgentContext(apiBaseUrl: string, token: string, sessionId?: string) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+
+  return requestJson<AgentAction>({
+    scope: 'agent.compact',
+    url: `${apiBaseUrl}/api/app/agent/compact${params.size ? `?${params.toString()}` : ''}`,
     init: {
       method: 'POST',
       headers: authHeaders(token),

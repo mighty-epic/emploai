@@ -14,6 +14,19 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def resolve_memory_root(workspace: Path) -> Path:
+    """Resolve the durable memory store root.
+
+    Desktop/runtime builds set EMPLOAI_HOME to a packaged runtime home. When
+    present, memory should live there instead of following an arbitrary file
+    workspace or repo checkout.
+    """
+    configured = os.getenv("EMPLOAI_HOME", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return Path(workspace).expanduser().resolve()
+
+
 @dataclass
 class MemoryEntry:
     """Single memory entry with metadata."""
@@ -37,7 +50,7 @@ class MemoryManager:
     """
     
     def __init__(self, workspace: Path):
-        self.workspace = Path(workspace)
+        self.workspace = resolve_memory_root(Path(workspace))
         self.memory_dir = self.workspace / "memory"
         self.memory_file = self.workspace / "MEMORY.md"
         
@@ -326,7 +339,7 @@ _memory_managers: Dict[str, MemoryManager] = {}
 
 def get_memory_manager(workspace: Path) -> MemoryManager:
     """Get or create a memory manager for a workspace."""
-    key = str(workspace.resolve())
+    key = str(resolve_memory_root(Path(workspace)))
     if key not in _memory_managers:
         _memory_managers[key] = MemoryManager(workspace)
     return _memory_managers[key]

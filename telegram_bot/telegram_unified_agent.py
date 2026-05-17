@@ -18,11 +18,14 @@ except Exception as exc:
     PYAUTOGUI_AVAILABLE = False
     PYAUTOGUI_IMPORT_ERROR = exc
 
+PYWINAUTO_IMPORT_ERROR = None
 try:
     from pywinauto import Desktop
     PYWINAUTO_AVAILABLE = True
-except ImportError:
+except Exception as exc:
+    Desktop = None
     PYWINAUTO_AVAILABLE = False
+    PYWINAUTO_IMPORT_ERROR = exc
 
 try:
     import mss
@@ -42,10 +45,12 @@ except ImportError:
 
 from telegram.constants import ParseMode
 from cli.agent_tools.web_tools import duckduckgo_search
+from shared.channel_sync import get_channel_sync_hub
 from shared import (
     create_unified_agent,
     get_heartbeat_manager,
 )
+from shared.task_board import TASK_BOARD_INTERNAL_TOOL_NAME, build_task_board_prompt
 from single_agent.browser_tool import create_browser_tool
 from single_agent.extension_tool import create_extension_tool
 from single_agent.cron_scheduler import CRON_TOOL_DEFINITIONS, parse_schedule_with_error
@@ -56,7 +61,9 @@ logger = logging.getLogger(__name__)
 if PYAUTOGUI_IMPORT_ERROR is not None:
     logger.warning("pyautogui unavailable; desktop input tools disabled: %s", PYAUTOGUI_IMPORT_ERROR)
 
-# Linux compatibility: auto-detect or force via PLATFORM=linux env var
+# Linux compatibility: host-authoritative detection only. Cross-OS env
+# overrides are ignored so local Windows desktops never activate Linux tools
+# and Linux deployments never fall back to the Windows desktop path.
 try:
     from .linux import LINUX_MODE
     if LINUX_MODE:
@@ -697,6 +704,7 @@ def get_browser_bridge_status(session) -> Dict[str, Any]:
         "task_backend": context.backend,
         "task_id": context.task_id,
         "healthy": context.healthy,
+        "requires_real_chrome": bool(getattr(context, "requires_real_chrome", False)),
         "primary_tab_id": context.primary_tab_id,
         "primary_window_id": context.primary_window_id,
         "owned_tab_ids": list(context.owned_tab_ids),
@@ -767,6 +775,7 @@ def build_browser_runtime_prompt(session) -> str:
             f"- Desired backend preference: {status['desired_backend']}",
             f"- Effective backend right now: {status['effective_backend']}",
             f"- Task backend pin: {status.get('task_backend') or 'unassigned'}",
+            f"- Task depends on user's Chrome: {'YES' if status['requires_real_chrome'] else 'NO'}",
             f"- Real Chrome available now: {'YES' if status['real_browser_available'] else 'NO'}",
             f"- Extension connected: {'YES' if status['extension_connected'] else 'NO'}",
             f"- Extension healthy: {'YES' if status['extension_healthy'] else 'NO'}",
@@ -835,6 +844,7 @@ Supported schedules include: 'every 30 seconds', 'every 5 minutes', 'every 1 hou
 """.strip()
 
     sections = [
+        build_task_board_prompt(session),
         build_browser_runtime_prompt(session),
         build_desktop_runtime_prompt(session),
         cron_prompt,
@@ -852,9 +862,48 @@ def _should_failover_browser_result(result: Dict[str, Any]) -> bool:
     return bool(result.get("error")) and result.get("error_type") in FAILOVER_ERROR_TYPES
 
 
+def _browser_tools_blocked_for_user_chrome_task(context) -> bool:
+    return bool(getattr(context, "requires_real_chrome", False))
+
+
+def _blocked_user_chrome_browser_result(reason: str) -> Dict[str, Any]:
+    return {
+        "error": (
+            "browser_* tools are blocked for this task because it targets the user's current Chrome. "
+            f"{reason} Use describe_screen, click, type_text, hotkey, and other desktop tools instead."
+        ),
+        "error_type": "policy",
+    }
+
+
 def _run_browser_action(session, extension_action, selenium_action, *, own_tab: bool = False) -> Dict[str, Any]:
     context = session.get_browser_task_context()
     use_extension = _bridge_enabled(session) and context.backend != "selenium"
+
+    if _browser_tools_blocked_for_user_chrome_task(context):
+        if not _bridge_enabled(session):
+            return _blocked_user_chrome_browser_result(
+                "The extension bridge is not enabled."
+            )
+
+        extension_tool = ensure_extension_bridge(session)
+        extension_status = extension_tool.get_status()
+        if not _extension_status_ready(extension_status):
+            return _blocked_user_chrome_browser_result(
+                "The extension bridge is not connected and healthy."
+            )
+
+        result = extension_action(extension_tool, context)
+        if _should_failover_browser_result(result):
+            context.healthy = False
+            session.update_browser_task_context(result, owned_tab=own_tab)
+            return _blocked_user_chrome_browser_result(
+                result.get("error") or "The extension bridge failed."
+            )
+
+        context.backend = "extension"
+        session.update_browser_task_context(result, owned_tab=own_tab)
+        return result
 
     if use_extension:
         extension_tool = ensure_extension_bridge(session)
@@ -1293,10 +1342,21 @@ def _execute_change_directory(session, args: Dict) -> str:
             return f"Directory not found: {path}"
         if not path.is_dir():
             return f"Not a directory: {path}"
-            
-        session.workspace = path
-        if session.tool_executor:
-            session.tool_executor.workspace_path = path
+
+        session.set_workspace(path)
+        session.save_session()
+        current_session_id = session.session_manager.get_current_session_id() if session.session_manager else None
+        if current_session_id:
+            origin_channel = "telegram" if getattr(session, "_app", None) else "app"
+            get_channel_sync_hub().publish(
+                user_id=int(session.user_id),
+                event={
+                    "type": "session_config",
+                    "session_id": current_session_id,
+                    "origin_channel": origin_channel,
+                    "payload": {"setting": "workspace"},
+                },
+            )
 
         return f"Current working directory changed to: {path}"
     except Exception as e:

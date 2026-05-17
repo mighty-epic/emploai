@@ -1,4 +1,4 @@
-import * as SecureStore from 'expo-secure-store';
+import { getDesktopBridge, loadDesktopBootstrap } from '../src/lib/desktopBridge';
 
 export type AppConfig = {
   apiBaseUrl: string;
@@ -40,6 +40,15 @@ export function getConnectionSetupState(config: AppConfig) {
 }
 
 export async function loadAppConfig(): Promise<AppConfig> {
+  const desktopBootstrap = await loadDesktopBootstrap();
+  if (desktopBootstrap) {
+    return {
+      apiBaseUrl: normalizeApiBaseUrl(desktopBootstrap.apiBaseUrl),
+      accessToken: (desktopBootstrap.accessToken || '').trim(),
+    };
+  }
+
+  const SecureStore = await import('expo-secure-store');
   const [apiBaseUrl, accessToken] = await Promise.all([
     SecureStore.getItemAsync(API_BASE_KEY),
     SecureStore.getItemAsync(ACCESS_TOKEN_KEY),
@@ -52,6 +61,14 @@ export async function loadAppConfig(): Promise<AppConfig> {
 }
 
 export async function saveAppConfig(config: AppConfig): Promise<AppConfig> {
+  if (getDesktopBridge()) {
+    return {
+      apiBaseUrl: normalizeApiBaseUrl(config.apiBaseUrl),
+      accessToken: config.accessToken.trim(),
+    };
+  }
+
+  const SecureStore = await import('expo-secure-store');
   const normalized = {
     apiBaseUrl: normalizeApiBaseUrl(config.apiBaseUrl),
     accessToken: config.accessToken.trim(),

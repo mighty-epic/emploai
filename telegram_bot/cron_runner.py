@@ -11,7 +11,6 @@ from datetime import datetime
 from typing import Callable, Optional
 
 from cli.agent_tools.loop import run_tool_loop
-from cli.agent_tools.adapters import to_anthropic_format
 from cli.tui_constants import MODEL_CONFIGS
 from single_agent.agent import AGENT_TOOLS
 from shared import current_session_id
@@ -37,10 +36,7 @@ def _merge_openai_tools(*tool_groups):
 
 
 def _get_provider_tools(provider: str):
-    merged = _merge_openai_tools(get_auto_mode_extra_tools(), AGENT_TOOLS)
-    if provider == "anthropic":
-        return to_anthropic_format(merged)
-    return merged
+    return _merge_openai_tools(get_auto_mode_extra_tools(), AGENT_TOOLS)
 
 
 async def run_cron_job_via_unified_flow(

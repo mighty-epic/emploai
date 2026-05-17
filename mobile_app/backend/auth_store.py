@@ -157,6 +157,7 @@ class AppAuthStore:
             token_record = {
                 "device_id": device_id,
                 "user_id": user_id,
+                "token_value": access_token,
                 "created_at": now,
                 "last_used_at": now,
                 "expires_at": now + token_ttl_seconds,
@@ -251,3 +252,104 @@ class AppAuthStore:
                     token_data["revoked_at"] = revoked_at
             self._save()
             return True
+
+    def ensure_device_token(
+        self,
+        *,
+        user_id: int,
+        device_name: Optional[str],
+        device_platform: Optional[str],
+        token_ttl_seconds: int,
+        device_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        with self._lock:
+            self._cleanup()
+            now = time.time()
+            normalized_key = (device_key or "").strip() or None
+            normalized_name = (device_name or "").strip() or "EmploAI App"
+            normalized_platform = (device_platform or "").strip() or None
+
+            existing_device: Optional[Dict[str, Any]] = None
+            existing_device_id: Optional[str] = None
+            if normalized_key:
+                for device_id, device in self._data["devices"].items():
+                    if int(device.get("user_id", -1)) != int(user_id):
+                        continue
+                    if device.get("revoked_at"):
+                        continue
+                    if str(device.get("device_key") or "").strip() != normalized_key:
+                        continue
+                    existing_device = device
+                    existing_device_id = device_id
+                    break
+
+            if existing_device is None:
+                existing_device_id = secrets.token_hex(12)
+                existing_device = {
+                    "device_id": existing_device_id,
+                    "user_id": int(user_id),
+                    "device_name": normalized_name,
+                    "device_platform": normalized_platform,
+                    "device_key": normalized_key,
+                    "created_at": now,
+                    "last_used_at": now,
+                    "revoked_at": None,
+                }
+                self._data["devices"][existing_device_id] = existing_device
+            else:
+                existing_device["device_name"] = normalized_name
+                existing_device["device_platform"] = normalized_platform
+                existing_device["last_used_at"] = now
+                if normalized_key:
+                    existing_device["device_key"] = normalized_key
+
+            reusable_token_value: Optional[str] = None
+            reusable_expires_at: Optional[float] = None
+            if existing_device_id:
+                for token_data in self._data["tokens"].values():
+                    if token_data.get("device_id") != existing_device_id:
+                        continue
+                    if token_data.get("revoked_at"):
+                        continue
+                    expires_at = float(token_data.get("expires_at", 0) or 0)
+                    if expires_at and expires_at < now:
+                        continue
+                    token_value = str(token_data.get("token_value") or "").strip()
+                    if not token_value:
+                        continue
+                    token_data["last_used_at"] = now
+                    reusable_token_value = token_value
+                    reusable_expires_at = expires_at
+                    break
+
+            if reusable_token_value:
+                self._save()
+                return {
+                    "device_id": existing_device_id,
+                    "access_token": reusable_token_value,
+                    "expires_at": reusable_expires_at,
+                    "device": dict(existing_device),
+                }
+
+            for token_data in self._data["tokens"].values():
+                if token_data.get("device_id") == existing_device_id and not token_data.get("revoked_at"):
+                    token_data["revoked_at"] = now
+
+            access_token = secrets.token_urlsafe(32)
+            token_record = {
+                "device_id": existing_device_id,
+                "user_id": int(user_id),
+                "token_value": access_token,
+                "created_at": now,
+                "last_used_at": now,
+                "expires_at": now + token_ttl_seconds,
+                "revoked_at": None,
+            }
+            self._data["tokens"][_hash_token(access_token)] = token_record
+            self._save()
+            return {
+                "device_id": existing_device_id,
+                "access_token": access_token,
+                "expires_at": token_record["expires_at"],
+                "device": dict(existing_device),
+            }

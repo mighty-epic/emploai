@@ -1,0 +1,16 @@
+{
+  "name": "emploai-desktop-shell",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "build:renderer": "npm --prefix ../mobile_app/client run export:web",
+    "package:win": "powershell -ExecutionPolicy Bypass -File ../deploy/windows/build_beta_release.ps1"
+  },
+  "devDependencies": {
+    "electron": "^35.5.1",
+    "electron-packager": "^17.1.2"
+  }
+}

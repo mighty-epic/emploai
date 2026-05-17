@@ -41,7 +41,6 @@ from cli.tui_constants import (
     AGENT_MODE_LABELS,
     AGENT_MODES,
     AVAILABLE_MODELS,
-    UNIFIED_AGENT_PROMPT,
     ChatMessage,
     CommandResult,
     MODEL_CONFIGS,
@@ -187,7 +186,10 @@ class ChatProcessor:
                     if hasattr(self, "skill_registry") and self.skill_registry:
                         skills_index = f"\n\n{self.skill_registry.get_skills_index()}"
                     
-                    custom_prompt = UNIFIED_AGENT_PROMPT + skills_index
+                    custom_prompt = chat_processor_core.build_tui_auto_system_prompt(
+                        self,
+                        skills_index=skills_index,
+                    )
 
             # Call the unified tool loop
             result = run_tool_loop(

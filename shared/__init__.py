@@ -11,6 +11,7 @@ from .skills_enhanced import SkillMatcher, EnhancedSkillsManager, enhance_skill_
 from .channel_runtime import (
     TurnReservation,
     SharedTurnResult,
+    compact_session_history,
     begin_chat_turn,
     current_session_id,
     merge_openai_tools,
@@ -40,6 +41,7 @@ __all__ = [
     # Shared runtime
     'TurnReservation',
     'SharedTurnResult',
+    'compact_session_history',
     'begin_chat_turn',
     'current_session_id',
     'merge_openai_tools',

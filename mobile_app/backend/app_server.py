@@ -6,10 +6,12 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import threading
 import time
 import traceback
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -48,6 +50,9 @@ from mobile_app.backend.models import (
     RealtimeServerEvent,
     ScheduledJobView,
     ScreenCaptureView,
+    SessionSearchRequest,
+    SessionSearchResponse,
+    SessionSearchResultView,
     SkillActivateRequest,
     SkillListResponse,
     SkillSummaryView,
@@ -57,6 +62,8 @@ from mobile_app.backend.models import (
     SubAgentListResponse,
     SubAgentSpawnRequest,
     SubAgentTaskView,
+    TaskBoardResponse,
+    TimelineEventAppendRequest,
     TrustedDeviceView,
     UploadResponse,
     VoiceClientEvent,
@@ -64,7 +71,17 @@ from mobile_app.backend.models import (
 from mobile_app.backend.runtime import run_app_chat_turn
 from mobile_app.backend.session_bridge import AppSessionBridge
 from mobile_app.backend.voice_runtime import VoiceDraftState, get_voice_runtime_status, synthesize_assistant_audio
+from shared.channel_sync import get_channel_sync_hub
 from shared.live_config import get_live_config
+from shared.channel_runtime import compact_session_history
+from shared.task_board import (
+    completed_task_board_views,
+    format_task_board_for_user,
+    get_active_task_board,
+    get_display_task_board,
+    request_task_board_reassessment,
+    task_board_view,
+)
 from single_agent.cron_scheduler import get_scheduler, parse_schedule_with_error
 from telegram_bot.restart_runtime import exec_current_process
 
@@ -89,6 +106,10 @@ _APP_RUNTIME_STATUS: Dict[str, Any] = {
     "last_runtime_error_detail": None,
     "last_runtime_error_at": None,
 }
+_SESSION_SEARCH_CACHE_LOCK = threading.Lock()
+_SESSION_SEARCH_CACHE: Dict[int, Dict[str, Dict[str, Any]]] = {}
+_SEARCH_NORMALIZE_RE = re.compile(r"[\W_]+", re.UNICODE)
+_SESSION_SEARCH_LIMIT_MAX = 100
 
 
 def _set_startup_state(state: str, *, error: Optional[str] = None, detail: Optional[str] = None) -> None:
@@ -181,6 +202,410 @@ def _format_thinking_for_app(thinking: str) -> str:
     return formatted.replace("*", "")
 
 
+def _normalize_search_text(value: Any) -> str:
+    collapsed = _SEARCH_NORMALIZE_RE.sub(" ", str(value or "").casefold())
+    return " ".join(collapsed.split())
+
+
+def _project_name_from_path(project_path: str) -> str:
+    normalized = str(project_path or "").strip()
+    if not normalized:
+        return "Workspace"
+    try:
+        path = Path(normalized)
+        name = path.name.strip()
+        if name:
+            return name
+    except Exception:
+        pass
+    parts = normalized.rstrip("\\/").split("\\")
+    return parts[-1] if parts else normalized
+
+
+def _safe_datetime_value(value: Any) -> float:
+    raw = str(value or "").strip()
+    if not raw:
+        return 0.0
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
+def _session_file_signature(session_file: Path) -> Optional[tuple[int, int]]:
+    try:
+        stat = session_file.stat()
+    except OSError:
+        return None
+    return stat.st_mtime_ns, stat.st_size
+
+
+def _name_match_reason(kind: str, query: str, candidate: str) -> Optional[tuple[str, float]]:
+    if not query or not candidate:
+        return None
+    if candidate == query:
+        return (f"{kind}_exact", 300.0 if kind == "project" else 270.0)
+    if candidate.startswith(query):
+        return (f"{kind}_prefix", 290.0 if kind == "project" else 260.0)
+    if query in candidate:
+        return (f"{kind}_substring", 280.0 if kind == "project" else 250.0)
+    return None
+
+
+def _build_message_snippet(content: str, query: str, query_tokens: list[str]) -> str:
+    normalized_content = " ".join(str(content or "").split())
+    if not normalized_content:
+        return ""
+    lowered = normalized_content.casefold()
+    search_needles = [query.casefold(), *[token.casefold() for token in query_tokens if token]]
+    match_index = -1
+    match_length = 0
+    for needle in search_needles:
+        if not needle:
+            continue
+        match_index = lowered.find(needle)
+        if match_index >= 0:
+            match_length = len(needle)
+            break
+    if match_index < 0:
+        return normalized_content[:180]
+    start = max(0, match_index - 60)
+    end = min(len(normalized_content), match_index + max(match_length, 1) + 120)
+    snippet = normalized_content[start:end]
+    if start > 0:
+        snippet = f"...{snippet}"
+    if end < len(normalized_content):
+        snippet = f"{snippet}..."
+    return snippet
+
+
+def _user_session_search_cache(user_id: int) -> Dict[str, Dict[str, Any]]:
+    with _SESSION_SEARCH_CACHE_LOCK:
+        user_cache = _SESSION_SEARCH_CACHE.setdefault(user_id, {})
+    return user_cache
+
+
+def _load_session_search_entry(
+    *,
+    cache: Dict[str, Dict[str, Any]],
+    session_file: Path,
+    session_summary: Any,
+) -> Optional[Dict[str, Any]]:
+    signature = _session_file_signature(session_file)
+    if signature is None:
+        cache.pop(str(session_file), None)
+        return None
+
+    cached = cache.get(str(session_file))
+    if cached and tuple(cached.get("signature") or ()) == signature:
+        return cached
+
+    try:
+        payload = json.loads(session_file.read_text(encoding="utf-8"))
+    except Exception:
+        cache.pop(str(session_file), None)
+        return None
+
+    workspace = str(getattr(session_summary, "workspace", "") or payload.get("workspace", "") or "")
+    entry = {
+        "signature": signature,
+        "session_id": str(getattr(session_summary, "id", "") or payload.get("id", "")),
+        "session_name": str(getattr(session_summary, "name", "") or payload.get("name", "")),
+        "workspace": workspace,
+        "updated_at": str(getattr(session_summary, "updated_at", "") or payload.get("updated_at", "")),
+        "messages": [
+            {
+                "index": index,
+                "role": str(item.get("role", "user")),
+                "content": str(item.get("content", "")),
+                "normalized": _normalize_search_text(item.get("content", "")),
+                "timestamp": item.get("timestamp"),
+            }
+            for index, item in enumerate(payload.get("chat_history", []))
+            if str(item.get("content", "")).strip()
+        ],
+    }
+    cache[str(session_file)] = entry
+    return entry
+
+
+def _search_sessions_in_manager(
+    *,
+    user_id: int,
+    session_manager: Any,
+    query: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    normalized_query = _normalize_search_text(query)
+    if not normalized_query:
+        return []
+
+    normalized_limit = max(1, min(int(limit or 40), _SESSION_SEARCH_LIMIT_MAX))
+    query_tokens = [token for token in normalized_query.split(" ") if token]
+    summaries = sorted(
+        session_manager.list_sessions(),
+        key=lambda item: str(getattr(item, "updated_at", "") or ""),
+        reverse=True,
+    )
+    session_cache = _user_session_search_cache(user_id)
+    active_file_keys: set[str] = set()
+
+    project_exact: list[dict[str, Any]] = []
+    project_prefix: list[dict[str, Any]] = []
+    project_substring: list[dict[str, Any]] = []
+    session_exact: list[dict[str, Any]] = []
+    session_prefix: list[dict[str, Any]] = []
+    session_substring: list[dict[str, Any]] = []
+    message_phrase: list[dict[str, Any]] = []
+    message_token: list[dict[str, Any]] = []
+    seen_project_paths: set[str] = set()
+    remaining_message_limit = normalized_limit
+
+    for summary in summaries:
+        project_path = str(getattr(summary, "workspace", "") or "")
+        project_name = _project_name_from_path(project_path)
+        normalized_project_name = _normalize_search_text(project_name)
+        normalized_project_path = _normalize_search_text(project_path)
+        project_reason = _name_match_reason("project", normalized_query, normalized_project_name)
+        if project_reason is None and normalized_project_path:
+            project_reason = _name_match_reason("project", normalized_query, normalized_project_path)
+        if project_reason and project_path not in seen_project_paths:
+            seen_project_paths.add(project_path)
+            target_bucket = (
+                project_exact
+                if project_reason[0].endswith("exact")
+                else project_prefix
+                if project_reason[0].endswith("prefix")
+                else project_substring
+            )
+            target_bucket.append({
+                "kind": "project",
+                "project_path": project_path,
+                "project_name": project_name,
+                "session_id": None,
+                "session_name": None,
+                "message_index": None,
+                "message_role": None,
+                "timestamp": None,
+                "snippet": "Project name match",
+                "match_reason": project_reason[0],
+                "score": project_reason[1],
+            })
+
+        session_name = str(getattr(summary, "name", "") or "")
+        normalized_session_name = _normalize_search_text(session_name)
+        session_reason = _name_match_reason("session", normalized_query, normalized_session_name)
+        if session_reason:
+            target_bucket = (
+                session_exact
+                if session_reason[0].endswith("exact")
+                else session_prefix
+                if session_reason[0].endswith("prefix")
+                else session_substring
+            )
+            target_bucket.append({
+                "kind": "session",
+                "project_path": project_path,
+                "project_name": project_name,
+                "session_id": str(getattr(summary, "id", "")),
+                "session_name": session_name,
+                "message_index": None,
+                "message_role": None,
+                "timestamp": getattr(summary, "updated_at", None),
+                "snippet": "Chat name match",
+                "match_reason": session_reason[0],
+                "score": session_reason[1],
+            })
+
+    remaining_message_limit = max(
+        0,
+        normalized_limit - len(project_exact) - len(project_prefix) - len(project_substring) - len(session_exact) - len(session_prefix) - len(session_substring),
+    )
+    if remaining_message_limit <= 0:
+        return (
+            project_exact
+            + project_prefix
+            + project_substring
+            + session_exact
+            + session_prefix
+            + session_substring
+        )[:normalized_limit]
+
+    for summary in summaries:
+        if len(message_phrase) >= remaining_message_limit and len(message_token) >= remaining_message_limit:
+            break
+        session_file = session_manager.sessions_dir / f"{getattr(summary, 'id', '')}.json"
+        active_file_keys.add(str(session_file))
+        search_entry = _load_session_search_entry(cache=session_cache, session_file=session_file, session_summary=summary)
+        if not search_entry:
+            continue
+
+        project_path = str(search_entry.get("workspace", "") or "")
+        project_name = _project_name_from_path(project_path)
+        for message in reversed(search_entry.get("messages", [])):
+            message_text = str(message.get("content", "") or "")
+            normalized_message = str(message.get("normalized", "") or "")
+            if not normalized_message:
+                continue
+
+            if normalized_query in normalized_message:
+                if len(message_phrase) >= remaining_message_limit:
+                    continue
+                reason = "message_phrase"
+                score = 240.0 + min(_safe_datetime_value(message.get("timestamp")) / 10_000_000_000, 0.999999)
+                target_bucket = message_phrase
+            elif query_tokens and all(token in normalized_message for token in query_tokens):
+                if len(message_token) >= remaining_message_limit:
+                    continue
+                reason = "message_tokens"
+                score = 230.0 + min(_safe_datetime_value(message.get("timestamp")) / 10_000_000_000, 0.999999)
+                target_bucket = message_token
+            else:
+                continue
+
+            target_bucket.append({
+                "kind": "message",
+                "project_path": project_path,
+                "project_name": project_name,
+                "session_id": str(search_entry.get("session_id", "")),
+                "session_name": str(search_entry.get("session_name", "")),
+                "message_index": int(message.get("index", 0)),
+                "message_role": str(message.get("role", "user")),
+                "timestamp": message.get("timestamp"),
+                "snippet": _build_message_snippet(message_text, normalized_query, query_tokens),
+                "match_reason": reason,
+                "score": score,
+            })
+
+    stale_files = [key for key in list(session_cache.keys()) if key not in active_file_keys]
+    for stale_file in stale_files:
+        session_cache.pop(stale_file, None)
+
+    return (
+        project_exact
+        + project_prefix
+        + project_substring
+        + session_exact
+        + session_prefix
+        + session_substring
+        + message_phrase
+        + message_token
+    )[:normalized_limit]
+
+
+def _sync_event_to_realtime_event(
+    event: Dict[str, Any],
+    *,
+    active_session_id: Optional[str],
+    client_id: Optional[str],
+    verbose_mode: bool,
+) -> Optional[RealtimeServerEvent]:
+    event_session_id = str(event.get("session_id") or "").strip()
+    if not active_session_id or not event_session_id or event_session_id != active_session_id:
+        return None
+
+    if client_id and str(event.get("source_client_id") or "").strip() == client_id:
+        return None
+
+    payload = dict(event.get("payload") or {})
+    event_type = str(event.get("type") or "").strip()
+
+    if event_type == "user_message":
+        message = payload.get("message")
+        if not isinstance(message, dict):
+            return None
+        return RealtimeServerEvent(
+            type="user_message",
+            session_id=event_session_id,
+            payload={"message": message},
+        )
+
+    if event_type == "assistant_delta":
+        return RealtimeServerEvent(
+            type="assistant_delta",
+            session_id=event_session_id,
+            payload={"delta": payload.get("delta", "")},
+        )
+
+    if event_type == "assistant_final":
+        return RealtimeServerEvent(
+            type="assistant_final",
+            session_id=event_session_id,
+            payload=payload,
+        )
+
+    if event_type == "tool_use":
+        if not verbose_mode:
+            return None
+        return RealtimeServerEvent(
+            type="tool_event",
+            session_id=event_session_id,
+            payload=_format_verbose_tool_event(
+                str(payload.get("tool_name", "")),
+                payload.get("tool_args") or {},
+                payload.get("tool_result"),
+                float(payload.get("duration_ms") or 0.0),
+            ),
+        )
+
+    if event_type == "log":
+        if not verbose_mode:
+            return None
+        return RealtimeServerEvent(
+            type="log",
+            session_id=event_session_id,
+            payload=_format_runtime_log_entry(str(payload.get("message", ""))),
+        )
+
+    if event_type == "status":
+        return RealtimeServerEvent(
+            type="status",
+            session_id=event_session_id,
+            payload={"message": payload.get("message", "")},
+        )
+
+    if event_type == "task_board":
+        return RealtimeServerEvent(
+            type="task_board",
+            session_id=event_session_id,
+            payload={
+                "board": payload.get("board"),
+                "completed_task_boards": payload.get("completed_task_boards") or [],
+                "summary": payload.get("summary"),
+            },
+        )
+
+    if event_type == "timeline_event":
+        return RealtimeServerEvent(
+            type="timeline_event",
+            session_id=event_session_id,
+            payload={"event": payload.get("event")},
+        )
+
+    return None
+
+
+def _resolve_external_current_session_id(
+    bridge: Any,
+    *,
+    active_session_id: Optional[str],
+    event: Dict[str, Any],
+) -> Optional[str]:
+    event_session_id = str(event.get("session_id") or "").strip()
+    if not event_session_id or event_session_id == active_session_id:
+        return None
+
+    try:
+        current = bridge.get_current_session()
+    except Exception:
+        return None
+
+    current_session_id = str(getattr(current, "id", "") or "").strip()
+    if current_session_id == event_session_id:
+        return current_session_id
+    return None
+
+
 def _sign(value: str) -> str:
     return hmac.new(_secret().encode("utf-8"), value.encode("utf-8"), hashlib.sha256).hexdigest()
 
@@ -231,6 +656,14 @@ def _authorize_pair_start(auth_header: Optional[str], pair_secret: Optional[str]
 def _bridge_for_user(user_id: int) -> AppSessionBridge:
     workspace = _workspace_root()
     return AppSessionBridge(user_id=user_id, workspace=workspace)
+
+
+def _path_signature(path: Path) -> Optional[tuple[int, int]]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (int(stat.st_mtime_ns), int(stat.st_size))
 
 
 def _resolve_pairing_user_id(pairing_id: str) -> int:
@@ -307,15 +740,29 @@ def _estimate_message_tokens(message: Dict[str, Any]) -> int:
 
 
 def _context_usage(runtime) -> dict[str, Any]:
+    context_manager = getattr(runtime, "context_manager", None)
+    if context_manager:
+        return context_manager.get_usage_snapshot(
+            runtime.chat_history,
+            runtime.current_model,
+            last_compaction=getattr(runtime, "last_context_compaction", None),
+        )
+
     max_tokens = int(MODEL_CONTEXT_SIZES.get(runtime.current_model, 128000))
     estimated_tokens = sum(_estimate_message_tokens(message) for message in runtime.chat_history)
     usage_percent = (estimated_tokens / max_tokens) * 100 if max_tokens else 0.0
+    threshold_percent = 40.0
     return {
         "model": runtime.current_model,
         "max_tokens": max_tokens,
         "estimated_tokens": estimated_tokens,
         "usage_percent": round(usage_percent, 2),
         "message_count": len(runtime.chat_history),
+        "threshold_percent": threshold_percent,
+        "needs_compaction": usage_percent >= threshold_percent,
+        "compaction_state": "needs_compaction" if usage_percent >= threshold_percent else "ok",
+        "token_strategy": "rough",
+        "last_compaction": getattr(runtime, "last_context_compaction", None),
     }
 
 
@@ -424,10 +871,15 @@ def _agent_overview(runtime, *, history_count: int = 12, analytics_days: int = 7
         }
     )
 
+    get_supported_planner_models = getattr(runtime, "get_supported_planner_models", None)
+    planner_models = list(get_supported_planner_models(AVAILABLE_MODELS)) if callable(get_supported_planner_models) else []
+
     return {
         "session_id": runtime.session_manager.get_current_session_id() if runtime.session_manager else None,
         "current_model": runtime.current_model,
         "current_variant": runtime.current_variant,
+        "planner_model": getattr(runtime, "planner_model", None),
+        "available_planner_models": planner_models,
         "available_variants": runtime.get_available_variants(),
         "model_groups": _model_groups(runtime),
         "max_turns": runtime.max_turns,
@@ -444,6 +896,8 @@ def _agent_overview(runtime, *, history_count: int = 12, analytics_days: int = 7
         "analytics": _analytics_summary(runtime, max(1, min(analytics_days, 30))),
         "security": _security_summary(),
         "config_preview": _config_preview(runtime),
+        "task_board": task_board_view(get_display_task_board(runtime)),
+        "completed_task_boards": completed_task_board_views(runtime),
     }
 
 
@@ -469,22 +923,28 @@ def _coerce_config_value(raw_value: Any) -> Any:
         return value
 
 
-def _set_workspace(runtime, workspace_value: str) -> None:
-    requested = (workspace_value or "").strip()
-    if not requested:
+def _resolve_workspace_path(requested: str, *, user_id: int) -> Path:
+    requested_value = (requested or "").strip()
+    if not requested_value:
         raise HTTPException(status_code=400, detail="Workspace is required")
 
     manager = _get_security_manager()
     resolved_path: Optional[Path] = None
     if manager:
-        valid, resolved_path, error = manager.validate_path(requested, runtime.user_id)
+        valid, resolved_path, error = manager.validate_path(requested_value, user_id)
         if not valid or not resolved_path:
             raise HTTPException(status_code=400, detail=error or "Invalid workspace path")
     else:
-        resolved_path = Path(requested).expanduser().resolve()
+        resolved_path = Path(requested_value).expanduser().resolve()
 
     if not resolved_path.exists() or not resolved_path.is_dir():
         raise HTTPException(status_code=400, detail="Workspace path does not exist or is not a directory")
+
+    return resolved_path
+
+
+def _set_workspace(runtime, workspace_value: str) -> None:
+    resolved_path = _resolve_workspace_path(workspace_value, user_id=runtime.user_id)
 
     try:
         runtime.set_workspace(resolved_path)
@@ -513,6 +973,19 @@ def _configure_runtime(runtime, request: AgentConfigureRequest) -> None:
         if request.variant not in available_variants:
             raise HTTPException(status_code=400, detail="Variant is not available for the current model")
         runtime.current_variant = request.variant
+        should_save_session = True
+
+    if request.planner_model is not None:
+        planner_value = str(request.planner_model).strip() or None
+        get_supported_planner_models = getattr(runtime, "get_supported_planner_models", None)
+        supported_planner_models = (
+            set(get_supported_planner_models(AVAILABLE_MODELS))
+            if callable(get_supported_planner_models)
+            else set(runtime.get_available_models(AVAILABLE_MODELS))
+        )
+        if planner_value and planner_value not in supported_planner_models:
+            raise HTTPException(status_code=400, detail="Planner model is unavailable for the lightweight planner runtime")
+        runtime.planner_model = planner_value
         should_save_session = True
 
     if request.max_turns is not None:
@@ -572,6 +1045,33 @@ def _configure_runtime(runtime, request: AgentConfigureRequest) -> None:
 
     if should_save_session:
         runtime.save_session()
+
+
+def _publish_runtime_config_sync(runtime, *, user_id: int, origin_channel: str) -> None:
+    try:
+        session_id = runtime.session_manager.get_current_session_id() if runtime.session_manager else None
+        if not session_id:
+            return
+        get_channel_sync_hub().publish(
+            user_id=user_id,
+            event={
+                "type": "session_config",
+                "session_id": session_id,
+                "origin_channel": origin_channel,
+                "payload": {
+                    "model": runtime.current_model,
+                    "variant": runtime.current_variant,
+                    "planner_model": getattr(runtime, "planner_model", None),
+                    "max_turns": runtime.max_turns,
+                    "auto_reply_enabled": bool(runtime.auto_reply_enabled),
+                    "verbose_mode": bool(runtime.verbose_mode),
+                    "bridge_enabled": bool(runtime.live_config.get("browser.use_extension", True)) if runtime.live_config else False,
+                    "headless_mode": _current_headless_mode(),
+                },
+            },
+        )
+    except Exception:
+        logger.exception("[app] failed to publish runtime config sync")
 
 
 def _active_task_agents(runtime) -> list[Any]:
@@ -696,10 +1196,12 @@ def create_app() -> FastAPI:
     async def health() -> dict:
         config = get_live_config(_workspace_root() / "config.json")
         dependency_status = _dependency_status()
+        forced_app_server = os.getenv("EMPLOAI_DESKTOP_FORCE_APP_SERVER", "").strip().lower() in {"1", "true", "yes", "on"}
         return {
             "ok": True,
             "channel": "app",
-            "enabled": bool(config.get("channels.app.enabled", False)),
+            "process_id": os.getpid(),
+            "enabled": bool(forced_app_server or config.get("channels.app.enabled", False)),
             "pairing_bootstrap_enabled": bool(os.getenv(PAIRING_SECRET_ENV, "").strip()),
             "pairing_token_ttl_seconds": DEFAULT_PAIR_TTL_SECONDS,
             "access_token_ttl_seconds": TOKEN_TTL_SECONDS,
@@ -794,6 +1296,48 @@ def create_app() -> FastAPI:
         runtime = _load_runtime_session_or_409(bridge, session_id)
         return AgentOverviewView(**_agent_overview(runtime, history_count=history_count, analytics_days=analytics_days))
 
+    @app.get("/api/app/agent/task-board", response_model=TaskBoardResponse)
+    async def agent_task_board(
+        authorization: Optional[str] = Header(default=None),
+        session_id: Optional[str] = None,
+    ) -> TaskBoardResponse:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        runtime = _load_runtime_session_or_409(bridge, session_id)
+        return TaskBoardResponse(task_board=task_board_view(get_display_task_board(runtime)))
+
+    @app.post("/api/app/agent/task-board/reassess", response_model=AgentActionResponse)
+    async def agent_task_board_reassess(
+        authorization: Optional[str] = Header(default=None),
+        session_id: Optional[str] = None,
+    ) -> AgentActionResponse:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        runtime = _load_runtime_session_or_409(bridge, session_id)
+
+        board = request_task_board_reassessment(runtime, "Manual reassessment requested by the user.")
+        if not board:
+            return AgentActionResponse(action="reassess", message="No active managed task.")
+
+        runtime.save_session()
+        get_channel_sync_hub().publish(
+            user_id=int(auth["user_id"]),
+            event={
+                "type": "task_board",
+                "session_id": runtime.session_manager.get_current_session_id() if runtime.session_manager else session_id,
+                "origin_channel": "app",
+                "payload": {
+                    "board": board,
+                    "completed_task_boards": completed_task_board_views(runtime),
+                    "summary": "Manual reassessment completed. The active task board was revised immediately.",
+                },
+            },
+        )
+        return AgentActionResponse(
+            action="reassess",
+            message="Manual reassessment completed. The active task board was revised immediately.",
+        )
+
     @app.post("/api/app/agent/configure", response_model=AgentActionResponse)
     async def configure_agent(
         request: AgentConfigureRequest,
@@ -804,7 +1348,22 @@ def create_app() -> FastAPI:
         bridge = _bridge_for_user(int(auth["user_id"]))
         runtime = _load_runtime_session_or_409(bridge, session_id)
         _configure_runtime(runtime, request)
+        _publish_runtime_config_sync(runtime, user_id=int(auth["user_id"]), origin_channel="app")
         return AgentActionResponse(action="configure", message="Agent controls updated")
+
+    @app.get("/api/app/agent/bridge-status")
+    async def bridge_status(
+        authorization: Optional[str] = Header(default=None),
+        session_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        runtime = _load_runtime_session_or_409(bridge, session_id)
+        try:
+            from telegram_bot.telegram_unified_agent import get_browser_bridge_status
+        except ImportError:
+            from telegram_unified_agent import get_browser_bridge_status
+        return dict(get_browser_bridge_status(runtime) or {})
 
     @app.get("/api/app/agent/config", response_model=ConfigListResponse)
     async def list_agent_config(
@@ -934,6 +1493,26 @@ def create_app() -> FastAPI:
             runtime.unified_agent.conversation_history = []
         runtime.save_session()
         return AgentActionResponse(action="reset", message="Chat history cleared")
+
+    @app.post("/api/app/agent/compact", response_model=AgentActionResponse)
+    async def compact_agent_context(
+        authorization: Optional[str] = Header(default=None),
+        session_id: Optional[str] = None,
+    ) -> AgentActionResponse:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        runtime = _load_runtime_session_or_409(bridge, session_id)
+
+        async with runtime.lock:
+            if getattr(runtime, "is_processing", False):
+                raise HTTPException(status_code=409, detail="Session is busy")
+
+            result = compact_session_history(runtime, reason="manual", announce=True)
+            if not result:
+                raise HTTPException(status_code=503, detail="Context manager is unavailable")
+
+            runtime.save_session()
+        return AgentActionResponse(action="compact", message=result.message)
 
     @app.get("/api/app/agent/skills", response_model=SkillListResponse)
     async def list_agent_skills(
@@ -1126,13 +1705,42 @@ def create_app() -> FastAPI:
         bridge = _bridge_for_user(int(auth["user_id"]))
         return [SessionSummaryView(**bridge.summarize_session(s)) for s in bridge.list_sessions()]
 
+    @app.post("/api/app/sessions/search", response_model=SessionSearchResponse)
+    async def search_sessions(request: SessionSearchRequest, authorization: Optional[str] = Header(default=None)) -> SessionSearchResponse:
+        auth = _resolve_token(authorization)
+        user_id = int(auth["user_id"])
+        bridge = _bridge_for_user(user_id)
+        results = _search_sessions_in_manager(
+            user_id=user_id,
+            session_manager=bridge.session_manager,
+            query=request.query,
+            limit=request.limit,
+        )
+        return SessionSearchResponse(results=[SessionSearchResultView(**item) for item in results])
+
     @app.post("/api/app/sessions", response_model=CreateSessionResponse)
     async def create_session(request: CreateSessionRequest, authorization: Optional[str] = Header(default=None)) -> CreateSessionResponse:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        session = bridge.create_session(request.name)
+        workspace = _resolve_workspace_path(request.workspace, user_id=int(auth["user_id"])) if request.workspace else None
+        try:
+            session = bridge.create_session(request.name, workspace=workspace)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         detail = SessionDetailView(**bridge.detailed_session_view(session))
         return CreateSessionResponse(session=detail)
+
+    @app.post("/api/app/sessions/{session_id}/activate", response_model=SessionDetailView)
+    async def activate_session(session_id: str, authorization: Optional[str] = Header(default=None)) -> SessionDetailView:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        try:
+            session = bridge.activate_session(session_id)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail="Session not found") from exc
+        return SessionDetailView(**bridge.detailed_session_view(session))
 
     @app.get("/api/app/sessions/{session_id}", response_model=SessionDetailView)
     async def get_session(session_id: str, authorization: Optional[str] = Header(default=None)) -> SessionDetailView:
@@ -1140,6 +1748,36 @@ def create_app() -> FastAPI:
         bridge = _bridge_for_user(int(auth["user_id"]))
         session = bridge.get_session(session_id)
         return SessionDetailView(**bridge.detailed_session_view(session))
+
+    @app.post("/api/app/sessions/{session_id}/timeline")
+    async def append_session_timeline(
+        session_id: str,
+        request: TimelineEventAppendRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> dict:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        event = bridge.append_timeline_event(
+            session_id=session_id,
+            kind=request.kind,
+            title=request.title,
+            content=request.content,
+            tone=request.tone,
+            channel=request.channel,
+            source_format=request.source_format,
+            metadata=request.metadata,
+        )
+        get_channel_sync_hub().publish(
+            user_id=int(auth["user_id"]),
+            event={
+                "type": "timeline_event",
+                "session_id": session_id,
+                "origin_channel": request.channel,
+                "source_client_id": request.source_client_id,
+                "payload": {"event": event},
+            },
+        )
+        return {"event": event}
 
     @app.post("/api/app/chat/send")
     async def send_chat(request: ChatSendRequest, authorization: Optional[str] = Header(default=None)) -> dict:
@@ -1363,6 +2001,9 @@ def create_app() -> FastAPI:
         await websocket.accept()
         logger.info("[app] websocket /ws/app/chat connected from %s", websocket.client.host if websocket.client else "unknown")
         send_lock = asyncio.Lock()
+        watch_task: Optional[asyncio.Task[None]] = None
+        sync_subscription_id: Optional[str] = None
+        effective_session_id: Optional[str] = None
 
         async def send_model(event: RealtimeServerEvent) -> None:
             async with send_lock:
@@ -1373,6 +2014,31 @@ def create_app() -> FastAPI:
             session_id = websocket.query_params.get("session_id")
             auth = _resolve_ws_token(token)
             bridge = _bridge_for_user(int(auth["user_id"]))
+            client_id = str(websocket.query_params.get("client_id") or secrets.token_hex(8))
+
+            last_session_signature: Optional[tuple[int, int]] = None
+            last_index_signature: Optional[tuple[int, int]] = None
+
+            async def send_session_sync(target_session_id: Optional[str], reason: str) -> None:
+                nonlocal last_session_signature, last_index_signature
+                if not target_session_id:
+                    return
+                try:
+                    payload = bridge.build_session_sync_payload(target_session_id)
+                except Exception:
+                    return
+
+                payload["reason"] = reason
+                last_session_signature = _path_signature(bridge.session_file_path(target_session_id))
+                last_index_signature = _path_signature(bridge.session_index_path())
+                await send_model(
+                    RealtimeServerEvent(
+                        type="session_sync",
+                        session_id=target_session_id,
+                        payload=payload,
+                    )
+                )
+
             try:
                 runtime = bridge.load_runtime_session(session_id)
             except RuntimeError as exc:
@@ -1392,17 +2058,87 @@ def create_app() -> FastAPI:
                     payload={"connected": True},
                 )
             )
+            await send_session_sync(effective_session_id, "connected")
+
+            async def handle_sync_event(event: Dict[str, Any]) -> None:
+                nonlocal effective_session_id
+                event_type = str(event.get("type") or "").strip()
+                event_session_id = str(event.get("session_id") or "").strip()
+                if event_type == "session_config":
+                    if event_session_id and event_session_id == effective_session_id:
+                        payload = event.get("payload") or {}
+                        setting = str(payload.get("setting") or "external_config")
+                        await send_session_sync(effective_session_id, setting)
+                    return
+
+                switched_session_id = _resolve_external_current_session_id(
+                    bridge,
+                    active_session_id=effective_session_id,
+                    event=event,
+                )
+                if switched_session_id:
+                    effective_session_id = switched_session_id
+                    await send_session_sync(switched_session_id, "external_current_session")
+                    return
+
+                live_event = _sync_event_to_realtime_event(
+                    event,
+                    active_session_id=effective_session_id,
+                    client_id=client_id,
+                    verbose_mode=runtime.verbose_mode,
+                )
+                if live_event is None:
+                    return
+                await send_model(live_event)
+
+            sync_subscription_id = get_channel_sync_hub().subscribe(
+                user_id=int(auth["user_id"]),
+                channel="app",
+                callback=handle_sync_event,
+                loop=asyncio.get_running_loop(),
+            )
+
+            async def watch_session_updates() -> None:
+                nonlocal effective_session_id
+                try:
+                    while True:
+                        await asyncio.sleep(1.0)
+                        current = bridge.get_current_session()
+                        current_session_id = str(getattr(current, "id", "") or "").strip() or effective_session_id
+                        if current_session_id != effective_session_id:
+                            effective_session_id = current_session_id
+                            await send_session_sync(current_session_id, "external_current_session")
+                            continue
+
+                        tracked_session_id = effective_session_id
+                        if not tracked_session_id:
+                            continue
+
+                        session_signature = _path_signature(bridge.session_file_path(tracked_session_id))
+                        index_signature = _path_signature(bridge.session_index_path())
+                        if (
+                            session_signature != last_session_signature
+                            or index_signature != last_index_signature
+                        ):
+                            await send_session_sync(tracked_session_id, "external_change")
+                except asyncio.CancelledError:
+                    return
+
+            watch_task = asyncio.create_task(watch_session_updates())
+
             while True:
                 raw = await websocket.receive_text()
                 data = json.loads(raw)
                 text = str(data.get("text", "")).strip()
                 req_session_id = data.get("session_id") or effective_session_id
+                source_format = str(data.get("source_format") or "app_text")
                 if not text:
                     await send_model(RealtimeServerEvent(type="warning", message="Empty message ignored"))
                     continue
 
                 try:
                     runtime = bridge.load_runtime_session(req_session_id)
+                    effective_session_id = runtime.session_manager.get_current_session_id() or req_session_id
                 except RuntimeError as exc:
                     await send_model(
                         RealtimeServerEvent(
@@ -1458,12 +2194,24 @@ def create_app() -> FastAPI:
                                 payload={"message": event.get("message", "")},
                             )
                         )
+                    elif kind == "task_board":
+                        await send_model(
+                            RealtimeServerEvent(
+                                type="task_board",
+                                session_id=req_session_id,
+                                payload={
+                                    "board": event.get("board"),
+                                    "summary": event.get("summary"),
+                                },
+                            )
+                        )
 
                 result = await run_app_chat_turn(
                     runtime,
                     user_message=text,
-                    source_format="app_text",
+                    source_format=source_format,
                     interrupt_policy=str(data.get("interrupt_policy", "none")),
+                    source_client_id=client_id,
                     log_callback=emit,
                 )
                 if result.get("busy"):
@@ -1531,6 +2279,8 @@ def create_app() -> FastAPI:
                             },
                         )
                     )
+                effective_session_id = final_session_id
+                await send_session_sync(final_session_id, "turn_complete")
         except WebSocketDisconnect:
             logger.info("[app] websocket /ws/app/chat disconnected")
             return
@@ -1554,6 +2304,11 @@ def create_app() -> FastAPI:
             except Exception:
                 pass
             return
+        finally:
+            if watch_task:
+                watch_task.cancel()
+            if sync_subscription_id:
+                get_channel_sync_hub().unsubscribe(sync_subscription_id)
 
     @app.websocket("/ws/app/voice")
     async def voice_ws(websocket: WebSocket) -> None:
@@ -1569,6 +2324,7 @@ def create_app() -> FastAPI:
             token = websocket.query_params.get("token")
             auth = _resolve_ws_token(token)
             bridge = _bridge_for_user(int(auth["user_id"]))
+            client_id = str(websocket.query_params.get("client_id") or secrets.token_hex(8))
             draft = VoiceDraftState()
             active_session_id = websocket.query_params.get("session_id")
             await send_model(
@@ -1643,11 +2399,22 @@ def create_app() -> FastAPI:
                     draft.state = "finalizing"
                     await send_voice_event("voice_state", {"state": "finalizing"})
                     await draft.wait_for_pending()
-                    draft_text = draft.transcript().strip()
+                    draft_text = (await draft.final_transcript()).strip()
                     if not draft_text:
                         draft.reset()
                         await send_voice_event("warning", {"message": "No speech detected"})
                         await send_voice_event("voice_state", {"state": "idle"})
+                        continue
+                    if event.auto_send is False:
+                        await send_model(
+                            RealtimeServerEvent(
+                                type="voice_transcript",
+                                session_id=active_session_id,
+                                payload={"text": draft_text, "auto_sent": False},
+                            )
+                        )
+                        await send_voice_event("voice_state", {"state": "idle"})
+                        draft.reset()
                         continue
                     try:
                         runtime = bridge.load_runtime_session(active_session_id)
@@ -1709,6 +2476,7 @@ def create_app() -> FastAPI:
                         user_message=draft_text,
                         source_format="app_voice_transcript",
                         interrupt_policy=event.interrupt_policy or "none",
+                        source_client_id=client_id,
                         log_callback=emit,
                     )
                     if result.get("busy"):
@@ -1834,14 +2602,14 @@ def create_app() -> FastAPI:
     return app
 
 
-def start_embedded_app_server_if_enabled() -> None:
+def start_embedded_app_server_if_enabled(*, force: bool = False) -> None:
     global _server_thread, _server_started
     if _server_started:
         return
 
     workspace = _workspace_root()
     config = get_live_config(workspace / "config.json")
-    if not bool(config.get("channels.app.enabled", False)):
+    if not force and not bool(config.get("channels.app.enabled", False)):
         return
 
     host = str(config.get("channels.app.host", "0.0.0.0"))

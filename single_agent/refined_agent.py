@@ -36,11 +36,15 @@ try:
 except ImportError:
     PYAUTOGUI_AVAILABLE = False
 
+PYWINAUTO_IMPORT_ERROR = None
 try:
     from pywinauto import Desktop, Application
     PYWINAUTO_AVAILABLE = True
-except ImportError:
+except Exception as exc:
+    Desktop = None
+    Application = None
     PYWINAUTO_AVAILABLE = False
+    PYWINAUTO_IMPORT_ERROR = exc
 
 try:
     import pyperclip

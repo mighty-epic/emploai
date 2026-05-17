@@ -9,6 +9,8 @@ from typing import Dict, List, Optional, Any, Callable
 from pathlib import Path
 from dataclasses import dataclass
 
+from cli.agent_tools.adapters import normalize_provider, to_anthropic_format, to_google_format, to_openai_format
+
 logger = logging.getLogger(__name__)
 
 
@@ -581,14 +583,13 @@ class UnifiedToolRegistry:
     
     def get_tools_for_provider(self, provider: str) -> List[Dict]:
         """Get tool definitions formatted for specific provider."""
+        provider = normalize_provider(provider)
+        tools = list(self.tools.values())
         if provider == 'anthropic':
-            return self._format_for_anthropic()
-        elif provider in ['openai', 'xai', 'deepseek', 'openrouter']:
-            return self._format_for_openai()
-        elif provider == 'google':
-            return self._format_for_google()
-        else:
-            return self._format_for_openai()  # Default to OpenAI format
+            return to_anthropic_format(tools)
+        if provider == 'google':
+            return to_google_format(tools)
+        return to_openai_format(tools)
     
     def _format_for_anthropic(self) -> List[Dict]:
         """Format tools for Anthropic API."""
@@ -1040,24 +1041,29 @@ def create_unified_agent(
         "gpt-5": ModelConfig(name="gpt-5", provider="openai", model_id="gpt-5", max_context=400000),
         "gpt-5.1": ModelConfig(name="gpt-5.1", provider="openai", model_id="gpt-5.1-2025-11-13", max_context=400000),
         "gpt-5.2": ModelConfig(name="gpt-5.2", provider="openai", model_id="gpt-5.2-2025-12-11", max_context=400000),
-        "gpt-5.4": ModelConfig(name="gpt-5.4", provider="openai", model_id="gpt-5.4-2026-03-05", max_context=400000),
+        "gpt-5.5": ModelConfig(name="gpt-5.5", provider="openai", model_id="gpt-5.5", max_context=1000000),
+        "gpt-5.4": ModelConfig(name="gpt-5.4", provider="openai", model_id="gpt-5.4-2026-03-05", max_context=1050000),
+        "gpt-5.4-mini": ModelConfig(name="gpt-5.4-mini", provider="openai", model_id="gpt-5.4-mini", max_context=400000),
         "gpt-5.1-codex-max": ModelConfig(name="gpt-5.1-codex-max", provider="openai", model_id="gpt-5.1-codex-max", max_context=400000),
         "gpt-5.2-codex": ModelConfig(name="gpt-5.2-codex", provider="openai", model_id="gpt-5.2-codex", max_context=400000),
-        "gpt-4.1": ModelConfig(name="gpt-4.1", provider="openai", model_id="gpt-4.1", max_context=128000),
+        "gpt-4.1": ModelConfig(name="gpt-4.1", provider="openai", model_id="gpt-4.1", max_context=1047576),
         "gpt-4o": ModelConfig(name="gpt-4o", provider="openai", model_id="gpt-4o", max_context=128000),
         "gpt-4o-mini": ModelConfig(name="gpt-4o-mini", provider="openai", model_id="gpt-4o-mini", max_context=128000),
         "claude-sonnet-4.5": ModelConfig(name="claude-sonnet-4.5", provider="anthropic", model_id="claude-sonnet-4-5-20250929", max_context=200000),
         "claude-opus-4.5": ModelConfig(name="claude-opus-4.5", provider="anthropic", model_id="claude-opus-4-5-20250929", max_context=200000),
+        "claude-sonnet-4.6": ModelConfig(name="claude-sonnet-4.6", provider="anthropic", model_id="claude-sonnet-4-6", max_context=1000000),
+        "claude-opus-4.6": ModelConfig(name="claude-opus-4.6", provider="anthropic", model_id="claude-opus-4-6", max_context=1000000),
+        "claude-opus-4.7": ModelConfig(name="claude-opus-4.7", provider="anthropic", model_id="claude-opus-4-7", max_context=1000000),
         "claude-haiku-4.5": ModelConfig(name="claude-haiku-4.5", provider="anthropic", model_id="claude-haiku-4-5-20251001", max_context=200000),
         "claude-sonnet-4": ModelConfig(name="claude-sonnet-4", provider="anthropic", model_id="claude-sonnet-4-20250514", max_context=200000),
         "claude-opus-4": ModelConfig(name="claude-opus-4", provider="anthropic", model_id="claude-opus-4-20250514", max_context=200000),
-        "claude-haiku-4": ModelConfig(name="claude-haiku-4", provider="anthropic", model_id="claude-haiku-4-20250514", max_context=200000),
-        "gemini-3-pro": ModelConfig(name="gemini-3-pro", provider="google", model_id="gemini-3-pro", max_context=2000000),
-        "gemini-3-flash": ModelConfig(name="gemini-3-flash", provider="google", model_id="gemini-3-flash", max_context=1000000),
-        "gemini-2.5-pro": ModelConfig(name="gemini-2.5-pro", provider="google", model_id="gemini-2.5-pro", max_context=2000000),
-        "gemini-2.5-flash": ModelConfig(name="gemini-2.5-flash", provider="google", model_id="gemini-2.5-flash", max_context=1000000),
-        "gemini-2.0-flash": ModelConfig(name="gemini-2.0-flash", provider="google", model_id="gemini-2.0-flash-exp", max_context=1000000),
-        "gemini-1.5-pro": ModelConfig(name="gemini-1.5-pro", provider="google", model_id="gemini-1.5-pro", max_context=2000000),
+        "claude-haiku-4": ModelConfig(name="claude-haiku-4", provider="anthropic", model_id="claude-haiku-4-5-20251001", max_context=200000),
+        "gemini-3-pro": ModelConfig(name="gemini-3-pro", provider="google", model_id="gemini-3-pro", max_context=1048576),
+        "gemini-3-flash": ModelConfig(name="gemini-3-flash", provider="google", model_id="gemini-3-flash", max_context=1048576),
+        "gemini-2.5-pro": ModelConfig(name="gemini-2.5-pro", provider="google", model_id="gemini-2.5-pro", max_context=1048576),
+        "gemini-2.5-flash": ModelConfig(name="gemini-2.5-flash", provider="google", model_id="gemini-2.5-flash", max_context=1048576),
+        "gemini-2.0-flash": ModelConfig(name="gemini-2.0-flash", provider="google", model_id="gemini-2.0-flash-exp", max_context=1048576),
+        "gemini-1.5-pro": ModelConfig(name="gemini-1.5-pro", provider="google", model_id="gemini-1.5-pro", max_context=2097152),
         "grok-4.1-fast-reasoning": ModelConfig(name="grok-4.1-fast-reasoning", provider="xai", model_id="grok-4-1-fast-reasoning", max_context=2000000),
         "grok-4.1-fast-non-reasoning": ModelConfig(name="grok-4.1-fast-non-reasoning", provider="xai", model_id="grok-4-1-fast-non-reasoning", max_context=2000000),
         "grok-code-fast-1": ModelConfig(name="grok-code-fast-1", provider="xai", model_id="grok-code-fast-1", max_context=256000),
@@ -1069,8 +1075,8 @@ def create_unified_agent(
         "grok-2-vision-1212": ModelConfig(name="grok-2-vision-1212", provider="xai", model_id="grok-2-vision-1212", max_context=32768),
         "grok-2": ModelConfig(name="grok-2", provider="xai", model_id="grok-2-latest", max_context=128000),
         "grok-beta": ModelConfig(name="grok-beta", provider="xai", model_id="grok-beta", max_context=128000),
-        "deepseek-chat": ModelConfig(name="deepseek-chat", provider="deepseek", model_id="deepseek-chat", max_context=64000),
-        "deepseek-reasoner": ModelConfig(name="deepseek-reasoner", provider="deepseek", model_id="deepseek-reasoner", max_context=64000),
+        "deepseek-chat": ModelConfig(name="deepseek-chat", provider="deepseek", model_id="deepseek-chat", max_context=128000),
+        "deepseek-reasoner": ModelConfig(name="deepseek-reasoner", provider="deepseek", model_id="deepseek-reasoner", max_context=128000),
         "orb-gpt-4o": ModelConfig(name="orb-gpt-4o", provider="openai", model_id="openai/gpt-4o", max_context=128000),
         "orb-claude-3.5-sonnet": ModelConfig(name="orb-claude-3.5-sonnet", provider="openai", model_id="anthropic/claude-3.5-sonnet", max_context=200000),
     }

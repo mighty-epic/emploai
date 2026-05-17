@@ -191,6 +191,7 @@ export default function AgentScreen() {
         <MetricCard label="Status" value={status} />
         <MetricCard label="Model" value={overview?.current_model || 'Unknown'} />
         <MetricCard label="Variant" value={overview?.current_variant || 'Unknown'} />
+        <MetricCard label="Planner" value={overview?.planner_model || 'Automatic'} />
         <MetricCard label="Turns" value={overview ? String(overview.max_turns) : '-'} />
         <MetricCard label="Session" value={activeSession?.name || 'No session'} />
       </ScrollView>
@@ -239,6 +240,25 @@ export default function AgentScreen() {
                   label={variant}
                   active={variant === overview?.current_variant}
                   onPress={() => void applyConfig({ variant })}
+                />
+              ))}
+            </View>
+          </View>
+
+          <View style={styles.groupBlock}>
+            <Text style={styles.groupTitle}>Planner model</Text>
+            <View style={styles.chipRow}>
+              <ActionChip
+                label="Automatic"
+                active={!overview?.planner_model}
+                onPress={() => void applyConfig({ planner_model: null })}
+              />
+              {(overview?.available_planner_models || []).map((model) => (
+                <ActionChip
+                  key={`planner-${model}`}
+                  label={model}
+                  active={model === overview?.planner_model}
+                  onPress={() => void applyConfig({ planner_model: model })}
                 />
               ))}
             </View>

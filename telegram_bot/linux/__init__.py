@@ -1,18 +1,31 @@
 """
 Linux compatibility layer for the Telegram agent.
 
-When running on Linux (auto-detected or via PLATFORM=linux env var),
-this module provides replacement implementations for the Windows-centric
-desktop path using Linux/X11 equivalents (`xdotool`, `wmctrl`, `scrot`).
-
-Usage:
-    Set PLATFORM=linux in .env (or auto-detected from platform.system()).
+This module only enables Linux desktop overrides when the host OS is actually
+Linux. Cross-OS environment overrides are intentionally ignored so a Windows
+desktop runtime cannot accidentally activate Linux-only handlers, and a Linux
+runtime cannot accidentally fall back to the Windows tool path.
 """
 
+import logging
 import os
 import platform
 
-LINUX_MODE = os.getenv("PLATFORM", platform.system()).lower() == "linux"
+logger = logging.getLogger(__name__)
+
+HOST_PLATFORM = (platform.system() or "").strip().lower()
+REQUESTED_PLATFORM = os.getenv("PLATFORM", "").strip().lower()
+PLATFORM_OVERRIDE_IGNORED = bool(REQUESTED_PLATFORM and REQUESTED_PLATFORM != HOST_PLATFORM)
+
+if PLATFORM_OVERRIDE_IGNORED:
+    logger.warning(
+        "Ignoring PLATFORM=%s on %s host; cross-OS platform overrides are disabled.",
+        REQUESTED_PLATFORM,
+        HOST_PLATFORM or "unknown",
+    )
+
+EFFECTIVE_PLATFORM = HOST_PLATFORM or REQUESTED_PLATFORM
+LINUX_MODE = EFFECTIVE_PLATFORM == "linux"
 
 _HEADLESS_FALSE_VALUES = {"false", "0", "no", "off"}
 
