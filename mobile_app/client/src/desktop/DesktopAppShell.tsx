@@ -20,6 +20,7 @@ import {
   removeDesktopVoicePack,
   saveDesktopMemory,
   saveDesktopSetup,
+  setDesktopVoiceDefaultEngine,
   startDesktopRuntime,
   stopDesktopRuntime,
   subscribeDesktopRuntime,
@@ -694,6 +695,30 @@ export function DesktopAppShell() {
     }
   };
 
+  const selectVoiceEngine = async (engine: string) => {
+    setError(null);
+    setNotice(`Switching voice path to ${engine === 'hebrew_local' ? 'Hebrew' : engine === 'english_local' ? 'English' : 'off'}...`);
+    try {
+      const payload = await setDesktopVoiceDefaultEngine(engine);
+      if (!payload) {
+        setError('Voice engine controls are unavailable in this shell.');
+        return false;
+      }
+      applyBootstrap(payload, { keepSetupClosed: false });
+      setNotice(
+        engine === 'hebrew_local'
+          ? 'Voice path switched to Hebrew.'
+          : engine === 'english_local'
+            ? 'Voice path switched to English.'
+            : 'Voice input turned off.'
+      );
+      return true;
+    } catch (selectionError) {
+      setError(selectionError instanceof Error ? selectionError.message : String(selectionError));
+      return false;
+    }
+  };
+
   const installUpdateNow = async () => {
     setInstallingUpdate(true);
     setError(null);
@@ -886,6 +911,9 @@ export function DesktopAppShell() {
               runtimeStatus={runtimeStatus || bootstrap.runtimeStatus || null}
               envFilePath={bootstrap.envFilePath || undefined}
               defaultInterruptPolicy={bootstrap.setupState?.values.INTERRUPT_POLICY_DEFAULT || 'none'}
+              voicePackState={bootstrap.setupState?.voicePacks || null}
+              voiceStatus={bootstrap.setupState?.voiceStatus || null}
+              onSelectVoiceEngine={(engine) => selectVoiceEngine(engine)}
               onStartupStateChange={handleConversationStartupState}
               onOpenSetup={() => setShowSetup(true)}
               setupOpen={showSetup}

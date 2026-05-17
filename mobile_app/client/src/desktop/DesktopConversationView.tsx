@@ -41,11 +41,13 @@ import {
   loadDesktopSidebarState,
   pickDesktopFolder,
   saveDesktopSidebarState,
+  type DesktopVoicePackState,
   type DesktopRuntimeStatus,
   type DesktopSidebarProjectActivity,
   type DesktopSidebarProjectState,
   type DesktopSidebarSessionState,
   type DesktopSidebarState,
+  type DesktopVoiceRuntimeStatus,
 } from '@/lib/desktopBridge';
 import {
   DESKTOP_COMMAND_PLACEHOLDER,
@@ -72,6 +74,9 @@ const TRANSCRIPT_AUTO_SCROLL_IDLE_MS = 15000;
 const TRANSCRIPT_SCROLL_UP_THRESHOLD = 6;
 const TRANSCRIPT_SCROLL_MOVE_THRESHOLD = 2;
 const MAX_COMMAND_SUGGESTIONS = 8;
+const VOICE_ENGINE_NONE = 'none';
+const VOICE_ENGINE_ENGLISH = 'english_local';
+const VOICE_ENGINE_HEBREW = 'hebrew_local';
 // Flip this back to true if always-on voice should submit immediately after gate close.
 const ALWAYS_ON_VOICE_AUTO_SEND = false;
 
@@ -175,6 +180,9 @@ type Props = {
   runtimeStatus?: DesktopRuntimeStatus | null;
   envFilePath?: string;
   defaultInterruptPolicy?: string | null;
+  voicePackState?: DesktopVoicePackState | null;
+  voiceStatus?: DesktopVoiceRuntimeStatus | null;
+  onSelectVoiceEngine?: (engine: string) => Promise<boolean> | boolean;
   onStartupStateChange?: (state: StartupReadinessState, detail?: string) => void;
   onOpenSetup?: () => void;
   setupOpen?: boolean;
@@ -863,6 +871,9 @@ export function DesktopConversationView({
   runtimeStatus,
   envFilePath,
   defaultInterruptPolicy,
+  voicePackState,
+  voiceStatus,
+  onSelectVoiceEngine,
   onStartupStateChange,
   onOpenSetup,
   setupOpen = false,
