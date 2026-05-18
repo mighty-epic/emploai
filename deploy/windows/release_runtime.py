@@ -105,6 +105,15 @@ def configure_ssl_certificate_environment() -> str | None:
     """Keep httpx/requests usable inside the frozen Windows backend."""
 
     certificate_env_keys = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE")
+    openssl_config_env_keys = ("OPENSSL_CONF", "OPENSSL_MODULES", "SSL_CERT_DIR")
+
+    # Ignore host-level OpenSSL config in the packaged Windows backend.
+    # Machine-specific OpenSSL settings can reference config/modules that do
+    # not exist inside the frozen app, which breaks ssl.create_default_context().
+    if is_frozen() and os.name == "nt":
+        for key in openssl_config_env_keys:
+            os.environ.pop(key, None)
+
     for key in certificate_env_keys:
         configured = os.getenv(key, "").strip()
         if not configured:
@@ -889,7 +898,6 @@ def run_first_run_setup(
 def configure_process_environment(home: Path, env_file: Path) -> Dict[str, str]:
     os.chdir(home)
     load_dotenv(dotenv_path=env_file, override=True)
-    configure_ssl_certificate_environment()
 
     values = load_existing_env_values(env_file)
     for key, value in values.items():
@@ -899,6 +907,7 @@ def configure_process_environment(home: Path, env_file: Path) -> Dict[str, str]:
     os.environ.setdefault("BETA_MODE", values.get("BETA_MODE", "true"))
     os.environ.setdefault("HEADLESS", values.get("HEADLESS", "false"))
     os.environ.setdefault("EMPLOAI_HOME", str(home))
+    configure_ssl_certificate_environment()
     return values
 
 
