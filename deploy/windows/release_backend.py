@@ -10,26 +10,15 @@ import signal
 import subprocess
 import sys
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Optional
+import urllib.error
+import urllib.request
 from urllib.parse import quote
 
 from mobile_app.backend.auth_store import AppAuthStore
-from mobile_app.backend.desktop_runtime import (
-    DEFAULT_ATTACH_TIMEOUT_SECONDS,
-    DEFAULT_DESKTOP_HOST,
-    DEFAULT_DESKTOP_PORT,
-    DEFAULT_DEVICE_KEY,
-    DEFAULT_DEVICE_NAME,
-    DEFAULT_DEVICE_PLATFORM,
-    DesktopRuntimeConfig,
-    get_runtime_status,
-    load_desktop_runtime_config,
-    run_desktop_runtime_server,
-)
-from mobile_app.backend.session_bridge import AppSessionBridge
 from mobile_app.backend.voice_pack_manager import (
     HEBREW_PACK_ARCHIVE_URL_ENV,
     HEBREW_PACK_REVISION_ENV,
@@ -40,7 +29,6 @@ from mobile_app.backend.voice_pack_manager import (
     install_voice_pack,
     remove_voice_pack,
 )
-from mobile_app.backend.app_server import TOKEN_TTL_SECONDS
 
 from deploy.windows.release_runtime import (
     build_setup_state,
@@ -58,10 +46,130 @@ from deploy.windows.release_runtime import (
 )
 from deploy.windows.release_update import check_for_updates, install_latest_update
 
+if TYPE_CHECKING:
+    from mobile_app.backend.session_bridge import AppSessionBridge
+
 
 RUNTIME_PID_FILENAME = "desktop_runtime.pid.json"
 RUNTIME_LOG_FILENAME = "desktop_runtime.log"
 VOICE_PACK_BOOTSTRAP_REPORT_FILENAME = "installer_voice_pack_bootstrap.json"
+DEFAULT_ATTACH_TIMEOUT_SECONDS = 90
+DEFAULT_DESKTOP_HOST = "127.0.0.1"
+DEFAULT_DESKTOP_PORT = 8787
+DEFAULT_DEVICE_NAME = "EmploAI Desktop"
+DEFAULT_DEVICE_PLATFORM = "desktop-electron"
+DEFAULT_DEVICE_KEY = "desktop-local"
+TOKEN_TTL_SECONDS = 60 * 60 * 24 * 180
+
+
+def _desktop_runtime_module():
+    from mobile_app.backend import desktop_runtime as module
+
+    return module
+
+
+@dataclass
+class DesktopRuntimeConfig:
+    enabled: bool
+    host: str
+    port: int
+    auto_start: bool
+    attach_timeout_seconds: int
+    workspace: str
+
+    @property
+    def api_base_url(self) -> str:
+        host = self.host.strip() or DEFAULT_DESKTOP_HOST
+        if host in {"0.0.0.0", "::", "[::]"}:
+            host = "127.0.0.1"
+        return f"http://{host}:{self.port}"
+
+
+@dataclass
+class DesktopRuntimeStatus:
+    ok: bool
+    state: str
+    mode: str
+    api_base_url: str
+    startup_state: Optional[str] = None
+    degraded: bool = False
+    issues: list[str] | None = None
+    detail: Optional[str] = None
+    process_id: Optional[int] = None
+
+
+def _load_desktop_runtime_config():
+    home = runtime_home()
+    runtime_config = load_runtime_config(home)
+    channels = runtime_config.get("channels") if isinstance(runtime_config.get("channels"), dict) else {}
+    desktop = channels.get("desktop") if isinstance(channels.get("desktop"), dict) else {}
+    app = channels.get("app") if isinstance(channels.get("app"), dict) else {}
+    enabled = bool(desktop.get("enabled", True))
+    host = str(desktop.get("host", DEFAULT_DESKTOP_HOST) or DEFAULT_DESKTOP_HOST)
+    port = int(desktop.get("port", app.get("port", DEFAULT_DESKTOP_PORT) or DEFAULT_DESKTOP_PORT))
+    auto_start = bool(desktop.get("auto_start", False))
+    attach_timeout_seconds = int(desktop.get("attach_timeout_seconds", DEFAULT_ATTACH_TIMEOUT_SECONDS) or DEFAULT_ATTACH_TIMEOUT_SECONDS)
+    return DesktopRuntimeConfig(
+        enabled=enabled,
+        host=host,
+        port=port,
+        auto_start=auto_start,
+        attach_timeout_seconds=max(DEFAULT_ATTACH_TIMEOUT_SECONDS, attach_timeout_seconds),
+        workspace=str(home),
+    )
+
+
+def _healthcheck(url: str, timeout_seconds: float = 2.0) -> Optional[dict[str, Any]]:
+    request = urllib.request.Request(url=f"{url.rstrip('/')}/api/app/health", method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            if isinstance(payload, dict):
+                return payload
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError, OSError):
+        return None
+    return None
+
+
+def _get_runtime_status():
+    config = _load_desktop_runtime_config()
+    if not config.enabled:
+        return DesktopRuntimeStatus(
+            ok=False,
+            state="disabled",
+            mode="disabled",
+            api_base_url=config.api_base_url,
+            detail="Desktop channel is disabled in config.json",
+        )
+
+    payload = _healthcheck(config.api_base_url)
+    if not payload:
+        return DesktopRuntimeStatus(
+            ok=False,
+            state="offline",
+            mode="detached",
+            api_base_url=config.api_base_url,
+            detail="No compatible local runtime responded on the configured desktop host/port",
+        )
+
+    dependency_status = payload.get("dependency_status") or {}
+    degraded = bool(dependency_status.get("degraded"))
+    issues = [str(item) for item in dependency_status.get("issues", [])]
+    state = "degraded" if degraded else "ready"
+    return DesktopRuntimeStatus(
+        ok=True,
+        state=state,
+        mode="attached",
+        api_base_url=config.api_base_url,
+        startup_state=str(payload.get("startup_state") or ""),
+        degraded=degraded,
+        issues=issues,
+        process_id=int(payload.get("process_id") or 0) or None,
+    )
+
+
+async def _run_desktop_runtime_server(*, host: str, port: int) -> None:
+    await _desktop_runtime_module().run_desktop_runtime_server(host=host, port=port)
 
 
 def _json_print(payload: dict[str, Any]) -> int:
@@ -155,6 +263,8 @@ def _default_user_id() -> int:
 
 
 def _ensure_current_session_id(workspace: Path) -> str:
+    from mobile_app.backend.session_bridge import AppSessionBridge
+
     bridge = AppSessionBridge(user_id=_default_user_id(), workspace=workspace)
     current = bridge.get_current_session()
     if current:
@@ -223,7 +333,7 @@ def _clear_pid_record(home: Path) -> None:
         pass
 
 
-def _launch_detached_daemon(config: DesktopRuntimeConfig, home: Path) -> None:
+def _launch_detached_daemon(config: "DesktopRuntimeConfig", home: Path) -> None:
     command = [
         *_self_command(),
         "run-daemon",
@@ -269,8 +379,8 @@ def _launch_detached_daemon(config: DesktopRuntimeConfig, home: Path) -> None:
         )
 
 
-def _ensure_runtime(config: DesktopRuntimeConfig, home: Path, *, require_auto_start: bool = True) -> tuple[Any, str]:
-    status = get_runtime_status()
+def _ensure_runtime(config: "DesktopRuntimeConfig", home: Path, *, require_auto_start: bool = True) -> tuple[Any, str]:
+    status = _get_runtime_status()
     if status.ok:
         return status, "attached"
 
@@ -283,7 +393,7 @@ def _ensure_runtime(config: DesktopRuntimeConfig, home: Path, *, require_auto_st
     deadline = time.monotonic() + max(2, config.attach_timeout_seconds or DEFAULT_ATTACH_TIMEOUT_SECONDS)
     while time.monotonic() < deadline:
         time.sleep(0.75)
-        status = get_runtime_status()
+        status = _get_runtime_status()
         if status.ok:
             return status, "launched"
 
@@ -406,9 +516,9 @@ def _process_ids_for_port(port: int) -> set[int]:
         return set()
 
 
-def _managed_runtime_pids(home: Path, config: DesktopRuntimeConfig, *, status: Any | None = None) -> list[int]:
+def _managed_runtime_pids(home: Path, config: "DesktopRuntimeConfig", *, status: Any | None = None) -> list[int]:
     record = _read_pid_record(home)
-    status = status or get_runtime_status()
+    status = status or _get_runtime_status()
     pids: set[int] = set()
 
     recorded_pid = int(record.get("pid") or 0) if record else 0
@@ -430,7 +540,7 @@ def _managed_runtime_pids(home: Path, config: DesktopRuntimeConfig, *, status: A
 
 def _runtime_compatibility_issue(
     home: Path,
-    config: DesktopRuntimeConfig,
+    config: "DesktopRuntimeConfig",
     status: Any,
     *,
     telegram_enabled: bool,
@@ -463,21 +573,22 @@ def _runtime_compatibility_issue(
     )
 
 
-def _bootstrap_payload(*, launch_if_needed: bool = False, force_launch: bool = False) -> dict[str, Any]:
+def _bootstrap_payload(
+    *,
+    launch_if_needed: bool = False,
+    force_launch: bool = False,
+    resolve_current_session: bool = True,
+) -> dict[str, Any]:
     root, home, env_file, existing = _prepare_environment()
     apply_installer_voice_pack_preferences(home)
-    try:
-        ensure_requested_voice_packs(config_path=home / "config.json")
-    except Exception:
-        pass
     setup_state = build_setup_state(
         home=home,
         env_file=env_file,
         source_root=root,
         existing=existing,
     )
-    config = load_desktop_runtime_config()
-    status = get_runtime_status()
+    config = _load_desktop_runtime_config()
+    status = _get_runtime_status()
     runtime_mode = status.mode
     telegram_enabled = bool(configure_channels_enabled("telegram"))
     telegram_configured = bool(existing.get("TELEGRAM_BOT_TOKEN") and existing.get("ALLOWED_USER_IDS"))
@@ -508,7 +619,7 @@ def _bootstrap_payload(*, launch_if_needed: bool = False, force_launch: bool = F
                 telegram_configured=telegram_configured,
             )
         except RuntimeError as exc:
-            status = get_runtime_status()
+            status = _get_runtime_status()
             status.detail = str(exc)
             try:
                 status.state = "failed"
@@ -551,11 +662,21 @@ def _bootstrap_payload(*, launch_if_needed: bool = False, force_launch: bool = F
     current_session_id: str | None = None
     device_id: str | None = None
     if status.ok:
-        workspace = Path(config.workspace)
-        current_session_id = _ensure_current_session_id(workspace)
         token_payload = _ensure_desktop_token()
         access_token = str(token_payload["access_token"])
         device_id = str(token_payload["device_id"])
+        if resolve_current_session:
+            workspace = Path(config.workspace)
+            try:
+                current_session_id = _ensure_current_session_id(workspace)
+            except Exception as exc:
+                issues = list(status.issues or [])
+                issues.append(f"Shared session warm-up failed: {exc}")
+                try:
+                    status.issues = issues
+                    status.degraded = True
+                except Exception:
+                    pass
 
     return {
         "ok": True,
@@ -610,7 +731,7 @@ def _set_voice_engine(engine: str) -> dict[str, Any]:
 
     _, home, _, _ = _prepare_environment()
     update_voice_pack_preferences(home=home, default_engine=engine)
-    return _bootstrap_payload(launch_if_needed=False)
+    return _bootstrap_payload(launch_if_needed=False, resolve_current_session=False)
 
 
 def _process_exists(pid: int) -> bool:
@@ -648,8 +769,8 @@ def _terminate_pid(pid: int) -> None:
         return
 
 
-def _stop_runtime(home: Path, config: DesktopRuntimeConfig | None = None) -> dict[str, Any]:
-    config = config or load_desktop_runtime_config()
+def _stop_runtime(home: Path, config: "DesktopRuntimeConfig" | None = None) -> dict[str, Any]:
+    config = config or _load_desktop_runtime_config()
     managed_pids = _managed_runtime_pids(home, config)
     remaining = set(managed_pids)
 
@@ -673,8 +794,8 @@ def _stop_runtime(home: Path, config: DesktopRuntimeConfig | None = None) -> dic
     }
 
 
-def _runtime_is_managed(home: Path, config: DesktopRuntimeConfig | None = None) -> bool:
-    config = config or load_desktop_runtime_config()
+def _runtime_is_managed(home: Path, config: "DesktopRuntimeConfig" | None = None) -> bool:
+    config = config or _load_desktop_runtime_config()
     return bool(_managed_runtime_pids(home, config))
 
 
@@ -684,13 +805,13 @@ def _daemon_mode_for_desktop_runtime(*, telegram_enabled: bool, telegram_configu
 
 def _save_setup(launch_if_needed: bool) -> dict[str, Any]:
     root, home, env_file, existing = _prepare_environment()
-    config = load_desktop_runtime_config()
+    config = _load_desktop_runtime_config()
     payload = json.loads(sys.stdin.read() or "{}")
     values = payload.get("values") if isinstance(payload, dict) else None
     if not isinstance(values, dict):
         values = payload if isinstance(payload, dict) else {}
 
-    status_before_save = get_runtime_status()
+    status_before_save = _get_runtime_status()
     was_running = _runtime_is_managed(home, config) or bool(status_before_save.ok)
     if was_running:
         _stop_runtime(home, config)
@@ -714,8 +835,8 @@ def _voice_pack_action(pack_id: str, *, install: bool) -> dict[str, Any]:
         raise RuntimeError(f"Unsupported voice pack: {pack_id}")
 
     _, home, _, _ = _prepare_environment()
-    config = load_desktop_runtime_config()
-    status_before_action = get_runtime_status()
+    config = _load_desktop_runtime_config()
+    status_before_action = _get_runtime_status()
     was_running = _runtime_is_managed(home, config) or bool(status_before_action.ok)
     if was_running:
         _stop_runtime(home, config)
@@ -737,6 +858,7 @@ def _voice_pack_action(pack_id: str, *, install: bool) -> dict[str, Any]:
     return _bootstrap_payload(
         launch_if_needed=True,
         force_launch=was_running,
+        resolve_current_session=False,
     )
 
 
@@ -755,7 +877,7 @@ def _forward_voice_bridge(args: list[str]) -> int:
 
 def _run_daemon(host: str | None, port: int | None) -> int:
     root, home, env_file, existing = _prepare_environment()
-    config = load_desktop_runtime_config()
+    config = _load_desktop_runtime_config()
     run_host = str(host or config.host or DEFAULT_DESKTOP_HOST)
     run_port = int(port or config.port or DEFAULT_DESKTOP_PORT)
     telegram_enabled = bool(configure_channels_enabled("telegram"))
@@ -784,12 +906,12 @@ def _run_daemon(host: str | None, port: int | None) -> int:
                 os.environ["EMPLOAI_DESKTOP_FORCE_APP_SERVER"] = previous_force_flag
 
     print("Starting EmploAI backend in desktop-app-only mode", flush=True)
-    asyncio.run(run_desktop_runtime_server(host=run_host, port=run_port))
+    asyncio.run(_run_desktop_runtime_server(host=run_host, port=run_port))
     return 0
 
 
 def configure_channels_enabled(channel_name: str) -> bool:
-    config = load_desktop_runtime_config()
+    config = _load_desktop_runtime_config()
     if channel_name == "telegram":
         workspace = Path(config.workspace)
         config_path = workspace / "config.json"
@@ -868,20 +990,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(raw_argv)
 
     if args.command == "bootstrap":
-        return _json_print(_bootstrap_payload(launch_if_needed=bool(args.launch_if_needed)))
+        return _json_print(_bootstrap_payload(launch_if_needed=bool(args.launch_if_needed), resolve_current_session=False))
 
     if args.command == "start":
-        return _json_print(_bootstrap_payload(force_launch=True))
+        return _json_print(_bootstrap_payload(force_launch=True, resolve_current_session=False))
 
     if args.command == "stop":
         _prepare_environment()
         _, home, _ = _runtime_paths()
         _stop_runtime(home)
-        return _json_print(_bootstrap_payload(launch_if_needed=False))
+        return _json_print(_bootstrap_payload(launch_if_needed=False, resolve_current_session=False))
 
     if args.command == "status":
         _prepare_environment()
-        return _json_print(asdict(get_runtime_status()))
+        return _json_print(asdict(_get_runtime_status()))
 
     if args.command == "setup-state":
         root, home, env_file, existing = _prepare_environment()

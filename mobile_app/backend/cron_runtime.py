@@ -4,13 +4,26 @@ import asyncio
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from single_agent.cron_scheduler import get_scheduler
-from telegram_bot.cron_runner import run_cron_job_via_unified_flow
-from telegram_bot.telegram_session_state import TelegramSession
+
+if TYPE_CHECKING:
+    from telegram_bot.telegram_session_state import TelegramSession
 
 _CRON_RUNTIME_SESSIONS: dict[int, TelegramSession] = {}
+
+
+def _telegram_session_cls():
+    from telegram_bot.telegram_session_state import TelegramSession
+
+    return TelegramSession
+
+
+def _run_cron_job_via_unified_flow():
+    from telegram_bot.cron_runner import run_cron_job_via_unified_flow
+
+    return run_cron_job_via_unified_flow
 
 
 def _workspace() -> Path:
@@ -24,7 +37,7 @@ def get_cron_runtime_session(user_id: int = 0) -> TelegramSession:
     normalized_user_id = int(user_id or 0)
     session = _CRON_RUNTIME_SESSIONS.get(normalized_user_id)
     if session is None:
-        session = TelegramSession(
+        session = _telegram_session_cls()(
             user_id=normalized_user_id,
             workspace=_workspace(),
             create_new_session_on_init=False,
@@ -74,7 +87,7 @@ async def cron_spawn_callback(job_id: str, prompt: str) -> None:
         except Exception:
             pass
 
-    result = await run_cron_job_via_unified_flow(
+    result = await _run_cron_job_via_unified_flow()(
         session,
         prompt,
         scheduled_job_id=job_id,

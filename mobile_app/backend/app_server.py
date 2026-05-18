@@ -13,7 +13,7 @@ import time
 import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from fastapi import FastAPI, File, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -69,7 +69,6 @@ from mobile_app.backend.models import (
     VoiceClientEvent,
 )
 from mobile_app.backend.runtime import run_app_chat_turn
-from mobile_app.backend.session_bridge import AppSessionBridge
 from mobile_app.backend.voice_runtime import VoiceDraftState, get_voice_runtime_status, synthesize_assistant_audio
 from shared.channel_sync import get_channel_sync_hub
 from shared.live_config import get_live_config
@@ -84,6 +83,9 @@ from shared.task_board import (
 )
 from single_agent.cron_scheduler import get_scheduler, parse_schedule_with_error
 from telegram_bot.restart_runtime import exec_current_process
+
+if TYPE_CHECKING:
+    from mobile_app.backend.session_bridge import AppSessionBridge
 
 
 APP_SECRET_ENV = "EMPLO_APP_SECRET"
@@ -655,6 +657,8 @@ def _authorize_pair_start(auth_header: Optional[str], pair_secret: Optional[str]
 
 def _bridge_for_user(user_id: int) -> AppSessionBridge:
     workspace = _workspace_root()
+    from mobile_app.backend.session_bridge import AppSessionBridge
+
     return AppSessionBridge(user_id=user_id, workspace=workspace)
 
 

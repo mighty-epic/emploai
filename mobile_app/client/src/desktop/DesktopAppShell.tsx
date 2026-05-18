@@ -221,7 +221,13 @@ export function DesktopAppShell() {
     payload: DesktopBootstrap,
     options: { keepSetupClosed?: boolean } = {}
   ) => {
-    setBootstrap(payload);
+    setBootstrap((current) => ({
+      ...current,
+      ...payload,
+      accessToken: payload.accessToken || current?.accessToken || '',
+      currentSessionId: payload.currentSessionId ?? current?.currentSessionId ?? null,
+      deviceId: payload.deviceId ?? current?.deviceId ?? null,
+    }));
     if (payload.runtimeStatus) {
       setRuntimeStatus(payload.runtimeStatus);
     }

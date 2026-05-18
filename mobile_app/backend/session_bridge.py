@@ -2,14 +2,27 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 import time
 
 from cli.models.session import Session
 from cli.session_manager import SessionManager
-from single_agent.cron_scheduler import get_scheduler
-from telegram_bot.telegram_session_state import TelegramSession, get_session, user_sessions
 from shared.session_timeline import append_timeline_event, create_timeline_event
+
+if TYPE_CHECKING:
+    from telegram_bot.telegram_session_state import TelegramSession
+
+
+def _telegram_session_state_module():
+    from telegram_bot import telegram_session_state as module
+
+    return module
+
+
+def _scheduler():
+    from single_agent.cron_scheduler import get_scheduler
+
+    return get_scheduler()
 
 
 class AppSessionBridge:
@@ -59,12 +72,13 @@ class AppSessionBridge:
     def session_index_path(self) -> Path:
         return self.session_manager.sessions_dir / "index.json"
 
-    def _runtime(self) -> Optional[TelegramSession]:
-        return user_sessions.get(self.user_id)
+    def _runtime(self) -> Optional["TelegramSession"]:
+        module = _telegram_session_state_module()
+        return getattr(module, "user_sessions", {}).get(self.user_id)
 
     def _assert_runtime_can_switch(
         self,
-        runtime: Optional[TelegramSession],
+        runtime: Optional["TelegramSession"],
         *,
         target_session_id: Optional[str] = None,
     ) -> None:
@@ -77,12 +91,12 @@ class AppSessionBridge:
 
         raise RuntimeError("Finish or stop the current task before switching sessions.")
 
-    def _persist_runtime_before_switch(self, runtime: Optional[TelegramSession]) -> None:
+    def _persist_runtime_before_switch(self, runtime: Optional["TelegramSession"]) -> None:
         if not runtime:
             return
         runtime.save_session()
 
-    def _session_defaults(self, runtime: Optional[TelegramSession]) -> Dict[str, Any]:
+    def _session_defaults(self, runtime: Optional["TelegramSession"]) -> Dict[str, Any]:
         if runtime:
             planner_model = getattr(runtime, "planner_model", None)
             if planner_model is None:
@@ -146,14 +160,15 @@ class AppSessionBridge:
             return runtime.session
         return session
 
-    def get_or_create_runtime_session(self) -> TelegramSession:
-        return get_session(
+    def get_or_create_runtime_session(self) -> "TelegramSession":
+        module = _telegram_session_state_module()
+        return module.get_session(
             self.user_id,
             workspace=self.workspace,
             create_new_session=False,
         )
 
-    def load_runtime_session(self, session_id: Optional[str] = None) -> TelegramSession:
+    def load_runtime_session(self, session_id: Optional[str] = None) -> "TelegramSession":
         runtime = self.get_or_create_runtime_session()
         target_session_id = session_id or self.session_manager.get_current_session_id()
         if target_session_id:
@@ -328,7 +343,7 @@ class AppSessionBridge:
         }
 
     def list_jobs(self) -> List[Dict[str, Any]]:
-        scheduler = get_scheduler()
+        scheduler = _scheduler()
         jobs = []
         for job in scheduler.jobs.values():
             owner_user_id = getattr(job, "owner_user_id", None)

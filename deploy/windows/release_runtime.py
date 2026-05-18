@@ -11,6 +11,10 @@ from typing import Callable, Dict, Mapping, MutableMapping
 
 from dotenv import dotenv_values, load_dotenv
 
+from mobile_app.backend.voice_pack_manager import (
+    get_english_pack_status,
+    get_hebrew_pack_status,
+)
 from shared.tesseract_runtime import resolve_tesseract_runtime
 
 try:
@@ -975,20 +979,74 @@ def validate_setup_values(values: Mapping[str, str]) -> list[str]:
 
 
 def resolve_voice_runtime_status() -> Dict[str, object]:
-    try:
-        from mobile_app.backend.voice_runtime import get_voice_runtime_status
+    runtime_config = load_runtime_config(runtime_home())
+    _normalize_voice_config(runtime_config, installer_preferences=_read_installer_voice_pack_preferences())
+    voice_config = runtime_config.get("voice") if isinstance(runtime_config.get("voice"), dict) else {}
+    packs = voice_config.get("packs") if isinstance(voice_config.get("packs"), dict) else {}
+    english_requested = _coerce_bool((packs.get(VOICE_ENGINE_ENGLISH) or {}).get("requested"), True)
+    hebrew_requested = _coerce_bool((packs.get(VOICE_ENGINE_HEBREW) or {}).get("requested"), False)
 
-        return get_voice_runtime_status()
-    except Exception as exc:
-        return {
-            "ok": False,
-            "issues": [f"Voice runtime check failed: {exc}"],
-            "stt_backend": "local_whisper",
-            "stt_model": None,
-            "draft_model": None,
-            "binary_flavor": None,
-            "tts_enabled": False,
-        }
+    default_engine = str(voice_config.get("default_engine") or VOICE_ENGINE_NONE).strip().lower()
+    if default_engine not in {VOICE_ENGINE_NONE, VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW}:
+        default_engine = VOICE_ENGINE_ENGLISH if english_requested else VOICE_ENGINE_HEBREW if hebrew_requested else VOICE_ENGINE_NONE
+    if default_engine == VOICE_ENGINE_ENGLISH and not english_requested:
+        default_engine = VOICE_ENGINE_HEBREW if hebrew_requested else VOICE_ENGINE_NONE
+    if default_engine == VOICE_ENGINE_HEBREW and not hebrew_requested:
+        default_engine = VOICE_ENGINE_ENGLISH if english_requested else VOICE_ENGINE_NONE
+
+    stt_backend = (os.getenv("EMPLO_APP_STT_BACKEND", "local_whisper").strip().lower() or "local_whisper")
+    stt_model = os.getenv("EMPLO_APP_STT_MODEL", "base.en-q5_1").strip() or "base.en-q5_1"
+    draft_model = os.getenv("EMPLO_APP_STT_DRAFT_MODEL", "tiny.en").strip() or "tiny.en"
+    binary_flavor = os.getenv("EMPLO_APP_STT_BINARY_FLAVOR", "blas").strip() or "blas"
+    tts_enabled = os.getenv("EMPLO_APP_TTS_ENABLED", "1").strip().lower() not in {"0", "false", "off", "no"}
+
+    english_pack_status = get_english_pack_status()
+    hebrew_pack_status = get_hebrew_pack_status()
+    english_pack_issues = list(english_pack_status.get("issues") or [])
+    hebrew_pack_issues = list(hebrew_pack_status.get("issues") or [])
+    english_pack_ready = bool(english_pack_status.get("available"))
+    hebrew_pack_ready = bool(hebrew_pack_status.get("available"))
+
+    input_issues: list[str] = []
+    if default_engine == VOICE_ENGINE_NONE:
+        input_issues.append("Voice input is disabled in setup and settings.")
+    elif default_engine == VOICE_ENGINE_HEBREW:
+        input_issues.extend(hebrew_pack_issues)
+    elif stt_backend == "openai":
+        if not os.getenv("OPENAI_API_KEY", "").strip():
+            input_issues.append("OPENAI_API_KEY is not configured, so app voice transcription is unavailable.")
+    else:
+        input_issues.extend(english_pack_issues)
+
+    return {
+        "ok": not input_issues,
+        "input_ok": not input_issues,
+        "issues": input_issues,
+        "stt_backend": stt_backend,
+        "stt_model": (
+            str(hebrew_pack_status.get("model_dir") or "")
+            if default_engine == VOICE_ENGINE_HEBREW
+            else stt_model
+            if stt_backend != "openai"
+            else os.getenv("EMPLO_APP_STT_MODEL", "gpt-4o-mini-transcribe")
+        ),
+        "draft_model": (
+            str(hebrew_pack_status.get("model_dir") or "")
+            if default_engine == VOICE_ENGINE_HEBREW
+            else None if stt_backend == "openai" else draft_model
+        ),
+        "binary_flavor": None if default_engine == VOICE_ENGINE_HEBREW or stt_backend == "openai" else binary_flavor,
+        "tts_enabled": tts_enabled,
+        "selected_engine": default_engine,
+        "english_requested": english_requested,
+        "hebrew_requested": hebrew_requested,
+        "english_pack_ready": english_pack_ready,
+        "hebrew_pack_ready": hebrew_pack_ready,
+        "english_pack_status": english_pack_status,
+        "hebrew_pack_status": hebrew_pack_status,
+        "hebrew_model_root": str(hebrew_pack_status.get("model_dir") or ""),
+        "hebrew_draft_model_root": str(hebrew_pack_status.get("model_dir") or ""),
+    }
 
 
 def build_setup_state(

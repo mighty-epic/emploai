@@ -60,8 +60,10 @@ try:
     import base64
     configure_pytesseract_runtime(pytesseract)
     TESSERACT_AVAILABLE = True
-except ImportError:
+    TESSERACT_IMPORT_ERROR = None
+except Exception as exc:
     TESSERACT_AVAILABLE = False
+    TESSERACT_IMPORT_ERROR = exc
 
 
 # ============================================================

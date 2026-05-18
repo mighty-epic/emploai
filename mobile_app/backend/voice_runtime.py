@@ -27,10 +27,6 @@ from mobile_app.backend.whisper_cpp_runtime import (
     transcript_confidence_from_output_json,
     write_pcm16_mono_wav,
 )
-from mobile_app.backend.hebrew_transformers_runtime import (
-    looks_repetitive as hebrew_looks_repetitive,
-    transcribe_wav_bytes as transcribe_hebrew_wav_bytes,
-)
 from mobile_app.backend.voice_pack_manager import (
     VOICE_ENGINE_ENGLISH,
     VOICE_ENGINE_HEBREW,
@@ -108,6 +104,20 @@ _WHISPER_ASSET_DIRS = {
     "cublas-11.8": "whisper-cublas-11.8.0-bin-x64",
     "cublas-12.4": "whisper-cublas-12.4.0-bin-x64",
 }
+
+
+def _hebrew_transformers_runtime():
+    from mobile_app.backend import hebrew_transformers_runtime as module
+
+    return module
+
+
+def hebrew_looks_repetitive(text: str) -> bool:
+    return bool(_hebrew_transformers_runtime().looks_repetitive(text))
+
+
+def transcribe_hebrew_wav_bytes(*args, **kwargs):
+    return _hebrew_transformers_runtime().transcribe_wav_bytes(*args, **kwargs)
 
 
 def _get_stt_client() -> Optional[OpenAI]:

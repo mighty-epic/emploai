@@ -11,15 +11,17 @@ import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from dotenv import load_dotenv
 
 from mobile_app.backend.app_server import TOKEN_TTL_SECONDS, _default_user_id, _workspace_root, create_app
 from mobile_app.backend.auth_store import AppAuthStore
 from mobile_app.backend.cron_runtime import ensure_global_cron_scheduler_started
-from mobile_app.backend.session_bridge import AppSessionBridge
 from shared.live_config import get_live_config
+
+if TYPE_CHECKING:
+    from mobile_app.backend.session_bridge import AppSessionBridge
 
 
 DEFAULT_DESKTOP_HOST = "127.0.0.1"
@@ -260,6 +262,8 @@ def _offline_bootstrap(config: DesktopRuntimeConfig, status: DesktopRuntimeStatu
 
 def _bridge() -> AppSessionBridge:
     workspace = _load_workspace()
+    from mobile_app.backend.session_bridge import AppSessionBridge
+
     return AppSessionBridge(user_id=_default_user_id(), workspace=workspace)
 
 
