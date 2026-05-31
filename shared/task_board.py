@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from cli.tui_constants import MODEL_CONFIGS
+from shared.openai_api import create_openai_completion
 
 
 TASK_BOARD_METHOD_FAILURE_THRESHOLD = 3
@@ -22,9 +23,10 @@ _TASK_STATES = {
     "reassessing",
     "blocked_waiting_user",
     "completed_collapsed",
+    "history_collapsed",
 }
-_TASK_STATUSES = {"active", "completed", "blocked", "paused"}
-_DISPLAY_MODES = {"active", "completed_collapsed"}
+_TASK_STATUSES = {"active", "completed", "blocked", "paused", "interrupted"}
+_DISPLAY_MODES = {"active", "completed_collapsed", "history_collapsed"}
 _SUBGOAL_STATUSES = {"open", "in_progress", "done", "blocked"}
 _VERIFICATION_STATUSES = {"open", "done"}
 _BLOCKER_TYPES = {"none", "credentials", "2fa", "account_choice"}
@@ -34,10 +36,12 @@ _TOOL_FAMILY_MAP: Dict[str, str] = {
     "open_browser": "browser_dom",
     "observe_browser": "browser_dom",
     "browser_snapshot": "browser_dom",
+    "browser_read_text": "browser_dom",
     "browser_click_ref": "browser_dom",
     "browser_type": "browser_dom",
     "browser_press_key": "browser_dom",
     "browser_scroll": "browser_dom",
+    "browser_screenshot": "browser_dom",
     "browser_navigate": "browser_dom",
     "browser_wait_for": "browser_dom",
     "browser_list_tabs": "browser_dom",
@@ -101,9 +105,9 @@ _PLANNER_PREFERRED_MODELS = [
 
 _FAMILY_SIBLING_METHODS: Dict[str, List[str]] = {
     "browser_dom": [
-        "Refresh the DOM view with browser_snapshot and use a ref-based browser action after re-observing the page.",
-        "Switch to describe_screen for visual targeting before trying another browser DOM action.",
-        "Use ocr_screen only as an exact coordinate fallback after visual discovery fails.",
+        "Refresh the DOM view with browser_snapshot or observe_browser and use a ref-based browser action after re-observing the page.",
+        "Use browser_read_text or browser_wait_for(text_contains=...) when the missing proof is static page text, a heading, or an exact rendered value.",
+        "Do not switch to describe_screen or ocr_screen for a headless isolated browser page. Use desktop vision only when the browser is intentionally headed and visibly on screen.",
     ],
     "desktop_gui": [
         "Re-observe with describe_screen and relocate the target before trying another physical action.",
@@ -213,10 +217,23 @@ def ensure_task_board_state(session: Any) -> None:
         session.task_history = []
     if not hasattr(session, "active_task_id"):
         session.active_task_id = None
+    if not hasattr(session, "task_board_armed_next_turn"):
+        session.task_board_armed_next_turn = False
     if not hasattr(session, "_task_board_candidate"):
         session._task_board_candidate = None
     if not hasattr(session, "_task_board_turn_state"):
         session._task_board_turn_state = None
+
+
+def get_task_board_armed_next_turn(session: Any) -> bool:
+    ensure_task_board_state(session)
+    return bool(getattr(session, "task_board_armed_next_turn", False))
+
+
+def set_task_board_armed_next_turn(session: Any, armed: bool) -> bool:
+    ensure_task_board_state(session)
+    session.task_board_armed_next_turn = bool(armed)
+    return session.task_board_armed_next_turn
 
 
 def _current_turn_state(session: Any) -> Optional[Dict[str, Any]]:
@@ -377,7 +394,11 @@ def get_active_task_board(session: Any) -> Optional[Dict[str, Any]]:
     if index is None:
         return None
     board = session.task_history[index]
-    return board if board.get("display_mode") == "active" else None
+    if str(board.get("display_mode") or "") != "active":
+        return None
+    if str(board.get("status") or "") != "active":
+        return None
+    return board
 
 
 def get_latest_task_board(session: Any) -> Optional[Dict[str, Any]]:
@@ -396,7 +417,7 @@ def completed_task_boards(session: Any) -> List[Dict[str, Any]]:
     items = [
         board
         for board in session.task_history
-        if str(board.get("display_mode") or "") == "completed_collapsed"
+        if str(board.get("display_mode") or "") in {"completed_collapsed", "history_collapsed"}
     ]
     items.sort(key=lambda item: str(item.get("collapsed_completed_at") or item.get("completed_at") or item.get("updated_at") or ""), reverse=True)
     return items[:TASK_BOARD_COMPLETED_HISTORY_LIMIT]
@@ -411,7 +432,7 @@ def _prune_completed_boards(session: Any) -> None:
     completed_indexes = [
         index
         for index, board in enumerate(session.task_history)
-        if str(board.get("display_mode") or "") == "completed_collapsed"
+        if str(board.get("display_mode") or "") in {"completed_collapsed", "history_collapsed"}
     ]
     if len(completed_indexes) <= TASK_BOARD_COMPLETED_HISTORY_LIMIT:
         return
@@ -509,12 +530,6 @@ def _tool_event(tool_name: str, tool_args: Dict[str, Any], tool_result: Any) -> 
         "success": not _is_failure_result(tool_result),
         "result_preview": _result_preview(tool_result),
     }
-
-
-def _candidate_should_activate(candidate: Dict[str, Any]) -> bool:
-    families = {str(item) for item in candidate.get("tool_families") or [] if str(item)}
-    call_count = int(candidate.get("qualifying_tool_calls") or 0)
-    return len(families) >= 2 or call_count >= 3
 
 
 def _default_next_method() -> str:
@@ -703,8 +718,10 @@ def _planner_create_completion(model_name: str, provider: str, client: Any, prom
     model_id = MODEL_CONFIGS.get(model_name, {}).get("id", model_name)
 
     if provider in {"openai", "xai", "deepseek", "openrouter", "google"}:
-        response = client.chat.completions.create(
-            model=model_id,
+        response = create_openai_completion(
+            client,
+            model_name=model_name,
+            model_id=model_id,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -890,23 +907,73 @@ def _reassess_board_runtime(
     }
 
 
-def _collapse_completed_board(board: Dict[str, Any], completion_summary: str) -> None:
-    completion_summary = _collapse_text(completion_summary, limit=260) or "Task completed."
-    _complete_remaining_sub_goals(board, completion_summary)
-    board["state"] = "completed_collapsed"
-    board["status"] = "completed"
-    board["display_mode"] = "completed_collapsed"
-    board["completed_at"] = _now_iso()
-    board["completion_summary"] = completion_summary
-    board["verification_status"] = "done"
-    board["verification_summary"] = completion_summary
-    board["collapsed_title"] = f"[x] {board.get('main_goal')}"
-    board["collapsed_completed_at"] = board["completed_at"]
-    board["collapsed_completion_summary"] = completion_summary
+def _archive_board(board: Dict[str, Any], *, status: str, summary: str, blocked_reason: Optional[str] = None) -> None:
+    archived_at = _now_iso()
+    normalized_status = _normalize_status(status, default="interrupted", allowed=_TASK_STATUSES)
+    summary_text = _collapse_text(summary, limit=260) or "Managed task archived."
+    title_prefix = {
+        "completed": "[x]",
+        "blocked": "[!]",
+        "interrupted": "[■]",
+    }.get(normalized_status, "[x]")
+
+    if normalized_status == "completed":
+        _complete_remaining_sub_goals(board, summary_text)
+        board["verification_status"] = "done"
+    else:
+        board["verification_status"] = _normalize_status(
+            board.get("verification_status", "open"),
+            default="open",
+            allowed=_VERIFICATION_STATUSES,
+        )
+
+    board["state"] = "history_collapsed"
+    board["status"] = normalized_status
+    board["display_mode"] = "history_collapsed"
+    board["completed_at"] = archived_at
+    board["completion_summary"] = summary_text
+    board["verification_summary"] = summary_text
+    board["collapsed_title"] = f"{title_prefix} {board.get('main_goal')}"
+    board["collapsed_completed_at"] = archived_at
+    board["collapsed_completion_summary"] = summary_text
     board["pending_reassessment_reason"] = None
-    board["updated_at"] = _now_iso()
+    board["blocked_reason"] = blocked_reason
+    board["updated_at"] = archived_at
     _set_progress_summary(board)
-    _board_log(board, "completed", completion_summary)
+    _board_log(board, normalized_status, summary_text)
+
+
+def _collapse_completed_board(board: Dict[str, Any], completion_summary: str) -> None:
+    _archive_board(board, status="completed", summary=completion_summary)
+
+
+def archive_active_task_board(
+    session: Any,
+    *,
+    status: str,
+    summary: str,
+    blocked_reason: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    board = get_active_task_board(session)
+    if not board:
+        return None
+    _archive_board(board, status=status, summary=summary, blocked_reason=blocked_reason)
+    session.active_task_id = None
+    _prune_completed_boards(session)
+    return board
+
+
+def recover_stale_task_board(
+    session: Any,
+    *,
+    summary: str = "The previous managed task ended before it could be closed cleanly.",
+) -> Optional[Dict[str, Any]]:
+    board = get_active_task_board(session)
+    if not board:
+        return None
+    if bool(getattr(session, "is_processing", False)):
+        return None
+    return archive_active_task_board(session, status="interrupted", summary=summary)
 
 
 def create_task_board(
@@ -972,11 +1039,17 @@ def task_board_view(board: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]
     if not board:
         return None
     done, total = _progress_counts(board)
+    raw_state = str(board.get("state", "active") or "active")
+    raw_display_mode = str(board.get("display_mode", "active") or "active")
+    if raw_state == "completed_collapsed":
+        raw_state = "history_collapsed"
+    if raw_display_mode == "completed_collapsed":
+        raw_display_mode = "history_collapsed"
     return {
         "task_id": str(board.get("task_id") or ""),
         "status": _normalize_status(board.get("status", "active"), default="active", allowed=_TASK_STATUSES),
-        "state": _normalize_status(board.get("state", "active"), default="active", allowed=_TASK_STATES),
-        "display_mode": _normalize_status(board.get("display_mode", "active"), default="active", allowed=_DISPLAY_MODES),
+        "state": _normalize_status(raw_state, default="active", allowed=_TASK_STATES),
+        "display_mode": _normalize_status(raw_display_mode, default="active", allowed=_DISPLAY_MODES),
         "main_goal": str(board.get("main_goal") or ""),
         "goal_locked": bool(board.get("goal_locked", True)),
         "sub_goals": [copy.deepcopy(item) for item in board.get("sub_goals") or []],
@@ -1056,7 +1129,7 @@ def build_task_board_prompt(session: Any) -> str:
             "- The managed task board is runtime-owned. You do NOT create or edit it directly.\n"
             "- The board appears only for long-running multi-tool tasks after the runtime confirms the task crossed the activation threshold.\n"
             "- Do NOT ask the user to continue just because a method failed. Keep working unless a true user-dependent blocker exists.\n"
-            f"- Your only task-board tool is {TASK_BOARD_INTERNAL_TOOL_NAME}. Use it only after the same concrete method genuinely failed three times, or when the task truly needs credentials, 2FA, or an account choice from the user.\n"
+            "- No managed task board is active right now, so task-board-only tools are unavailable for this turn.\n"
             "- For normal failures, keep trying materially different methods and let the runtime manage the board.\n"
             "- The runtime will create, reassess, and complete the board; you should focus on executing the task and reporting proof."
         )
@@ -1110,13 +1183,38 @@ def note_user_turn(session: Any, user_message: str) -> Optional[str]:
 
     board = get_active_task_board(session)
     cleaned_message = str(user_message or "").strip()
+    armed_next_turn = get_task_board_armed_next_turn(session)
+    if armed_next_turn:
+        set_task_board_armed_next_turn(session, False)
     turn_state: Dict[str, Any] = {
         "user_message": user_message,
         "qualifying_tool_calls": 0,
         "qualifying_tool_events": [],
         "board_task_id_at_start": str(board.get("task_id") or "") if board else None,
         "user_changed_active_board": False,
+        "board_armed_next_turn": armed_next_turn,
     }
+
+    if board is None and armed_next_turn:
+        board = create_task_board(
+            session,
+            user_message=user_message,
+            origin="armed_next_turn",
+        )
+        plan = _planner_refresh(
+            session,
+            board=board,
+            mode="activation",
+            recent_events=[],
+        )
+        _apply_planner_result(board, plan)
+        board["next_method"] = _default_next_method()
+        board["updated_at"] = _now_iso()
+        _set_progress_summary(board)
+        summary = _activation_summary(board)
+        _board_log(board, "created", summary)
+        _set_turn_state(session, turn_state)
+        return summary
 
     if not board:
         _set_turn_state(session, turn_state)
@@ -1228,10 +1326,7 @@ def handle_tool_result(
         }
 
     board = get_active_task_board(session)
-    created = False
-    activated_this_call = False
     prompt_messages: List[Dict[str, str]] = []
-    summary: Optional[str] = None
     turn_state = _current_turn_state(session)
 
     if not _is_qualifying_tool(tool_name):
@@ -1252,74 +1347,16 @@ def handle_tool_result(
         del turn_state["qualifying_tool_events"][:-20]
 
     if board is None:
-        candidate = getattr(session, "_task_board_candidate", None)
-        if not isinstance(candidate, dict) or candidate.get("source_message") != source_message:
-            session._task_board_candidate = {
-                "source_message": source_message,
-                "qualifying_tool_calls": 0,
-                "tool_families": [],
-                "recent_events": [],
-                "channel": channel,
-                "created_at": _now_iso(),
-            }
-            candidate = session._task_board_candidate
+        return {
+            "summary": None,
+            "prompt_messages": prompt_messages,
+            "board": None,
+            "completed_boards": completed_task_board_views(session),
+            "created": False,
+        }
 
-        candidate["qualifying_tool_calls"] = int(candidate.get("qualifying_tool_calls") or 0) + 1
-        family = str(event.get("family") or "")
-        if family and family not in candidate["tool_families"]:
-            candidate["tool_families"].append(family)
-        candidate.setdefault("recent_events", []).append(event)
-        del candidate["recent_events"][:-20]
-
-        if not _candidate_should_activate(candidate):
-            return {
-                "summary": None,
-                "prompt_messages": [],
-                "board": None,
-                "completed_boards": completed_task_board_views(session),
-                "created": False,
-            }
-
-        board = create_task_board(
-            session,
-            user_message=source_message,
-            origin="runtime_activation",
-            channel=channel,
-        )
-        board["tool_call_count"] = int(candidate.get("qualifying_tool_calls") or 0)
-        board["qualifying_tool_calls"] = int(candidate.get("qualifying_tool_calls") or 0)
-        board["recent_tool_events"] = list(candidate.get("recent_events") or [])
-        plan = _planner_refresh(
-            session,
-            board=board,
-            mode="activation",
-            recent_events=list(board.get("recent_tool_events") or []),
-        )
-        _apply_planner_result(board, plan)
-        board["next_method"] = _default_next_method()
-        board["updated_at"] = _now_iso()
-        _set_progress_summary(board)
-        session._task_board_candidate = None
-        created = True
-        activated_this_call = True
-        summary = _activation_summary(board)
-        _board_log(board, "created", summary)
-        prompt_messages.append(
-            {
-                "role": "system",
-                "content": (
-                    "Managed task tracking is now active for this long-running task.\n"
-                    f"Goal: {board.get('main_goal')}\n"
-                    f"Current focus: {board.get('current_focus') or 'unset'}\n"
-                    f"Next method: {board.get('next_method')}\n"
-                    f"Use {TASK_BOARD_INTERNAL_TOOL_NAME} only if the same concrete method truly fails three times, or if credentials / 2FA / account choice from the user are required."
-                ),
-            }
-        )
-
-    if not activated_this_call:
-        board["tool_call_count"] = int(board.get("tool_call_count") or 0) + 1
-        board["qualifying_tool_calls"] = int(board.get("qualifying_tool_calls") or 0) + 1
+    board["tool_call_count"] = int(board.get("tool_call_count") or 0) + 1
+    board["qualifying_tool_calls"] = int(board.get("qualifying_tool_calls") or 0) + 1
     board.setdefault("recent_tool_events", []).append(event)
     del board["recent_tool_events"][:-30]
     board["updated_at"] = _now_iso()
@@ -1334,11 +1371,11 @@ def handle_tool_result(
         observed[key] = int(observed.get(key) or 0) + 1
 
     return {
-        "summary": summary,
+        "summary": None,
         "prompt_messages": prompt_messages,
         "board": board,
         "completed_boards": completed_task_board_views(session),
-        "created": created,
+        "created": False,
     }
 
 
@@ -1400,26 +1437,25 @@ def apply_task_board_failure_report(session: Any, args: Dict[str, Any]) -> Dict[
         }
 
     if blocker_type in {"credentials", "2fa", "account_choice"}:
-        board["state"] = "blocked_waiting_user"
-        board["status"] = "blocked"
-        board["display_mode"] = "active"
-        board["blocked_reason"] = blocker_type
-        board["pending_reassessment_reason"] = _failure_report_summary(blocker_type)
-        board["next_method"] = "Wait for the user to provide the missing credentials or account choice, then continue from the same goal."
-        board["updated_at"] = _now_iso()
-        _board_log(board, "blocked", board["pending_reassessment_reason"])
+        blocked_summary = _failure_report_summary(blocker_type)
+        archive_active_task_board(
+            session,
+            status="blocked",
+            summary=blocked_summary,
+            blocked_reason=blocker_type,
+        )
         return {
             "ok": True,
             "task_id": board.get("task_id"),
-            "summary": board["pending_reassessment_reason"],
-            "board": task_board_view(board),
+            "summary": blocked_summary,
+            "board": task_board_view(get_active_task_board(session)),
             "completed_boards": completed_task_board_views(session),
             "prompt_messages": [
                 {
                     "role": "system",
                     "content": (
                         "The runtime marked this task as blocked waiting on the user.\n"
-                        f"Reason: {board['pending_reassessment_reason']}\n"
+                        f"Reason: {blocked_summary}\n"
                         "Ask only for that missing user-dependent input, then continue."
                     ),
                 }
@@ -1529,12 +1565,16 @@ def finalize_task_board_turn(session: Any, assistant_text: str) -> Optional[Dict
             assistant_text=assistant_text,
             recent_events=list(turn_state.get("qualifying_tool_events") or []),
         )
-        if _can_runtime_complete_board(board, assistant_text, external_tool_calls):
+
+    if board:
+        if assistant_text:
             completion_summary = _assistant_completion_summary(assistant_text)
-            _collapse_completed_board(board, completion_summary)
-            session.active_task_id = None
-            _prune_completed_boards(session)
+            archive_active_task_board(session, status="completed", summary=completion_summary)
             summary = completion_summary
+        else:
+            interruption_summary = "The managed task ended before a final assistant reply was produced."
+            archive_active_task_board(session, status="interrupted", summary=interruption_summary)
+            summary = interruption_summary
 
     result_board = get_active_task_board(session)
     completed_views = completed_task_board_views(session)
