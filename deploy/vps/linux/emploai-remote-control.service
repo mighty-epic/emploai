@@ -1,0 +1,16 @@
+[Unit]
+Description=EmploAI Remote Control Plane
+After=network.target
+
+[Service]
+Type=simple
+User=emploai
+Group=emploai
+WorkingDirectory=/opt/emploai
+EnvironmentFile=/etc/emploai/remote-control.env
+ExecStart=/opt/emploai/venv/bin/python -m mobile_app.backend.remote_control_service --host ${EMPLOAI_REMOTE_CONTROL_HOST} --port ${EMPLOAI_REMOTE_CONTROL_PORT}
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

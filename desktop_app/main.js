@@ -1,5 +1,5 @@
 const { app, BrowserWindow, ipcMain, shell, clipboard, net, protocol, dialog } = require('electron');
-const { execFile, spawnSync } = require('child_process');
+const { execFile, spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
@@ -185,6 +185,118 @@ function runBackendJson(args, options = {}) {
   });
 }
 
+function runBackendJsonStream(args, options = {}) {
+  const backend = resolveBackendCommand();
+  const payload = options.input === undefined ? null : JSON.stringify(options.input);
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      backend.command,
+      [...backend.prefixArgs, ...args],
+      {
+        cwd: backend.cwd,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }
+    );
+
+    let stdoutBuffer = '';
+    let stderrBuffer = '';
+    let lineBuffer = '';
+    let finalPayload = null;
+    let streamedError = null;
+
+    const handleLine = (line) => {
+      const text = String(line || '').trim();
+      if (!text) {
+        return;
+      }
+      let parsed = null;
+      try {
+        parsed = JSON.parse(text);
+      } catch (_error) {
+        stdoutBuffer += `${text}\n`;
+        return;
+      }
+
+      if (parsed && parsed.kind === 'voice_pack_progress') {
+        if (parsed.state === 'error') {
+          streamedError = parsed.message || null;
+        }
+        if (typeof options.onEvent === 'function') {
+          options.onEvent(parsed);
+        }
+        return;
+      }
+
+      if (parsed && parsed.kind === 'bootstrap' && parsed.payload) {
+        finalPayload = parsed.payload;
+        return;
+      }
+
+      if (parsed && typeof parsed === 'object' && !parsed.kind) {
+        finalPayload = parsed;
+        return;
+      }
+
+      stdoutBuffer += `${text}\n`;
+    };
+
+    child.stdout.on('data', (chunk) => {
+      lineBuffer += String(chunk || '');
+      let newlineIndex = lineBuffer.indexOf('\n');
+      while (newlineIndex !== -1) {
+        const line = lineBuffer.slice(0, newlineIndex);
+        lineBuffer = lineBuffer.slice(newlineIndex + 1);
+        handleLine(line);
+        newlineIndex = lineBuffer.indexOf('\n');
+      }
+    });
+
+    child.stderr.on('data', (chunk) => {
+      stderrBuffer += String(chunk || '');
+    });
+
+    child.on('error', (error) => {
+      reject(new Error(error?.message || 'Failed to launch backend helper'));
+    });
+
+    child.on('close', (code) => {
+      if (lineBuffer.trim()) {
+        handleLine(lineBuffer);
+        lineBuffer = '';
+      }
+
+      if (code !== 0) {
+        reject(
+          new Error(
+            streamedError ||
+            stderrBuffer.trim() ||
+            stdoutBuffer.trim() ||
+            `Backend helper exited with code ${code}`
+          )
+        );
+        return;
+      }
+
+      if (!finalPayload) {
+        reject(new Error(stderrBuffer.trim() || stdoutBuffer.trim() || 'No JSON payload returned from backend helper'));
+        return;
+      }
+
+      resolve(finalPayload);
+    });
+
+    if (payload !== null && child.stdin) {
+      child.stdin.end(payload);
+      return;
+    }
+    if (child.stdin) {
+      child.stdin.end();
+    }
+  });
+}
+
 function updateBootstrapCaches(payload) {
   bootstrapCache = payload;
   runtimeStatusCache = payload?.runtimeStatus || null;
@@ -201,9 +313,22 @@ async function bootstrapRuntime() {
   return payload;
 }
 
-async function startLocalRuntime() {
+async function startLocalRuntime(options = {}) {
   emitRuntimeEvent({ type: 'runtime_starting' });
-  const payload = await runBackendJson(['start']);
+  const attachTimeoutSeconds = Number.isFinite(Number(options?.attachTimeoutSeconds))
+    ? Math.max(2, Math.trunc(Number(options.attachTimeoutSeconds)))
+    : null;
+  const restartAttachTimeoutSeconds = Number.isFinite(Number(options?.restartAttachTimeoutSeconds))
+    ? Math.max(2, Math.trunc(Number(options.restartAttachTimeoutSeconds)))
+    : null;
+  const args = ['start'];
+  if (attachTimeoutSeconds) {
+    args.push('--attach-timeout-seconds', String(attachTimeoutSeconds));
+  }
+  if (restartAttachTimeoutSeconds) {
+    args.push('--restart-attach-timeout-seconds', String(restartAttachTimeoutSeconds));
+  }
+  const payload = await runBackendJson(args);
   updateBootstrapCaches(payload);
   emitRuntimeEvent({
     type: 'runtime_started',
@@ -241,7 +366,17 @@ async function saveSetup(payload) {
 }
 
 async function installVoicePack(packId) {
-  const next = await runBackendJson(['install-voice-pack', '--pack', String(packId || '')]);
+  const next = await runBackendJsonStream(
+    ['install-voice-pack', '--pack', String(packId || ''), '--stream-progress'],
+    {
+      onEvent: (eventPayload) => {
+        emitRuntimeEvent({
+          type: 'voice_pack_progress',
+          payload: eventPayload,
+        });
+      },
+    }
+  );
   updateBootstrapCaches(next);
   emitRuntimeEvent({
     type: 'voice_pack_installed',
@@ -479,6 +614,25 @@ async function validateSetupField(fieldName, rawValue) {
         : setupValidationResult(field, 'invalid', 'Use numeric Telegram user IDs separated by commas');
     }
 
+    if (field === 'EMPLOAI_REMOTE_CONTROL_BASE_URL') {
+      try {
+        const parsed = new URL(value);
+        const valid = parsed.protocol === 'https:' || parsed.protocol === 'http:';
+        return valid
+          ? setupValidationResult(field, 'valid', 'Remote control service URL format looks valid')
+          : setupValidationResult(field, 'invalid', 'Remote control service URL must use http:// or https://');
+      } catch (_error) {
+        return setupValidationResult(field, 'invalid', 'Remote control service URL must be a valid URL');
+      }
+    }
+
+    if (field === 'EMPLOAI_REMOTE_CONTROL_EMAIL') {
+      const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+      return valid
+        ? setupValidationResult(field, 'valid', 'Remote control email format looks valid')
+        : setupValidationResult(field, 'invalid', 'Use a normal email address');
+    }
+
     return setupValidationResult(field, 'idle', '');
   } catch (error) {
     const detail = error?.name === 'AbortError'
@@ -595,6 +749,172 @@ function writeSidebarState(state) {
 
   fs.writeFileSync(filePath, `${JSON.stringify(state, null, 2)}\n`, 'utf-8');
   return state;
+}
+
+function getSidebarPathStatus(targetPath) {
+  const candidate = String(targetPath || '').trim();
+  if (!candidate) {
+    return {
+      requestedPath: null,
+      resolvedPath: null,
+      exists: false,
+      isDirectory: false,
+    };
+  }
+
+  try {
+    const resolvedPath = path.resolve(candidate);
+    if (!fs.existsSync(resolvedPath)) {
+      return {
+        requestedPath: candidate,
+        resolvedPath,
+        exists: false,
+        isDirectory: false,
+      };
+    }
+
+    const stat = fs.statSync(resolvedPath);
+    return {
+      requestedPath: candidate,
+      resolvedPath,
+      exists: true,
+      isDirectory: Boolean(stat.isDirectory()),
+    };
+  } catch (_error) {
+    return {
+      requestedPath: candidate,
+      resolvedPath: null,
+      exists: false,
+      isDirectory: false,
+    };
+  }
+}
+
+function runGitCommand(targetPath, gitArgs) {
+  const cwd = path.resolve(String(targetPath || '').trim() || '.');
+  const result = spawnSync('git', ['-C', cwd, ...gitArgs], {
+    windowsHide: true,
+    encoding: 'utf-8',
+  });
+  if (result.error) {
+    return {
+      ok: false,
+      error: result.error.message || 'git command failed',
+      stdout: '',
+      stderr: '',
+    };
+  }
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      error: String(result.stderr || result.stdout || '').trim() || `git exited with code ${result.status}`,
+      stdout: String(result.stdout || '').trim(),
+      stderr: String(result.stderr || '').trim(),
+    };
+  }
+  return {
+    ok: true,
+    error: null,
+    stdout: String(result.stdout || '').trim(),
+    stderr: String(result.stderr || '').trim(),
+  };
+}
+
+function getSidebarGitRepoInfo(targetPath) {
+  const candidate = String(targetPath || '').trim();
+  if (!candidate) {
+    return {
+      requestedPath: null,
+      resolvedPath: null,
+      repoRoot: null,
+      isGitRepo: false,
+      currentBranch: null,
+      branches: [],
+      error: null,
+    };
+  }
+
+  const pathStatus = getSidebarPathStatus(candidate);
+  const resolvedPath = pathStatus?.resolvedPath || path.resolve(candidate);
+  if (!pathStatus?.exists || !pathStatus?.isDirectory) {
+    return {
+      requestedPath: candidate,
+      resolvedPath,
+      repoRoot: null,
+      isGitRepo: false,
+      currentBranch: null,
+      branches: [],
+      error: 'Folder not available',
+    };
+  }
+
+  const topLevel = runGitCommand(resolvedPath, ['rev-parse', '--show-toplevel']);
+  if (!topLevel.ok || !topLevel.stdout) {
+    return {
+      requestedPath: candidate,
+      resolvedPath,
+      repoRoot: null,
+      isGitRepo: false,
+      currentBranch: null,
+      branches: [],
+      error: null,
+    };
+  }
+
+  const repoRoot = path.resolve(topLevel.stdout);
+  const currentBranchResult = runGitCommand(resolvedPath, ['branch', '--show-current']);
+  const branchListResult = runGitCommand(resolvedPath, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']);
+  const currentBranch = currentBranchResult.ok ? String(currentBranchResult.stdout || '').trim() || null : null;
+  const branches = branchListResult.ok
+    ? Array.from(new Set(
+        String(branchListResult.stdout || '')
+          .split(/\r?\n/)
+          .map((item) => String(item || '').trim())
+          .filter(Boolean),
+      ))
+    : [];
+
+  if (currentBranch && !branches.includes(currentBranch)) {
+    branches.unshift(currentBranch);
+  }
+
+  return {
+    requestedPath: candidate,
+    resolvedPath,
+    repoRoot,
+    isGitRepo: true,
+    currentBranch,
+    branches,
+    error: null,
+  };
+}
+
+function checkoutSidebarGitBranch(targetPath, branchName) {
+  const branch = String(branchName || '').trim();
+  const info = getSidebarGitRepoInfo(targetPath);
+  if (!info.isGitRepo || !info.resolvedPath) {
+    return {
+      ...info,
+      error: info.error || 'Not a Git repository',
+    };
+  }
+  if (!branch) {
+    return {
+      ...info,
+      error: 'Missing branch name',
+    };
+  }
+  if (info.currentBranch === branch) {
+    return info;
+  }
+  const switched = runGitCommand(info.resolvedPath, ['switch', branch]);
+  if (!switched.ok) {
+    return {
+      ...info,
+      error: switched.error || 'Failed to switch branch',
+    };
+  }
+  return getSidebarGitRepoInfo(info.resolvedPath);
 }
 
 async function pickSidebarFolder(defaultPath) {
@@ -722,7 +1042,7 @@ app.whenReady().then(async () => {
     return getRuntimeStatus();
   });
 
-  ipcMain.handle('emploai:runtime:start', async () => startLocalRuntime());
+  ipcMain.handle('emploai:runtime:start', async (_event, payload) => startLocalRuntime(payload || {}));
   ipcMain.handle('emploai:runtime:stop', async () => stopLocalRuntime());
   ipcMain.handle('emploai:setup:save', async (_event, payload) => saveSetup(payload || {}));
   ipcMain.handle('emploai:setup:validate-field', async (_event, payload) => validateSetupField(payload?.field, payload?.value));
@@ -739,6 +1059,9 @@ app.whenReady().then(async () => {
   ipcMain.handle('emploai:sidebar:read-state', async () => readSidebarState());
   ipcMain.handle('emploai:sidebar:write-state', async (_event, payload) => writeSidebarState(payload?.state ?? null));
   ipcMain.handle('emploai:sidebar:pick-folder', async (_event, payload) => pickSidebarFolder(payload?.defaultPath));
+  ipcMain.handle('emploai:sidebar:path-status', async (_event, payload) => getSidebarPathStatus(payload?.path));
+  ipcMain.handle('emploai:sidebar:git-repo-info', async (_event, payload) => getSidebarGitRepoInfo(payload?.path));
+  ipcMain.handle('emploai:sidebar:checkout-branch', async (_event, payload) => checkoutSidebarGitBranch(payload?.path, payload?.branch));
 
   await createWindow();
 

@@ -186,6 +186,8 @@ export default function ChatScreen() {
   const [interruptPolicy, setInterruptPolicy] = useState<InterruptPolicy>('none');
   const [apiBaseUrl, setApiBaseUrl] = useState('');
   const [token, setToken] = useState('');
+  const [connectionMode, setConnectionMode] = useState<'desktop_local' | 'remote_cloud' | 'direct_backend'>('direct_backend');
+  const [pairedDesktopId, setPairedDesktopId] = useState('');
   const [configLoaded, setConfigLoaded] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<DrawerTab>('chats');
@@ -228,7 +230,15 @@ export default function ChatScreen() {
 
   const steeringArmed = steeringBetaEnabled && interruptPolicy !== 'none';
   const canStartVoice = !isVoiceBusy || steeringArmed;
-  const setupMissing = !apiBaseUrl || !token;
+  const mobileVoiceEnabled = connectionMode !== 'remote_cloud';
+  const setupMissing = !apiBaseUrl || !token || (connectionMode === 'remote_cloud' && !pairedDesktopId);
+
+  const missingConnectionStatus = () => {
+    if (!apiBaseUrl) return connectionMode === 'remote_cloud' ? 'add the service URL first' : 'missing backend';
+    if (!token) return connectionMode === 'remote_cloud' ? 'sign in and pair this phone first' : 'pair this phone first';
+    if (connectionMode === 'remote_cloud' && !pairedDesktopId) return 'pair this phone with a desktop first';
+    return 'missing setup';
+  };
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -241,6 +251,8 @@ export default function ChatScreen() {
         if (!active) return;
         setApiBaseUrl(config.apiBaseUrl);
         setToken(config.accessToken);
+        setConnectionMode(config.connectionMode);
+        setPairedDesktopId(config.pairedDesktopId);
         setConfigLoaded(true);
       })
       .catch(() => {
@@ -427,7 +439,7 @@ export default function ChatScreen() {
 
   const selectSession = async (nextSessionId: string, options?: { updateRoute?: boolean; keepLogs?: boolean }) => {
     if (!apiBaseUrl || !token) {
-      setStatus('missing backend');
+      setStatus(missingConnectionStatus());
       return;
     }
 
@@ -451,7 +463,7 @@ export default function ChatScreen() {
 
   const createConversation = async () => {
     if (!apiBaseUrl || !token) {
-      setStatus(apiBaseUrl ? 'pair this phone first' : 'add backend first');
+      setStatus(missingConnectionStatus());
       setPairPromptOpen(true);
       return;
     }
@@ -1037,11 +1049,15 @@ export default function ChatScreen() {
 
   const uploadAttachment = async (kind: 'camera' | 'gallery' | 'document') => {
     if (!apiBaseUrl) {
-      setStatus('missing backend');
+      setStatus(missingConnectionStatus());
       return;
     }
     if (!token) {
-      setStatus('missing token');
+      setStatus(missingConnectionStatus());
+      return;
+    }
+    if (connectionMode === 'remote_cloud' && !pairedDesktopId) {
+      setStatus(missingConnectionStatus());
       return;
     }
 
@@ -1234,8 +1250,12 @@ export default function ChatScreen() {
 
   const startVoiceCapture = async () => {
     if (!configLoaded || !apiBaseUrl || !token) {
-      setStatus(apiBaseUrl ? 'pair this phone first' : 'add backend first');
+      setStatus(missingConnectionStatus());
       setPairPromptOpen(true);
+      return;
+    }
+    if (!mobileVoiceEnabled) {
+      setStatus('voice is disabled in remote mobile v1');
       return;
     }
     if (isVoiceBusy && !steeringArmed) {
@@ -1333,11 +1353,11 @@ export default function ChatScreen() {
     clearReconnectTimers();
 
     if (!apiBaseUrl) {
-      setStatus('missing backend');
+      setStatus(missingConnectionStatus());
       return;
     }
     if (!token) {
-      setStatus('missing token');
+      setStatus(missingConnectionStatus());
       return;
     }
 
@@ -1352,7 +1372,7 @@ export default function ChatScreen() {
 
     const connectChatSocket = () => {
       if (disposed) return;
-      const url = buildWsUrl('/ws/app/chat');
+      const url = buildWsUrl(connectionMode === 'remote_cloud' ? '/ws/remote/mobile' : '/ws/app/chat');
       logDiagnostic('chat.ws', 'connecting', { url });
       const ws = new WebSocket(url);
       chatWsRef.current = ws;
@@ -1396,6 +1416,10 @@ export default function ChatScreen() {
     };
 
     const connectVoiceSocket = () => {
+      if (!mobileVoiceEnabled) {
+        setVoiceState('disabled');
+        return;
+      }
       if (disposed) return;
       const url = buildWsUrl('/ws/app/voice');
       logDiagnostic('voice.ws', 'connecting', { url });
@@ -1457,7 +1481,7 @@ export default function ChatScreen() {
         voiceWsRef.current = null;
       }
     };
-  }, [apiBaseUrl, configLoaded, token]);
+  }, [apiBaseUrl, configLoaded, connectionMode, pairedDesktopId, token]);
 
   useEffect(() => {
     if (!configLoaded) return;
@@ -1548,7 +1572,7 @@ export default function ChatScreen() {
 
   const send = () => {
     if (setupMissing) {
-      setStatus(apiBaseUrl ? 'pair this phone first' : 'add backend first');
+      setStatus(missingConnectionStatus());
       setPairPromptOpen(true);
       return;
     }
@@ -1600,15 +1624,23 @@ export default function ChatScreen() {
 
   const sessionUpdatedAt = sessions.find((item) => item.id === sessionId)?.updated_at;
   const subtitle = setupMissing
-    ? (apiBaseUrl ? 'Tap the message field to finish pairing' : 'Tap the message field to connect this phone')
+    ? (connectionMode === 'remote_cloud'
+      ? 'Sign in and pair this phone with your desktop to open the shared chat space.'
+      : (apiBaseUrl ? 'Tap the message field to finish pairing' : 'Tap the message field to connect this phone'))
     : (sessionId ? `Updated ${formatRelativeTime(sessionUpdatedAt)}` : 'Ready to chat');
-  const pairingPromptTitle = apiBaseUrl ? 'Finish pairing this phone' : 'Connect this phone';
-  const pairingPromptText = apiBaseUrl
-    ? 'This phone already knows the backend URL, but it still needs a trusted-device token before chat opens up.'
-    : 'Add the backend URL first, then complete trusted-device pairing. After that, chat stays as the main workspace.';
+  const pairingPromptTitle = connectionMode === 'remote_cloud'
+    ? 'Connect this phone to your desktop'
+    : (apiBaseUrl ? 'Finish pairing this phone' : 'Connect this phone');
+  const pairingPromptText = connectionMode === 'remote_cloud'
+    ? 'Sign in to the EmploAI control plane, then complete desktop pairing. After that, the phone stays synced through the VPS while the desktop remains the execution machine.'
+    : (
+      apiBaseUrl
+        ? 'This phone already knows the backend URL, but it still needs a trusted-device token before chat opens up.'
+        : 'Add the backend URL first, then complete trusted-device pairing. After that, chat stays as the main workspace.'
+    );
   const workspaceStatus = [
     { label: 'Connection', value: status },
-    { label: 'Voice', value: voiceState },
+    { label: 'Voice', value: mobileVoiceEnabled ? voiceState : 'disabled in remote v1' },
     { label: 'Session', value: sessionId ? sessionName : 'No session yet' },
   ];
 
@@ -2472,7 +2504,7 @@ export default function ChatScreen() {
         )}
       </ScrollView>
 
-      {voiceDraft || isRecording || isVoiceBusy ? (
+      {mobileVoiceEnabled && (voiceDraft || isRecording || isVoiceBusy) ? (
         <View style={styles.voiceBanner}>
           <Text style={styles.voiceBannerTitle}>Voice</Text>
           <Text style={styles.voiceBannerText}>
@@ -2486,7 +2518,7 @@ export default function ChatScreen() {
           <Pressable style={styles.plusButtonSmall} onPress={() => setWorkspacePanelOpen(true)}>
             <Text style={styles.plusButtonSmallText}>+</Text>
           </Pressable>
-          {isRecording ? (
+          {mobileVoiceEnabled && isRecording ? (
             <>
               <Pressable style={styles.voiceStopButton} onPress={() => void stopVoiceCapture(true)}>
                 <Text style={styles.voiceButtonText}>Stop and send</Text>
@@ -2495,7 +2527,7 @@ export default function ChatScreen() {
                 <Text style={styles.voiceButtonText}>Cancel</Text>
               </Pressable>
             </>
-          ) : (
+          ) : mobileVoiceEnabled ? (
             <Pressable
               style={[styles.voiceStartButton, !canStartVoice ? styles.disabledButton : null]}
               onPress={() => void startVoiceCapture()}
@@ -2505,14 +2537,16 @@ export default function ChatScreen() {
                 {isVoiceBusy ? (steeringArmed ? 'Interrupt with voice' : 'Voice busy') : 'Start voice'}
               </Text>
             </Pressable>
-          )}
+          ) : null}
         </View>
 
         <View style={styles.inputRow}>
           {setupMissing ? (
             <Pressable style={[styles.input, styles.lockedInput]} onPress={() => setPairPromptOpen(true)}>
               <Text style={styles.lockedInputText}>
-                {apiBaseUrl ? 'Tap to finish pairing' : 'Tap to add backend and pair'}
+                {connectionMode === 'remote_cloud'
+                  ? 'Tap to sign in and pair this phone'
+                  : (apiBaseUrl ? 'Tap to finish pairing' : 'Tap to add backend and pair')}
               </Text>
             </Pressable>
           ) : (

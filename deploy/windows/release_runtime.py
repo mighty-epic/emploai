@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 import textwrap
@@ -29,10 +30,18 @@ LOG_DIRNAME = "logs"
 EXTENSION_DIRNAME = "browser_extension"
 RELEASE_STATE_FILENAME = "release_state.json"
 EXTENSION_GUIDE_FILENAME = "HOW_TO_LOAD_BROWSER_EXTENSION.txt"
+TELEGRAM_REBIND_REQUIRED_STATE_KEY = "telegram_rebind_required"
+RUNTIME_DATA_SCHEMA_STATE_KEY = "runtime_data_schema_version"
+RUNTIME_DATA_SCHEMA_VERSION = 2
 
 _ENV_ORDER = [
     "TELEGRAM_BOT_TOKEN",
     "ALLOWED_USER_IDS",
+    "EMPLOAI_REMOTE_CONTROL_BASE_URL",
+    "EMPLOAI_REMOTE_CONTROL_EMAIL",
+    "EMPLOAI_REMOTE_CONTROL_PASSWORD",
+    "EMPLOAI_REMOTE_DESKTOP_NAME",
+    "EMPLOAI_REMOTE_DESKTOP_KEY",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "GOOGLE_API_KEY",
@@ -75,6 +84,11 @@ VOICE_PACK_SELECTION_SCHEMA_VERSION = 1
 _SETUP_EDITABLE_FIELDS = [
     "TELEGRAM_BOT_TOKEN",
     "ALLOWED_USER_IDS",
+    "EMPLOAI_REMOTE_CONTROL_BASE_URL",
+    "EMPLOAI_REMOTE_CONTROL_EMAIL",
+    "EMPLOAI_REMOTE_CONTROL_PASSWORD",
+    "EMPLOAI_REMOTE_DESKTOP_NAME",
+    "EMPLOAI_REMOTE_DESKTOP_KEY",
     "DEFAULT_WORKSPACE",
     "PLANNER_MODEL",
     "INTERRUPT_POLICY_DEFAULT",
@@ -90,6 +104,12 @@ _PROVIDER_LABELS = {
     "DEEPSEEK_API_KEY": "DeepSeek",
     "OPENROUTER_API_KEY": "OpenRouter",
 }
+
+_REMOTE_CONTROL_REQUIRED_FIELDS = (
+    "EMPLOAI_REMOTE_CONTROL_BASE_URL",
+    "EMPLOAI_REMOTE_CONTROL_EMAIL",
+    "EMPLOAI_REMOTE_CONTROL_PASSWORD",
+)
 
 
 def is_frozen() -> bool:
@@ -169,6 +189,66 @@ def runtime_home() -> Path:
         or str(Path.home())
     )
     return (Path(base) / APP_NAME).resolve()
+
+
+def _parse_numeric_version(value: str) -> tuple[int, ...]:
+    parts = re.findall(r"\d+", str(value or ""))
+    return tuple(int(part) for part in parts) if parts else (0,)
+
+
+def bundled_internal_root(root: Path | None = None) -> Path:
+    bundle = root or bundle_root()
+    internal_root = bundle / "_internal"
+    return internal_root if internal_root.exists() else bundle
+
+
+def _prune_duplicate_bundled_dist_info(package_name: str, *, root: Path | None = None) -> list[str]:
+    internal_root = bundled_internal_root(root)
+    if not internal_root.exists():
+        return []
+
+    prefix = f"{package_name}-"
+    candidates = [
+        path
+        for path in internal_root.glob(f"{package_name}-*.dist-info")
+        if path.is_dir() and path.name.startswith(prefix) and path.name.endswith(".dist-info")
+    ]
+    if len(candidates) <= 1:
+        return []
+
+    def _version_key(path: Path) -> tuple[int, ...]:
+        version_text = path.name[len(prefix) : -len(".dist-info")]
+        return _parse_numeric_version(version_text)
+
+    keep = max(candidates, key=_version_key)
+    removed: list[str] = []
+    for candidate in candidates:
+        if candidate == keep:
+            continue
+        shutil.rmtree(candidate, ignore_errors=True)
+        if not candidate.exists():
+            removed.append(str(candidate))
+    return removed
+
+
+def _prune_all_duplicate_bundled_dist_info(*, root: Path | None = None) -> list[str]:
+    internal_root = bundled_internal_root(root)
+    if not internal_root.exists():
+        return []
+
+    duplicate_names: set[str] = set()
+    for path in internal_root.glob("*.dist-info"):
+        if not path.is_dir():
+            continue
+        match = re.match(r"^(?P<name>.+)-(?P<version>\d[^\\/]*)\.dist-info$", path.name)
+        if not match:
+            continue
+        duplicate_names.add(match.group("name"))
+
+    removed: list[str] = []
+    for package_name in sorted(duplicate_names):
+        removed.extend(_prune_duplicate_bundled_dist_info(package_name, root=internal_root))
+    return removed
 
 
 def extension_path(home: Path) -> Path:
@@ -261,67 +341,28 @@ def _setting_bool(value: object, default: bool = False) -> str:
 
 
 def _read_installer_voice_pack_preferences() -> Dict[str, object]:
-    preferences: Dict[str, object] = {
+    # Voice pack selection is now app-driven only. The Windows installer no longer
+    # exposes voice-pack feature choices, so legacy registry state must not leak
+    # into a fresh packaged runtime home and silently re-enable voice.
+    return {
         "schema_version": 0,
         "english_requested": None,
         "hebrew_requested": None,
     }
-    if winreg is None:
-        return preferences
-
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, VOICE_PACK_REGISTRY_KEY) as key:
-            try:
-                preferences["schema_version"] = int(winreg.QueryValueEx(key, "SelectionSchemaVersion")[0] or 0)
-            except OSError:
-                preferences["schema_version"] = 0
-
-            for registry_name, field_name in (
-                ("EnglishRequested", "english_requested"),
-                ("HebrewRequested", "hebrew_requested"),
-            ):
-                try:
-                    raw_value = winreg.QueryValueEx(key, registry_name)[0]
-                    preferences[field_name] = _coerce_bool(raw_value)
-                except OSError:
-                    if int(preferences.get("schema_version") or 0) >= VOICE_PACK_SELECTION_SCHEMA_VERSION:
-                        preferences[field_name] = False
-    except OSError:
-        return preferences
-
-    return preferences
 
 
 def _default_voice_config(*, installer_preferences: Mapping[str, object] | None = None) -> Dict[str, object]:
-    schema_present = bool(
-        installer_preferences
-        and int(installer_preferences.get("schema_version") or 0) >= VOICE_PACK_SELECTION_SCHEMA_VERSION
-    )
-    english_requested = True
-    hebrew_requested = False
-    selection_source = "default"
-    if schema_present:
-        english_requested = _coerce_bool(installer_preferences.get("english_requested"), False)
-        hebrew_requested = _coerce_bool(installer_preferences.get("hebrew_requested"), False)
-        selection_source = "installer"
-
     return {
-        "selection_source": selection_source,
-        "default_engine": (
-            VOICE_ENGINE_ENGLISH
-            if english_requested
-            else VOICE_ENGINE_HEBREW
-            if hebrew_requested
-            else VOICE_ENGINE_NONE
-        ),
+        "selection_source": "default",
+        "default_engine": VOICE_ENGINE_NONE,
         "packs": {
             VOICE_ENGINE_ENGLISH: {
-                "requested": english_requested,
+                "requested": False,
                 "display_name": "English voice pack",
                 "placeholder": False,
             },
             VOICE_ENGINE_HEBREW: {
-                "requested": hebrew_requested,
+                "requested": False,
                 "display_name": "Hebrew voice pack",
                 "placeholder": False,
             },
@@ -343,7 +384,7 @@ def _normalize_voice_config(
     packs = existing_voice.setdefault("packs", {})
     english_pack = packs.setdefault(VOICE_ENGINE_ENGLISH, {})
     hebrew_pack = packs.setdefault(VOICE_ENGINE_HEBREW, {})
-    english_requested = _coerce_bool(english_pack.get("requested"), True)
+    english_requested = _coerce_bool(english_pack.get("requested"), False)
     hebrew_requested = _coerce_bool(hebrew_pack.get("requested"), False)
     english_pack["requested"] = english_requested
     hebrew_pack["requested"] = hebrew_requested
@@ -395,7 +436,7 @@ def apply_installer_voice_pack_preferences(home: Path) -> Dict[str, object]:
 
 def _voice_pack_setup_payload(voice_config: Mapping[str, object], voice_status: Mapping[str, object]) -> Dict[str, object]:
     packs = voice_config.get("packs") if isinstance(voice_config.get("packs"), dict) else {}
-    english_requested = _coerce_bool((packs.get(VOICE_ENGINE_ENGLISH) or {}).get("requested"), True)
+    english_requested = _coerce_bool((packs.get(VOICE_ENGINE_ENGLISH) or {}).get("requested"), False)
     hebrew_requested = _coerce_bool((packs.get(VOICE_ENGINE_HEBREW) or {}).get("requested"), False)
     default_engine = str(voice_config.get("default_engine") or VOICE_ENGINE_NONE).strip().lower()
     if default_engine not in {VOICE_ENGINE_NONE, VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW}:
@@ -532,8 +573,68 @@ def default_release_config(*, installer_preferences: Mapping[str, object] | None
     }
 
 
+def _clear_runtime_home_contents(home: Path) -> list[str]:
+    removed: list[str] = []
+    if not home.exists():
+        return removed
+    for child in list(home.iterdir()):
+        try:
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
+        except Exception:
+            continue
+        if not child.exists():
+            removed.append(str(child))
+    return removed
+
+
+def _clear_runtime_schema_sensitive_files(home: Path) -> list[str]:
+    removed: list[str] = []
+    targets = [
+        home / "desktop-sidebar-state.json",
+    ]
+    for target in targets:
+        try:
+            if target.is_dir():
+                shutil.rmtree(target, ignore_errors=True)
+            else:
+                target.unlink(missing_ok=True)
+        except Exception:
+            continue
+        if not target.exists():
+            removed.append(str(target))
+    return removed
+
+
+def _runtime_data_schema_version(state: Mapping[str, object] | None) -> int:
+    if not state:
+        return 0
+    try:
+        return int(state.get(RUNTIME_DATA_SCHEMA_STATE_KEY) or 0)
+    except Exception:
+        return 0
+
+
+def _ensure_runtime_data_schema(home: Path) -> bool:
+    state = load_release_state(home)
+    if _runtime_data_schema_version(state) == RUNTIME_DATA_SCHEMA_VERSION:
+        return False
+
+    _clear_runtime_schema_sensitive_files(home)
+    save_release_state(
+        home,
+        {
+            RUNTIME_DATA_SCHEMA_STATE_KEY: RUNTIME_DATA_SCHEMA_VERSION,
+        },
+    )
+    return True
+
+
 def ensure_runtime_files(home: Path, source_root: Path) -> None:
     home.mkdir(parents=True, exist_ok=True)
+    _ensure_runtime_data_schema(home)
     (home / LOG_DIRNAME).mkdir(parents=True, exist_ok=True)
     (home / "memory").mkdir(parents=True, exist_ok=True)
     memory_file = home / "MEMORY.md"
@@ -708,14 +809,45 @@ def needs_first_run_setup(values: Mapping[str, str]) -> bool:
     return bool(validate_setup_values(values))
 
 
+def _release_version_requires_setup(state: Mapping[str, object], *, source_root: Path) -> bool:
+    release_version = current_release_version(source_root)
+    last_onboarded_version = str(state.get("last_onboarded_version") or "")
+    return last_onboarded_version != release_version
+
+
+def should_require_telegram_rebind(
+    home: Path,
+    source_root: Path,
+    *,
+    state: Mapping[str, object] | None = None,
+    mark: bool = False,
+) -> bool:
+    loaded_state = dict(state or load_release_state(home))
+    rebind_required = bool(loaded_state.get(TELEGRAM_REBIND_REQUIRED_STATE_KEY))
+    if not rebind_required and _release_version_requires_setup(loaded_state, source_root=source_root):
+        rebind_required = True
+        if mark:
+            loaded_state[TELEGRAM_REBIND_REQUIRED_STATE_KEY] = True
+            save_release_state(home, loaded_state)
+    return rebind_required
+
+
+def apply_telegram_rebind_gate(values: Mapping[str, str], *, rebind_required: bool) -> Dict[str, str]:
+    gated = dict(values)
+    if rebind_required:
+        gated["TELEGRAM_BOT_TOKEN"] = ""
+        gated["ALLOWED_USER_IDS"] = ""
+    return gated
+
+
 def needs_versioned_setup(values: Mapping[str, str], *, home: Path, source_root: Path) -> bool:
     if needs_first_run_setup(values):
         return True
 
-    release_version = current_release_version(source_root)
     state = load_release_state(home)
-    last_onboarded_version = str(state.get("last_onboarded_version") or "")
-    return last_onboarded_version != release_version
+    if bool(state.get(TELEGRAM_REBIND_REQUIRED_STATE_KEY)):
+        return True
+    return _release_version_requires_setup(state, source_root=source_root)
 
 
 def _prompt_nonempty(prompt: str, input_fn: Callable[[str], str]) -> str:
@@ -812,18 +944,19 @@ def run_first_run_setup(
     input_fn: Callable[[str], str] = input,
 ) -> Dict[str, str]:
     _print_setup_intro(home, env_file, source_root=source_root)
+    telegram_rebind_required = should_require_telegram_rebind(home, source_root, mark=True)
 
     while True:
         updates: Dict[str, str] = {}
 
-        token_default = existing.get("TELEGRAM_BOT_TOKEN", "")
+        token_default = "" if telegram_rebind_required else existing.get("TELEGRAM_BOT_TOKEN", "")
         updates["TELEGRAM_BOT_TOKEN"] = _prompt_secret(
             "Telegram bot token",
             existing=token_default,
             input_fn=input_fn,
         )
 
-        ids_default = existing.get("ALLOWED_USER_IDS", "")
+        ids_default = "" if telegram_rebind_required else existing.get("ALLOWED_USER_IDS", "")
         ids_prompt = "Allowed Telegram user ID(s)"
         if ids_default:
             allowed_ids = _prompt_with_default(ids_prompt, ids_default, input_fn)
@@ -834,6 +967,46 @@ def run_first_run_setup(
         workspace_default = existing.get("DEFAULT_WORKSPACE") or str(default_workspace())
         workspace = _prompt_with_default("Workspace root for file operations", workspace_default, input_fn)
         updates["DEFAULT_WORKSPACE"] = workspace
+
+        remote_url_default = existing.get("EMPLOAI_REMOTE_CONTROL_BASE_URL", "")
+        if remote_url_default:
+            updates["EMPLOAI_REMOTE_CONTROL_BASE_URL"] = _prompt_with_default(
+                "Remote control service URL",
+                remote_url_default,
+                input_fn,
+            )
+        else:
+            updates["EMPLOAI_REMOTE_CONTROL_BASE_URL"] = input_fn(
+                "Remote control service URL [optional; Enter=skip]: "
+            ).strip()
+
+        remote_email_default = existing.get("EMPLOAI_REMOTE_CONTROL_EMAIL", "")
+        if remote_email_default:
+            updates["EMPLOAI_REMOTE_CONTROL_EMAIL"] = _prompt_with_default(
+                "Remote control account email",
+                remote_email_default,
+                input_fn,
+            )
+        else:
+            updates["EMPLOAI_REMOTE_CONTROL_EMAIL"] = input_fn(
+                "Remote control account email [optional; Enter=skip]: "
+            ).strip()
+
+        updates["EMPLOAI_REMOTE_CONTROL_PASSWORD"] = _prompt_secret(
+            "Remote control account password",
+            existing=existing.get("EMPLOAI_REMOTE_CONTROL_PASSWORD", ""),
+            input_fn=input_fn,
+        )
+        updates["EMPLOAI_REMOTE_DESKTOP_NAME"] = _prompt_with_default(
+            "Remote desktop display name",
+            existing.get("EMPLOAI_REMOTE_DESKTOP_NAME", "EmploAI Desktop"),
+            input_fn,
+        )
+        updates["EMPLOAI_REMOTE_DESKTOP_KEY"] = _prompt_with_default(
+            "Remote desktop stable key",
+            existing.get("EMPLOAI_REMOTE_DESKTOP_KEY", "desktop-default"),
+            input_fn,
+        )
 
         updates["OPENAI_API_KEY"] = _prompt_secret(
             "OpenAI API key",
@@ -900,6 +1073,7 @@ def run_first_run_setup(
 
 
 def configure_process_environment(home: Path, env_file: Path) -> Dict[str, str]:
+    _prune_all_duplicate_bundled_dist_info()
     os.chdir(home)
     load_dotenv(dotenv_path=env_file, override=True)
 
@@ -945,6 +1119,10 @@ def _normalized_existing_values(existing: Mapping[str, str]) -> Dict[str, str]:
         values["INTERRUPT_POLICY_DEFAULT"] = "none"
     if not values.get("GOOGLE_API_KEY") and values.get("GEMINI_API_KEY"):
         values["GOOGLE_API_KEY"] = values["GEMINI_API_KEY"]
+    if not values.get("EMPLOAI_REMOTE_DESKTOP_NAME"):
+        values["EMPLOAI_REMOTE_DESKTOP_NAME"] = "EmploAI Desktop"
+    if not values.get("EMPLOAI_REMOTE_DESKTOP_KEY"):
+        values["EMPLOAI_REMOTE_DESKTOP_KEY"] = "desktop-default"
     return values
 
 
@@ -975,6 +1153,19 @@ def validate_setup_values(values: Mapping[str, str]) -> list[str]:
     if allowed_ids and not token:
         issues.append("Telegram bot token is required when allowed Telegram user ID(s) are configured.")
 
+    remote_values = {field: normalized.get(field, "").strip() for field in _REMOTE_CONTROL_REQUIRED_FIELDS}
+    remote_present = [field for field, value in remote_values.items() if value]
+    if remote_present and len(remote_present) != len(_REMOTE_CONTROL_REQUIRED_FIELDS):
+        missing = [field for field in _REMOTE_CONTROL_REQUIRED_FIELDS if not remote_values.get(field)]
+        issues.append(
+            "Remote control requires service URL, email, and password together. Missing: "
+            + ", ".join(missing)
+        )
+
+    remote_url = normalized.get("EMPLOAI_REMOTE_CONTROL_BASE_URL", "").strip()
+    if remote_url and not (remote_url.startswith("https://") or remote_url.startswith("http://")):
+        issues.append("Remote control service URL must start with http:// or https://.")
+
     return issues
 
 
@@ -983,7 +1174,7 @@ def resolve_voice_runtime_status() -> Dict[str, object]:
     _normalize_voice_config(runtime_config, installer_preferences=_read_installer_voice_pack_preferences())
     voice_config = runtime_config.get("voice") if isinstance(runtime_config.get("voice"), dict) else {}
     packs = voice_config.get("packs") if isinstance(voice_config.get("packs"), dict) else {}
-    english_requested = _coerce_bool((packs.get(VOICE_ENGINE_ENGLISH) or {}).get("requested"), True)
+    english_requested = _coerce_bool((packs.get(VOICE_ENGINE_ENGLISH) or {}).get("requested"), False)
     hebrew_requested = _coerce_bool((packs.get(VOICE_ENGINE_HEBREW) or {}).get("requested"), False)
 
     default_engine = str(voice_config.get("default_engine") or VOICE_ENGINE_NONE).strip().lower()
@@ -1018,6 +1209,20 @@ def resolve_voice_runtime_status() -> Dict[str, object]:
     else:
         input_issues.extend(english_pack_issues)
 
+    if default_engine == VOICE_ENGINE_NONE:
+        selected_engine_state = "disabled"
+    elif input_issues:
+        selected_engine_state = "error"
+    elif default_engine == VOICE_ENGINE_HEBREW:
+        try:
+            from mobile_app.backend.voice_runtime import hebrew_model_bundle_loaded
+
+            selected_engine_state = "ready" if hebrew_model_bundle_loaded() else "warming"
+        except Exception:
+            selected_engine_state = "warming"
+    else:
+        selected_engine_state = "ready"
+
     return {
         "ok": not input_issues,
         "input_ok": not input_issues,
@@ -1044,6 +1249,10 @@ def resolve_voice_runtime_status() -> Dict[str, object]:
         "hebrew_pack_ready": hebrew_pack_ready,
         "english_pack_status": english_pack_status,
         "hebrew_pack_status": hebrew_pack_status,
+        "english_pack_manifest": english_pack_status.get("manifest"),
+        "english_pack_manifest_verified": bool(english_pack_status.get("manifest_verified")),
+        "selected_engine_state": selected_engine_state,
+        "selected_engine_ready": selected_engine_state == "ready",
         "hebrew_model_root": str(hebrew_pack_status.get("model_dir") or ""),
         "hebrew_draft_model_root": str(hebrew_pack_status.get("model_dir") or ""),
     }
@@ -1056,9 +1265,24 @@ def build_setup_state(
     source_root: Path,
     existing: Mapping[str, str],
 ) -> Dict[str, object]:
-    normalized = _normalized_existing_values(existing)
     state = load_release_state(home)
     release_version = current_release_version(source_root)
+    versioned = _release_version_requires_setup(state, source_root=source_root)
+    telegram_rebind_required = should_require_telegram_rebind(
+        home,
+        source_root,
+        state=state,
+        mark=versioned,
+    )
+    gated_existing = apply_telegram_rebind_gate(existing, rebind_required=telegram_rebind_required)
+    normalized = _normalized_existing_values(gated_existing)
+    validation_issues = validate_setup_values(normalized)
+    blocking_validation_issues = list(validation_issues)
+    if telegram_rebind_required:
+        validation_issues = [
+            "Review Telegram bot access for this installed version, or leave Telegram blank to keep it off.",
+            *validation_issues,
+        ]
     runtime = resolve_tesseract_runtime()
     voice_status = resolve_voice_runtime_status()
     runtime_config = load_runtime_config(home)
@@ -1067,31 +1291,36 @@ def build_setup_state(
     values = {field: normalized.get(field, "").strip() for field in _SETUP_EDITABLE_FIELDS}
     english_requested = _coerce_bool(
         (((voice_config.get("packs") or {}).get(VOICE_ENGINE_ENGLISH) or {}).get("requested")),
-        True,
+        False,
     )
     hebrew_requested = _coerce_bool(
         (((voice_config.get("packs") or {}).get(VOICE_ENGINE_HEBREW) or {}).get("requested")),
         False,
     )
     values[VOICE_DEFAULT_ENGINE_FIELD] = str(voice_config.get("default_engine") or VOICE_ENGINE_NONE)
-    values[VOICE_ENGLISH_REQUESTED_FIELD] = _setting_bool(english_requested, True)
+    values[VOICE_ENGLISH_REQUESTED_FIELD] = _setting_bool(english_requested, False)
     values[VOICE_HEBREW_REQUESTED_FIELD] = _setting_bool(hebrew_requested, False)
 
     return {
-        "required": bool(validate_setup_values(normalized)),
-        "versioned": str(state.get("last_onboarded_version") or "") != release_version,
+        "required": bool(blocking_validation_issues),
+        "versioned": versioned,
         "releaseVersion": release_version,
         "runtimeHome": str(home),
         "envFilePath": str(env_file),
         "extensionPath": str(extension_path(home)),
         "extensionGuidePath": str(home / EXTENSION_GUIDE_FILENAME),
         "values": values,
-        "validationIssues": validate_setup_values(normalized),
+        "validationIssues": validation_issues,
         "configuredProviders": configured_provider_labels(normalized),
-        "telegramConfigured": bool(normalized.get("TELEGRAM_BOT_TOKEN") and normalized.get("ALLOWED_USER_IDS")),
-        "telegramPartiallyConfigured": bool(
+        "telegramConfigured": False if telegram_rebind_required else bool(normalized.get("TELEGRAM_BOT_TOKEN") and normalized.get("ALLOWED_USER_IDS")),
+        "telegramPartiallyConfigured": False if telegram_rebind_required else bool(
             bool(normalized.get("TELEGRAM_BOT_TOKEN")) ^ bool(normalized.get("ALLOWED_USER_IDS"))
         ),
+        "remoteControlConfigured": bool(all(normalized.get(field, "").strip() for field in _REMOTE_CONTROL_REQUIRED_FIELDS)),
+        "remoteControlPartiallyConfigured": bool(
+            any(normalized.get(field, "").strip() for field in _REMOTE_CONTROL_REQUIRED_FIELDS)
+        ) and not bool(all(normalized.get(field, "").strip() for field in _REMOTE_CONTROL_REQUIRED_FIELDS)),
+        "telegramRebindRequired": telegram_rebind_required,
         "ocrAvailable": runtime.executable is not None,
         "ocrSource": runtime.source,
         "voiceAvailable": bool(voice_status.get("input_ok", voice_status.get("ok"))),
@@ -1135,7 +1364,7 @@ def save_setup_values(
 
     english_requested = _coerce_bool(
         updates.get(VOICE_ENGLISH_REQUESTED_FIELD),
-        _coerce_bool(english_pack.get("requested"), True),
+        _coerce_bool(english_pack.get("requested"), False),
     )
     hebrew_requested = _coerce_bool(
         updates.get(VOICE_HEBREW_REQUESTED_FIELD),
@@ -1151,7 +1380,7 @@ def save_setup_values(
     default_engine = str(
         updates.get(VOICE_DEFAULT_ENGINE_FIELD)
         or voice_config.get("default_engine")
-        or VOICE_ENGINE_ENGLISH
+        or VOICE_ENGINE_NONE
     ).strip().lower()
     if default_engine not in {VOICE_ENGINE_NONE, VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW}:
         default_engine = VOICE_ENGINE_ENGLISH if english_requested else VOICE_ENGINE_HEBREW if hebrew_requested else VOICE_ENGINE_NONE
@@ -1166,6 +1395,7 @@ def save_setup_values(
     save_env(env_file, merged)
     state = load_release_state(home)
     state["last_onboarded_version"] = current_release_version(source_root)
+    state[TELEGRAM_REBIND_REQUIRED_STATE_KEY] = False
     save_release_state(home, state)
     return merged
 
@@ -1192,7 +1422,7 @@ def update_voice_pack_preferences(
         else:
             raise ValueError(f"Unsupported voice pack: {pack_id}")
 
-    english_requested = _coerce_bool(english_pack.get("requested"), True)
+    english_requested = _coerce_bool(english_pack.get("requested"), False)
     hebrew_requested = _coerce_bool(hebrew_pack.get("requested"), False)
     english_pack["requested"] = english_requested
     hebrew_pack["requested"] = hebrew_requested

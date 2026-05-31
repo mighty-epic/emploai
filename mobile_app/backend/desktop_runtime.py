@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -12,6 +14,7 @@ import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -19,6 +22,7 @@ from mobile_app.backend.app_server import TOKEN_TTL_SECONDS, _default_user_id, _
 from mobile_app.backend.auth_store import AppAuthStore
 from mobile_app.backend.cron_runtime import ensure_global_cron_scheduler_started
 from shared.live_config import get_live_config
+from shared.runtime_paths import log_root
 
 if TYPE_CHECKING:
     from mobile_app.backend.session_bridge import AppSessionBridge
@@ -26,10 +30,13 @@ if TYPE_CHECKING:
 
 DEFAULT_DESKTOP_HOST = "127.0.0.1"
 DEFAULT_DESKTOP_PORT = 8787
-DEFAULT_ATTACH_TIMEOUT_SECONDS = 90
+DEFAULT_ATTACH_TIMEOUT_SECONDS = 25
+DEFAULT_RESTART_ATTACH_TIMEOUT_SECONDS = 10
+READINESS_POLL_INTERVAL_SECONDS = 0.25
 DEFAULT_DEVICE_NAME = "EmploAI Desktop"
 DEFAULT_DEVICE_PLATFORM = "desktop-electron"
 DEFAULT_DEVICE_KEY = "desktop-local"
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -39,6 +46,7 @@ class DesktopRuntimeConfig:
     port: int
     auto_start: bool
     attach_timeout_seconds: int
+    restart_attach_timeout_seconds: int
     workspace: str
 
     @property
@@ -80,18 +88,43 @@ def load_desktop_runtime_config() -> DesktopRuntimeConfig:
         config.get("channels.desktop.attach_timeout_seconds", DEFAULT_ATTACH_TIMEOUT_SECONDS)
         or DEFAULT_ATTACH_TIMEOUT_SECONDS
     )
+    restart_attach_timeout_seconds = int(
+        config.get(
+            "channels.desktop.restart_attach_timeout_seconds",
+            min(DEFAULT_RESTART_ATTACH_TIMEOUT_SECONDS, attach_timeout_seconds),
+        )
+        or min(DEFAULT_RESTART_ATTACH_TIMEOUT_SECONDS, attach_timeout_seconds)
+    )
     return DesktopRuntimeConfig(
         enabled=desktop_enabled,
         host=host,
         port=port,
         auto_start=auto_start,
-        attach_timeout_seconds=max(DEFAULT_ATTACH_TIMEOUT_SECONDS, attach_timeout_seconds),
+        attach_timeout_seconds=max(2, attach_timeout_seconds),
+        restart_attach_timeout_seconds=max(2, restart_attach_timeout_seconds),
         workspace=str(workspace),
     )
 
 
-def _healthcheck(url: str, timeout_seconds: float = 2.0) -> Optional[dict[str, Any]]:
-    request = urllib.request.Request(url=f"{url.rstrip('/')}/api/app/health", method="GET")
+def _port_accepts_connections(url: str, *, timeout_seconds: float = 0.25) -> bool:
+    parsed = urlparse(url)
+    host = parsed.hostname
+    if not host:
+        return False
+
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        with socket.create_connection((host, port), timeout=max(0.05, timeout_seconds)):
+            return True
+    except OSError:
+        return False
+
+
+def _healthcheck(url: str, timeout_seconds: float = 0.75) -> Optional[dict[str, Any]]:
+    if not _port_accepts_connections(url, timeout_seconds=min(timeout_seconds, 0.25)):
+        return None
+
+    request = urllib.request.Request(url=f"{url.rstrip('/')}/api/app/health?shallow=1", method="GET")
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
@@ -140,7 +173,7 @@ def get_runtime_status() -> DesktopRuntimeStatus:
 
 
 def _desktop_log_path() -> Path:
-    home = Path.home() / ".agentshell" / "logs"
+    home = log_root()
     home.mkdir(parents=True, exist_ok=True)
     return home / "desktop_runtime.log"
 
@@ -197,6 +230,17 @@ def launch_detached_runtime(config: DesktopRuntimeConfig) -> None:
         )
 
 
+def _wait_for_runtime(config: DesktopRuntimeConfig, *, timeout_seconds: int) -> tuple[DesktopRuntimeStatus, str]:
+    deadline = time.monotonic() + max(2, timeout_seconds)
+    last_status = get_runtime_status()
+    while time.monotonic() < deadline:
+        time.sleep(READINESS_POLL_INTERVAL_SECONDS)
+        last_status = get_runtime_status()
+        if last_status.ok:
+            return last_status, "launched"
+    return last_status, "detached"
+
+
 def ensure_runtime(*, require_auto_start: bool = True) -> tuple[DesktopRuntimeConfig, DesktopRuntimeStatus, str]:
     config = load_desktop_runtime_config()
     status = get_runtime_status()
@@ -209,12 +253,14 @@ def ensure_runtime(*, require_auto_start: bool = True) -> tuple[DesktopRuntimeCo
         raise RuntimeError("Desktop runtime is offline and auto-start is disabled")
 
     launch_detached_runtime(config)
-    deadline = time.monotonic() + config.attach_timeout_seconds
-    while time.monotonic() < deadline:
-        time.sleep(0.75)
-        status = get_runtime_status()
-        if status.ok:
-            return config, status, "launched"
+    status, mode = _wait_for_runtime(config, timeout_seconds=config.attach_timeout_seconds)
+    if status.ok:
+        return config, status, mode
+
+    launch_detached_runtime(config)
+    status, mode = _wait_for_runtime(config, timeout_seconds=config.restart_attach_timeout_seconds)
+    if status.ok:
+        return config, status, "recovered"
 
     raise RuntimeError(
         f"Desktop runtime did not become ready within {config.attach_timeout_seconds} seconds. "
@@ -267,12 +313,11 @@ def _bridge() -> AppSessionBridge:
     return AppSessionBridge(user_id=_default_user_id(), workspace=workspace)
 
 
-def _ensure_current_session_id(bridge: AppSessionBridge) -> str:
+def _current_session_id(bridge: AppSessionBridge) -> Optional[str]:
     current = bridge.get_current_session()
     if current:
         return current.id
-    created = bridge.create_session(None)
-    return created.id
+    return None
 
 
 def _ensure_desktop_token() -> dict[str, Any]:
@@ -303,7 +348,7 @@ def bootstrap_context(*, launch_if_needed: bool = False) -> dict[str, Any]:
         return _offline_bootstrap(config, status, runtime_mode="detached")
 
     bridge = _bridge()
-    session_id = _ensure_current_session_id(bridge)
+    session_id = _current_session_id(bridge)
     token_payload = _ensure_desktop_token()
     return _bootstrap_payload(
         config,
@@ -326,7 +371,7 @@ def start_runtime_context() -> dict[str, Any]:
         return _offline_bootstrap(config, status, runtime_mode="detached")
 
     bridge = _bridge()
-    session_id = _ensure_current_session_id(bridge)
+    session_id = _current_session_id(bridge)
     token_payload = _ensure_desktop_token()
     return _bootstrap_payload(
         config,
@@ -341,13 +386,22 @@ def start_runtime_context() -> dict[str, Any]:
 async def run_desktop_runtime_server(host: str, port: int) -> None:
     import uvicorn
 
-    await ensure_global_cron_scheduler_started()
+    async def _start_background_services() -> None:
+        try:
+            await ensure_global_cron_scheduler_started()
+        except Exception:
+            logger.exception("Desktop runtime background service startup failed")
+
+    asyncio.create_task(_start_background_services())
     server = uvicorn.Server(
         uvicorn.Config(
             create_app(),
             host=host,
             port=port,
             log_level="info",
+            loop="asyncio",
+            http="h11",
+            ws="websockets",
         )
     )
     await server.serve()
@@ -365,6 +419,7 @@ def _build_parser() -> argparse.ArgumentParser:
     bootstrap_parser.add_argument("--launch-if-needed", action="store_true")
     subparsers.add_parser("start", help="launch the local runtime if needed and print bootstrap JSON")
     subparsers.add_parser("status", help="print the current runtime status JSON")
+    subparsers.add_parser("remote-control", help="connect the local desktop runtime to the remote control plane")
     return parser
 
 
@@ -390,6 +445,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.command == "status":
         print(json.dumps(asdict(get_runtime_status())))
         return 0
+
+    if args.command == "remote-control":
+        from mobile_app.backend.remote_desktop_client import main as remote_control_main
+
+        return int(remote_control_main([]))
 
     parser.error(f"Unsupported command: {args.command}")
     return 2

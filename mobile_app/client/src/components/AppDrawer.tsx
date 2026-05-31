@@ -165,12 +165,12 @@ export function AppDrawer({
                 {!desktopMode ? (
                   <>
                     <Pressable style={styles.navCard} onPress={() => navigate('/pair')}>
-                      <Text style={styles.cardTitle}>Pair device</Text>
-                      <Text style={styles.cardBody}>Finish trusted-device pairing or re-pair this phone.</Text>
+                      <Text style={styles.cardTitle}>Connect phone</Text>
+                      <Text style={styles.cardBody}>Sign in to the cloud service and pair this phone with one of your desktops.</Text>
                     </Pressable>
                     <Pressable style={styles.navCard} onPress={() => navigate('/settings')}>
                       <Text style={styles.cardTitle}>Settings</Text>
-                      <Text style={styles.cardBody}>Backend URL, token state, and device verification.</Text>
+                      <Text style={styles.cardBody}>Service URL, account session, pairing state, and connection verification.</Text>
                     </Pressable>
                   </>
                 ) : (

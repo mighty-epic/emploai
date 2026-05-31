@@ -10,6 +10,67 @@ export type AppProfile = {
   device_platform?: string | null;
 };
 
+export type RemoteUser = {
+  user_id: number;
+  email: string;
+  display_name?: string | null;
+  created_at?: string | null;
+  last_login_at?: string | null;
+};
+
+export type RemoteDesktop = {
+  desktop_id: string;
+  device_key?: string | null;
+  display_name?: string | null;
+  status: 'offline' | 'connected' | 'planned';
+  detail?: string | null;
+  created_at?: string | null;
+  last_seen_at?: string | null;
+  last_heartbeat_at?: string | null;
+  paired_mobile_ids: string[];
+};
+
+export type RemoteMobile = {
+  mobile_id: string;
+  device_name?: string | null;
+  device_platform?: string | null;
+  paired_desktop_id?: string | null;
+  created_at?: string | null;
+  last_used_at?: string | null;
+};
+
+export type RemoteAuthLoginResult = {
+  session_token: string;
+  expires_in_seconds: number;
+  actor_kind: 'mobile' | 'desktop';
+  user: RemoteUser;
+  desktop?: RemoteDesktop | null;
+  mobile?: RemoteMobile | null;
+};
+
+export type RemoteAccountProfile = {
+  user: RemoteUser;
+  actor_kind: 'mobile' | 'desktop';
+  desktop?: RemoteDesktop | null;
+  mobile?: RemoteMobile | null;
+  shared_state: Record<string, unknown>;
+};
+
+export type RemotePairStartResult = {
+  pairing_id: string;
+  pairing_token: string;
+  pairing_uri: string;
+  desktop_id: string;
+  desktop_name?: string | null;
+  expires_in_seconds: number;
+};
+
+export type RemotePairCompleteResult = {
+  desktop: RemoteDesktop;
+  mobile: RemoteMobile;
+  shared_state: Record<string, unknown>;
+};
+
 export type SessionSummary = {
   id: string;
   name: string;
@@ -20,6 +81,15 @@ export type SessionSummary = {
   workspace?: string;
   latest_preview?: string | null;
   origin_channels: string[];
+  is_running: boolean;
+  run_state: 'idle' | 'running';
+  enabled_tool_packs: string[];
+  available_tool_packs: string[];
+  lock_status: Record<string, unknown>;
+  telegram_bot_config_id?: string | null;
+  headless_eligible: boolean;
+  artifact_count: number;
+  latest_artifact_at?: string | null;
 };
 
 export type SessionMessage = {
@@ -58,6 +128,45 @@ export type SessionDetail = {
   timeline_events: SessionTimelineEvent[];
   task_board?: TaskBoard | null;
   completed_task_boards: TaskBoard[];
+  task_board_armed_next_turn: boolean;
+  is_running: boolean;
+  run_state: 'idle' | 'running';
+  enabled_tool_packs: string[];
+  available_tool_packs: string[];
+  lock_status: Record<string, unknown>;
+  telegram_bot_config_id?: string | null;
+  headless_eligible: boolean;
+  artifact_count: number;
+  latest_artifact_at?: string | null;
+};
+
+export type ArtifactSummary = {
+  artifact_id: string;
+  title: string;
+  artifact_kind: string;
+  source_kind: string;
+  created_at: string;
+  mime_type: string;
+  size_bytes: number;
+  preview_text: string;
+  summary_text: string;
+  source_tool?: string | null;
+  source_command?: string | null;
+  file_path?: string | null;
+  workspace?: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type ArtifactDetail = ArtifactSummary & {
+  payload_file_name?: string | null;
+  inline_text?: string | null;
+  image_base64?: string | null;
+  index_segments: Array<Record<string, unknown>>;
+};
+
+export type DeleteSessionResult = {
+  deleted_session_id: string;
+  current_session_id?: string | null;
 };
 
 export type SessionSearchResult = {
@@ -87,6 +196,11 @@ export type ScheduledJob = {
   interval_seconds?: number | null;
   due?: boolean;
   owner_user_id?: number | null;
+  origin_session_id?: string | null;
+  origin_telegram_bot_config_id?: string | null;
+  origin_workspace?: string | null;
+  origin_model?: string | null;
+  origin_enabled_tool_packs: string[];
 };
 
 export type CronFeedItem = {
@@ -98,6 +212,9 @@ export type CronFeedItem = {
   session_name?: string | null;
   job_id?: string | null;
   job_name?: string | null;
+  telegram_bot_config_id?: string | null;
+  telegram_bot_label?: string | null;
+  status?: string | null;
 };
 
 export type ModelProviderGroup = {
@@ -162,9 +279,9 @@ export type TaskBoardSubGoal = {
 
 export type TaskBoard = {
   task_id: string;
-  status: 'active' | 'completed' | 'blocked' | 'paused';
-  state: 'idle' | 'candidate' | 'active' | 'reassessing' | 'blocked_waiting_user' | 'completed_collapsed';
-  display_mode: 'active' | 'completed_collapsed';
+  status: 'active' | 'completed' | 'blocked' | 'paused' | 'interrupted';
+  state: 'idle' | 'candidate' | 'active' | 'reassessing' | 'blocked_waiting_user' | 'completed_collapsed' | 'history_collapsed';
+  display_mode: 'active' | 'completed_collapsed' | 'history_collapsed';
   main_goal: string;
   goal_locked: boolean;
   sub_goals: TaskBoardSubGoal[];
@@ -255,8 +372,69 @@ export type AgentOverview = {
   analytics: AnalyticsSummary;
   security: SecuritySummary;
   config_preview: ConfigEntry[];
+  run_state: 'idle' | 'running';
   task_board?: TaskBoard | null;
   completed_task_boards: TaskBoard[];
+  task_board_armed_next_turn: boolean;
+  available_tool_packs: string[];
+  enabled_tool_packs: string[];
+  lock_status: Record<string, unknown>;
+};
+
+export type TelegramBotConfig = {
+  id: string;
+  label: string;
+  bot_token: string;
+  is_default: boolean;
+};
+
+export type RuntimeWorkerStatus = {
+  session_id: string;
+  is_running: boolean;
+  run_state: 'idle' | 'running';
+  workspace: string;
+  enabled_tool_packs: string[];
+  active_tool_packs: string[];
+  telegram_bot_config_id?: string | null;
+};
+
+export type RuntimeOrchestratorStatus = {
+  max_concurrent_chats: number;
+  running_sessions: RuntimeWorkerStatus[];
+  locks: {
+    interactive_owner_session_id?: string | null;
+    workspace_write_owner_by_workspace: Record<string, string>;
+  };
+  headless_mode_enabled: boolean;
+  default_sleep_session_by_bot: Record<string, string>;
+};
+
+export type VoiceRuntimeStatus = {
+  ok?: boolean;
+  input_ok?: boolean;
+  issues?: string[];
+  stt_backend?: string | null;
+  stt_model?: string | null;
+  draft_model?: string | null;
+  binary_flavor?: string | null;
+  tts_enabled?: boolean;
+  selected_engine?: string | null;
+  english_requested?: boolean;
+  hebrew_requested?: boolean;
+  english_pack_ready?: boolean;
+  hebrew_pack_ready?: boolean;
+  english_pack_manifest?: Record<string, unknown> | null;
+  english_pack_manifest_verified?: boolean;
+  hebrew_pack_manifest?: Record<string, unknown> | null;
+  hebrew_pack_manifest_verified?: boolean;
+  selected_engine_state?: string | null;
+  selected_engine_ready?: boolean;
+  warmup?: Record<string, unknown> | null;
+};
+
+export type TaskBoardArmResult = {
+  session_id?: string | null;
+  task_board_armed_next_turn: boolean;
 };
 
 export type AgentConfigurePayload = {
@@ -271,6 +449,24 @@ export type AgentConfigurePayload = {
   heartbeat_enabled?: boolean;
   heartbeat_interval_seconds?: number;
   headless_mode?: 'headless' | 'headed';
+};
+
+export type ToolPackUpdatePayload = {
+  enabled_tool_packs: string[];
+};
+
+export type SessionBotAssignmentPayload = {
+  telegram_bot_config_id?: string | null;
+};
+
+export type SessionHeadlessEligibilityPayload = {
+  headless_eligible: boolean;
+};
+
+export type HeadlessConfigurePayload = {
+  enabled?: boolean;
+  default_max_concurrent_chats?: number;
+  default_sleep_session_by_bot?: Record<string, string | null>;
 };
 
 export type AgentAction = {
@@ -364,6 +560,40 @@ export async function fetchSessionDetail(apiBaseUrl: string, token: string, sess
   });
 }
 
+export async function fetchSessionArtifacts(apiBaseUrl: string, token: string, sessionId: string) {
+  return requestJson<ArtifactSummary[]>({
+    scope: 'sessions.artifacts.list',
+    url: `${apiBaseUrl}/api/app/sessions/${encodeURIComponent(sessionId)}/artifacts`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function fetchSessionArtifactDetail(apiBaseUrl: string, token: string, sessionId: string, artifactId: string) {
+  return requestJson<ArtifactDetail>({
+    scope: 'sessions.artifacts.detail',
+    url: `${apiBaseUrl}/api/app/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(artifactId)}`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function fetchSessionArtifactBlob(apiBaseUrl: string, token: string, sessionId: string, artifactId: string) {
+  const response = await fetch(
+    `${apiBaseUrl}/api/app/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(artifactId)}/download`,
+    { headers: authHeaders(token) },
+  );
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(text || `Artifact download failed (${response.status})`);
+  }
+  const disposition = response.headers.get('content-disposition') || '';
+  const filenameMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
+  return {
+    blob: await response.blob(),
+    filename: filenameMatch?.[1] || `${artifactId}.bin`,
+    mimeType: response.headers.get('content-type') || 'application/octet-stream',
+  };
+}
+
 export async function searchSessions(
   apiBaseUrl: string,
   token: string,
@@ -416,7 +646,7 @@ export async function appendSessionTimelineEvent(
 export async function createSession(
   apiBaseUrl: string,
   token: string,
-  nameOrOptions?: string | { name?: string; workspace?: string },
+  nameOrOptions?: string | { name?: string; workspace?: string; telegram_bot_config_id?: string | null; enabled_tool_packs?: string[]; headless_eligible?: boolean },
   workspaceArg?: string,
 ) {
   const payload = typeof nameOrOptions === 'string'
@@ -424,6 +654,9 @@ export async function createSession(
     : {
         name: nameOrOptions?.name,
         workspace: nameOrOptions?.workspace,
+        telegram_bot_config_id: nameOrOptions?.telegram_bot_config_id,
+        enabled_tool_packs: nameOrOptions?.enabled_tool_packs,
+        headless_eligible: nameOrOptions?.headless_eligible,
       };
   return requestJson<{ session: SessionDetail }>({
     scope: 'sessions.create',
@@ -445,6 +678,18 @@ export async function activateSession(apiBaseUrl: string, token: string, session
     url: `${apiBaseUrl}/api/app/sessions/${sessionId}/activate`,
     init: {
       method: 'POST',
+      headers: authHeaders(token),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function deleteSession(apiBaseUrl: string, token: string, sessionId: string) {
+  return requestJson<DeleteSessionResult>({
+    scope: 'sessions.delete',
+    url: `${apiBaseUrl}/api/app/sessions/${sessionId}`,
+    init: {
+      method: 'DELETE',
       headers: authHeaders(token),
     },
     timeoutMs: 30000,
@@ -483,6 +728,105 @@ export async function createJob(apiBaseUrl: string, token: string, payload: { na
   });
 }
 
+export async function fetchTelegramBotConfigs(apiBaseUrl: string, token: string) {
+  return requestJson<TelegramBotConfig[]>({
+    scope: 'telegram-bots.list',
+    url: `${apiBaseUrl}/api/app/telegram-bots`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function createTelegramBotConfig(apiBaseUrl: string, token: string, payload: { label: string; bot_token: string }) {
+  return requestJson<TelegramBotConfig>({
+    scope: 'telegram-bots.create',
+    url: `${apiBaseUrl}/api/app/telegram-bots`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function updateTelegramBotConfig(apiBaseUrl: string, token: string, botConfigId: string, payload: { label?: string; bot_token?: string; is_default?: boolean }) {
+  return requestJson<TelegramBotConfig>({
+    scope: 'telegram-bots.update',
+    url: `${apiBaseUrl}/api/app/telegram-bots/${encodeURIComponent(botConfigId)}`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function deleteTelegramBotConfig(apiBaseUrl: string, token: string, botConfigId: string) {
+  return requestJson<{ ok: boolean; id: string }>({
+    scope: 'telegram-bots.delete',
+    url: `${apiBaseUrl}/api/app/telegram-bots/${encodeURIComponent(botConfigId)}`,
+    init: {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    },
+  });
+}
+
+export async function updateSessionToolPacks(apiBaseUrl: string, token: string, sessionId: string, payload: ToolPackUpdatePayload) {
+  return requestJson<SessionDetail>({
+    scope: 'sessions.toolpacks',
+    url: `${apiBaseUrl}/api/app/sessions/${encodeURIComponent(sessionId)}/tool-packs`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function updateSessionTelegramBotAssignment(apiBaseUrl: string, token: string, sessionId: string, payload: SessionBotAssignmentPayload) {
+  return requestJson<SessionDetail>({
+    scope: 'sessions.telegram-bot',
+    url: `${apiBaseUrl}/api/app/sessions/${encodeURIComponent(sessionId)}/telegram-bot`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function updateSessionHeadlessEligibility(apiBaseUrl: string, token: string, sessionId: string, payload: SessionHeadlessEligibilityPayload) {
+  return requestJson<SessionDetail>({
+    scope: 'sessions.headless-eligibility',
+    url: `${apiBaseUrl}/api/app/sessions/${encodeURIComponent(sessionId)}/headless-eligibility`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function fetchRuntimeOrchestratorStatus(apiBaseUrl: string, token: string) {
+  return requestJson<RuntimeOrchestratorStatus>({
+    scope: 'runtime.orchestrator',
+    url: `${apiBaseUrl}/api/app/runtime/orchestrator`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function configureHeadlessRuntime(apiBaseUrl: string, token: string, payload: HeadlessConfigurePayload) {
+  return requestJson<RuntimeOrchestratorStatus>({
+    scope: 'runtime.headless.configure',
+    url: `${apiBaseUrl}/api/app/runtime/headless`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
 export async function actOnJob(apiBaseUrl: string, token: string, jobId: string, action: 'run' | 'enable' | 'disable' | 'delete') {
   const method = action === 'delete' ? 'DELETE' : 'POST';
   const url = action === 'delete'
@@ -517,6 +861,26 @@ export async function fetchAgentOverview(
   });
 }
 
+export async function fetchVoiceRuntimeStatus(apiBaseUrl: string, token: string) {
+  return requestJson<VoiceRuntimeStatus>({
+    scope: 'voice.status',
+    url: `${apiBaseUrl}/api/app/voice/status`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function warmVoiceRuntime(apiBaseUrl: string, token: string) {
+  return requestJson<VoiceRuntimeStatus>({
+    scope: 'voice.warm',
+    url: `${apiBaseUrl}/api/app/voice/warm`,
+    init: {
+      method: 'POST',
+      headers: authHeaders(token),
+    },
+    timeoutMs: 120000,
+  });
+}
+
 export async function fetchTaskBoard(apiBaseUrl: string, token: string, sessionId?: string) {
   const query = new URLSearchParams();
   if (sessionId) query.set('session_id', sessionId);
@@ -538,6 +902,30 @@ export async function forceTaskBoardReassess(apiBaseUrl: string, token: string, 
     init: {
       method: 'POST',
       headers: authHeaders(token),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function setTaskBoardArmedNextTurn(
+  apiBaseUrl: string,
+  token: string,
+  armed: boolean,
+  sessionId?: string,
+) {
+  const query = new URLSearchParams();
+  if (sessionId) query.set('session_id', sessionId);
+
+  return requestJson<TaskBoardArmResult>({
+    scope: 'agent.taskboard.arm',
+    url: `${apiBaseUrl}/api/app/agent/task-board/arm${query.size ? `?${query.toString()}` : ''}`,
+    init: {
+      method: 'POST',
+      headers: {
+        ...authHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ armed }),
     },
     timeoutMs: 30000,
   });
@@ -816,6 +1204,103 @@ export async function controlAgentRun(
     init: {
       method: 'POST',
       headers: authHeaders(token),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function remoteRegisterAccount(
+  apiBaseUrl: string,
+  payload: { email: string; password: string; display_name?: string }
+) {
+  return requestJson<RemoteUser>({
+    scope: 'remote.auth.register',
+    url: `${apiBaseUrl}/api/remote/auth/register`,
+    init: {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function remoteLogin(
+  apiBaseUrl: string,
+  payload: {
+    email: string;
+    password: string;
+    actor_kind: 'mobile' | 'desktop';
+    device_name?: string;
+    device_platform?: string;
+    device_key?: string;
+  }
+) {
+  return requestJson<RemoteAuthLoginResult>({
+    scope: 'remote.auth.login',
+    url: `${apiBaseUrl}/api/remote/auth/login`,
+    init: {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function fetchRemoteAccountProfile(apiBaseUrl: string, token: string) {
+  return requestJson<RemoteAccountProfile>({
+    scope: 'remote.account.me',
+    url: `${apiBaseUrl}/api/remote/account/me`,
+    init: {
+      headers: authHeaders(token),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function fetchRemoteDesktops(apiBaseUrl: string, token: string) {
+  return requestJson<RemoteDesktop[]>({
+    scope: 'remote.desktops.list',
+    url: `${apiBaseUrl}/api/remote/desktops`,
+    init: {
+      headers: authHeaders(token),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function remoteStartPairing(apiBaseUrl: string, token: string, desktopId?: string) {
+  return requestJson<RemotePairStartResult>({
+    scope: 'remote.pair.start',
+    url: `${apiBaseUrl}/api/remote/pair/start`,
+    init: {
+      method: 'POST',
+      headers: {
+        ...authHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ desktop_id: desktopId || null }),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function remoteCompletePairing(apiBaseUrl: string, token: string, pairingToken: string) {
+  return requestJson<RemotePairCompleteResult>({
+    scope: 'remote.pair.complete',
+    url: `${apiBaseUrl}/api/remote/pair/complete`,
+    init: {
+      method: 'POST',
+      headers: {
+        ...authHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ pairing_token: pairingToken }),
     },
     timeoutMs: 30000,
   });

@@ -84,6 +84,15 @@ class SessionSummaryView(BaseModel):
     workspace: str = ""
     latest_preview: Optional[str] = None
     origin_channels: List[ChannelType] = Field(default_factory=list)
+    is_running: bool = False
+    run_state: Literal["idle", "running"] = "idle"
+    enabled_tool_packs: List[str] = Field(default_factory=list)
+    available_tool_packs: List[str] = Field(default_factory=list)
+    lock_status: Dict[str, Any] = Field(default_factory=dict)
+    telegram_bot_config_id: Optional[str] = None
+    headless_eligible: bool = False
+    artifact_count: int = 0
+    latest_artifact_at: Optional[str] = None
 
 
 class SessionDetailView(BaseModel):
@@ -100,15 +109,66 @@ class SessionDetailView(BaseModel):
     timeline_events: List[SessionTimelineEventView] = Field(default_factory=list)
     task_board: Optional["TaskBoardView"] = None
     completed_task_boards: List["TaskBoardView"] = Field(default_factory=list)
+    task_board_armed_next_turn: bool = False
+    is_running: bool = False
+    run_state: Literal["idle", "running"] = "idle"
+    enabled_tool_packs: List[str] = Field(default_factory=list)
+    available_tool_packs: List[str] = Field(default_factory=list)
+    lock_status: Dict[str, Any] = Field(default_factory=dict)
+    telegram_bot_config_id: Optional[str] = None
+    headless_eligible: bool = False
+    artifact_count: int = 0
+    latest_artifact_at: Optional[str] = None
+
+
+class ArtifactSummaryView(BaseModel):
+    artifact_id: str
+    title: str
+    artifact_kind: str
+    source_kind: str
+    created_at: str
+    mime_type: str
+    size_bytes: int
+    preview_text: str = ""
+    summary_text: str = ""
+    source_tool: Optional[str] = None
+    source_command: Optional[str] = None
+    file_path: Optional[str] = None
+    workspace: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ArtifactDetailView(ArtifactSummaryView):
+    payload_file_name: Optional[str] = None
+    inline_text: Optional[str] = None
+    image_base64: Optional[str] = None
+    index_segments: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class CreateSessionRequest(BaseModel):
     name: Optional[str] = None
     workspace: Optional[str] = None
+    telegram_bot_config_id: Optional[str] = None
+    enabled_tool_packs: List[str] = Field(default_factory=list)
+    headless_eligible: bool = False
 
 
 class CreateSessionResponse(BaseModel):
     session: SessionDetailView
+
+
+class DeleteSessionResponse(BaseModel):
+    deleted_session_id: str
+    current_session_id: Optional[str] = None
+
+
+class TaskBoardArmRequest(BaseModel):
+    armed: bool = False
+
+
+class TaskBoardArmResponse(BaseModel):
+    session_id: Optional[str] = None
+    task_board_armed_next_turn: bool = False
 
 
 class SessionSearchRequest(BaseModel):
@@ -168,6 +228,7 @@ class JobCreateRequest(BaseModel):
     name: str
     prompt: str
     schedule: str
+    session_id: Optional[str] = None
 
 
 class JobDetailView(BaseModel):
@@ -200,6 +261,11 @@ class ScheduledJobView(BaseModel):
     interval_seconds: Optional[int] = None
     due: bool = False
     owner_user_id: Optional[int] = None
+    origin_session_id: Optional[str] = None
+    origin_telegram_bot_config_id: Optional[str] = None
+    origin_workspace: Optional[str] = None
+    origin_model: Optional[str] = None
+    origin_enabled_tool_packs: List[str] = Field(default_factory=list)
 
 
 class CronFeedItemView(BaseModel):
@@ -211,6 +277,9 @@ class CronFeedItemView(BaseModel):
     session_name: Optional[str] = None
     job_id: Optional[str] = None
     job_name: Optional[str] = None
+    telegram_bot_config_id: Optional[str] = None
+    telegram_bot_label: Optional[str] = None
+    status: Optional[str] = None
 
 
 class JobActionResponse(BaseModel):
@@ -297,9 +366,9 @@ class TaskBoardSubGoalView(BaseModel):
 
 class TaskBoardView(BaseModel):
     task_id: str
-    status: Literal["active", "completed", "blocked", "paused"] = "active"
-    state: Literal["idle", "candidate", "active", "reassessing", "blocked_waiting_user", "completed_collapsed"] = "active"
-    display_mode: Literal["active", "completed_collapsed"] = "active"
+    status: Literal["active", "completed", "blocked", "paused", "interrupted"] = "active"
+    state: Literal["idle", "candidate", "active", "reassessing", "blocked_waiting_user", "completed_collapsed", "history_collapsed"] = "active"
+    display_mode: Literal["active", "completed_collapsed", "history_collapsed"] = "active"
     main_goal: str
     goal_locked: bool = True
     sub_goals: List[TaskBoardSubGoalView] = Field(default_factory=list)
@@ -411,8 +480,72 @@ class AgentOverviewView(BaseModel):
     analytics: AnalyticsSummaryView = Field(default_factory=AnalyticsSummaryView)
     security: SecuritySummaryView = Field(default_factory=SecuritySummaryView)
     config_preview: List[ConfigEntryView] = Field(default_factory=list)
+    run_state: Literal["idle", "running"] = "idle"
     task_board: Optional[TaskBoardView] = None
     completed_task_boards: List[TaskBoardView] = Field(default_factory=list)
+    task_board_armed_next_turn: bool = False
+    available_tool_packs: List[str] = Field(default_factory=list)
+    enabled_tool_packs: List[str] = Field(default_factory=list)
+    lock_status: Dict[str, Any] = Field(default_factory=dict)
+
+
+class TelegramBotConfigView(BaseModel):
+    id: str
+    label: str
+    bot_token: str
+    is_default: bool = False
+
+
+class TelegramBotConfigCreateRequest(BaseModel):
+    label: str
+    bot_token: str
+
+
+class TelegramBotConfigUpdateRequest(BaseModel):
+    label: Optional[str] = None
+    bot_token: Optional[str] = None
+    is_default: Optional[bool] = None
+
+
+class ToolPackUpdateRequest(BaseModel):
+    enabled_tool_packs: List[str] = Field(default_factory=list)
+
+
+class SessionBotAssignmentRequest(BaseModel):
+    telegram_bot_config_id: Optional[str] = None
+
+
+class SessionHeadlessEligibilityRequest(BaseModel):
+    headless_eligible: bool = False
+
+
+class RuntimeWorkerLockView(BaseModel):
+    interactive_owner_session_id: Optional[str] = None
+    workspace_write_owner_by_workspace: Dict[str, str] = Field(default_factory=dict)
+
+
+class RuntimeWorkerStatusView(BaseModel):
+    session_id: str
+    is_running: bool = False
+    run_state: Literal["idle", "running"] = "idle"
+    workspace: str = ""
+    enabled_tool_packs: List[str] = Field(default_factory=list)
+    active_tool_packs: List[str] = Field(default_factory=list)
+    telegram_bot_config_id: Optional[str] = None
+
+
+class RuntimeOrchestratorView(BaseModel):
+    max_concurrent_chats: int = 4
+    running_sessions: List[RuntimeWorkerStatusView] = Field(default_factory=list)
+    locks: RuntimeWorkerLockView = Field(default_factory=RuntimeWorkerLockView)
+    headless_mode_enabled: bool = False
+    default_sleep_session_by_bot: Dict[str, str] = Field(default_factory=dict)
+
+
+class HeadlessConfigureRequest(BaseModel):
+    enabled: Optional[bool] = None
+    default_max_concurrent_chats: Optional[int] = None
+    default_sleep_session_by_bot: Dict[str, Optional[str]] = Field(default_factory=dict)
 
 
 class AgentConfigureRequest(BaseModel):
@@ -533,4 +666,113 @@ class RealtimeServerEvent(BaseModel):
     type: str
     session_id: Optional[str] = None
     message: Optional[str] = None
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RemoteAuthRegisterRequest(BaseModel):
+    email: str
+    password: str
+    display_name: Optional[str] = None
+
+
+class RemoteAuthLoginRequest(BaseModel):
+    email: str
+    password: str
+    actor_kind: Literal["mobile", "desktop"]
+    device_name: Optional[str] = None
+    device_platform: Optional[str] = None
+    device_key: Optional[str] = None
+
+
+class RemoteUserView(BaseModel):
+    user_id: int
+    email: str
+    display_name: Optional[str] = None
+    created_at: Optional[str] = None
+    last_login_at: Optional[str] = None
+
+
+class RemoteDesktopView(BaseModel):
+    desktop_id: str
+    device_key: Optional[str] = None
+    display_name: Optional[str] = None
+    status: Literal["offline", "connected", "planned"] = "offline"
+    detail: Optional[str] = None
+    created_at: Optional[str] = None
+    last_seen_at: Optional[str] = None
+    last_heartbeat_at: Optional[str] = None
+    paired_mobile_ids: List[str] = Field(default_factory=list)
+
+
+class RemoteMobileView(BaseModel):
+    mobile_id: str
+    device_name: Optional[str] = None
+    device_platform: Optional[str] = None
+    paired_desktop_id: Optional[str] = None
+    created_at: Optional[str] = None
+    last_used_at: Optional[str] = None
+
+
+class RemoteAuthLoginResponse(BaseModel):
+    session_token: str
+    expires_in_seconds: int
+    actor_kind: Literal["mobile", "desktop"]
+    user: RemoteUserView
+    desktop: Optional[RemoteDesktopView] = None
+    mobile: Optional[RemoteMobileView] = None
+
+
+class RemoteAccountProfile(BaseModel):
+    user: RemoteUserView
+    actor_kind: Literal["mobile", "desktop"]
+    desktop: Optional[RemoteDesktopView] = None
+    mobile: Optional[RemoteMobileView] = None
+    shared_state: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RemotePairStartRequest(BaseModel):
+    desktop_id: Optional[str] = None
+
+
+class RemotePairStartResponse(BaseModel):
+    pairing_id: str
+    pairing_token: str
+    pairing_uri: str
+    desktop_id: str
+    desktop_name: Optional[str] = None
+    expires_in_seconds: int
+
+
+class RemotePairCompleteRequest(BaseModel):
+    pairing_token: str
+
+
+class RemotePairCompleteResponse(BaseModel):
+    desktop: RemoteDesktopView
+    mobile: RemoteMobileView
+    shared_state: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RemoteDesktopSyncEnvelope(BaseModel):
+    desktop_id: str
+    current_session_id: Optional[str] = None
+    current_model: Optional[str] = None
+    current_variant: Optional[str] = None
+    desktop_name: Optional[str] = None
+    desktop_status_detail: Optional[str] = None
+    sessions: List[Dict[str, Any]] = Field(default_factory=list)
+    session_details: Dict[str, Any] = Field(default_factory=dict)
+    jobs: List[Dict[str, Any]] = Field(default_factory=list)
+    project_groups: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class RemoteDesktopSocketMessage(BaseModel):
+    type: str
+    command_id: Optional[str] = None
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RemoteMobileSocketMessage(BaseModel):
+    type: str
+    session_id: Optional[str] = None
     payload: Dict[str, Any] = Field(default_factory=dict)

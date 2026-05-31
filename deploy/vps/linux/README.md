@@ -1,5 +1,13 @@
 # Linux VPS Deployment
 
+## Legacy path
+This document describes the older **headed Linux + Telegram/X11** deployment path.
+
+It is still useful for legacy VPS automation, but it is **not** the primary architecture for the remote mobile app anymore.
+
+For the current public mobile control-plane deployment on Ubuntu 22.04, use:
+- [REMOTE_CONTROL_README.md](C:/Users/Magsihim_AI/Documents/GitHub/powerful-project-collection/emploai/deploy/vps/linux/REMOTE_CONTROL_README.md)
+
 This deployment keeps the Telegram agent on a persistent virtual desktop so it can:
 
 - run headed Chrome

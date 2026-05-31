@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link } from 'expo-router';
 import { Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { isSupportedApiBaseUrl, loadAppConfig, normalizeApiBaseUrl, saveAppConfig } from '../lib/appConfig';
+import { fetchRemoteAccountProfile } from '../src/lib/appApi';
+import { isSupportedApiBaseUrl, loadAppConfig, normalizeApiBaseUrl, saveAppConfig, type AppConnectionMode } from '../lib/appConfig';
 import { requestJson } from '../lib/appHttp';
 import { describeError } from '../lib/diagnostics';
 
@@ -19,8 +20,12 @@ type DeviceStatus = {
 export default function SettingsScreen() {
   const [apiBaseUrl, setApiBaseUrl] = useState('');
   const [accessToken, setAccessToken] = useState('');
+  const [accountToken, setAccountToken] = useState('');
+  const [pairedDesktopId, setPairedDesktopId] = useState('');
+  const [connectionMode, setConnectionMode] = useState<AppConnectionMode>('remote_cloud');
   const [status, setStatus] = useState('idle');
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatus | null>(null);
+  const [accountSummary, setAccountSummary] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -28,6 +33,9 @@ export default function SettingsScreen() {
       .then((config) => {
         setApiBaseUrl(config.apiBaseUrl);
         setAccessToken(config.accessToken);
+        setAccountToken(config.accountToken);
+        setPairedDesktopId(config.pairedDesktopId);
+        setConnectionMode(config.connectionMode);
         setStatus('ready');
       })
       .catch(() => setStatus('load error'));
@@ -36,16 +44,24 @@ export default function SettingsScreen() {
   const save = async () => {
     const normalizedBaseUrl = normalizeApiBaseUrl(apiBaseUrl);
     if (normalizedBaseUrl && !isSupportedApiBaseUrl(normalizedBaseUrl)) {
-      setStatus('backend must start with http:// or https://');
+      setStatus('service URL must start with http:// or https://');
       return;
     }
-
     setStatus('saving');
     setIsSaving(true);
     try {
-      const config = await saveAppConfig({ apiBaseUrl: normalizedBaseUrl, accessToken });
+      const config = await saveAppConfig({
+        apiBaseUrl: normalizedBaseUrl,
+        accessToken,
+        accountToken,
+        pairedDesktopId,
+        connectionMode,
+      });
       setApiBaseUrl(config.apiBaseUrl);
       setAccessToken(config.accessToken);
+      setAccountToken(config.accountToken);
+      setPairedDesktopId(config.pairedDesktopId);
+      setConnectionMode(config.connectionMode);
       setStatus('saved');
     } catch {
       setStatus('save error');
@@ -57,11 +73,11 @@ export default function SettingsScreen() {
   const verify = async () => {
     const normalizedBaseUrl = normalizeApiBaseUrl(apiBaseUrl);
     if (!normalizedBaseUrl) {
-      setStatus('missing backend');
+      setStatus('missing service URL');
       return;
     }
     if (!isSupportedApiBaseUrl(normalizedBaseUrl)) {
-      setStatus('backend must start with http:// or https://');
+      setStatus('service URL must start with http:// or https://');
       return;
     }
 
@@ -72,9 +88,16 @@ export default function SettingsScreen() {
         url: `${normalizedBaseUrl}/api/app/health`,
       });
 
+      if (accountToken.trim()) {
+        const profile = await fetchRemoteAccountProfile(normalizedBaseUrl, accountToken);
+        setAccountSummary(`${profile.user.email} · ${profile.mobile?.paired_desktop_id || 'not paired'}`);
+      } else {
+        setAccountSummary(null);
+      }
+
       if (!accessToken.trim()) {
         setDeviceStatus(null);
-        setStatus('backend reachable');
+        setStatus('service reachable');
         return;
       }
 
@@ -92,20 +115,27 @@ export default function SettingsScreen() {
       setStatus('connected');
     } catch (error) {
       setDeviceStatus(null);
+      setAccountSummary(null);
       setStatus(describeError(error));
     }
   };
 
-  const clearToken = async () => {
-    setStatus('clearing token');
+  const clearTokens = async () => {
+    setStatus('clearing tokens');
     try {
       await saveAppConfig({
         apiBaseUrl: normalizeApiBaseUrl(apiBaseUrl),
         accessToken: '',
+        accountToken: '',
+        pairedDesktopId: '',
+        connectionMode,
       });
       setAccessToken('');
+      setAccountToken('');
+      setPairedDesktopId('');
       setDeviceStatus(null);
-      setStatus('token cleared');
+      setAccountSummary(null);
+      setStatus('tokens cleared');
     } catch {
       setStatus('clear error');
     }
@@ -116,30 +146,57 @@ export default function SettingsScreen() {
       <View style={styles.card}>
         <Text style={styles.title}>Settings</Text>
         <Text style={styles.help}>
-          This app should point to the app backend. Use HTTPS for VPS access, or http://LAN-IP:8787 for same-Wi-Fi local
-          testing. Save the URL here once, then verify the device token.
+          Mobile v1 targets the public EmploAI control plane. The phone signs into the service, pairs to a desktop, then
+          uses the same `/api/app` chat surface through the VPS instead of talking directly to a user-entered desktop URL.
         </Text>
-        <Text style={styles.text}>Backend URL</Text>
+        <Text style={styles.text}>Service URL</Text>
         <TextInput
           style={styles.input}
           value={apiBaseUrl}
           onChangeText={setApiBaseUrl}
           autoCapitalize="none"
           autoCorrect={false}
-          placeholder="https://your-vps-host or http://192.168.x.x:8787"
+          placeholder="https://your-emploai-domain"
           placeholderTextColor="#7f8aa3"
         />
-        <Text style={styles.text}>Access token</Text>
+        <Text style={styles.text}>Connection mode</Text>
+        <Text style={styles.meta}>{connectionMode}</Text>
+        <Text style={styles.text}>Account token</Text>
+        <TextInput
+          style={styles.input}
+          value={accountToken}
+          onChangeText={setAccountToken}
+          autoCapitalize="none"
+          autoCorrect={false}
+          placeholder="Remote account session token"
+          placeholderTextColor="#7f8aa3"
+        />
+        <Text style={styles.text}>App token</Text>
         <TextInput
           style={styles.input}
           value={accessToken}
           onChangeText={setAccessToken}
           autoCapitalize="none"
           autoCorrect={false}
-          placeholder="Paste app token"
+          placeholder="Effective app token"
+          placeholderTextColor="#7f8aa3"
+        />
+        <Text style={styles.text}>Paired desktop ID</Text>
+        <TextInput
+          style={styles.input}
+          value={pairedDesktopId}
+          onChangeText={setPairedDesktopId}
+          autoCapitalize="none"
+          autoCorrect={false}
+          placeholder="Desktop id after pairing"
           placeholderTextColor="#7f8aa3"
         />
         <Text style={styles.meta}>Status: {status}</Text>
+        {accountSummary ? (
+          <View style={styles.infoCard}>
+            <Text style={styles.infoLine}>Account: {accountSummary}</Text>
+          </View>
+        ) : null}
         {deviceStatus ? (
           <View style={styles.infoCard}>
             <Text style={styles.infoLine}>Device: {deviceStatus.device_name || 'Unknown'}</Text>
@@ -155,9 +212,10 @@ export default function SettingsScreen() {
           <Pressable style={styles.secondaryButton} onPress={() => void verify()}>
             <Text style={styles.buttonText}>Verify</Text>
           </Pressable>
-          <Pressable style={styles.dangerButton} onPress={() => void clearToken()}>
-            <Text style={styles.buttonText}>Clear Token</Text>
+          <Pressable style={styles.dangerButton} onPress={() => void clearTokens()}>
+            <Text style={styles.buttonText}>Clear Tokens</Text>
           </Pressable>
+          <Link href="/pair" style={styles.link}>Connect or Pair</Link>
           <Link href="/diagnostics" style={styles.link}>Open Diagnostics</Link>
         </View>
       </View>

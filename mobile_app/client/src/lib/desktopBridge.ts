@@ -5,6 +5,7 @@ export type DesktopRuntimeStatus = {
   api_base_url?: string;
   apiBaseUrl?: string;
   startup_state?: string | null;
+  readiness_scope?: string | null;
   degraded?: boolean;
   issues?: string[] | null;
   detail?: string | null;
@@ -12,9 +13,43 @@ export type DesktopRuntimeStatus = {
   processId?: number | null;
 };
 
+export type DesktopTelegramStatus = {
+  enabled: boolean;
+  configured: boolean;
+  state: string;
+  detail?: string | null;
+  process_id?: number | null;
+  processId?: number | null;
+  log_path?: string | null;
+  logPath?: string | null;
+  ready_at?: string | null;
+  readyAt?: string | null;
+};
+
+export type DesktopRemoteControlStatus = {
+  configured: boolean;
+  state: string;
+  detail?: string | null;
+  process_id?: number | null;
+  processId?: number | null;
+  log_path?: string | null;
+  logPath?: string | null;
+  desktop_id?: string | null;
+  desktopId?: string | null;
+  desktop_name?: string | null;
+  desktopName?: string | null;
+  ready_at?: string | null;
+  readyAt?: string | null;
+};
+
 export type DesktopSetupValues = {
   TELEGRAM_BOT_TOKEN: string;
   ALLOWED_USER_IDS: string;
+  EMPLOAI_REMOTE_CONTROL_BASE_URL: string;
+  EMPLOAI_REMOTE_CONTROL_EMAIL: string;
+  EMPLOAI_REMOTE_CONTROL_PASSWORD: string;
+  EMPLOAI_REMOTE_DESKTOP_NAME: string;
+  EMPLOAI_REMOTE_DESKTOP_KEY: string;
   DEFAULT_WORKSPACE: string;
   PLANNER_MODEL: string;
   INTERRUPT_POLICY_DEFAULT: string;
@@ -43,6 +78,12 @@ export type DesktopVoiceRuntimeStatus = {
   hebrew_requested?: boolean;
   english_pack_ready?: boolean;
   hebrew_pack_ready?: boolean;
+  english_pack_manifest?: Record<string, unknown> | null;
+  english_pack_manifest_verified?: boolean;
+  hebrew_pack_manifest?: Record<string, unknown> | null;
+  hebrew_pack_manifest_verified?: boolean;
+  selected_engine_state?: string | null;
+  selected_engine_ready?: boolean;
 };
 
 export type DesktopVoicePackSummary = {
@@ -62,6 +103,16 @@ export type DesktopVoicePackSummary = {
   issues?: string[];
 };
 
+export type DesktopVoicePackInstallProgress = {
+  packId: string;
+  state: string;
+  phase: string;
+  message: string;
+  percent?: number | null;
+  downloadedBytes?: number | null;
+  totalBytes?: number | null;
+};
+
 export type DesktopVoicePackState = {
   defaultEngine: string;
   selectionSource: string;
@@ -71,6 +122,7 @@ export type DesktopVoicePackState = {
 export type DesktopSetupState = {
   required: boolean;
   versioned: boolean;
+  telegramRebindRequired?: boolean;
   releaseVersion: string;
   runtimeHome: string;
   envFilePath: string;
@@ -81,11 +133,14 @@ export type DesktopSetupState = {
   configuredProviders: string[];
   telegramConfigured: boolean;
   telegramPartiallyConfigured: boolean;
+  remoteControlConfigured?: boolean;
+  remoteControlPartiallyConfigured?: boolean;
   ocrAvailable: boolean;
   ocrSource?: string | null;
   voiceAvailable: boolean;
   voiceStatus?: DesktopVoiceRuntimeStatus | null;
   voicePacks?: DesktopVoicePackState | null;
+  remoteControlStatus?: DesktopRemoteControlStatus | null;
 };
 
 export type DesktopMemoryState = {
@@ -135,8 +190,11 @@ export type DesktopBootstrap = {
   runtimeHome?: string | null;
   envFilePath?: string | null;
   desktopLogPath?: string | null;
+  telegramLogPath?: string | null;
   releaseVersion?: string | null;
   setupState?: DesktopSetupState | null;
+  telegramStatus?: DesktopTelegramStatus | null;
+  startupTimings?: Record<string, number> | null;
 };
 
 export type DesktopSetupFieldValidation = {
@@ -183,11 +241,28 @@ export type DesktopSidebarState = {
   lastSelectedProjectPath?: string | null;
 };
 
+export type DesktopPathStatus = {
+  requestedPath?: string | null;
+  resolvedPath?: string | null;
+  exists: boolean;
+  isDirectory: boolean;
+};
+
+export type DesktopGitRepoState = {
+  requestedPath?: string | null;
+  resolvedPath?: string | null;
+  repoRoot?: string | null;
+  isGitRepo: boolean;
+  currentBranch?: string | null;
+  branches: string[];
+  error?: string | null;
+};
+
 type DesktopBridge = {
   bootstrap: () => Promise<DesktopBootstrap>;
   getRuntimeStatus: () => Promise<DesktopRuntimeStatus>;
   runtime?: {
-    start: () => Promise<DesktopBootstrap>;
+    start: (payload?: { attachTimeoutSeconds?: number; restartAttachTimeoutSeconds?: number }) => Promise<DesktopBootstrap>;
     stop: () => Promise<DesktopBootstrap>;
   };
   setup?: {
@@ -218,6 +293,9 @@ type DesktopBridge = {
     readState: () => Promise<DesktopSidebarState | null>;
     writeState: (payload: { state: DesktopSidebarState | null }) => Promise<DesktopSidebarState | null>;
     pickFolder: (payload?: { defaultPath?: string | null }) => Promise<string | null>;
+    pathStatus: (payload: { path?: string | null }) => Promise<DesktopPathStatus | null>;
+    gitRepoInfo: (payload: { path?: string | null }) => Promise<DesktopGitRepoState | null>;
+    checkoutBranch: (payload: { path?: string | null; branch?: string | null }) => Promise<DesktopGitRepoState | null>;
   };
   onRuntimeEvent: (callback: (event: DesktopBridgeEvent) => void) => () => void;
 };
@@ -255,12 +333,12 @@ export async function loadDesktopBootstrap(options?: { force?: boolean }) {
   return bootstrapPromise;
 }
 
-export async function startDesktopRuntime() {
+export async function startDesktopRuntime(options?: { attachTimeoutSeconds?: number; restartAttachTimeoutSeconds?: number }) {
   const bridge = getDesktopBridge();
   if (!bridge?.runtime?.start) {
     return null;
   }
-  const payload = await bridge.runtime.start();
+  const payload = await bridge.runtime.start(options);
   bootstrapPromise = Promise.resolve(payload);
   return payload;
 }
@@ -417,4 +495,28 @@ export async function pickDesktopFolder(defaultPath?: string | null) {
     return null;
   }
   return bridge.sidebar.pickFolder({ defaultPath: defaultPath || null });
+}
+
+export async function getDesktopPathStatus(targetPath?: string | null) {
+  const bridge = getDesktopBridge();
+  if (!bridge?.sidebar?.pathStatus) {
+    return null;
+  }
+  return bridge.sidebar.pathStatus({ path: targetPath || null });
+}
+
+export async function getDesktopGitRepoInfo(targetPath?: string | null) {
+  const bridge = getDesktopBridge();
+  if (!bridge?.sidebar?.gitRepoInfo) {
+    return null;
+  }
+  return bridge.sidebar.gitRepoInfo({ path: targetPath || null });
+}
+
+export async function checkoutDesktopGitBranch(targetPath?: string | null, branchName?: string | null) {
+  const bridge = getDesktopBridge();
+  if (!bridge?.sidebar?.checkoutBranch) {
+    return null;
+  }
+  return bridge.sidebar.checkoutBranch({ path: targetPath || null, branch: branchName || null });
 }

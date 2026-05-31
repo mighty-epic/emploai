@@ -3,8 +3,11 @@ import os
 from pathlib import Path
 
 from deploy.windows.release_runtime import (
+    RUNTIME_DATA_SCHEMA_STATE_KEY,
+    RUNTIME_DATA_SCHEMA_VERSION,
     build_setup_state,
     configure_ssl_certificate_environment,
+    configure_process_environment,
     current_release_version,
     default_release_config,
     ensure_runtime_files,
@@ -16,6 +19,7 @@ from deploy.windows.release_runtime import (
     render_env,
     run_first_run_setup,
     update_voice_pack_preferences,
+    validate_setup_values,
 )
 
 
@@ -42,6 +46,38 @@ def test_ensure_runtime_files_creates_runtime_layout(tmp_path: Path):
     assert '"default_model": "gpt-4o-mini"' in config
     assert "# MEMORY.md - Long-Term Memory" in (runtime_home / "MEMORY.md").read_text(encoding="utf-8")
     assert (runtime_home / "agent_data" / "AGENTS.md").read_text(encoding="utf-8") == "# Runtime Agents\n"
+    assert load_release_state(runtime_home)[RUNTIME_DATA_SCHEMA_STATE_KEY] == RUNTIME_DATA_SCHEMA_VERSION
+
+
+def test_ensure_runtime_files_resets_stale_runtime_home_on_schema_mismatch(tmp_path: Path):
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / ".env.example").write_text("OPENAI_API_KEY=\n", encoding="utf-8")
+
+    runtime_home = tmp_path / "runtime"
+    runtime_home.mkdir()
+    (runtime_home / "desktop-sidebar-state.json").write_text('{"stale":true}', encoding="utf-8")
+    (runtime_home / ".env").write_text("OPENAI_API_KEY=sk-test\n", encoding="utf-8")
+    (runtime_home / "config.json").write_text('{"voice":{"default_engine":"english_local"}}', encoding="utf-8")
+    (runtime_home / "release_state.json").write_text(
+        json.dumps(
+            {
+                RUNTIME_DATA_SCHEMA_STATE_KEY: RUNTIME_DATA_SCHEMA_VERSION - 1,
+                "last_onboarded_version": "0.1.0-beta.1",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ensure_runtime_files(runtime_home, source_root)
+
+    state = load_release_state(runtime_home)
+    config = json.loads((runtime_home / "config.json").read_text(encoding="utf-8"))
+    assert state[RUNTIME_DATA_SCHEMA_STATE_KEY] == RUNTIME_DATA_SCHEMA_VERSION
+    assert "last_onboarded_version" not in state
+    assert not (runtime_home / "desktop-sidebar-state.json").exists()
+    assert config["voice"]["default_engine"] == "none"
+    assert (runtime_home / ".env").read_text(encoding="utf-8") == "OPENAI_API_KEY=sk-test\n"
 
 
 def test_ensure_runtime_files_migrates_legacy_runtime_config(tmp_path: Path):
@@ -82,6 +118,10 @@ def test_ensure_runtime_files_preserves_existing_extension_payload(tmp_path: Pat
 
     runtime_home = tmp_path / "runtime"
     runtime_home.mkdir()
+    (runtime_home / "release_state.json").write_text(
+        json.dumps({RUNTIME_DATA_SCHEMA_STATE_KEY: RUNTIME_DATA_SCHEMA_VERSION}),
+        encoding="utf-8",
+    )
     extension_dst = runtime_home / "browser_extension"
     extension_dst.mkdir()
     (extension_dst / "popup.js").write_text("existing-popup", encoding="utf-8")
@@ -127,6 +167,39 @@ def test_render_env_keeps_release_fields_first():
     assert lines[-1] == "ZZZ=tail"
 
 
+def test_validate_setup_values_requires_complete_remote_control_configuration():
+    issues = validate_setup_values(
+        {
+            "DEFAULT_WORKSPACE": "C:/Work",
+            "OPENAI_API_KEY": "sk-test",
+            "EMPLOAI_REMOTE_CONTROL_BASE_URL": "https://example.com",
+        }
+    )
+
+    assert any("Remote control requires service URL, email, and password together." in issue for issue in issues)
+
+
+def test_build_setup_state_marks_remote_control_configuration(tmp_path: Path):
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    env_file = tmp_path / ".env"
+    state = build_setup_state(
+        home=tmp_path,
+        env_file=env_file,
+        source_root=source_root,
+        existing={
+            "DEFAULT_WORKSPACE": "C:/Work",
+            "OPENAI_API_KEY": "sk-test",
+            "EMPLOAI_REMOTE_CONTROL_BASE_URL": "https://example.com",
+            "EMPLOAI_REMOTE_CONTROL_EMAIL": "user@example.com",
+            "EMPLOAI_REMOTE_CONTROL_PASSWORD": "correct horse battery staple",
+        },
+    )
+
+    assert state["remoteControlConfigured"] is True
+    assert state["remoteControlPartiallyConfigured"] is False
+
+
 def test_needs_first_run_setup_requires_workspace_and_provider_key():
     assert needs_first_run_setup({})
     assert needs_first_run_setup({"DEFAULT_WORKSPACE": "C:/Work"})
@@ -142,12 +215,12 @@ def test_default_release_config_enables_desktop_and_app_channels():
     assert config["channels"]["desktop"]["enabled"] is True
     assert config["channels"]["desktop"]["auto_start"] is False
     assert config["channels"]["desktop"]["keep_runtime_on_app_close"] is False
-    assert config["voice"]["default_engine"] == "english_local"
-    assert config["voice"]["packs"]["english_local"]["requested"] is True
+    assert config["voice"]["default_engine"] == "none"
+    assert config["voice"]["packs"]["english_local"]["requested"] is False
     assert config["voice"]["packs"]["hebrew_local"]["requested"] is False
 
 
-def test_ensure_runtime_files_seeds_voice_packs_from_installer_preferences(monkeypatch, tmp_path: Path):
+def test_ensure_runtime_files_ignores_legacy_installer_voice_preferences(monkeypatch, tmp_path: Path):
     source_root = tmp_path / "source"
     source_root.mkdir()
     (source_root / ".env.example").write_text("OPENAI_API_KEY=\n", encoding="utf-8")
@@ -165,10 +238,10 @@ def test_ensure_runtime_files_seeds_voice_packs_from_installer_preferences(monke
     ensure_runtime_files(runtime_home, source_root)
 
     config = json.loads((runtime_home / "config.json").read_text(encoding="utf-8"))
-    assert config["voice"]["default_engine"] == "hebrew_local"
-    assert config["voice"]["selection_source"] == "installer"
+    assert config["voice"]["default_engine"] == "none"
+    assert config["voice"]["selection_source"] == "default"
     assert config["voice"]["packs"]["english_local"]["requested"] is False
-    assert config["voice"]["packs"]["hebrew_local"]["requested"] is True
+    assert config["voice"]["packs"]["hebrew_local"]["requested"] is False
 
 
 def test_needs_versioned_setup_triggers_on_new_release(tmp_path: Path):
@@ -206,12 +279,18 @@ def test_run_first_run_setup_saves_all_provider_keys_and_onboarded_version(tmp_p
         "123:abc",
         "42",
         "C:/Work",
+        "https://remote.emplo.ai",
+        "user@example.com",
+        "pw-123",
+        "",
+        "",
         "sk-openai",
         "sk-ant",
         "google-key",
         "xai-key",
         "deepseek-key",
         "openrouter-key",
+        "",
         "",
     ])
 
@@ -230,6 +309,11 @@ def test_run_first_run_setup_saves_all_provider_keys_and_onboarded_version(tmp_p
     assert merged["XAI_API_KEY"] == "xai-key"
     assert merged["DEEPSEEK_API_KEY"] == "deepseek-key"
     assert merged["OPENROUTER_API_KEY"] == "openrouter-key"
+    assert merged["EMPLOAI_REMOTE_CONTROL_BASE_URL"] == "https://remote.emplo.ai"
+    assert merged["EMPLOAI_REMOTE_CONTROL_EMAIL"] == "user@example.com"
+    assert merged["EMPLOAI_REMOTE_CONTROL_PASSWORD"] == "pw-123"
+    assert merged["EMPLOAI_REMOTE_DESKTOP_NAME"] == "EmploAI Desktop"
+    assert merged["EMPLOAI_REMOTE_DESKTOP_KEY"] == "desktop-default"
     assert load_release_state(runtime_home)["last_onboarded_version"] == "0.1.0-beta.2"
 
 
@@ -256,13 +340,61 @@ def test_build_setup_state_marks_versioned_setup_and_provider_labels(tmp_path: P
 
     assert state["required"] is False
     assert state["versioned"] is True
+    assert state["telegramRebindRequired"] is True
     assert state["configuredProviders"] == ["OpenAI"]
+    assert state["validationIssues"][0].startswith("Review Telegram bot access")
     assert "voiceAvailable" in state
     assert "voiceStatus" in state
     assert state["values"]["PLANNER_MODEL"] == "gpt-5.4-mini"
-    assert state["values"]["VOICE_DEFAULT_ENGINE"] == "english_local"
-    assert state["voicePacks"]["defaultEngine"] == "english_local"
+    assert state["values"]["TELEGRAM_BOT_TOKEN"] == ""
+    assert state["values"]["ALLOWED_USER_IDS"] == ""
+    assert state["values"]["VOICE_DEFAULT_ENGINE"] == "none"
+    assert state["voicePacks"]["defaultEngine"] == "none"
     assert state["voicePacks"]["packs"][0]["id"] == "english_local"
+
+
+def test_save_setup_values_clears_telegram_rebind_flag(tmp_path: Path):
+    source_root = tmp_path / "source"
+    deploy_dir = source_root / "deploy" / "windows"
+    deploy_dir.mkdir(parents=True)
+    (deploy_dir / "release_info.json").write_text('{"version":"0.1.0-beta.2"}', encoding="utf-8")
+
+    runtime_home = tmp_path / "runtime"
+    runtime_home.mkdir()
+    env_file = runtime_home / ".env"
+    (runtime_home / "config.json").write_text(json.dumps(default_release_config(), indent=2), encoding="utf-8")
+    (runtime_home / "release_state.json").write_text(
+        json.dumps(
+            {
+                "last_onboarded_version": "0.1.0-beta.1",
+                "telegram_rebind_required": True,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    save_setup_values(
+        home=runtime_home,
+        env_file=env_file,
+        source_root=source_root,
+        existing={
+            "DEFAULT_WORKSPACE": "C:/Work",
+            "OPENAI_API_KEY": "sk-test",
+            "TELEGRAM_BOT_TOKEN": "old-token",
+            "ALLOWED_USER_IDS": "42",
+        },
+        updates={
+            "DEFAULT_WORKSPACE": "C:/Work",
+            "OPENAI_API_KEY": "sk-test",
+            "TELEGRAM_BOT_TOKEN": "",
+            "ALLOWED_USER_IDS": "",
+        },
+    )
+
+    state = load_release_state(runtime_home)
+    assert state["last_onboarded_version"] == "0.1.0-beta.2"
+    assert state["telegram_rebind_required"] is False
 
 
 def test_save_setup_values_persists_voice_pack_scaffold_in_config_only(monkeypatch, tmp_path: Path):
@@ -422,3 +554,44 @@ def test_configure_ssl_certificate_environment_repairs_missing_cert_env(monkeypa
     assert Path(cert_path) != missing_cert
     for key in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
         assert Path(os.environ[key]).exists()
+
+
+def test_configure_process_environment_prunes_older_regex_metadata(monkeypatch, tmp_path: Path):
+    runtime_home = tmp_path / "runtime"
+    runtime_home.mkdir()
+    env_file = runtime_home / ".env"
+    env_file.write_text("", encoding="utf-8")
+    bundle = tmp_path / "bundle"
+    internal = bundle / "_internal"
+    internal.mkdir(parents=True)
+    older = internal / "regex-2024.11.6.dist-info"
+    newer = internal / "regex-2026.4.4.dist-info"
+    older.mkdir()
+    newer.mkdir()
+
+    monkeypatch.setattr("deploy.windows.release_runtime.bundle_root", lambda: bundle)
+
+    configure_process_environment(runtime_home, env_file)
+
+    assert not older.exists()
+    assert newer.exists()
+
+
+def test_configure_process_environment_prunes_duplicates_when_bundle_root_is_internal(monkeypatch, tmp_path: Path):
+    runtime_home = tmp_path / "runtime"
+    runtime_home.mkdir()
+    env_file = runtime_home / ".env"
+    env_file.write_text("", encoding="utf-8")
+    internal = tmp_path / "bundle" / "_internal"
+    internal.mkdir(parents=True)
+    older = internal / "regex-2024.11.6.dist-info"
+    newer = internal / "regex-2026.4.4.dist-info"
+    older.mkdir()
+    newer.mkdir()
+
+    monkeypatch.setattr("deploy.windows.release_runtime.bundle_root", lambda: internal)
+
+    configure_process_environment(runtime_home, env_file)
+
+    assert not older.exists()
+    assert newer.exists()

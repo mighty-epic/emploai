@@ -17,18 +17,18 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from fastapi import FastAPI, File, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from bot_core.ui_helpers import ThinkingModeVisualizer
-from bot_core.security import SecurityManager
 from cli.tui_constants import AVAILABLE_MODELS, MODEL_CONFIGS, MODEL_CONTEXT_SIZES
 from mobile_app.backend.auth_store import AppAuthStore
-from mobile_app.backend.capture_runtime import capture_screen_snapshot, get_capture_runtime_status
 from mobile_app.backend.models import (
     AgentActionResponse,
     AgentConfigureRequest,
     AgentOverviewView,
     AppUserProfile,
+    ArtifactDetailView,
+    ArtifactSummaryView,
     ChatSendRequest,
     ConfigEntryView,
     ConfigListResponse,
@@ -36,6 +36,7 @@ from mobile_app.backend.models import (
     CronFeedItemView,
     CreateSessionRequest,
     CreateSessionResponse,
+    DeleteSessionResponse,
     DeviceActionResponse,
     DevicePairCompleteRequest,
     DevicePairCompleteResponse,
@@ -44,47 +45,80 @@ from mobile_app.backend.models import (
     JobActionResponse,
     JobCreateRequest,
     JobDetailView,
+    HeadlessConfigureRequest,
     MemorySearchRequest,
     MemorySearchResponse,
     MemoryNoteRequest,
     RealtimeServerEvent,
+    RemoteAccountProfile,
+    RemoteAuthLoginRequest,
+    RemoteAuthLoginResponse,
+    RemoteAuthRegisterRequest,
+    RemoteDesktopSocketMessage,
+    RemoteDesktopSyncEnvelope,
+    RemoteDesktopView,
+    RemoteMobileView,
+    RemoteMobileSocketMessage,
+    RemotePairCompleteRequest,
+    RemotePairCompleteResponse,
+    RemotePairStartRequest,
+    RemotePairStartResponse,
+    RemoteUserView,
     ScheduledJobView,
     ScreenCaptureView,
     SessionSearchRequest,
     SessionSearchResponse,
     SessionSearchResultView,
+    SessionBotAssignmentRequest,
     SkillActivateRequest,
     SkillListResponse,
     SkillSummaryView,
     SkillValidationView,
     SessionDetailView,
+    SessionHeadlessEligibilityRequest,
     SessionSummaryView,
     SubAgentListResponse,
     SubAgentSpawnRequest,
     SubAgentTaskView,
+    TaskBoardArmRequest,
+    TaskBoardArmResponse,
     TaskBoardResponse,
+    TelegramBotConfigCreateRequest,
+    TelegramBotConfigUpdateRequest,
+    TelegramBotConfigView,
     TimelineEventAppendRequest,
+    ToolPackUpdateRequest,
     TrustedDeviceView,
     UploadResponse,
     VoiceClientEvent,
+    RuntimeOrchestratorView,
 )
-from mobile_app.backend.runtime import run_app_chat_turn
-from mobile_app.backend.voice_runtime import VoiceDraftState, get_voice_runtime_status, synthesize_assistant_audio
+from mobile_app.backend.remote_control_runtime import get_remote_desktop_manager
+from mobile_app.backend.remote_control_store import (
+    REMOTE_PAIRING_TTL_SECONDS,
+    REMOTE_SESSION_TTL_SECONDS,
+    RemoteControlPlaneStore,
+)
+from shared.channel_events import publish_current_session_changed, publish_status_update
 from shared.channel_sync import get_channel_sync_hub
 from shared.live_config import get_live_config
 from shared.channel_runtime import compact_session_history
 from shared.task_board import (
+    archive_active_task_board,
     completed_task_board_views,
     format_task_board_for_user,
     get_active_task_board,
     get_display_task_board,
+    get_task_board_armed_next_turn,
     request_task_board_reassessment,
+    recover_stale_task_board,
     task_board_view,
 )
 from single_agent.cron_scheduler import get_scheduler, parse_schedule_with_error
 from telegram_bot.restart_runtime import exec_current_process
 
 if TYPE_CHECKING:
+    from bot_core.security import SecurityManager
     from mobile_app.backend.session_bridge import AppSessionBridge
 
 
@@ -94,6 +128,7 @@ DEFAULT_PAIR_TTL_SECONDS = 60 * 30
 TOKEN_TTL_SECONDS = 60 * 60 * 24 * 180
 
 _auth_store: Optional[AppAuthStore] = None
+_remote_control_store: Optional[RemoteControlPlaneStore] = None
 _security_manager: Optional[SecurityManager] = None
 _security_manager_attempted = False
 _server_thread: Optional[threading.Thread] = None
@@ -114,6 +149,55 @@ _SEARCH_NORMALIZE_RE = re.compile(r"[\W_]+", re.UNICODE)
 _SESSION_SEARCH_LIMIT_MAX = 100
 
 
+def _capture_runtime_status() -> Dict[str, Any]:
+    from mobile_app.backend.capture_runtime import get_capture_runtime_status
+
+    return get_capture_runtime_status()
+
+
+def _capture_screen_snapshot(*, max_width: Optional[int] = None, jpeg_quality: Optional[int] = None):
+    from mobile_app.backend.capture_runtime import capture_screen_snapshot
+
+    if max_width is None and jpeg_quality is None:
+        return capture_screen_snapshot()
+    kwargs: Dict[str, Any] = {}
+    if max_width is not None:
+        kwargs["max_width"] = max_width
+    if jpeg_quality is not None:
+        kwargs["jpeg_quality"] = jpeg_quality
+    return capture_screen_snapshot(**kwargs)
+
+
+def _voice_runtime_status() -> Dict[str, Any]:
+    from mobile_app.backend.voice_runtime import get_voice_runtime_status
+
+    return get_voice_runtime_status()
+
+
+def _preload_hebrew_voice_models() -> Dict[str, Any]:
+    from mobile_app.backend.voice_runtime import preload_hebrew_models
+
+    return preload_hebrew_models()
+
+
+def _new_voice_draft_state():
+    from mobile_app.backend.voice_runtime import VoiceDraftState
+
+    return VoiceDraftState()
+
+
+def _synthesize_assistant_audio_sync(text: str):
+    from mobile_app.backend.voice_runtime import synthesize_assistant_audio
+
+    return synthesize_assistant_audio(text)
+
+
+async def _run_app_chat_turn_lazy(*args, **kwargs):
+    from mobile_app.backend.runtime import run_app_chat_turn
+
+    return await run_app_chat_turn(*args, **kwargs)
+
+
 def _set_startup_state(state: str, *, error: Optional[str] = None, detail: Optional[str] = None) -> None:
     _APP_RUNTIME_STATUS["startup_state"] = state
     _APP_RUNTIME_STATUS["startup_error"] = error
@@ -127,8 +211,8 @@ def _record_runtime_error(message: str, detail: Optional[str] = None) -> None:
 
 
 def _dependency_status() -> Dict[str, Any]:
-    capture = get_capture_runtime_status()
-    voice = get_voice_runtime_status()
+    capture = _capture_runtime_status()
+    voice = _voice_runtime_status()
     issues = [*capture.get("issues", []), *voice.get("issues", [])]
     return {
         "capture": capture,
@@ -352,48 +436,16 @@ def _search_sessions_in_manager(
     session_cache = _user_session_search_cache(user_id)
     active_file_keys: set[str] = set()
 
-    project_exact: list[dict[str, Any]] = []
-    project_prefix: list[dict[str, Any]] = []
-    project_substring: list[dict[str, Any]] = []
     session_exact: list[dict[str, Any]] = []
     session_prefix: list[dict[str, Any]] = []
     session_substring: list[dict[str, Any]] = []
     message_phrase: list[dict[str, Any]] = []
     message_token: list[dict[str, Any]] = []
-    seen_project_paths: set[str] = set()
     remaining_message_limit = normalized_limit
 
     for summary in summaries:
         project_path = str(getattr(summary, "workspace", "") or "")
         project_name = _project_name_from_path(project_path)
-        normalized_project_name = _normalize_search_text(project_name)
-        normalized_project_path = _normalize_search_text(project_path)
-        project_reason = _name_match_reason("project", normalized_query, normalized_project_name)
-        if project_reason is None and normalized_project_path:
-            project_reason = _name_match_reason("project", normalized_query, normalized_project_path)
-        if project_reason and project_path not in seen_project_paths:
-            seen_project_paths.add(project_path)
-            target_bucket = (
-                project_exact
-                if project_reason[0].endswith("exact")
-                else project_prefix
-                if project_reason[0].endswith("prefix")
-                else project_substring
-            )
-            target_bucket.append({
-                "kind": "project",
-                "project_path": project_path,
-                "project_name": project_name,
-                "session_id": None,
-                "session_name": None,
-                "message_index": None,
-                "message_role": None,
-                "timestamp": None,
-                "snippet": "Project name match",
-                "match_reason": project_reason[0],
-                "score": project_reason[1],
-            })
-
         session_name = str(getattr(summary, "name", "") or "")
         normalized_session_name = _normalize_search_text(session_name)
         session_reason = _name_match_reason("session", normalized_query, normalized_session_name)
@@ -421,14 +473,11 @@ def _search_sessions_in_manager(
 
     remaining_message_limit = max(
         0,
-        normalized_limit - len(project_exact) - len(project_prefix) - len(project_substring) - len(session_exact) - len(session_prefix) - len(session_substring),
+        normalized_limit - len(session_exact) - len(session_prefix) - len(session_substring),
     )
     if remaining_message_limit <= 0:
         return (
-            project_exact
-            + project_prefix
-            + project_substring
-            + session_exact
+            session_exact
             + session_prefix
             + session_substring
         )[:normalized_limit]
@@ -484,10 +533,7 @@ def _search_sessions_in_manager(
         session_cache.pop(stale_file, None)
 
     return (
-        project_exact
-        + project_prefix
-        + project_substring
-        + session_exact
+        session_exact
         + session_prefix
         + session_substring
         + message_phrase
@@ -503,14 +549,29 @@ def _sync_event_to_realtime_event(
     verbose_mode: bool,
 ) -> Optional[RealtimeServerEvent]:
     event_session_id = str(event.get("session_id") or "").strip()
+    payload = dict(event.get("payload") or {})
+    event_type = str(event.get("type") or "").strip()
+
+    if event_type == "current_session_changed":
+        if not active_session_id:
+            return None
+        current_session_id = str(payload.get("current_session_id") or "").strip()
+        previous_session_id = str(payload.get("previous_session_id") or "").strip()
+        if active_session_id not in {session_id for session_id in (current_session_id, previous_session_id) if session_id}:
+            return None
+        if client_id and str(event.get("source_client_id") or "").strip() == client_id:
+            return None
+        return RealtimeServerEvent(
+            type="current_session_changed",
+            session_id=current_session_id or previous_session_id or active_session_id,
+            payload=payload,
+        )
+
     if not active_session_id or not event_session_id or event_session_id != active_session_id:
         return None
 
     if client_id and str(event.get("source_client_id") or "").strip() == client_id:
         return None
-
-    payload = dict(event.get("payload") or {})
-    event_type = str(event.get("type") or "").strip()
 
     if event_type == "user_message":
         message = payload.get("message")
@@ -536,6 +597,13 @@ def _sync_event_to_realtime_event(
             payload=payload,
         )
 
+    if event_type == "artifact_created":
+        return RealtimeServerEvent(
+            type="artifact_created",
+            session_id=event_session_id,
+            payload={"artifacts": payload.get("artifacts") or []},
+        )
+
     if event_type == "tool_use":
         if not verbose_mode:
             return None
@@ -548,6 +616,15 @@ def _sync_event_to_realtime_event(
                 payload.get("tool_result"),
                 float(payload.get("duration_ms") or 0.0),
             ),
+        )
+
+    if event_type == "tool_event":
+        if not verbose_mode:
+            return None
+        return RealtimeServerEvent(
+            type="tool_event",
+            session_id=event_session_id,
+            payload=payload,
         )
 
     if event_type == "log":
@@ -563,7 +640,21 @@ def _sync_event_to_realtime_event(
         return RealtimeServerEvent(
             type="status",
             session_id=event_session_id,
-            payload={"message": payload.get("message", "")},
+            payload=payload,
+        )
+
+    if event_type == "warning":
+        return RealtimeServerEvent(
+            type="warning",
+            session_id=event_session_id,
+            payload=payload,
+        )
+
+    if event_type == "error":
+        return RealtimeServerEvent(
+            type="error",
+            session_id=event_session_id,
+            payload=payload,
         )
 
     if event_type == "task_board":
@@ -608,6 +699,215 @@ def _resolve_external_current_session_id(
     return None
 
 
+async def _handle_remote_chat_ws(websocket: WebSocket, auth: Dict[str, Any]) -> None:
+    send_lock = asyncio.Lock()
+    watch_task: Optional[asyncio.Task[None]] = None
+    sync_subscription_id: Optional[str] = None
+    client_id = str(websocket.query_params.get("client_id") or secrets.token_hex(8))
+    requested_session_id = str(websocket.query_params.get("session_id") or "").strip() or None
+    effective_session_id = requested_session_id or _remote_current_session_id(auth)
+    last_sync_version = -1
+
+    async def send_model(event: RealtimeServerEvent) -> None:
+        async with send_lock:
+            await websocket.send_json(event.model_dump())
+
+    async def send_session_sync(reason: str) -> None:
+        nonlocal effective_session_id, last_sync_version
+        state = _remote_shared_state(auth)
+        last_sync_version = int(state.get("sync_version", 0) or 0)
+        next_session_id = requested_session_id or str(state.get("current_session_id") or "").strip() or effective_session_id
+        if not next_session_id:
+            return
+        effective_session_id = next_session_id
+        try:
+            detail = _remote_session_detail_view(auth, next_session_id)
+        except HTTPException:
+            return
+        await send_model(
+            RealtimeServerEvent(
+                type="session_sync",
+                session_id=next_session_id,
+                payload={
+                    "reason": reason,
+                    "session": detail.model_dump(),
+                    "sessions": [item.model_dump() for item in _remote_session_summary_views(auth)],
+                    "shared_state": state,
+                },
+            )
+        )
+
+    async def handle_sync_event(event: Dict[str, Any]) -> None:
+        nonlocal effective_session_id
+        event_type = str(event.get("type") or "").strip()
+        if event_type == "current_session_changed":
+            next_session_id = str((event.get("payload") or {}).get("current_session_id") or event.get("session_id") or "").strip()
+            if next_session_id:
+                effective_session_id = next_session_id
+                await send_session_sync("remote_current_session")
+            return
+        live_event = _sync_event_to_realtime_event(
+            event,
+            active_session_id=effective_session_id,
+            client_id=client_id,
+            verbose_mode=True,
+        )
+        if live_event is None:
+            return
+        await send_model(live_event)
+
+    sync_subscription_id = get_channel_sync_hub().subscribe(
+        user_id=int(auth["user_id"]),
+        channel="remote_mobile",
+        callback=handle_sync_event,
+        loop=asyncio.get_running_loop(),
+    )
+
+    async def watch_remote_state() -> None:
+        nonlocal effective_session_id, last_sync_version
+        try:
+            while True:
+                await asyncio.sleep(0.8)
+                state = _remote_shared_state(auth)
+                current_sync_version = int(state.get("sync_version", 0) or 0)
+                current_session_id = str(state.get("current_session_id") or "").strip() or effective_session_id
+                if current_sync_version != last_sync_version:
+                    effective_session_id = current_session_id
+                    await send_session_sync("remote_sync")
+        except asyncio.CancelledError:
+            return
+
+    await send_model(
+        RealtimeServerEvent(
+            type="session_snapshot",
+            session_id=effective_session_id,
+            payload={"connected": True, "mode": "remote"},
+        )
+    )
+    await send_session_sync("connected")
+    watch_task = asyncio.create_task(watch_remote_state())
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            data = json.loads(raw)
+            text = str(data.get("text", "")).strip()
+            if not text:
+                await send_model(RealtimeServerEvent(type="warning", payload={"message": "Empty message ignored"}))
+                continue
+            target_session_id = str(data.get("session_id") or effective_session_id or "").strip() or None
+            await _remote_dispatch_command(
+                auth,
+                command_name="chat_send",
+                payload={
+                    "text": text,
+                    "session_id": target_session_id,
+                    "source_format": str(data.get("source_format") or "app_text"),
+                    "interrupt_policy": str(data.get("interrupt_policy") or "none"),
+                    "source_client_id": client_id,
+                },
+            )
+            await send_model(
+                RealtimeServerEvent(
+                    type="status",
+                    session_id=target_session_id,
+                    payload={"message": "dispatched to desktop"},
+                )
+            )
+    finally:
+        if watch_task:
+            watch_task.cancel()
+        if sync_subscription_id:
+            get_channel_sync_hub().unsubscribe(sync_subscription_id)
+
+
+async def _handle_remote_desktop_ws(websocket: WebSocket, auth: Dict[str, Any]) -> None:
+    if not _is_remote_session_auth(auth) or str(auth.get("actor_kind") or "") != "desktop":
+        raise WebSocketDisconnect(code=4403)
+
+    desktop_id = str(auth.get("desktop_id") or "").strip()
+    if not desktop_id:
+        raise WebSocketDisconnect(code=4400)
+
+    user_id = int(auth["user_id"])
+    manager = get_remote_desktop_manager()
+    store = _get_remote_control_store()
+    connection = manager.register(
+        user_id=user_id,
+        desktop_id=desktop_id,
+        websocket=websocket,
+        loop=asyncio.get_running_loop(),
+    )
+    store.mark_desktop_connection(user_id=user_id, desktop_id=desktop_id, status="connected", detail="desktop websocket connected")
+    get_channel_sync_hub().publish(
+        user_id=user_id,
+        event={
+            "type": "status",
+            "session_id": None,
+            "origin_channel": "app",
+            "payload": {"message": "paired desktop connected"},
+        },
+    )
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            message = RemoteDesktopSocketMessage.model_validate_json(raw)
+            if message.type == "heartbeat":
+                store.heartbeat_desktop(
+                    user_id=user_id,
+                    desktop_id=desktop_id,
+                    detail=str((message.payload or {}).get("detail") or "desktop heartbeat"),
+                )
+                continue
+
+            if message.type == "state_snapshot":
+                snapshot = RemoteDesktopSyncEnvelope.model_validate(message.payload or {})
+                before_state = store.get_shared_state(user_id=user_id)
+                store.update_shared_snapshot(
+                    user_id=user_id,
+                    desktop_id=desktop_id,
+                    snapshot=snapshot.model_dump(),
+                )
+                previous_session_id = str(before_state.get("current_session_id") or "").strip() or None
+                current_session_id = str(snapshot.current_session_id or "").strip() or None
+                if current_session_id != previous_session_id:
+                    publish_current_session_changed(
+                        user_id=user_id,
+                        session_id=current_session_id,
+                        previous_session_id=previous_session_id,
+                        origin_channel="app",
+                        reason="remote_snapshot",
+                    )
+                continue
+
+            if message.type == "sync_event":
+                payload = dict(message.payload or {})
+                payload.setdefault("origin_channel", "app")
+                get_channel_sync_hub().publish(user_id=user_id, event=payload)
+                continue
+
+            if message.type == "status":
+                get_channel_sync_hub().publish(
+                    user_id=user_id,
+                    event={
+                        "type": "status",
+                        "session_id": (message.payload or {}).get("session_id"),
+                        "origin_channel": "app",
+                        "payload": {"message": str((message.payload or {}).get("message") or "")},
+                    },
+                )
+                continue
+    finally:
+        manager.unregister(connection.desktop_id)
+        store.mark_desktop_connection(
+            user_id=user_id,
+            desktop_id=desktop_id,
+            status="offline",
+            detail="desktop websocket disconnected",
+        )
+
+
 def _sign(value: str) -> str:
     return hmac.new(_secret().encode("utf-8"), value.encode("utf-8"), hashlib.sha256).hexdigest()
 
@@ -617,6 +917,13 @@ def _get_auth_store() -> AppAuthStore:
     if _auth_store is None:
         _auth_store = AppAuthStore()
     return _auth_store
+
+
+def _get_remote_control_store() -> RemoteControlPlaneStore:
+    global _remote_control_store
+    if _remote_control_store is None:
+        _remote_control_store = RemoteControlPlaneStore()
+    return _remote_control_store
 
 
 def _bearer_token_from_header(auth_header: Optional[str]) -> str:
@@ -629,12 +936,16 @@ def _resolve_token(auth_header: Optional[str]) -> Dict[str, object]:
     token = _bearer_token_from_header(auth_header)
     payload = _get_auth_store().resolve_access_token(token)
     if not payload:
+        payload = _get_remote_control_store().resolve_session_token(token)
+    if not payload:
         raise HTTPException(status_code=401, detail="Invalid token")
     return payload
 
 
 def _resolve_ws_token(token: Optional[str]) -> Dict[str, object]:
     payload = _get_auth_store().resolve_access_token(token or "")
+    if not payload:
+        payload = _get_remote_control_store().resolve_session_token(token or "")
     if not payload:
         raise WebSocketDisconnect(code=4401)
     return payload
@@ -684,6 +995,89 @@ def _resolve_pairing_user_id(pairing_id: str) -> int:
     return _default_user_id()
 
 
+def _is_remote_session_auth(payload: Dict[str, Any]) -> bool:
+    return str(payload.get("auth_kind") or "").strip() == "remote_session"
+
+
+def _remote_shared_state(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return _get_remote_control_store().get_shared_state(user_id=int(payload["user_id"]))
+
+
+def _remote_current_session_id(payload: Dict[str, Any]) -> Optional[str]:
+    state = _remote_shared_state(payload)
+    current_session_id = str(state.get("current_session_id") or "").strip()
+    return current_session_id or None
+
+
+def _remote_profile_view(payload: Dict[str, Any]) -> AppUserProfile:
+    state = _remote_shared_state(payload)
+    return AppUserProfile(
+        user_id=int(payload["user_id"]),
+        current_session_id=str(state.get("current_session_id") or "").strip() or None,
+        current_model=str(state.get("current_model") or "").strip() or None,
+        current_variant=str(state.get("current_variant") or "").strip() or None,
+        device_id=str(payload.get("mobile_id") or payload.get("desktop_id") or "").strip() or None,
+        device_name=str(payload.get("device_name") or payload.get("desktop_name") or "").strip() or None,
+        device_platform=str(payload.get("device_platform") or payload.get("actor_kind") or "").strip() or None,
+    )
+
+
+def _remote_session_summary_views(payload: Dict[str, Any]) -> list[SessionSummaryView]:
+    state = _remote_shared_state(payload)
+    items = []
+    for raw in list(state.get("sessions") or []):
+        try:
+            items.append(SessionSummaryView.model_validate(raw))
+        except Exception:
+            continue
+    return items
+
+
+def _remote_session_detail_view(payload: Dict[str, Any], session_id: Optional[str]) -> SessionDetailView:
+    state = _remote_shared_state(payload)
+    target_session_id = str(session_id or state.get("current_session_id") or "").strip()
+    if not target_session_id:
+        raise HTTPException(status_code=404, detail="No current session")
+    details = dict(state.get("session_details") or {})
+    raw = details.get(target_session_id)
+    if not raw:
+        raise HTTPException(status_code=404, detail="Session detail is not available yet")
+    try:
+        return SessionDetailView.model_validate(raw)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Remote session detail is malformed: {exc}") from exc
+
+
+async def _remote_wait_for_sync_version(user_id: int, baseline: int, *, timeout_seconds: float = 8.0) -> Dict[str, Any]:
+    deadline = time.monotonic() + max(0.5, timeout_seconds)
+    store = _get_remote_control_store()
+    while time.monotonic() < deadline:
+        state = store.get_shared_state(user_id=user_id)
+        if int(state.get("sync_version", 0) or 0) > int(baseline):
+            return state
+        await asyncio.sleep(0.2)
+    return store.get_shared_state(user_id=user_id)
+
+
+async def _remote_dispatch_command(
+    auth: Dict[str, Any],
+    *,
+    command_name: str,
+    payload: Dict[str, Any],
+) -> str:
+    desktop_id = _get_remote_control_store().paired_desktop_id_for_payload(auth)
+    if not desktop_id:
+        raise HTTPException(status_code=409, detail="No paired desktop is available for this account")
+    try:
+        return await get_remote_desktop_manager().send_command(
+            desktop_id=desktop_id,
+            command_type=command_name,
+            payload=payload,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 def _workspace_root() -> Path:
     runtime_home = os.getenv("EMPLOAI_HOME", "").strip()
     if runtime_home:
@@ -710,6 +1104,8 @@ def _get_security_manager() -> Optional[SecurityManager]:
 
     _security_manager_attempted = True
     try:
+        from bot_core.security import SecurityManager
+
         _security_manager = SecurityManager(
             max_requests_per_minute=int(os.getenv("MAX_REQUESTS_PER_MINUTE", "30")),
             max_requests_per_hour=int(os.getenv("MAX_REQUESTS_PER_HOUR", "200")),
@@ -719,9 +1115,20 @@ def _get_security_manager() -> Optional[SecurityManager]:
     return _security_manager
 
 
+def _resolve_target_session_id(bridge: "AppSessionBridge", session_id: Optional[str] = None) -> str:
+    target_session_id = str(session_id or "").strip()
+    if target_session_id:
+        return target_session_id
+    current = bridge.get_current_session()
+    if not current:
+        raise HTTPException(status_code=404, detail="No current session")
+    return str(current.id)
+
+
 def _load_runtime_session_or_409(bridge: AppSessionBridge, session_id: Optional[str] = None):
     try:
-        return bridge.load_runtime_session(session_id)
+        target_session_id = _resolve_target_session_id(bridge, session_id)
+        return bridge.orchestrator.get_worker(target_session_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -861,7 +1268,7 @@ def _config_preview(runtime, limit: int = 18) -> list[dict[str, Any]]:
     return [{"key": key, "value": value} for key, value in sorted(items.items())[:limit]]
 
 
-def _agent_overview(runtime, *, history_count: int = 12, analytics_days: int = 7) -> dict[str, Any]:
+def _agent_overview(runtime, bridge: "AppSessionBridge", *, history_count: int = 12, analytics_days: int = 7) -> dict[str, Any]:
     runtime.ensure_current_model_available(AVAILABLE_MODELS)
     heartbeat = (
         runtime.heartbeat_manager.get_status()
@@ -900,8 +1307,13 @@ def _agent_overview(runtime, *, history_count: int = 12, analytics_days: int = 7
         "analytics": _analytics_summary(runtime, max(1, min(analytics_days, 30))),
         "security": _security_summary(),
         "config_preview": _config_preview(runtime),
+        "run_state": "running" if bool(getattr(runtime, "is_processing", False)) else "idle",
         "task_board": task_board_view(get_display_task_board(runtime)),
         "completed_task_boards": completed_task_board_views(runtime),
+        "task_board_armed_next_turn": get_task_board_armed_next_turn(runtime),
+        "available_tool_packs": bridge.orchestrator.available_tool_packs_for_session_obj(runtime.session),
+        "enabled_tool_packs": list(getattr(runtime, "enabled_tool_packs", []) or []),
+        "lock_status": bridge.orchestrator.lock_status_for_session_obj(runtime.session),
     }
 
 
@@ -1053,7 +1465,9 @@ def _configure_runtime(runtime, request: AgentConfigureRequest) -> None:
 
 def _publish_runtime_config_sync(runtime, *, user_id: int, origin_channel: str) -> None:
     try:
-        session_id = runtime.session_manager.get_current_session_id() if runtime.session_manager else None
+        session_id = str(getattr(getattr(runtime, "session", None), "id", "") or "").strip()
+        if not session_id and runtime.session_manager:
+            session_id = runtime.session_manager.get_current_session_id()
         if not session_id:
             return
         get_channel_sync_hub().publish(
@@ -1071,6 +1485,9 @@ def _publish_runtime_config_sync(runtime, *, user_id: int, origin_channel: str) 
                     "verbose_mode": bool(runtime.verbose_mode),
                     "bridge_enabled": bool(runtime.live_config.get("browser.use_extension", True)) if runtime.live_config else False,
                     "headless_mode": _current_headless_mode(),
+                    "enabled_tool_packs": list(getattr(runtime, "enabled_tool_packs", []) or []),
+                    "telegram_bot_config_id": getattr(runtime, "telegram_bot_config_id", None),
+                    "headless_eligible": bool(getattr(runtime, "headless_eligible", False)),
                 },
             },
         )
@@ -1197,11 +1614,10 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/api/app/health")
-    async def health() -> dict:
+    async def health(shallow: bool = False) -> dict:
         config = get_live_config(_workspace_root() / "config.json")
-        dependency_status = _dependency_status()
         forced_app_server = os.getenv("EMPLOAI_DESKTOP_FORCE_APP_SERVER", "").strip().lower() in {"1", "true", "yes", "on"}
-        return {
+        payload = {
             "ok": True,
             "channel": "app",
             "process_id": os.getpid(),
@@ -1219,8 +1635,138 @@ def create_app() -> FastAPI:
             "last_runtime_error": _APP_RUNTIME_STATUS["last_runtime_error"],
             "last_runtime_error_detail": _APP_RUNTIME_STATUS["last_runtime_error_detail"],
             "last_runtime_error_at": _APP_RUNTIME_STATUS["last_runtime_error_at"],
-            "dependency_status": dependency_status,
+            "readiness_scope": "app_api" if shallow else "full",
         }
+        if shallow:
+            return payload
+        payload["dependency_status"] = _dependency_status()
+        return payload
+
+    @app.post("/api/remote/auth/register", response_model=RemoteUserView)
+    async def remote_register(request: RemoteAuthRegisterRequest) -> RemoteUserView:
+        try:
+            user = _get_remote_control_store().register_user(
+                email=request.email,
+                password=request.password,
+                display_name=request.display_name,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return RemoteUserView.model_validate(user)
+
+    @app.post("/api/remote/auth/login", response_model=RemoteAuthLoginResponse)
+    async def remote_login(request: RemoteAuthLoginRequest) -> RemoteAuthLoginResponse:
+        try:
+            result = _get_remote_control_store().login(
+                email=request.email,
+                password=request.password,
+                actor_kind=request.actor_kind,
+                device_name=request.device_name,
+                device_platform=request.device_platform,
+                device_key=request.device_key,
+                token_ttl_seconds=REMOTE_SESSION_TTL_SECONDS,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        expires_at = float(result.get("expires_at") or time.time())
+        expires_in_seconds = max(0, int(expires_at - time.time()))
+        return RemoteAuthLoginResponse(
+            session_token=str(result.get("session_token") or ""),
+            expires_in_seconds=expires_in_seconds,
+            actor_kind=request.actor_kind,
+            user=RemoteUserView.model_validate(result.get("user") or {}),
+            desktop=RemoteDesktopView.model_validate(result["desktop"]) if result.get("desktop") else None,
+            mobile=RemoteMobileView.model_validate(result["mobile"]) if result.get("mobile") else None,
+        )
+
+    @app.get("/api/remote/account/me", response_model=RemoteAccountProfile)
+    async def remote_account_me(authorization: Optional[str] = Header(default=None)) -> RemoteAccountProfile:
+        auth = _resolve_token(authorization)
+        if not _is_remote_session_auth(auth):
+            raise HTTPException(status_code=403, detail="Remote account access requires a remote session token")
+        user = _get_remote_control_store().get_user(int(auth["user_id"]))
+        if not user:
+            raise HTTPException(status_code=404, detail="Unknown account")
+        desktops = _get_remote_control_store().list_desktops(user_id=int(auth["user_id"]))
+        desktop = None
+        if auth.get("desktop_id"):
+            for item in desktops:
+                if str(item.get("desktop_id") or "") == str(auth.get("desktop_id") or ""):
+                    desktop = item
+                    break
+        mobile = None
+        if auth.get("mobile_id"):
+            mobile = {
+                "mobile_id": auth.get("mobile_id"),
+                "device_name": auth.get("device_name"),
+                "device_platform": auth.get("device_platform"),
+                "paired_desktop_id": _get_remote_control_store().paired_desktop_id_for_payload(auth),
+                "created_at": None,
+                "last_used_at": None,
+            }
+        return RemoteAccountProfile(
+            user=RemoteUserView.model_validate(user),
+            actor_kind=str(auth.get("actor_kind") or "mobile"),
+            desktop=RemoteDesktopView.model_validate(desktop) if desktop else None,
+            mobile=RemoteMobileView.model_validate(mobile) if mobile else None,
+            shared_state=_remote_shared_state(auth),
+        )
+
+    @app.get("/api/remote/desktops", response_model=list[RemoteDesktopView])
+    async def remote_list_desktops(authorization: Optional[str] = Header(default=None)) -> list[RemoteDesktopView]:
+        auth = _resolve_token(authorization)
+        if not _is_remote_session_auth(auth):
+            raise HTTPException(status_code=403, detail="Remote desktop access requires a remote session token")
+        items = _get_remote_control_store().list_desktops(user_id=int(auth["user_id"]))
+        return [RemoteDesktopView.model_validate(item) for item in items]
+
+    @app.post("/api/remote/pair/start", response_model=RemotePairStartResponse)
+    async def remote_pair_start(
+        request: RemotePairStartRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> RemotePairStartResponse:
+        auth = _resolve_token(authorization)
+        if not _is_remote_session_auth(auth) or str(auth.get("actor_kind") or "") != "desktop":
+            raise HTTPException(status_code=403, detail="Desktop login required to start pairing")
+        desktop_id = str(request.desktop_id or auth.get("desktop_id") or "").strip()
+        if not desktop_id:
+            raise HTTPException(status_code=400, detail="No desktop is available for pairing")
+        try:
+            pairing = _get_remote_control_store().create_pairing(
+                user_id=int(auth["user_id"]),
+                desktop_id=desktop_id,
+                ttl_seconds=REMOTE_PAIRING_TTL_SECONDS,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown desktop") from exc
+        return RemotePairStartResponse.model_validate(pairing)
+
+    @app.post("/api/remote/pair/complete", response_model=RemotePairCompleteResponse)
+    async def remote_pair_complete(
+        request: RemotePairCompleteRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> RemotePairCompleteResponse:
+        auth = _resolve_token(authorization)
+        if not _is_remote_session_auth(auth) or str(auth.get("actor_kind") or "") != "mobile":
+            raise HTTPException(status_code=403, detail="Mobile login required to complete pairing")
+        mobile_id = str(auth.get("mobile_id") or "").strip()
+        if not mobile_id:
+            raise HTTPException(status_code=400, detail="Mobile device is unavailable")
+        try:
+            result = _get_remote_control_store().complete_pairing(
+                user_id=int(auth["user_id"]),
+                pairing_token=request.pairing_token,
+                mobile_id=mobile_id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown pairing") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return RemotePairCompleteResponse(
+            desktop=RemoteDesktopView.model_validate(result["desktop"]),
+            mobile=RemoteMobileView.model_validate(result["mobile"]),
+            shared_state=result.get("shared_state") or {},
+        )
 
     @app.post("/api/app/pair/start", response_model=DevicePairStartResponse)
     async def pair_start(
@@ -1275,6 +1821,8 @@ def create_app() -> FastAPI:
     @app.get("/api/app/me", response_model=AppUserProfile)
     async def me(authorization: Optional[str] = Header(default=None)) -> AppUserProfile:
         auth = _resolve_token(authorization)
+        if _is_remote_session_auth(auth):
+            return _remote_profile_view(auth)
         user_id = int(auth["user_id"])
         bridge = _bridge_for_user(user_id)
         current = bridge.get_current_session()
@@ -1288,6 +1836,56 @@ def create_app() -> FastAPI:
             device_platform=auth.get("device_platform"),
         )
 
+    @app.get("/api/app/voice/status")
+    async def voice_status(authorization: Optional[str] = Header(default=None)) -> dict[str, Any]:
+        auth = _resolve_token(authorization)
+        if _is_remote_session_auth(auth):
+            return {
+                "ok": True,
+                "input_ok": False,
+                "issues": ["Mobile voice is disabled in remote mode for v1."],
+                "selected_engine": "none",
+                "selected_engine_state": "disabled",
+                "selected_engine_ready": False,
+            }
+        return _voice_runtime_status()
+
+    @app.post("/api/app/voice/warm")
+    async def warm_voice_engine(authorization: Optional[str] = Header(default=None)) -> dict[str, Any]:
+        _resolve_token(authorization)
+        status = _voice_runtime_status()
+        selected_engine = str(status.get("selected_engine") or "").strip().lower()
+        if selected_engine == "hebrew_local":
+            try:
+                timings = _preload_hebrew_voice_models()
+                status = _voice_runtime_status()
+                status["warmup"] = {
+                    "ok": True,
+                    "engine": selected_engine,
+                    "timings": timings,
+                }
+            except Exception as exc:
+                status = _voice_runtime_status()
+                issues = list(status.get("issues") or [])
+                issues.insert(0, f"Hebrew voice warmup failed: {exc}")
+                status["issues"] = issues
+                status["ok"] = False
+                status["input_ok"] = False
+                status["selected_engine_state"] = "error"
+                status["selected_engine_ready"] = False
+                status["warmup"] = {
+                    "ok": False,
+                    "engine": selected_engine,
+                    "error": str(exc),
+                }
+        else:
+            status["warmup"] = {
+                "ok": True,
+                "engine": selected_engine or "none",
+                "timings": None,
+            }
+        return status
+
     @app.get("/api/app/agent/overview", response_model=AgentOverviewView)
     async def agent_overview(
         authorization: Optional[str] = Header(default=None),
@@ -1298,7 +1896,7 @@ def create_app() -> FastAPI:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
         runtime = _load_runtime_session_or_409(bridge, session_id)
-        return AgentOverviewView(**_agent_overview(runtime, history_count=history_count, analytics_days=analytics_days))
+        return AgentOverviewView(**_agent_overview(runtime, bridge, history_count=history_count, analytics_days=analytics_days))
 
     @app.get("/api/app/agent/task-board", response_model=TaskBoardResponse)
     async def agent_task_board(
@@ -1309,6 +1907,23 @@ def create_app() -> FastAPI:
         bridge = _bridge_for_user(int(auth["user_id"]))
         runtime = _load_runtime_session_or_409(bridge, session_id)
         return TaskBoardResponse(task_board=task_board_view(get_display_task_board(runtime)))
+
+    @app.post("/api/app/agent/task-board/arm", response_model=TaskBoardArmResponse)
+    async def agent_task_board_arm(
+        request: TaskBoardArmRequest,
+        authorization: Optional[str] = Header(default=None),
+        session_id: Optional[str] = None,
+    ) -> TaskBoardArmResponse:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        target_session_id = session_id
+        if not target_session_id:
+            current = bridge.get_current_session()
+            target_session_id = current.id if current else None
+        if not target_session_id:
+            raise HTTPException(status_code=404, detail="No current session to arm")
+        result = bridge.set_task_board_armed_next_turn(target_session_id, request.armed)
+        return TaskBoardArmResponse(**result)
 
     @app.post("/api/app/agent/task-board/reassess", response_model=AgentActionResponse)
     async def agent_task_board_reassess(
@@ -1641,6 +2256,13 @@ def create_app() -> FastAPI:
         session_id: Optional[str] = None,
     ) -> AgentActionResponse:
         auth = _resolve_token(authorization)
+        if _is_remote_session_auth(auth):
+            await _remote_dispatch_command(
+                auth,
+                command_name="pause_run",
+                payload={"session_id": session_id},
+            )
+            return AgentActionResponse(action="pause", message="Pause requested for the paired desktop")
         bridge = _bridge_for_user(int(auth["user_id"]))
         runtime = _load_runtime_session_or_409(bridge, session_id)
         agents = _active_task_agents(runtime)
@@ -1657,6 +2279,13 @@ def create_app() -> FastAPI:
         session_id: Optional[str] = None,
     ) -> AgentActionResponse:
         auth = _resolve_token(authorization)
+        if _is_remote_session_auth(auth):
+            await _remote_dispatch_command(
+                auth,
+                command_name="stop_run",
+                payload={"session_id": session_id},
+            )
+            return AgentActionResponse(action="stop", message="Stop requested for the paired desktop")
         bridge = _bridge_for_user(int(auth["user_id"]))
         runtime = _load_runtime_session_or_409(bridge, session_id)
         agents = _active_task_agents(runtime)
@@ -1665,9 +2294,35 @@ def create_app() -> FastAPI:
 
         for agent in agents:
             agent.stop()
+        archived_board = archive_active_task_board(
+            runtime,
+            status="interrupted",
+            summary="The current managed task was stopped by the user.",
+        )
         runtime.is_processing = False
         runtime.should_interrupt = True
         runtime.save_session()
+        current_runtime_session_id = runtime.session_manager.get_current_session_id() if runtime.session_manager else session_id
+        publish_status_update(
+            user_id=int(auth["user_id"]),
+            session_id=current_runtime_session_id,
+            origin_channel="app",
+            message="ready",
+            run_state="idle",
+        )
+        get_channel_sync_hub().publish(
+            user_id=int(auth["user_id"]),
+            event={
+                "type": "task_board",
+                "session_id": current_runtime_session_id,
+                "origin_channel": "app",
+                "payload": {
+                    "board": task_board_view(get_display_task_board(runtime)),
+                    "completed_task_boards": completed_task_board_views(runtime),
+                    "summary": (archived_board or {}).get("completion_summary") if archived_board else "Managed task stopped.",
+                },
+            },
+        )
         return AgentActionResponse(action="stop", message="Stopped the current task")
 
     @app.post("/api/app/agent/control/restart", response_model=AgentActionResponse)
@@ -1676,6 +2331,13 @@ def create_app() -> FastAPI:
         session_id: Optional[str] = None,
     ) -> AgentActionResponse:
         auth = _resolve_token(authorization)
+        if _is_remote_session_auth(auth):
+            await _remote_dispatch_command(
+                auth,
+                command_name="restart_runtime",
+                payload={"session_id": session_id},
+            )
+            return AgentActionResponse(action="restart", message="Restart requested for the paired desktop")
         bridge = _bridge_for_user(int(auth["user_id"]))
         runtime = _load_runtime_session_or_409(bridge, session_id)
 
@@ -1706,8 +2368,10 @@ def create_app() -> FastAPI:
     @app.get("/api/app/sessions", response_model=list[SessionSummaryView])
     async def list_sessions(authorization: Optional[str] = Header(default=None)) -> list[SessionSummaryView]:
         auth = _resolve_token(authorization)
+        if _is_remote_session_auth(auth):
+            return _remote_session_summary_views(auth)
         bridge = _bridge_for_user(int(auth["user_id"]))
-        return [SessionSummaryView(**bridge.summarize_session(s)) for s in bridge.list_sessions()]
+        return [SessionSummaryView(**bridge.summarize_session_summary(s)) for s in bridge.list_session_summaries()]
 
     @app.post("/api/app/sessions/search", response_model=SessionSearchResponse)
     async def search_sessions(request: SessionSearchRequest, authorization: Optional[str] = Header(default=None)) -> SessionSearchResponse:
@@ -1725,33 +2389,232 @@ def create_app() -> FastAPI:
     @app.post("/api/app/sessions", response_model=CreateSessionResponse)
     async def create_session(request: CreateSessionRequest, authorization: Optional[str] = Header(default=None)) -> CreateSessionResponse:
         auth = _resolve_token(authorization)
-        bridge = _bridge_for_user(int(auth["user_id"]))
-        workspace = _resolve_workspace_path(request.workspace, user_id=int(auth["user_id"])) if request.workspace else None
+        if _is_remote_session_auth(auth):
+            before = _remote_shared_state(auth)
+            await _remote_dispatch_command(
+                auth,
+                command_name="create_session",
+                payload={
+                    "name": request.name,
+                    "workspace": request.workspace,
+                    "telegram_bot_config_id": request.telegram_bot_config_id,
+                    "enabled_tool_packs": list(request.enabled_tool_packs or []),
+                    "headless_eligible": bool(request.headless_eligible),
+                },
+            )
+            await _remote_wait_for_sync_version(
+                int(auth["user_id"]),
+                int(before.get("sync_version", 0) or 0),
+            )
+            return CreateSessionResponse(session=_remote_session_detail_view(auth, _remote_current_session_id(auth)))
+        user_id = int(auth["user_id"])
+        bridge = _bridge_for_user(user_id)
+        workspace = _resolve_workspace_path(request.workspace, user_id=user_id) if request.workspace else None
+        previous = bridge.get_current_session()
         try:
-            session = bridge.create_session(request.name, workspace=workspace)
+            session = bridge.create_session(
+                request.name,
+                workspace=workspace,
+                telegram_bot_config_id=request.telegram_bot_config_id,
+                enabled_tool_packs=request.enabled_tool_packs,
+                headless_eligible=request.headless_eligible,
+            )
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        publish_current_session_changed(
+            user_id=user_id,
+            session_id=session.id,
+            previous_session_id=previous.id if previous else None,
+            origin_channel="app",
+            reason="session_created",
+        )
         detail = SessionDetailView(**bridge.detailed_session_view(session))
         return CreateSessionResponse(session=detail)
 
     @app.post("/api/app/sessions/{session_id}/activate", response_model=SessionDetailView)
     async def activate_session(session_id: str, authorization: Optional[str] = Header(default=None)) -> SessionDetailView:
         auth = _resolve_token(authorization)
-        bridge = _bridge_for_user(int(auth["user_id"]))
+        if _is_remote_session_auth(auth):
+            before = _remote_shared_state(auth)
+            await _remote_dispatch_command(
+                auth,
+                command_name="activate_session",
+                payload={"session_id": session_id},
+            )
+            await _remote_wait_for_sync_version(
+                int(auth["user_id"]),
+                int(before.get("sync_version", 0) or 0),
+            )
+            return _remote_session_detail_view(auth, session_id)
+        user_id = int(auth["user_id"])
+        bridge = _bridge_for_user(user_id)
+        previous = bridge.get_current_session()
         try:
             session = bridge.activate_session(session_id)
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=404, detail="Session not found") from exc
+        publish_current_session_changed(
+            user_id=user_id,
+            session_id=session.id,
+            previous_session_id=previous.id if previous else None,
+            origin_channel="app",
+            reason="session_activated",
+        )
         return SessionDetailView(**bridge.detailed_session_view(session))
+
+    @app.delete("/api/app/sessions/{session_id}", response_model=DeleteSessionResponse)
+    async def delete_session(session_id: str, authorization: Optional[str] = Header(default=None)) -> DeleteSessionResponse:
+        auth = _resolve_token(authorization)
+        user_id = int(auth["user_id"])
+        bridge = _bridge_for_user(user_id)
+        previous = bridge.get_current_session()
+        try:
+            result = bridge.delete_session(session_id)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail="Session not found") from exc
+        publish_current_session_changed(
+            user_id=user_id,
+            session_id=result.get("current_session_id"),
+            previous_session_id=previous.id if previous else session_id,
+            origin_channel="app",
+            reason="session_deleted",
+        )
+        return DeleteSessionResponse(**result)
 
     @app.get("/api/app/sessions/{session_id}", response_model=SessionDetailView)
     async def get_session(session_id: str, authorization: Optional[str] = Header(default=None)) -> SessionDetailView:
         auth = _resolve_token(authorization)
+        if _is_remote_session_auth(auth):
+            return _remote_session_detail_view(auth, session_id)
         bridge = _bridge_for_user(int(auth["user_id"]))
         session = bridge.get_session(session_id)
         return SessionDetailView(**bridge.detailed_session_view(session))
+
+    @app.get("/api/app/sessions/{session_id}/artifacts", response_model=list[ArtifactSummaryView])
+    async def list_session_artifacts(
+        session_id: str,
+        authorization: Optional[str] = Header(default=None),
+    ) -> list[ArtifactSummaryView]:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        try:
+            bridge.get_session(session_id)
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail="Session not found") from exc
+        return [ArtifactSummaryView(**item) for item in bridge.list_session_artifacts(session_id)]
+
+    @app.get("/api/app/sessions/{session_id}/artifacts/{artifact_id}", response_model=ArtifactDetailView)
+    async def get_session_artifact(
+        session_id: str,
+        artifact_id: str,
+        authorization: Optional[str] = Header(default=None),
+    ) -> ArtifactDetailView:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        try:
+            detail = bridge.get_session_artifact(session_id, artifact_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Artifact not found") from exc
+        return ArtifactDetailView(**detail)
+
+    @app.get("/api/app/sessions/{session_id}/artifacts/{artifact_id}/download")
+    async def download_session_artifact(
+        session_id: str,
+        artifact_id: str,
+        authorization: Optional[str] = Header(default=None),
+    ) -> FileResponse:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        try:
+            detail = bridge.get_session_artifact(session_id, artifact_id)
+            path = bridge.session_artifact_download_path(session_id, artifact_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Artifact not found") from exc
+        return FileResponse(
+            path,
+            media_type=str(detail.get("mime_type") or "application/octet-stream"),
+            filename=str(detail.get("payload_file_name") or path.name),
+        )
+
+    @app.post("/api/app/sessions/{session_id}/tool-packs", response_model=SessionDetailView)
+    async def update_session_tool_packs(
+        session_id: str,
+        request: ToolPackUpdateRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> SessionDetailView:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        session = bridge.update_session_tool_packs(session_id, request.enabled_tool_packs)
+        return SessionDetailView(**bridge.detailed_session_view(session))
+
+    @app.post("/api/app/sessions/{session_id}/telegram-bot", response_model=SessionDetailView)
+    async def update_session_telegram_bot(
+        session_id: str,
+        request: SessionBotAssignmentRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> SessionDetailView:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        session = bridge.update_session_telegram_bot_config(session_id, request.telegram_bot_config_id)
+        return SessionDetailView(**bridge.detailed_session_view(session))
+
+    @app.post("/api/app/sessions/{session_id}/headless-eligibility", response_model=SessionDetailView)
+    async def update_session_headless_eligibility(
+        session_id: str,
+        request: SessionHeadlessEligibilityRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> SessionDetailView:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        session = bridge.update_session_headless_eligible(session_id, request.headless_eligible)
+        return SessionDetailView(**bridge.detailed_session_view(session))
+
+    @app.get("/api/app/telegram-bots", response_model=list[TelegramBotConfigView])
+    async def list_telegram_bot_configs(authorization: Optional[str] = Header(default=None)) -> list[TelegramBotConfigView]:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        return [TelegramBotConfigView(**item) for item in bridge.list_telegram_bot_configs()]
+
+    @app.post("/api/app/telegram-bots", response_model=TelegramBotConfigView)
+    async def create_telegram_bot_config(
+        request: TelegramBotConfigCreateRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> TelegramBotConfigView:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        return TelegramBotConfigView(**bridge.create_telegram_bot_config(label=request.label, bot_token=request.bot_token))
+
+    @app.post("/api/app/telegram-bots/{bot_config_id}", response_model=TelegramBotConfigView)
+    async def update_telegram_bot_config(
+        bot_config_id: str,
+        request: TelegramBotConfigUpdateRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> TelegramBotConfigView:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        try:
+            item = bridge.update_telegram_bot_config(
+                bot_config_id,
+                label=request.label,
+                bot_token=request.bot_token,
+                is_default=request.is_default,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Telegram bot config not found") from exc
+        return TelegramBotConfigView(**item)
+
+    @app.delete("/api/app/telegram-bots/{bot_config_id}")
+    async def delete_telegram_bot_config(
+        bot_config_id: str,
+        authorization: Optional[str] = Header(default=None),
+    ) -> dict[str, Any]:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        return bridge.delete_telegram_bot_config(bot_config_id)
 
     @app.post("/api/app/sessions/{session_id}/timeline")
     async def append_session_timeline(
@@ -1788,12 +2651,18 @@ def create_app() -> FastAPI:
         auth = _resolve_token(authorization)
         bridge = _bridge_for_user(int(auth["user_id"]))
         runtime = _load_runtime_session_or_409(bridge, request.session_id)
-        result = await run_app_chat_turn(
-            runtime,
-            user_message=request.text,
-            source_format=request.source_format,
-            interrupt_policy=request.interrupt_policy,
-        )
+        lease = await bridge.orchestrator.prepare_turn(str(runtime.session.id))
+        if lease.busy:
+            raise HTTPException(status_code=409, detail=lease.error or "Session is already processing another message")
+        try:
+            result = await _run_app_chat_turn_lazy(
+                runtime,
+                user_message=request.text,
+                source_format=request.source_format,
+                interrupt_policy=request.interrupt_policy,
+            )
+        finally:
+            await bridge.orchestrator.complete_turn(lease)
         if result.get("busy"):
             raise HTTPException(status_code=409, detail="Session is already processing another message")
         return result
@@ -1801,6 +2670,15 @@ def create_app() -> FastAPI:
     @app.get("/api/app/jobs", response_model=list[ScheduledJobView])
     async def list_jobs(authorization: Optional[str] = Header(default=None)) -> list[ScheduledJobView]:
         auth = _resolve_token(authorization)
+        if _is_remote_session_auth(auth):
+            state = _remote_shared_state(auth)
+            items: list[ScheduledJobView] = []
+            for raw in list(state.get("jobs") or []):
+                try:
+                    items.append(ScheduledJobView.model_validate(raw))
+                except Exception:
+                    continue
+            return items
         bridge = _bridge_for_user(int(auth["user_id"]))
         return [ScheduledJobView(**job) for job in bridge.list_jobs()]
 
@@ -1822,18 +2700,26 @@ def create_app() -> FastAPI:
     @app.post("/api/app/jobs", response_model=JobDetailView)
     async def create_job(request: JobCreateRequest, authorization: Optional[str] = Header(default=None)) -> JobDetailView:
         auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
         interval_seconds, error = parse_schedule_with_error(request.schedule)
         if error or not interval_seconds:
             raise HTTPException(status_code=400, detail=error or "Invalid schedule")
         scheduler = get_scheduler()
+        origin_session_id = request.session_id or _resolve_target_session_id(bridge, None)
+        origin_session = bridge.get_session(origin_session_id)
+        origin_bot = bridge.orchestrator.resolve_telegram_bot_for_session(origin_session)
         job_id = scheduler.add_job(
             name=request.name,
             prompt=request.prompt,
             interval_seconds=interval_seconds,
             schedule_text=request.schedule,
             owner_user_id=int(auth["user_id"]),
+            origin_session_id=origin_session.id,
+            origin_telegram_bot_config_id=str(origin_bot.get("id") or "").strip() or None if origin_bot else None,
+            origin_workspace=origin_session.workspace,
+            origin_model=origin_session.model,
+            origin_enabled_tool_packs=list(getattr(origin_session, "enabled_tool_packs", []) or []),
         )
-        bridge = _bridge_for_user(int(auth["user_id"]))
         try:
             return JobDetailView(**bridge.get_job(job_id))
         except KeyError:
@@ -1844,6 +2730,27 @@ def create_app() -> FastAPI:
                 schedule=request.schedule,
                 enabled=True,
             )
+
+    @app.get("/api/app/runtime/orchestrator", response_model=RuntimeOrchestratorView)
+    async def runtime_orchestrator_status(authorization: Optional[str] = Header(default=None)) -> RuntimeOrchestratorView:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        return RuntimeOrchestratorView(**bridge.orchestrator.runtime_status_view())
+
+    @app.post("/api/app/runtime/headless", response_model=RuntimeOrchestratorView)
+    async def configure_headless_runtime(
+        request: HeadlessConfigureRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> RuntimeOrchestratorView:
+        auth = _resolve_token(authorization)
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        return RuntimeOrchestratorView(
+            **bridge.orchestrator.configure_headless(
+                enabled=request.enabled,
+                default_max_concurrent_chats=request.default_max_concurrent_chats,
+                default_sleep_session_by_bot=request.default_sleep_session_by_bot,
+            )
+        )
 
     @app.post("/api/app/jobs/{job_id}/run", response_model=JobActionResponse)
     async def run_job(job_id: str, authorization: Optional[str] = Header(default=None)) -> JobActionResponse:
@@ -1906,7 +2813,7 @@ def create_app() -> FastAPI:
     async def current_screenshot(authorization: Optional[str] = Header(default=None)) -> ScreenCaptureView:
         _resolve_token(authorization)
         try:
-            capture = capture_screen_snapshot()
+            capture = _capture_screen_snapshot()
         except Exception as exc:
             _record_runtime_error(
                 f"Screenshot capture failed: {exc}",
@@ -1964,7 +2871,7 @@ def create_app() -> FastAPI:
             while True:
                 capture = await loop.run_in_executor(
                     None,
-                    lambda: capture_screen_snapshot(max_width=max_width, jpeg_quality=jpeg_quality),
+                    lambda: _capture_screen_snapshot(max_width=max_width, jpeg_quality=jpeg_quality),
                 )
                 if not announced_streaming:
                     await send_model(
@@ -2000,6 +2907,52 @@ def create_app() -> FastAPI:
                 pass
             return
 
+    @app.websocket("/ws/remote/desktop")
+    async def remote_desktop_ws(websocket: WebSocket) -> None:
+        await websocket.accept()
+        try:
+            auth = _resolve_ws_token(websocket.query_params.get("token"))
+            await _handle_remote_desktop_ws(websocket, auth)
+        except WebSocketDisconnect:
+            logger.info("[remote] desktop websocket disconnected")
+            return
+        except Exception:
+            logger.exception("[remote] desktop websocket failed")
+            try:
+                await websocket.send_json(
+                    RealtimeServerEvent(
+                        type="error",
+                        payload={"message": "Remote desktop websocket failed"},
+                    ).model_dump()
+                )
+            except Exception:
+                pass
+            return
+
+    @app.websocket("/ws/remote/mobile")
+    async def remote_mobile_ws(websocket: WebSocket) -> None:
+        await websocket.accept()
+        try:
+            auth = _resolve_ws_token(websocket.query_params.get("token"))
+            if not _is_remote_session_auth(auth):
+                raise WebSocketDisconnect(code=4403)
+            await _handle_remote_chat_ws(websocket, auth)
+        except WebSocketDisconnect:
+            logger.info("[remote] mobile websocket disconnected")
+            return
+        except Exception:
+            logger.exception("[remote] mobile websocket failed")
+            try:
+                await websocket.send_json(
+                    RealtimeServerEvent(
+                        type="error",
+                        payload={"message": "Remote mobile websocket failed"},
+                    ).model_dump()
+                )
+            except Exception:
+                pass
+            return
+
     @app.websocket("/ws/app/chat")
     async def chat_ws(websocket: WebSocket) -> None:
         await websocket.accept()
@@ -2017,6 +2970,9 @@ def create_app() -> FastAPI:
             token = websocket.query_params.get("token")
             session_id = websocket.query_params.get("session_id")
             auth = _resolve_ws_token(token)
+            if _is_remote_session_auth(auth):
+                await _handle_remote_chat_ws(websocket, auth)
+                return
             bridge = _bridge_for_user(int(auth["user_id"]))
             client_id = str(websocket.query_params.get("client_id") or secrets.token_hex(8))
 
@@ -2044,7 +3000,7 @@ def create_app() -> FastAPI:
                 )
 
             try:
-                runtime = bridge.load_runtime_session(session_id)
+                runtime = _load_runtime_session_or_409(bridge, session_id)
             except RuntimeError as exc:
                 await send_model(
                     RealtimeServerEvent(
@@ -2054,7 +3010,7 @@ def create_app() -> FastAPI:
                     )
                 )
                 return
-            effective_session_id = runtime.session_manager.get_current_session_id()
+            effective_session_id = str(getattr(getattr(runtime, "session", None), "id", "") or "").strip() or session_id
             await send_model(
                 RealtimeServerEvent(
                     type="session_snapshot",
@@ -2075,14 +3031,11 @@ def create_app() -> FastAPI:
                         await send_session_sync(effective_session_id, setting)
                     return
 
-                switched_session_id = _resolve_external_current_session_id(
-                    bridge,
-                    active_session_id=effective_session_id,
-                    event=event,
-                )
-                if switched_session_id:
-                    effective_session_id = switched_session_id
-                    await send_session_sync(switched_session_id, "external_current_session")
+                if event_type == "current_session_changed":
+                    next_session_id = event_session_id or str((event.get("payload") or {}).get("current_session_id") or "").strip()
+                    if next_session_id and next_session_id != effective_session_id:
+                        effective_session_id = next_session_id
+                        await send_session_sync(next_session_id, "external_current_session")
                     return
 
                 live_event = _sync_event_to_realtime_event(
@@ -2141,8 +3094,8 @@ def create_app() -> FastAPI:
                     continue
 
                 try:
-                    runtime = bridge.load_runtime_session(req_session_id)
-                    effective_session_id = runtime.session_manager.get_current_session_id() or req_session_id
+                    runtime = _load_runtime_session_or_409(bridge, req_session_id)
+                    effective_session_id = str(getattr(getattr(runtime, "session", None), "id", "") or "").strip() or req_session_id
                 except RuntimeError as exc:
                     await send_model(
                         RealtimeServerEvent(
@@ -2210,14 +3163,27 @@ def create_app() -> FastAPI:
                             )
                         )
 
-                result = await run_app_chat_turn(
-                    runtime,
-                    user_message=text,
-                    source_format=source_format,
-                    interrupt_policy=str(data.get("interrupt_policy", "none")),
-                    source_client_id=client_id,
-                    log_callback=emit,
-                )
+                lease = await bridge.orchestrator.prepare_turn(str(getattr(getattr(runtime, "session", None), "id", "") or req_session_id or ""))
+                if lease.busy:
+                    await send_model(
+                        RealtimeServerEvent(
+                            type="warning",
+                            session_id=req_session_id,
+                            payload={"message": lease.error or "Session is already processing another message"},
+                        )
+                    )
+                    continue
+                try:
+                    result = await _run_app_chat_turn_lazy(
+                        runtime,
+                        user_message=text,
+                        source_format=source_format,
+                        interrupt_policy=str(data.get("interrupt_policy", "none")),
+                        source_client_id=client_id,
+                        log_callback=emit,
+                    )
+                finally:
+                    await bridge.orchestrator.complete_turn(lease)
                 if result.get("busy"):
                     await send_model(
                         RealtimeServerEvent(
@@ -2327,9 +3293,18 @@ def create_app() -> FastAPI:
         try:
             token = websocket.query_params.get("token")
             auth = _resolve_ws_token(token)
+            if _is_remote_session_auth(auth):
+                await send_model(
+                    RealtimeServerEvent(
+                        type="error",
+                        session_id=websocket.query_params.get("session_id"),
+                        payload={"message": "Mobile voice is disabled in remote mode for v1"},
+                    )
+                )
+                return
             bridge = _bridge_for_user(int(auth["user_id"]))
             client_id = str(websocket.query_params.get("client_id") or secrets.token_hex(8))
-            draft = VoiceDraftState()
+            draft = _new_voice_draft_state()
             active_session_id = websocket.query_params.get("session_id")
             await send_model(
                 RealtimeServerEvent(
@@ -2475,7 +3450,7 @@ def create_app() -> FastAPI:
                                 )
                             )
 
-                    result = await run_app_chat_turn(
+                    result = await _run_app_chat_turn_lazy(
                         runtime,
                         user_message=draft_text,
                         source_format="app_voice_transcript",
@@ -2560,7 +3535,7 @@ def create_app() -> FastAPI:
                         await send_voice_event("voice_state", {"state": "synthesizing"})
                         loop = asyncio.get_running_loop()
                         try:
-                            assistant_audio = await loop.run_in_executor(None, synthesize_assistant_audio, assistant_text)
+                            assistant_audio = await loop.run_in_executor(None, _synthesize_assistant_audio_sync, assistant_text)
                         except Exception as exc:
                             await send_voice_event("warning", {"message": f"Assistant audio unavailable: {str(exc)}"})
 
@@ -2625,7 +3600,15 @@ def start_embedded_app_server_if_enabled(*, force: bool = False) -> None:
             import uvicorn
 
             _set_startup_state("ready")
-            uvicorn.run(create_app(), host=host, port=port, log_level="info")
+            uvicorn.run(
+                create_app(),
+                host=host,
+                port=port,
+                log_level="info",
+                loop="asyncio",
+                http="h11",
+                ws="websockets",
+            )
         except Exception as exc:
             detail = traceback.format_exc()
             logger.exception("[app] embedded app server failed to start")
