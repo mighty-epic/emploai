@@ -7,9 +7,11 @@ browser, and desktop automation.
 """
 
 import asyncio
+import json
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 
 # Add parent directory to path to allow imports from root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -30,6 +32,7 @@ from bot_core.hooks import HookEvent, HookType
 from bot_core.security import SecurityManager, rate_limited, authorized_only
 from bot_core.ui_helpers import InlineKeyboardHelper, MessageFormatter
 from cli.tui_constants import AVAILABLE_MODELS as _ALL_MODELS, MODEL_CONFIGS as _ALL_MODEL_CONFIGS
+from shared.telegram_bot_config_store import TelegramBotConfigStore
 try:
     from telegram_bot.telegram_app import run_bot
 except ImportError:
@@ -102,6 +105,62 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+_TELEGRAM_STATUS_PATH_ENV = "EMPLOAI_TELEGRAM_STATUS_PATH"
+_TELEGRAM_NOTIFY_ON_READY_ENV = "EMPLOAI_TELEGRAM_NOTIFY_ON_READY"
+
+
+def _write_desktop_telegram_status(state: str, *, detail: str | None = None, ready_at: str | None = None) -> None:
+    status_path = str(os.getenv(_TELEGRAM_STATUS_PATH_ENV, "") or "").strip()
+    if not status_path:
+        return
+    payload = {
+        "state": state,
+        "updatedAt": datetime.now(timezone.utc).isoformat(),
+    }
+    if detail:
+        payload["detail"] = detail
+    if ready_at:
+        payload["readyAt"] = ready_at
+    try:
+        os.makedirs(os.path.dirname(status_path), exist_ok=True)
+        with open(status_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+    except Exception:
+        logger.exception("Failed to write desktop Telegram worker status")
+
+
+def _notify_on_ready_enabled() -> bool:
+    return str(os.getenv(_TELEGRAM_NOTIFY_ON_READY_ENV, "") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def _notify_telegram_ready(application) -> None:
+    if not _notify_on_ready_enabled():
+        return
+    ready_message = (
+        str(os.getenv("EMPLOAI_TELEGRAM_READY_MESSAGE", "") or "").strip()
+        or "EmploAI Telegram backend is online and ready."
+    )
+    failures: list[str] = []
+    for user_id in sorted(security_manager.allowed_user_ids):
+        try:
+            await application.bot.send_message(chat_id=user_id, text=ready_message)
+        except Exception as exc:
+            failures.append(f"{user_id}: {type(exc).__name__}: {exc}")
+    if failures:
+        logger.warning("Telegram ready notifications had failures: %s", "; ".join(failures))
+
+
+async def _handle_application_ready(application) -> None:
+    set_telegram_application(application)
+    for user_id in sorted(security_manager.allowed_user_ids):
+        try:
+            get_session(user_id, create_new_session=False)
+        except Exception:
+            logger.exception("Failed to bootstrap Telegram session runtime for user %s", user_id)
+    ready_at = datetime.now(timezone.utc).isoformat()
+    _write_desktop_telegram_status("running", detail="Telegram backend is ready.", ready_at=ready_at)
+    await _notify_telegram_ready(application)
+
 
 def restart_process() -> None:
     """Re-exec the current Python process so the bot restarts in-place."""
@@ -109,6 +168,9 @@ def restart_process() -> None:
 
 
 def _safe_start_embedded_app_server() -> None:
+    if os.getenv("EMPLOAI_SKIP_EMBEDDED_APP_SERVER", "").strip().lower() in {"1", "true", "yes", "on"}:
+        logger.info("Embedded app server startup skipped for background Telegram worker")
+        return
     try:
         from mobile_app.backend import start_embedded_app_server_if_enabled
 
@@ -119,12 +181,33 @@ def _safe_start_embedded_app_server() -> None:
 
 
 async def _safe_start_cron_scheduler() -> None:
+    if os.getenv("EMPLOAI_SKIP_CRON_SCHEDULER", "").strip().lower() in {"1", "true", "yes", "on"}:
+        logger.info("Cron scheduler startup skipped for background Telegram worker")
+        return
     try:
         from mobile_app.backend.cron_runtime import ensure_global_cron_scheduler_started
 
         await ensure_global_cron_scheduler_started()
     except Exception:
         logger.exception("Cron scheduler startup failed; continuing without background cron runtime")
+
+
+def _extra_bot_tokens_provider() -> list[str]:
+    seen = {str(BOT_TOKEN or "").strip()}
+    tokens: list[str] = []
+    for user_id in sorted(security_manager.allowed_user_ids):
+        try:
+            store = TelegramBotConfigStore(user_id=user_id)
+            store.ensure_default_from_env(bot_token=BOT_TOKEN)
+            for item in store.list_configs():
+                token = str(item.get("bot_token") or "").strip()
+                if not token or token in seen:
+                    continue
+                seen.add(token)
+                tokens.append(token)
+        except Exception:
+            logger.exception("Failed to load Telegram bot configs for user %s", user_id)
+    return tokens
 
 
 # ======================================================================================
@@ -323,19 +406,26 @@ message_handlers = {
 def main():
     runtime_error = headed_linux_runtime_error()
     if runtime_error:
+        _write_desktop_telegram_status("degraded", detail=runtime_error)
         logger.error(runtime_error)
         raise RuntimeError(runtime_error)
 
+    _write_desktop_telegram_status("starting", detail="Telegram worker is starting in the background.")
+
     _safe_start_embedded_app_server()
     asyncio.run(_safe_start_cron_scheduler())
-
-    run_bot(
-        bot_token=BOT_TOKEN,
-        command_handlers=command_handlers,
-        callback_handler=button_callback,
-        message_handlers=message_handlers,
-        on_application_ready=set_telegram_application,
-    )
+    try:
+        run_bot(
+            bot_token=BOT_TOKEN,
+            command_handlers=command_handlers,
+            callback_handler=button_callback,
+            message_handlers=message_handlers,
+            on_application_ready=_handle_application_ready,
+            extra_bot_tokens_provider=_extra_bot_tokens_provider,
+        )
+    except Exception as exc:
+        _write_desktop_telegram_status("degraded", detail=f"{type(exc).__name__}: {exc}")
+        raise
 
 
 if __name__ == "__main__":

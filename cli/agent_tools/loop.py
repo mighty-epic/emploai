@@ -1,12 +1,26 @@
 """Unified tool-calling loop for multiple LLM providers."""
 
+import base64
+import io
 import json
 import time
 from dataclasses import dataclass
-from typing import List, Dict, Any, Callable
+from typing import List, Dict, Any, Callable, Optional, Tuple
 from cli.tui_constants import ChatMessage, SYSTEM_PROMPT, RESPONSE_MAX_TOKENS
-from .adapters import build_tools_for_provider, normalize_provider
-from .definitions import TOOL_RUN_COMMAND
+from .adapters import (
+    build_tools_for_provider,
+    canonical_tool_names,
+    normalize_provider,
+    validate_provider_tool_names,
+)
+from .definitions import CLI_AGENT_TOOLS, TOOL_RUN_COMMAND
+from .final_quality_guard import (
+    FinalQualityVerdict,
+    final_quality_guard_enabled,
+    final_quality_guard_mode,
+    judge_final_quality_with_nli,
+    max_auto_continues,
+)
 
 # Try to import verbose tool logger (only available in telegram_bot context)
 VERBOSE_LOGGING = False
@@ -28,6 +42,368 @@ class LoopResult:
     output_tokens: int = 0
     total_tokens: int = 0
 
+
+def _extract_image_payload(result: Any) -> Optional[str]:
+    if not isinstance(result, dict):
+        return None
+    for key in ("image_base64", "base64", "image_data", "data", "screenshot"):
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _vision_question_for_result(tool_name: str, args: Dict[str, Any], result: Any) -> str:
+    if isinstance(result, dict):
+        explicit = str(result.get("question") or "").strip()
+        if explicit:
+            return explicit
+    explicit_arg = str((args or {}).get("question") or "").strip()
+    if explicit_arg:
+        return explicit_arg
+
+    if tool_name == "describe_screen":
+        return (
+            "Describe the current visible desktop state, the main active window or dialog, "
+            "any error or confirmation message, and the controls or content most relevant to the current task."
+        )
+    if tool_name == "browser_screenshot":
+        return (
+            "Describe the visible browser page state, major heading or content, any dialogs, login prompts, or errors, "
+            "and whether the intended page, file, or result appears visibly open and ready."
+        )
+    return "Describe the visible state relevant to the current task."
+
+
+def _vision_sidecar_prompt(tool_name: str, question: str) -> str:
+    surface = "browser page" if tool_name == "browser_screenshot" else "desktop screen"
+    return (
+        "You are a vision sidecar for an autonomous agent. "
+        f"Look only at the provided {surface} image and answer the question precisely. "
+        "Do not guess hidden state, unreadable text, or off-screen content. "
+        "If you are uncertain, say what is uncertain. "
+        "Mention visible errors, dialogs, active window/page state, and whether the intended target appears visible when relevant. "
+        "Keep the answer concise and concrete.\n\n"
+        f"Question: {question}"
+    )
+
+
+def _extract_anthropic_text(response: Any) -> str:
+    parts: List[str] = []
+    for block in list(getattr(response, "content", []) or []):
+        block_type = getattr(block, "type", "")
+        text = getattr(block, "text", None)
+        if block_type == "text" and text:
+            parts.append(str(text))
+    return "\n".join(part for part in parts if part).strip()
+
+
+def _extract_openai_response_text(response: Any) -> str:
+    text = getattr(response, "output_text", None)
+    if text:
+        return str(text).strip()
+
+    output = list(getattr(response, "output", []) or [])
+    parts: List[str] = []
+    for item in output:
+        for content_item in list(getattr(item, "content", []) or []):
+            if getattr(content_item, "type", "") in {"output_text", "text"} and getattr(content_item, "text", None):
+                parts.append(str(content_item.text))
+    return "\n".join(part for part in parts if part).strip()
+
+
+def _analyze_image_sidecar(
+    *,
+    provider: str,
+    model_id: str,
+    client: Any,
+    api_type: str,
+    tool_name: str,
+    image_data: str,
+    question: str,
+    log: Callable[..., None],
+) -> str:
+    prompt = _vision_sidecar_prompt(tool_name, question)
+    try:
+        if provider == "anthropic":
+            response = client.messages.create(
+                model=model_id,
+                max_tokens=300,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": image_data,
+                                },
+                            },
+                        ],
+                    }
+                ],
+            )
+            text = _extract_anthropic_text(response)
+            if text:
+                return text
+        elif provider == "google":
+            from PIL import Image
+
+            image = Image.open(io.BytesIO(base64.b64decode(image_data)))
+            model = client.GenerativeModel(model_name=model_id)
+            response = model.generate_content([prompt, image])
+            text = str(getattr(response, "text", "") or "").strip()
+            if text:
+                return text
+        else:
+            if api_type == "responses" and hasattr(client, "responses"):
+                response = client.responses.create(
+                    model=model_id,
+                    input=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "input_text", "text": prompt},
+                                {"type": "input_image", "image_url": f"data:image/png;base64,{image_data}"},
+                            ],
+                        }
+                    ],
+                    max_output_tokens=300,
+                )
+                text = _extract_openai_response_text(response)
+                if text:
+                    return text
+            if hasattr(client, "chat") and hasattr(client.chat, "completions"):
+                response = client.chat.completions.create(
+                    model=model_id,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_data}"}},
+                            ],
+                        }
+                    ],
+                    max_tokens=300,
+                )
+                choice = response.choices[0].message if getattr(response, "choices", None) else None
+                text = str(getattr(choice, "content", "") or "").strip()
+                if text:
+                    return text
+    except Exception as exc:
+        log(f"  ↪ Vision sidecar failed for {tool_name}: {exc}")
+
+    return (
+        "Vision analysis unavailable for this image. "
+        "Use the screenshot as proof/artifact only and rely on other observation tools if you still need more certainty."
+    )
+
+
+def _responses_tool_shape(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    for tool in tools or []:
+        if not isinstance(tool, dict):
+            continue
+        if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
+            function = tool["function"]
+            normalized.append(
+                {
+                    "type": "function",
+                    "name": function.get("name"),
+                    "description": function.get("description"),
+                    "parameters": function.get("parameters"),
+                }
+            )
+        else:
+            normalized.append(tool)
+    return normalized
+
+
+def _responses_input_from_messages(messages: List[Dict[str, Any]]) -> tuple[str, List[Dict[str, Any]]]:
+    instructions_parts: List[str] = []
+    input_items: List[Dict[str, Any]] = []
+
+    for message in messages:
+        role = str(message.get("role") or "")
+        content = message.get("content")
+
+        if role == "system":
+            if content:
+                instructions_parts.append(str(content))
+            continue
+
+        if role == "tool":
+            input_items.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": message.get("tool_call_id"),
+                    "output": str(content or ""),
+                }
+            )
+            continue
+
+        tool_calls = list(message.get("tool_calls") or [])
+        if role == "assistant" and tool_calls:
+            if content:
+                input_items.append({"role": "assistant", "content": str(content)})
+            for tool_call in tool_calls:
+                function = tool_call.get("function") or {}
+                input_items.append(
+                    {
+                        "type": "function_call",
+                        "call_id": tool_call.get("id"),
+                        "name": function.get("name"),
+                        "arguments": function.get("arguments") or "",
+                    }
+                )
+            continue
+
+        if role in {"user", "assistant"}:
+            input_items.append({"role": role, "content": str(content or "")})
+
+    return "\n\n".join(part for part in instructions_parts if part), input_items
+
+
+def _response_item_to_dict(item: Any) -> Any:
+    if item is None:
+        return None
+    if isinstance(item, dict):
+        return item
+    to_dict = getattr(item, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    model_dump = getattr(item, "model_dump", None)
+    if callable(model_dump):
+        return model_dump()
+    return item
+
+
+def _truncate_text(value: str, *, max_chars: int) -> str:
+    text = str(value or "")
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 32] + f"\n...[truncated {len(text) - max_chars + 32} chars]"
+
+
+def _truncate_lines(value: str, *, max_lines: int, max_chars: int) -> str:
+    text = str(value or "")
+    lines = text.splitlines()
+    trimmed_lines = lines[:max_lines]
+    trimmed = "\n".join(trimmed_lines)
+    if len(lines) > max_lines:
+        trimmed += f"\n...[truncated {len(lines) - max_lines} lines]"
+    return _truncate_text(trimmed, max_chars=max_chars)
+
+
+def _summarize_tool_result_for_model(tool_name: str, result: Any) -> str:
+    if isinstance(result, dict):
+        safe = dict(result)
+        for key in ("image_base64", "base64", "image_data", "data"):
+            if key in safe and isinstance(safe[key], str) and len(safe[key]) > 500:
+                safe[key] = f"[IMAGE_DATA elided: {len(safe[key])} chars]"
+
+        if tool_name == "describe_screen":
+            summary = {
+                "image_captured": bool(safe.get("image_captured")),
+                "description": _truncate_text(str(safe.get("description") or ""), max_chars=600),
+                "metadata": safe.get("metadata"),
+            }
+            if safe.get("question"):
+                summary["question"] = _truncate_text(str(safe.get("question") or ""), max_chars=240)
+            if safe.get("vision_question"):
+                summary["vision_question"] = _truncate_text(str(safe.get("vision_question") or ""), max_chars=320)
+            if safe.get("vision_summary"):
+                summary["vision_summary"] = _truncate_text(str(safe.get("vision_summary") or ""), max_chars=1400)
+            return json.dumps(summary, ensure_ascii=False)
+
+        if tool_name == "browser_screenshot":
+            summary = {
+                "backend": safe.get("backend"),
+                "mode": safe.get("mode"),
+                "title": safe.get("title"),
+                "url": safe.get("url"),
+                "tab_id": safe.get("tab_id"),
+                "window_id": safe.get("window_id"),
+                "wait_reason": safe.get("wait_reason"),
+                "note": "Screenshot stored as proof/artifact only. Pixel content is not injected back into the model; use browser_read_text for exact text.",
+            }
+            if safe.get("question"):
+                summary["question"] = _truncate_text(str(safe.get("question") or ""), max_chars=240)
+            if safe.get("vision_question"):
+                summary["vision_question"] = _truncate_text(str(safe.get("vision_question") or ""), max_chars=320)
+            if safe.get("vision_summary"):
+                summary["vision_summary"] = _truncate_text(str(safe.get("vision_summary") or ""), max_chars=1400)
+            return json.dumps(summary, ensure_ascii=False)
+
+        if tool_name == "browser_read_text":
+            summary = {
+                "backend": safe.get("backend"),
+                "mode": safe.get("mode"),
+                "title": safe.get("title"),
+                "url": safe.get("url"),
+                "selector": safe.get("selector"),
+                "truncated": bool(safe.get("truncated")),
+                "text": _truncate_text(str(safe.get("text") or ""), max_chars=3500),
+            }
+            return json.dumps(summary, ensure_ascii=False)
+
+        if tool_name in {"browser_snapshot", "observe_browser"} and isinstance(safe.get("formatted"), str):
+            safe["formatted"] = _truncate_lines(safe["formatted"], max_lines=40, max_chars=3500)
+            safe["semantics"] = "Interactive structure and refs only. Use browser_read_text for full visible page text or exact rendered values."
+            return json.dumps(safe, ensure_ascii=False)
+
+        return _truncate_text(json.dumps(safe, ensure_ascii=False, default=str), max_chars=5000)
+
+    if isinstance(result, str):
+        if tool_name == "ocr_screen":
+            return _truncate_lines(result, max_lines=60, max_chars=3500)
+        if tool_name in {"browser_snapshot", "observe_browser"}:
+            return _truncate_lines(result, max_lines=40, max_chars=3500)
+        if tool_name == "observe_desktop":
+            return _truncate_lines(result, max_lines=30, max_chars=2500)
+        return _truncate_text(result, max_chars=4000)
+
+    return _truncate_text(json.dumps(result, ensure_ascii=False, default=str), max_chars=4000)
+
+
+def _latest_user_text(messages: List[Dict[str, Any]]) -> str:
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content", "")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = [
+                str(part.get("text", ""))
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            ]
+            return " ".join(part for part in parts if part).strip()
+    return ""
+
+
+def _coerce_final_quality_verdict(value: Any) -> FinalQualityVerdict:
+    if isinstance(value, FinalQualityVerdict):
+        return value
+    if isinstance(value, dict):
+        action = str(value.get("action") or "allow").strip().lower()
+        if action == "retry":
+            action = "continue"
+        if action == "true_blocker":
+            action = "allow"
+        return FinalQualityVerdict(
+            action=action if action in {"allow", "continue"} else "allow",
+            reason=str(value.get("reason") or value.get("failed_obligation") or "planner_verdict").strip(),
+            scores=dict(value.get("scores") or {}),
+            continuation_instruction=str(value.get("continuation_instruction") or value.get("retry_instruction") or "").strip(),
+        )
+    return FinalQualityVerdict(action="allow", reason="invalid_verdict")
+
 def run_tool_loop(
     provider: str,
     model_id: str,
@@ -38,7 +414,8 @@ def run_tool_loop(
     variant: str = "standard",
     extra_tools: List[Dict[str, Any]] = None,
     custom_system_prompt: str = None,
-    api_type: str = "chat"
+    api_type: str = "chat",
+    base_tools: List[Dict[str, Any]] = None,
 ) -> LoopResult:
     """
     Executes a multi-turn conversation loop where the model can call tools.
@@ -47,6 +424,7 @@ def run_tool_loop(
     log = callbacks.get("log", lambda *args: None)
     log_inline = callbacks.get("log_inline", lambda *args: None)
     append_stream = callbacks.get("append_stream", lambda *args: None)
+    append_reasoning = callbacks.get("append_reasoning", lambda *args: None)
     begin_stream = callbacks.get("begin_stream", lambda *args: None)
     finish_stream = callbacks.get("finish_stream", lambda *args: None)
     provider = normalize_provider(provider)
@@ -55,6 +433,14 @@ def run_tool_loop(
     total_usage = {"input": 0, "output": 0}
     final_response = ""
     assistant_text = ""
+    original_user_request = _latest_user_text(messages)
+    tool_trace: List[Dict[str, Any]] = []
+    auto_continue_count = 0
+    quality_guard_enabled = final_quality_guard_enabled()
+    quality_guard_mode = final_quality_guard_mode()
+    auto_continue_limit = max_auto_continues() if quality_guard_enabled else 0
+    must_use_tool_after_retry = False
+    retry_tool_trace_len = 0
     
     # 0. System Prompt Injection
     effective_system = custom_system_prompt or SYSTEM_PROMPT
@@ -95,16 +481,68 @@ def run_tool_loop(
                 final_response = assistant_text + "\n\n[Interrupted by user]"
                 break
             
-        tools = build_tools_for_provider(provider, extra_tools)
+        tools = build_tools_for_provider(provider, extra_tools, base_tools=base_tools)
+        canonical_source_tools = list(base_tools) if base_tools is not None else list(CLI_AGENT_TOOLS)
+        canonical_names = canonical_tool_names(canonical_source_tools)
+        canonical_names.update(canonical_tool_names(extra_tools or []))
+        tool_validation_error = validate_provider_tool_names(tools, allowed_names=canonical_names)
+        if tool_validation_error:
+            finish_stream()
+            return LoopResult(content=f"Error in tool inventory: {tool_validation_error}")
             
         assistant_text = ""
         # Because streaming tool calls are chunks, we must accumulate them
         # Format: {index: {"name": str, "args": str, "id": str}}
         tool_call_chunks = {}
         
-        begin_stream()
-        
         interrupted_stream = False
+        visible_stream_started = False
+        buffered_stream_events: List[Tuple[str, str]] = []
+
+        def _start_visible_stream() -> None:
+            nonlocal visible_stream_started
+            if not visible_stream_started:
+                begin_stream()
+                visible_stream_started = True
+
+        def _emit_stream(text: str) -> None:
+            if not text:
+                return
+            if quality_guard_enabled:
+                buffered_stream_events.append(("assistant_delta", str(text)))
+                return
+            _start_visible_stream()
+            append_stream(text)
+
+        def _emit_reasoning(text: str) -> None:
+            if not str(text or "").strip():
+                return
+            if quality_guard_enabled:
+                buffered_stream_events.append(("reasoning_delta", str(text)))
+                return
+            append_reasoning(text)
+
+        def _flush_buffered_stream_events() -> None:
+            if not buffered_stream_events:
+                return
+            _start_visible_stream()
+            for event_type, text in buffered_stream_events:
+                if event_type == "reasoning_delta":
+                    append_reasoning(text)
+                else:
+                    append_stream(text)
+            buffered_stream_events.clear()
+
+        def _discard_buffered_stream_events() -> None:
+            buffered_stream_events.clear()
+
+        def _finish_visible_stream() -> None:
+            if visible_stream_started:
+                finish_stream()
+
+        if not quality_guard_enabled:
+            _start_visible_stream()
+
         try:
             if provider == "anthropic":
                 # Convert ALL messages in history to Anthropic format
@@ -186,7 +624,7 @@ def run_tool_loop(
                         elif event.type == "content_block_delta":
                             if event.delta.type == "text_delta":
                                 assistant_text += event.delta.text
-                                append_stream(event.delta.text)
+                                _emit_stream(event.delta.text)
                             elif event.delta.type == "input_json_delta":
                                 # Tool call argument delta - use tracked index
                                 if current_tool_index is not None and current_tool_index in tool_call_chunks:
@@ -242,7 +680,7 @@ def run_tool_loop(
                     
                     if chunk.text:
                         assistant_text += chunk.text
-                        append_stream(chunk.text)
+                        _emit_stream(chunk.text)
                     
                     # Tool handling for Gemini
                     if hasattr(chunk, "candidates") and chunk.candidates:
@@ -259,6 +697,80 @@ def run_tool_loop(
                                             "name": fn.name,
                                             "args": json.dumps(dict(fn.args))
                                         }
+            elif provider == "openai" and api_type == "responses":
+                instructions, response_input = _responses_input_from_messages(messages)
+                response_tools = _responses_tool_shape(tools)
+                kwargs = {
+                    "model": model_id,
+                    "input": response_input,
+                    "stream": True,
+                    "tools": response_tools,
+                    "tool_choice": "auto",
+                    "instructions": instructions or None,
+                }
+
+                if variant in ["low", "medium", "high", "xhigh"]:
+                    kwargs["reasoning"] = {"effort": variant if variant != "xhigh" else "high"}
+
+                response_stream = client.responses.create(**kwargs)
+                completed_response = None
+
+                for event in response_stream:
+                    if tool_executor.check_interruption and tool_executor.check_interruption():
+                        interrupted_stream = True
+                        break
+
+                    event_type = getattr(event, "type", "")
+                    if event_type == "response.output_text.delta":
+                        delta_text = getattr(event, "delta", "") or ""
+                        if delta_text:
+                            assistant_text += delta_text
+                            _emit_stream(delta_text)
+                    elif "reasoning" in event_type:
+                        reasoning_delta = getattr(event, "delta", "") or getattr(event, "text", "") or ""
+                        if reasoning_delta:
+                            _emit_reasoning(str(reasoning_delta))
+                    elif event_type == "response.output_item.added":
+                        item = getattr(event, "item", None)
+                        if getattr(item, "type", "") == "function_call":
+                            idx = int(getattr(event, "output_index", len(tool_call_chunks)) or 0)
+                            tool_call_chunks[idx] = {
+                                "id": getattr(item, "call_id", None) or getattr(item, "id", None) or f"call_{idx}",
+                                "name": getattr(item, "name", "") or "",
+                                "args": getattr(item, "arguments", "") or "",
+                            }
+                    elif event_type == "response.function_call_arguments.delta":
+                        idx = int(getattr(event, "output_index", len(tool_call_chunks)) or 0)
+                        if idx not in tool_call_chunks:
+                            tool_call_chunks[idx] = {
+                                "id": getattr(event, "item_id", None) or f"call_{idx}",
+                                "name": "",
+                                "args": "",
+                            }
+                        snapshot = getattr(event, "snapshot", None)
+                        delta_text = getattr(event, "delta", "") or ""
+                        tool_call_chunks[idx]["args"] = str(snapshot if snapshot is not None else (tool_call_chunks[idx]["args"] + delta_text))
+                    elif event_type == "response.completed":
+                        completed_response = getattr(event, "response", None)
+                        usage = getattr(completed_response, "usage", None)
+                        if usage is not None:
+                            total_usage["input"] += int(getattr(usage, "input_tokens", 0) or 0)
+                            total_usage["output"] += int(getattr(usage, "output_tokens", 0) or 0)
+
+                if completed_response is not None:
+                    for idx, item in enumerate(list(getattr(completed_response, "output", []) or [])):
+                        if getattr(item, "type", "") == "function_call":
+                            tool_call_chunks[idx] = {
+                                "id": getattr(item, "call_id", None) or getattr(item, "id", None) or f"call_{idx}",
+                                "name": getattr(item, "name", "") or "",
+                                "args": getattr(item, "arguments", "") or "",
+                            }
+
+                    if not assistant_text:
+                        output_text = getattr(completed_response, "output_text", None)
+                        if output_text:
+                            assistant_text = str(output_text)
+                            _emit_stream(assistant_text)
             else:
                 # OpenAI Streaming Logic
                 kwargs = {
@@ -294,11 +806,12 @@ def run_tool_loop(
                     
                     if hasattr(delta, "content") and delta.content:
                         assistant_text += delta.content
-                        append_stream(delta.content)
+                        _emit_stream(delta.content)
                     
                     reasoning = getattr(delta, "reasoning_content", None)
                     if reasoning:
-                        append_stream(f"[dim]{reasoning}[/dim]")
+                        _emit_reasoning(reasoning)
+                        _emit_stream(f"[dim]{reasoning}[/dim]")
 
                     if hasattr(delta, "tool_calls") and delta.tool_calls:
                         for tc in delta.tool_calls:
@@ -320,9 +833,8 @@ def run_tool_loop(
                     assistant_text = "[USER INTERRUPT: Output Truncated]"
 
         except Exception as e:
+            _finish_visible_stream()
             return LoopResult(content=f"Error in model generation: {str(e)}")
-        
-        finish_stream()
         
         # Format tool calls for history
         formatted_tc = []
@@ -376,12 +888,127 @@ def run_tool_loop(
             if has_deferred and hasattr(tool_executor, "activate_deferred_interrupts") and tool_executor.activate_deferred_interrupts:
                 if tool_executor.activate_deferred_interrupts():
                     log("  ↪ Applying deferred steering after current turn.")
+                    _discard_buffered_stream_events()
+                    _finish_visible_stream()
                     continue
             if interrupted_stream:
+                _discard_buffered_stream_events()
+                _finish_visible_stream()
                 continue 
+            if (
+                must_use_tool_after_retry
+                and len(tool_trace) <= retry_tool_trace_len
+                and auto_continue_count < auto_continue_limit
+            ):
+                auto_continue_count += 1
+                final_response = ""
+                _discard_buffered_stream_events()
+                _finish_visible_stream()
+                instruction = (
+                    "[Hidden runtime continuation: your previous answer was not shown to the user.] "
+                    "A verifier already required more evidence, but you attempted to final-answer without using a tool. "
+                    "Call an appropriate tool now. Continue the user's original task from the current state, "
+                    "take a materially useful action, and verify the result before final-answering."
+                )
+                messages.append({"role": "user", "content": instruction})
+                on_auto_continue_cb = callbacks.get("on_auto_continue")
+                if on_auto_continue_cb:
+                    try:
+                        on_auto_continue_cb(
+                            {
+                                "reason": "retry_requires_tool",
+                                "action": "continue",
+                                "scores": {},
+                                "auto_continue_count": auto_continue_count,
+                                "auto_continue_limit": auto_continue_limit,
+                            }
+                        )
+                    except Exception:
+                        pass
+                log(
+                    "  ↪ Final quality guard forced tool use "
+                    f"(retry_requires_tool; {auto_continue_count}/{auto_continue_limit})."
+                )
+                continue
+            if (
+                quality_guard_enabled
+                and auto_continue_count < auto_continue_limit
+                and assistant_text
+            ):
+                judge_final_candidate_cb = callbacks.get("judge_final_candidate")
+                raw_final_quality_verdict = None
+                if judge_final_candidate_cb:
+                    try:
+                        raw_final_quality_verdict = judge_final_candidate_cb(
+                            {
+                                "user_request": original_user_request,
+                                "assistant_final": assistant_text,
+                                "tool_trace": list(tool_trace),
+                                "auto_continue_count": auto_continue_count,
+                                "auto_continue_limit": auto_continue_limit,
+                            }
+                        )
+                        verdict = _coerce_final_quality_verdict(
+                            raw_final_quality_verdict
+                        )
+                    except Exception as exc:
+                        verdict = FinalQualityVerdict(action="allow", reason=f"planner_unavailable:{exc}")
+                elif quality_guard_mode == "nli":
+                    verdict = judge_final_quality_with_nli(
+                        user_request=original_user_request,
+                        assistant_final=assistant_text,
+                        tool_trace=tool_trace,
+                    )
+                else:
+                    verdict = FinalQualityVerdict(action="allow", reason="no_final_quality_verifier")
+                on_auto_continue_cb = callbacks.get("on_auto_continue")
+                if on_auto_continue_cb:
+                    try:
+                        auto_continue_payload = {
+                            "reason": verdict.reason,
+                            "action": verdict.action,
+                            "scores": verdict.scores,
+                            "auto_continue_count": auto_continue_count + 1,
+                            "auto_continue_limit": auto_continue_limit,
+                            "candidate_final_preview": _truncate_text(assistant_text, max_chars=2000),
+                        }
+                        if isinstance(raw_final_quality_verdict, dict):
+                            for key in (
+                                "failed_obligation",
+                                "evidence_gap",
+                                "retry_instruction",
+                                "continuation_instruction",
+                                "must_use_tool",
+                            ):
+                                if key in raw_final_quality_verdict:
+                                    auto_continue_payload[key] = _truncate_text(
+                                        str(raw_final_quality_verdict.get(key) or ""),
+                                        max_chars=2000,
+                                    )
+                        on_auto_continue_cb(auto_continue_payload)
+                    except Exception:
+                        pass
+                if verdict.action == "continue" and verdict.continuation_instruction:
+                    auto_continue_count += 1
+                    final_response = ""
+                    _discard_buffered_stream_events()
+                    _finish_visible_stream()
+                    messages.append({"role": "user", "content": verdict.continuation_instruction})
+                    must_use_tool_after_retry = True
+                    retry_tool_trace_len = len(tool_trace)
+                    log(
+                        "  ↪ Final quality guard forced continuation "
+                        f"({verdict.reason}; {auto_continue_count}/{auto_continue_limit})."
+                    )
+                    continue
+            _flush_buffered_stream_events()
+            _finish_visible_stream()
             break
 
         # --- EXECUTE TOOLS ---
+        _flush_buffered_stream_events()
+        _finish_visible_stream()
+        must_use_tool_after_retry = False
         interrupted_batch = False
         batch_results = []
         post_tool_messages: List[Dict[str, Any]] = []
@@ -430,6 +1057,15 @@ def run_tool_loop(
             if VERBOSE_LOGGING:
                 log_tool_result(name, result, duration_ms)
 
+            tool_trace.append(
+                {
+                    "tool": name,
+                    "args": args,
+                    "result": _summarize_tool_result_for_model(name, result),
+                }
+            )
+            tool_trace = tool_trace[-32:]
+
             # Notify external callback (e.g. Telegram verbose mode)
             on_tool_use_cb = callbacks.get("on_tool_use")
             if on_tool_use_cb:
@@ -441,36 +1077,40 @@ def run_tool_loop(
                         if isinstance(item, dict):
                             post_tool_messages.append(item)
 
+            model_ready_result = result
+            image_payload = _extract_image_payload(result)
+            if image_payload and isinstance(result, dict):
+                vision_question = _vision_question_for_result(name, args, result)
+                vision_summary = _analyze_image_sidecar(
+                    provider=provider,
+                    model_id=model_id,
+                    client=client,
+                    api_type=api_type,
+                    tool_name=name,
+                    image_data=image_payload,
+                    question=vision_question,
+                    log=log,
+                )
+                model_ready_result = dict(result)
+                model_ready_result["vision_question"] = vision_question
+                model_ready_result["vision_summary"] = vision_summary
+
             # Group result
             batch_results.append({
                 "id": tc["id"],
                 "name": name,
-                "content": json.dumps(result) if not isinstance(result, str) else result,
-                "image_data": result.get("image_base64") if isinstance(result, dict) else None
+                "raw_result": model_ready_result,
+                "content": json.dumps(model_ready_result) if not isinstance(model_ready_result, str) else model_ready_result,
+                "image_data": None,
             })
 
         # --- TOOL RESULTS APPEND ---
         # Helper to strip base64 data from content (it's passed via vision API separately)
-        def strip_base64_from_result(content_str: str) -> str:
-            """Strip base64 data from tool result content to avoid token bloat."""
-            try:
-                data = json.loads(content_str)
-                if isinstance(data, dict):
-                    # Remove base64 fields but keep metadata
-                    for key in ["image_base64", "base64", "image_data", "data"]:
-                        if key in data and isinstance(data[key], str) and len(data[key]) > 500:
-                            data[key] = f"[IMAGE_DATA - {len(data[key])} chars - passed via vision API]"
-                    return json.dumps(data)
-            except (json.JSONDecodeError, TypeError):
-                pass
-            return content_str
-        
         if provider == "anthropic":
             # Anthropic expects tool results in a SINGLE user message as a list
             result_content = []
             for res in batch_results:
-                clean_content = strip_base64_from_result(res["content"])
-                if len(clean_content) > 8000: clean_content = clean_content[:8000] + "..."
+                clean_content = _summarize_tool_result_for_model(res["name"], res.get("raw_result"))
                 
                 result_content.append({
                     "type": "tool_result",
@@ -483,8 +1123,7 @@ def run_tool_loop(
         else:
             # OpenAI style - one message per tool
             for res in batch_results:
-                clean_content = strip_base64_from_result(res["content"])
-                if len(clean_content) > 8000: clean_content = clean_content[:8000] + "..."
+                clean_content = _summarize_tool_result_for_model(res["name"], res.get("raw_result"))
                 
                 messages.append({
                     "role": "tool",
@@ -492,36 +1131,6 @@ def run_tool_loop(
                     "name": res["name"],
                     "content": clean_content
                 })
-
-        # --- VISION UPDATE HANDLER ---
-        for res in batch_results:
-            if res.get("image_data"):
-                if provider == "anthropic":
-                    # Anthropic format for images
-                    messages.append({
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": f"[Vision Update from {res['name']}] Please analyze this image:"},
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/png",
-                                    "data": res["image_data"]
-                                }
-                            }
-                        ]
-                    })
-                else:
-                    # OpenAI format for images
-                    messages.append({
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": f"[Vision Update from {res['name']}]"},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{res['image_data']}"}}
-                        ]
-                    })
-
         if hasattr(tool_executor, "activate_deferred_interrupts") and tool_executor.activate_deferred_interrupts:
             activated_deferred = tool_executor.activate_deferred_interrupts()
             if activated_deferred:

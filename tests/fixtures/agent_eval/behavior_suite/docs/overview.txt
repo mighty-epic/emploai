@@ -1,0 +1,4 @@
+Behavior suite fixture workspace
+
+Use this file when a task asks the agent to inspect local project content.
+The repo fixture should stay simple and deterministic.

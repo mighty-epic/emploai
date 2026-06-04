@@ -101,7 +101,7 @@ def test_cron_spawn_callback_runs_against_owner_session(monkeypatch):
 
     monkeypatch.setattr(cron_runtime, "get_scheduler", lambda: FakeScheduler())
     monkeypatch.setattr(cron_runtime, "get_cron_runtime_session", fake_get_session)
-    monkeypatch.setattr(cron_runtime, "run_cron_job_via_unified_flow", fake_run)
+    monkeypatch.setattr(cron_runtime, "_run_cron_job_via_unified_flow", lambda: fake_run)
 
     asyncio.run(cron_runtime.cron_spawn_callback("job-1", "Run the nightly check"))
 
@@ -110,3 +110,15 @@ def test_cron_spawn_callback_runs_against_owner_session(monkeypatch):
     assert owner_session.chat_history[0]["content"] == "Scheduled job running: Nightly Check"
     assert owner_session.chat_history[1]["content"] == "owner result"
     assert all(item["scheduled_job_id"] == "job-1" for item in owner_session.chat_history)
+
+
+def test_cron_runtime_workspace_prefers_default_workspace_over_runtime_home(monkeypatch, tmp_path):
+    runtime_home = (tmp_path / "runtime-home").resolve()
+    runtime_home.mkdir()
+    default_workspace = (tmp_path / "Documents" / "CronWorkspace").resolve()
+    default_workspace.mkdir(parents=True)
+
+    monkeypatch.setenv("EMPLOAI_HOME", str(runtime_home))
+    monkeypatch.setenv("DEFAULT_WORKSPACE", str(default_workspace))
+
+    assert cron_runtime._workspace() == default_workspace

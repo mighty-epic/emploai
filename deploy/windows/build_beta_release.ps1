@@ -1,8 +1,5 @@
 param(
-    [switch]$IncludeZip,
-    [switch]$BundleEnglishVoicePack,
-    [switch]$IncludeHebrewVoicePackArchive,
-    [string]$HebrewVoicePackSourceDir = $(if ($env:EMPLOAI_HEBREW_VOICE_PACK_SOURCE_DIR) { $env:EMPLOAI_HEBREW_VOICE_PACK_SOURCE_DIR } else { "" })
+    [switch]$IncludeZip
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,17 +15,19 @@ $releaseDir = Join-Path $desktopBuildDir "EmploAI-win32-x64"
 $releaseAppExe = Join-Path $releaseDir "EmploAI.exe"
 $backendDistDir = Join-Path $distDir "EmploAIBackend"
 $backendExe = Join-Path $backendDistDir "EmploAIBackend.exe"
-$releaseMsi = Join-Path $distDir "EmploAI.msi"
+$releaseMsiName = "EmploAI.msi"
+$releaseMsi = Join-Path $distDir $releaseMsiName
 $portableZip = Join-Path $distDir "EmploAI-portable.zip"
+$staleVoiceArtifactPatterns = @(
+    "hebrew-whisper-*-runtime-ready.zip",
+    "english-voice-pack*.zip",
+    "emploai-*-voice-pack*.zip"
+)
 $harvestWxsPath = Join-Path $distDir "EmploAI.ReleaseFiles.wxs"
 $vendorDir = Join-Path $repoRoot "build\\windows-vendor"
 $tesseractBundleDir = Join-Path $vendorDir "tesseract"
 $requiredTesseractVersion = if ($env:EMPLOAI_REQUIRED_TESSERACT_VERSION) { $env:EMPLOAI_REQUIRED_TESSERACT_VERSION } else { "5.5.2" }
 $projectTesseractRoot = Join-Path $repoRoot ".tools\\tesseract-$requiredTesseractVersion"
-$whisperBundleDir = Join-Path $vendorDir "whisper"
-$whisperBinaryFlavor = if ($env:EMPLOAI_WHISPER_BINARY_FLAVOR) { $env:EMPLOAI_WHISPER_BINARY_FLAVOR } else { "blas" }
-$whisperReleaseTag = if ($env:EMPLOAI_WHISPER_RELEASE_TAG) { $env:EMPLOAI_WHISPER_RELEASE_TAG } else { "v1.8.4" }
-$whisperModels = @("base.en-q5_1", "tiny.en")
 $toolsDir = Join-Path $repoRoot ".tools"
 $wixDir = Join-Path $toolsDir "wix314"
 $wixZip = Join-Path $toolsDir "wix314-binaries.zip"
@@ -37,8 +36,6 @@ $desktopAppDir = Join-Path $repoRoot "desktop_app"
 $desktopRendererDir = Join-Path $desktopAppDir "renderer"
 $desktopBackendDir = Join-Path $desktopAppDir "backend"
 $clientDistDir = Join-Path $repoRoot "mobile_app\\client\\dist"
-$script:hebrewVoicePackAssetName = "hebrew-whisper-small-pass3-knesset-runtime-ready.zip"
-
 function Ensure-WixToolset {
     $candle = Join-Path $wixDir "candle.exe"
     $light = Join-Path $wixDir "light.exe"
@@ -63,6 +60,61 @@ function Assert-LastExitCode {
     if ($LASTEXITCODE -ne 0) {
         throw "$CommandName failed with exit code $LASTEXITCODE"
     }
+}
+
+function Remove-StaleVoiceArtifacts {
+    if (-not (Test-Path $distDir)) {
+        return
+    }
+
+    foreach ($pattern in $staleVoiceArtifactPatterns) {
+        Get-ChildItem -Path $distDir -Filter $pattern -File -ErrorAction SilentlyContinue | ForEach-Object {
+            Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Resolve-PythonLauncher {
+    $pythonLauncher = Get-Command python -ErrorAction SilentlyContinue
+    if ($pythonLauncher -and $pythonLauncher.Source) {
+        return @{
+            Command = $pythonLauncher.Source
+            PrefixArgs = @()
+        }
+    }
+
+    $pyLauncher = Get-Command py -ErrorAction SilentlyContinue
+    if ($pyLauncher -and $pyLauncher.Source) {
+        $resolvedPython = & $pyLauncher.Source -3.13 -c "import sys; print(sys.executable)" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $resolvedPython = ($resolvedPython | Select-Object -Last 1).Trim()
+            if ($resolvedPython -and (Test-Path $resolvedPython)) {
+                return @{
+                    Command = $resolvedPython
+                    PrefixArgs = @()
+                }
+            }
+        }
+
+        return @{
+            Command = $pyLauncher.Source
+            PrefixArgs = @("-3.13")
+        }
+    }
+
+    throw "Neither 'py' nor 'python' is available on PATH. Install Python 3.13 or expose the launcher before building the Windows release."
+}
+
+function Invoke-PythonAndAssert {
+    param(
+        [hashtable]$Launcher,
+        [string[]]$PythonArgs,
+        [string]$CommandName
+    )
+
+    $commandArgs = @($Launcher.PrefixArgs + $PythonArgs)
+    & $Launcher.Command @commandArgs | Out-Host
+    Assert-LastExitCode $CommandName
 }
 
 function New-StableGuidFromText {
@@ -283,55 +335,6 @@ function Prepare-TesseractBundle {
     Write-Host "Bundling Tesseract OCR from: $sourceRoot"
 }
 
-function Resolve-WhisperAssetDirName {
-    param(
-        [string]$Flavor
-    )
-
-    switch ($Flavor) {
-        "plain" { return "whisper-bin-x64" }
-        "blas" { return "whisper-blas-bin-x64" }
-        "cublas-11.8" { return "whisper-cublas-11.8.0-bin-x64" }
-        "cublas-12.4" { return "whisper-cublas-12.4.0-bin-x64" }
-        default { throw "Unsupported whisper.cpp binary flavor: $Flavor" }
-    }
-}
-
-function Prepare-WhisperBundle {
-    $modelCsv = $whisperModels -join ","
-    python -c "from mobile_app.backend.whisper_cpp_runtime import ensure_prebuilt_whisper_cpp, ensure_ggml_model; ensure_prebuilt_whisper_cpp(release_tag='$whisperReleaseTag', flavor='$whisperBinaryFlavor'); [ensure_ggml_model(model) for model in '$modelCsv'.split(',') if model]"
-    Assert-LastExitCode "prepare whisper.cpp runtime assets"
-
-    $assetDirName = Resolve-WhisperAssetDirName $whisperBinaryFlavor
-    $sourceBinaryDir = Join-Path $repoRoot ".tools\\$assetDirName"
-    $sourceModelsDir = Join-Path $repoRoot ".tools\\whisper_cpp_models"
-
-    if (-not (Test-Path (Join-Path $sourceBinaryDir "Release\\whisper-cli.exe"))) {
-        throw "whisper-cli.exe was not found after preparing whisper.cpp assets: $sourceBinaryDir"
-    }
-
-    if (Test-Path $whisperBundleDir) {
-        Remove-Item -Recurse -Force $whisperBundleDir
-    }
-
-    New-Item -ItemType Directory -Force -Path $whisperBundleDir | Out-Null
-    Copy-Item $sourceBinaryDir (Join-Path $whisperBundleDir $assetDirName) -Recurse -Force
-
-    $modelBundleDir = Join-Path $whisperBundleDir "models"
-    New-Item -ItemType Directory -Force -Path $modelBundleDir | Out-Null
-    foreach ($model in $whisperModels) {
-        $modelPath = Join-Path $sourceModelsDir "ggml-$model.bin"
-        if (-not (Test-Path $modelPath)) {
-            throw "Expected Whisper model was not found after prepare: $modelPath"
-        }
-        Copy-Item $modelPath $modelBundleDir -Force
-    }
-
-    $env:EMPLOAI_WHISPER_BUNDLE = $whisperBundleDir
-    Write-Host "Bundling local Whisper from: $sourceBinaryDir"
-    Write-Host "Bundling local Whisper models: $($whisperModels -join ', ')"
-}
-
 function Prepare-DesktopPackageAssets {
     if (Test-Path $desktopRendererDir) {
         Remove-Item -Recurse -Force $desktopRendererDir
@@ -363,53 +366,20 @@ function Assert-BackendBundleShape {
     }
 }
 
-function Prepare-HebrewVoicePackArchive {
-    param(
-        [string]$SourceDir,
-        [string]$AssetName
-    )
-
-    if (-not $SourceDir) {
-        throw "IncludeHebrewVoicePackArchive was set but no Hebrew voice pack source directory was provided. Use -HebrewVoicePackSourceDir or EMPLOAI_HEBREW_VOICE_PACK_SOURCE_DIR."
-    }
-
-    $resolvedSource = (Resolve-Path $SourceDir).Path
-    if (-not (Test-Path (Join-Path $resolvedSource "model.safetensors"))) {
-        throw "Hebrew voice pack source directory does not look like a runtime-ready pack: $resolvedSource"
-    }
-
-    $archivePath = Join-Path $distDir $AssetName
-    if (Test-Path $archivePath) {
-        Remove-Item -Force $archivePath
-    }
-
-    Compress-Archive -Path (Join-Path $resolvedSource "*") -DestinationPath $archivePath
-    Write-Host "Bundled Hebrew voice pack archive: $archivePath"
-}
-
 Push-Location $repoRoot
 try {
-    python -m pip install "setuptools<81" "pyinstaller>=6.14,<7" | Out-Host
-    Assert-LastExitCode "python -m pip install"
-    python -m pip install -r requirements.txt | Out-Host
-    Assert-LastExitCode "python -m pip install -r requirements.txt"
+    $pythonLauncher = Resolve-PythonLauncher
+    Invoke-PythonAndAssert -Launcher $pythonLauncher -PythonArgs @("-m", "pip", "install", "setuptools<81", "pyinstaller>=6.14,<7") -CommandName "python -m pip install"
+    Invoke-PythonAndAssert -Launcher $pythonLauncher -PythonArgs @("-m", "pip", "install", "-r", "requirements.txt") -CommandName "python -m pip install -r requirements.txt"
 
     $releaseInfo = Get-Content $releaseInfoPath | ConvertFrom-Json
-    if ($releaseInfo.hebrew_voice_pack_asset) {
-        $script:hebrewVoicePackAssetName = [string]$releaseInfo.hebrew_voice_pack_asset
+    if ($releaseInfo.primary_asset) {
+        $releaseMsiName = [string]$releaseInfo.primary_asset
+        $releaseMsi = Join-Path $distDir $releaseMsiName
     }
     Prepare-TesseractBundle
-    if ($BundleEnglishVoicePack) {
-        Prepare-WhisperBundle
-    } else {
-        Remove-Item Env:EMPLOAI_WHISPER_BUNDLE -ErrorAction SilentlyContinue
-        Write-Host "Skipping bundled English voice assets. Voice packs will download on first launch based on installer/app selection."
-    }
-    if ($IncludeHebrewVoicePackArchive) {
-        Prepare-HebrewVoicePackArchive -SourceDir $HebrewVoicePackSourceDir -AssetName $script:hebrewVoicePackAssetName
-    } else {
-        Write-Host "Skipping standalone Hebrew voice pack archive generation. MSI setup expects a downloadable asset named '$script:hebrewVoicePackAssetName' for pass-3 installs."
-    }
+    Remove-Item Env:EMPLOAI_WHISPER_BUNDLE -ErrorAction SilentlyContinue
+    Write-Host "Voice packs are not bundled into the Windows release. English and Hebrew install on demand from the app."
 
     npm --prefix mobile_app/client install | Out-Host
     Assert-LastExitCode "npm --prefix mobile_app/client install"
@@ -425,12 +395,26 @@ try {
     if (Test-Path $legacyBackendExe) {
         Remove-Item -Force $legacyBackendExe
     }
+    $versionedReleaseMsi = Join-Path $distDir ("EmploAI-{0}.msi" -f $releaseInfo.msi_version)
     if (Test-Path $releaseMsi) {
-        Remove-Item -Force $releaseMsi
+        try {
+            Remove-Item -Force $releaseMsi -ErrorAction Stop
+        }
+        catch {
+            if ($releaseMsi -ieq $versionedReleaseMsi) {
+                throw
+            }
+            Write-Warning "Primary MSI path is locked. Falling back to versioned MSI output: $versionedReleaseMsi"
+            $releaseMsi = $versionedReleaseMsi
+            if (Test-Path $releaseMsi) {
+                Remove-Item -Force $releaseMsi
+            }
+        }
     }
     if (Test-Path $portableZip) {
         Remove-Item -Force $portableZip
     }
+    Remove-StaleVoiceArtifacts
     if (Test-Path $desktopBuildDir) {
         Remove-Item -Recurse -Force $desktopBuildDir
     }
@@ -438,10 +422,11 @@ try {
         Remove-Item -Force $harvestWxsPath
     }
 
-    python -m PyInstaller --noconfirm --clean $backendSpecPath
-    Assert-LastExitCode "python -m PyInstaller"
+    Invoke-PythonAndAssert -Launcher $pythonLauncher -PythonArgs @("-m", "PyInstaller", "--noconfirm", "--clean", $backendSpecPath) -CommandName "python -m PyInstaller"
 
     Assert-BackendBundleShape
+    & $backendExe validate-hebrew-runtime | Out-Host
+    Assert-LastExitCode "EmploAIBackend.exe validate-hebrew-runtime"
     if (-not (Test-Path $clientDistDir)) {
         throw "Expected renderer export output not found: $clientDistDir"
     }
@@ -489,15 +474,12 @@ try {
     if ($IncludeZip) {
         Write-Host "  Portable Zip: $portableZip"
     }
-    if ($IncludeHebrewVoicePackArchive) {
-        Write-Host "  Hebrew Voice Pack: $(Join-Path $distDir $script:hebrewVoicePackAssetName)"
-    }
     Write-Host ""
-    Write-Host "Upload EmploAI.msi to the GitHub release page as the primary installer asset."
+    Write-Host "Upload $([System.IO.Path]::GetFileName($releaseMsi)) to the GitHub release page as the primary installer asset."
     if ($IncludeZip) {
         Write-Host "Upload EmploAI-portable.zip as the optional portable fallback asset."
     }
-    Write-Host "Upload $script:hebrewVoicePackAssetName to the same GitHub release so MSI-selected Hebrew installs can complete during setup."
+    Write-Host "Configure pinned Hugging Face voice-pack sources in deploy/windows/release_info.json before shipping a public build."
 }
 finally {
     Pop-Location

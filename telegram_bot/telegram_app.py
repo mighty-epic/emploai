@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any, Callable, Dict, Optional
@@ -176,34 +177,92 @@ def run_bot(
     callback_handler: Callable[..., Any],
     message_handlers: Dict[str, Callable[..., Any]],
     on_application_ready: Optional[Callable[[Application], Any]] = None,
+    extra_bot_tokens_provider: Optional[Callable[[], list[str]]] = None,
 ):
     print("Telegram CLI Agent Starting...")
     logging.info(f"Bot Token: {bot_token[:10]}...")
 
-    async def _post_init(application: Application):
+    async def _run_ready_callbacks(application: Application, callback: Optional[Callable[[Application], Any]]) -> None:
         await post_init(application)
-        if not on_application_ready:
+        if not callback:
             return
-        maybe = on_application_ready(application)
+        maybe = callback(application)
         if maybe is not None and hasattr(maybe, "__await__"):
             await maybe
 
-    application = (
-        Application.builder()
-        .token(bot_token)
-        .post_init(_post_init)
-        .concurrent_updates(True)
-        .build()
-    )
+    def _build_application(token: str, *, callback: Optional[Callable[[Application], Any]], use_post_init: bool) -> Application:
+        builder = (
+            Application.builder()
+            .token(token)
+            .concurrent_updates(True)
+        )
+        if use_post_init:
+            async def _post_init(application: Application):
+                await _run_ready_callbacks(application, callback)
+            builder = builder.post_init(_post_init)
+        application = builder.build()
+        application.add_error_handler(application_error_handler)
+        register_handlers(
+            application,
+            command_handlers=command_handlers,
+            callback_handler=callback_handler,
+            message_handlers=message_handlers,
+        )
+        return application
 
-    application.add_error_handler(application_error_handler)
+    if not extra_bot_tokens_provider:
+        application = _build_application(bot_token, callback=on_application_ready, use_post_init=True)
+        print("[INFO] Starting polling (dropping pending updates)...")
+        application.run_polling(**build_polling_kwargs())
+        return
 
-    register_handlers(
-        application,
-        command_handlers=command_handlers,
-        callback_handler=callback_handler,
-        message_handlers=message_handlers,
-    )
+    async def _start_application(application: Application, *, callback: Optional[Callable[[Application], Any]]) -> None:
+        await application.initialize()
+        await _run_ready_callbacks(application, callback)
+        await application.start()
+        if application.updater is not None:
+            await application.updater.start_polling(**build_polling_kwargs())
+
+    async def _stop_application(application: Application) -> None:
+        if application.updater is not None:
+            await application.updater.stop()
+        await application.stop()
+        await application.shutdown()
+
+    async def _run_multi_bot_group() -> None:
+        primary_app = _build_application(bot_token, callback=None, use_post_init=False)
+        extra_apps: Dict[str, Application] = {}
+        await _start_application(primary_app, callback=on_application_ready)
+        try:
+            while True:
+                desired_tokens = {
+                    str(token or "").strip()
+                    for token in (extra_bot_tokens_provider() or [])
+                    if str(token or "").strip() and str(token or "").strip() != bot_token
+                }
+                for token in sorted(desired_tokens):
+                    if token in extra_apps:
+                        continue
+                    logging.info("Starting additional Telegram bot polling for %s...", f"{token[:10]}...")
+                    extra_app = _build_application(token, callback=None, use_post_init=False)
+                    await _start_application(extra_app, callback=None)
+                    extra_apps[token] = extra_app
+
+                for token, app in list(extra_apps.items()):
+                    if token in desired_tokens:
+                        continue
+                    logging.info("Stopping removed Telegram bot polling for %s...", f"{token[:10]}...")
+                    await _stop_application(app)
+                    extra_apps.pop(token, None)
+
+                await asyncio.sleep(5.0)
+        finally:
+            for token, app in list(extra_apps.items()):
+                try:
+                    await _stop_application(app)
+                finally:
+                    extra_apps.pop(token, None)
+            await _stop_application(primary_app)
 
     print("[INFO] Starting polling (dropping pending updates)...")
-    application.run_polling(**build_polling_kwargs())
+    asyncio.run(_run_multi_bot_group())

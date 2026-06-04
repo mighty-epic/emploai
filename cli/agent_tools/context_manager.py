@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from cli.tui_constants import MODEL_CONFIGS
+from shared.openai_api import create_openai_completion
 
 try:
     import tiktoken
@@ -185,9 +186,18 @@ class ContextManager:
         try:
             return tiktoken.encoding_for_model(openai_like_model)
         except Exception:
+            candidates = ["cl100k_base"]
             if any(prefix in openai_like_model for prefix in ("gpt-5", "gpt-4o", "gpt-4.1", "gpt-4.5")):
-                return tiktoken.get_encoding("o200k_base")
-            return tiktoken.get_encoding("cl100k_base")
+                candidates.insert(0, "o200k_base")
+
+            for encoding_name in candidates:
+                try:
+                    return tiktoken.get_encoding(encoding_name)
+                except Exception:
+                    continue
+
+            logger.debug("Falling back to rough token counting for model %s", openai_like_model)
+            return None
 
     def _count_tokens_with_tiktoken(self, messages: List[Dict[str, Any]], model_id: str) -> Optional[int]:
         encoding = self._encoding_for_model(model_id)
@@ -489,8 +499,11 @@ class ContextManager:
             ]
 
             try:
-                response = self.compression_client.chat.completions.create(
-                    model=self.compression_model,
+                model_id = self.get_model_config(self.compression_model).get("id", self.compression_model)
+                response = create_openai_completion(
+                    self.compression_client,
+                    model_name=self.compression_model,
+                    model_id=model_id,
                     messages=summary_prompt,
                     max_tokens=max_tokens,
                 )

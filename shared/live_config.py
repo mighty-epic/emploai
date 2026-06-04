@@ -52,6 +52,21 @@ class LiveConfig:
         self.config: Dict[str, Any] = self._load_config()
         self.changes: List[ConfigChange] = []
         self._defaults = self._get_defaults()
+        self._last_mtime_ns: Optional[int] = self._config_mtime_ns()
+
+    def _config_mtime_ns(self) -> Optional[int]:
+        try:
+            return self.config_file.stat().st_mtime_ns
+        except OSError:
+            return None
+
+    def refresh_if_needed(self):
+        """Reload config from disk if the backing file changed."""
+        current_mtime_ns = self._config_mtime_ns()
+        if current_mtime_ns == self._last_mtime_ns:
+            return
+        self.config = self._load_config()
+        self._last_mtime_ns = current_mtime_ns
     
     def _get_defaults(self) -> Dict[str, Any]:
         """Get default configuration."""
@@ -147,6 +162,7 @@ class LiveConfig:
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(self.config, f, indent=2)
             logger.info(f"Saved config to {self.config_file}")
+            self._last_mtime_ns = self._config_mtime_ns()
         except Exception as e:
             logger.error(f"Error saving config: {e}")
     
@@ -156,6 +172,7 @@ class LiveConfig:
         
         Example: get("telegram.reply_mode") -> "full"
         """
+        self.refresh_if_needed()
         parts = path.split('.')
         value = self.config
         
@@ -173,6 +190,7 @@ class LiveConfig:
         
         Example: set("telegram.reply_mode", "minimal")
         """
+        self.refresh_if_needed()
         parts = path.split('.')
         old_value = self.get(path)
         
@@ -215,14 +233,17 @@ class LiveConfig:
     def reset_to_defaults(self):
         """Reset all config to defaults."""
         self.config = self._get_defaults()
+        self._last_mtime_ns = self._config_mtime_ns()
         logger.info("Config reset to defaults")
     
     def get_section(self, section: str) -> Optional[Dict]:
         """Get an entire config section."""
+        self.refresh_if_needed()
         return self.config.get(section)
     
     def list_all(self) -> Dict[str, Any]:
         """Get all config as a flat dict with dot-notation keys."""
+        self.refresh_if_needed()
         def flatten(d: Dict, prefix: str = '') -> Dict:
             items = {}
             for k, v in d.items():
@@ -292,6 +313,9 @@ _live_config: Optional[LiveConfig] = None
 def get_live_config(config_file: Optional[Path] = None) -> LiveConfig:
     """Get or create the global live config instance."""
     global _live_config
-    if _live_config is None:
-        _live_config = LiveConfig(config_file)
+    resolved_config_file = (config_file or Path("config.json")).resolve()
+    if _live_config is None or _live_config.config_file.resolve() != resolved_config_file:
+        _live_config = LiveConfig(resolved_config_file)
+    else:
+        _live_config.refresh_if_needed()
     return _live_config

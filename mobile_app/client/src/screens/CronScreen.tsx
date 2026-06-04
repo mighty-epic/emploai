@@ -246,7 +246,9 @@ export default function CronScreen() {
                 <Text style={styles.feedType}>{item.kind === 'announcement' ? 'Update' : 'Result'}</Text>
                 <Text style={styles.feedBody}>{item.content}</Text>
                 <Text style={styles.feedMeta}>
-                  {item.session_name ? `Session: ${item.session_name}` : 'No linked session'}
+                  {item.session_name ? `Chat: ${item.session_name}` : 'No linked chat'}
+                  {item.telegram_bot_label ? ` · Bot: ${item.telegram_bot_label}` : ''}
+                  {item.status ? ` · ${item.status}` : ''}
                   {item.timestamp ? ` · ${formatRelativeTime(item.timestamp)}` : ''}
                 </Text>
               </Pressable>
@@ -278,6 +280,13 @@ export default function CronScreen() {
                 </Text>
                 <Text style={styles.jobStats}>
                   Last: {job.last_run_at ? formatRelativeTime(job.last_run_at) : 'never'} · Runs: {job.run_count ?? 0} · Errors: {job.error_count ?? 0}
+                </Text>
+                <Text style={styles.jobStats}>
+                  Origin: {sessions.find((session) => session.id === job.origin_session_id)?.name || job.origin_session_id || 'unknown chat'}
+                  {job.origin_workspace ? ` · ${job.origin_workspace}` : ''}
+                </Text>
+                <Text style={styles.jobStats}>
+                  Bot: {job.origin_telegram_bot_config_id || 'default'} · Packs: {(job.origin_enabled_tool_packs || []).join(', ') || 'default'}
                 </Text>
                 <View style={styles.actionsRow}>
                   <Pressable style={styles.secondaryButton} onPress={() => void runAction(job.id, 'run')}>

@@ -1,0 +1,523 @@
+{
+  "name": "agent-eval-protocol-suite",
+  "profile": "protocol-suite",
+  "workspace": "tests/fixtures/agent_eval/protocol_suite",
+  "model": "gpt-5.4-mini",
+  "variant": "standard",
+  "enabled_tool_packs": [
+    "interactive_desktop",
+    "browser_isolated",
+    "workspace_write",
+    "workspace_read",
+    "web_research",
+    "scheduler",
+    "app_runtime"
+  ],
+  "repeat": 1,
+  "fresh_runtime": true,
+  "fresh_session_per_case": true,
+  "capture_prompt_snapshot": true,
+  "cases": [
+    {
+      "name": "tool-surface-sanity",
+      "prompt": "Open a simple page in the isolated browser, capture the main heading, save it into a text file named protocol_browser_heading.txt in the current workspace, open that file so it is visible on the desktop, and also tell me what main app or window is currently visible on screen. Verify each step and keep the changes harmless.",
+      "expectations": {
+        "required_tool_sequence": [
+          [
+            "browser_navigate",
+            "open_browser"
+          ],
+          [
+            "browser_snapshot",
+            "observe_browser",
+            "browser_read_text"
+          ],
+          "write_file",
+          [
+            "open_file",
+            "execute_command",
+            "run_command"
+          ],
+          [
+            "describe_screen",
+            "observe_desktop",
+            "ocr_screen"
+          ]
+        ],
+        "tool_arg_checks": [
+          {
+            "tool": "write_file",
+            "contains_all": [
+              "protocol_browser_heading.txt",
+              "Example Domain"
+            ]
+          }
+        ],
+        "artifact_checks": [
+          {
+            "path": "protocol_browser_heading.txt",
+            "must_exist": true,
+            "contains_all": [
+              "Example Domain"
+            ]
+          }
+        ],
+        "final_answer_forbidden_phrases": [
+          "error in model generation",
+          "context window"
+        ],
+        "max_unsupported_tool_attempts": 0,
+        "max_tool_errors": 0,
+        "min_tool_calls": 5
+      }
+    },
+    {
+      "name": "spotify-browser-fallback",
+      "prompt": "Open Spotify and play a song. If Spotify is not available as a local app, use the browser instead. If playback is not possible because I am not logged in, confirm that clearly and stop there.",
+      "expectations": {
+        "required_tools_any": [
+          "describe_screen",
+          "observe_desktop",
+          "ocr_screen",
+          "browser_navigate",
+          "open_browser"
+        ],
+        "final_answer_forbidden_phrases": [
+          "error in model generation",
+          "context window"
+        ],
+        "max_unsupported_tool_attempts": 0,
+        "min_tool_calls": 1
+      }
+    },
+    {
+      "name": "stocks-research-save-open",
+      "prompt": "Research the following stocks and decide whether each one is a buy, sell, or hold: ANET, NBIS, and RWD. Save the results to a text document named stock_signals_protocol.txt and then open the document so I can see it.",
+      "expectations": {
+        "required_tool_sequence": [
+          [
+            "web_search",
+            "fetch_url"
+          ],
+          "write_file",
+          [
+            "open_file",
+            "execute_command",
+            "run_command",
+            "read_file"
+          ]
+        ],
+        "tool_arg_checks": [
+          {
+            "tool": "write_file",
+            "contains_all": [
+              "stock_signals_protocol.txt",
+              "ANET",
+              "NBIS",
+              "RWD"
+            ],
+            "contains_any": [
+              "buy",
+              "sell",
+              "hold"
+            ]
+          }
+        ],
+        "artifact_checks": [
+          {
+            "path": "stock_signals_protocol.txt",
+            "must_exist": true,
+            "contains_all": [
+              "ANET",
+              "NBIS",
+              "RWD"
+            ],
+            "contains_any": [
+              "buy",
+              "sell",
+              "hold"
+            ]
+          }
+        ],
+        "final_answer_forbidden_phrases": [
+          "error in model generation",
+          "context window"
+        ],
+        "max_unsupported_tool_attempts": 0,
+        "max_tool_errors": 0,
+        "min_tool_calls": 3
+      }
+    },
+    {
+      "name": "calculator-electron-python",
+      "prompt": "Create a simple calculator app in a new folder named calculator_protocol and run it so I can use it. Use an Electron frontend and a Python backend.",
+      "expectations": {
+        "required_tool_sequence": [
+          "write_file",
+          [
+            "execute_command",
+            "run_command"
+          ]
+        ],
+        "tool_arg_checks": [
+          {
+            "tool": "write_file",
+            "contains_all": [
+              "calculator_protocol",
+              "package.json",
+              "electron"
+            ]
+          }
+        ],
+        "artifact_checks": [
+          {
+            "path": "calculator_protocol/package.json",
+            "must_exist": true,
+            "contains_all": [
+              "electron"
+            ]
+          }
+        ],
+        "final_answer_forbidden_phrases": [
+          "error in model generation",
+          "context window"
+        ],
+        "max_unsupported_tool_attempts": 0,
+        "min_tool_calls": 2
+      }
+    },
+    {
+      "name": "whatsapp-self-reminder",
+      "prompt": "Open my WhatsApp desktop app, find my personal chat with myself, and send a reminder to cancel my Grok membership. Make sure you do not send it to the wrong chat.",
+      "expectations": {
+        "required_tools_any": [
+          "describe_screen",
+          "observe_desktop",
+          "ocr_screen",
+          "click",
+          "type_text"
+        ],
+        "final_answer_forbidden_phrases": [
+          "error in model generation",
+          "context window"
+        ],
+        "max_unsupported_tool_attempts": 0,
+        "min_tool_calls": 2
+      }
+    },
+    {
+      "name": "browser-link-follow-summary",
+      "prompt": "In the isolated browser, open https://example.com, follow the page's More information link to the IANA example-domains page, verify the destination page, save a short note named browser_link_protocol.txt that includes both the original Example Domain heading and the destination page title or heading.",
+      "expectations": {
+        "required_tool_sequence": [
+          [
+            "browser_navigate",
+            "open_browser"
+          ],
+          [
+            "browser_snapshot",
+            "observe_browser",
+            "browser_read_text"
+          ],
+          [
+            "browser_click_ref",
+            "browser_navigate"
+          ],
+          [
+            "browser_wait_for",
+            "browser_read_text",
+            "browser_snapshot"
+          ],
+          "write_file"
+        ],
+        "tool_arg_checks": [
+          {
+            "tool": "write_file",
+            "contains_all": [
+              "browser_link_protocol.txt",
+              "Example Domain",
+              "IANA"
+            ]
+          }
+        ],
+        "artifact_checks": [
+          {
+            "path": "browser_link_protocol.txt",
+            "must_exist": true,
+            "contains_all": [
+              "Example Domain",
+              "IANA"
+            ],
+            "contains_any": [
+              "Example Domains",
+              "example domains",
+              "IANA-managed"
+            ]
+          }
+        ],
+        "final_answer_forbidden_phrases": [
+          "error in model generation",
+          "context window"
+        ],
+        "max_unsupported_tool_attempts": 0,
+        "max_tool_errors": 1,
+        "min_tool_calls": 5
+      }
+    },
+    {
+      "name": "browser-search-extract-note",
+      "prompt": "Use the isolated browser to open https://www.wikipedia.org, search for Alan Turing, verify you reached the Alan Turing article, capture the first useful summary sentence, and save it into turing_browser_notes.txt.",
+      "expectations": {
+        "required_tool_sequence": [
+          [
+            "browser_navigate",
+            "open_browser"
+          ],
+          [
+            "browser_snapshot",
+            "observe_browser",
+            "browser_read_text"
+          ],
+          [
+            "browser_type",
+            "type_text",
+            "browser_click_ref",
+            "click",
+            "press_key"
+          ],
+          [
+            "browser_wait_for",
+            "browser_read_text",
+            "browser_snapshot"
+          ],
+          "write_file"
+        ],
+        "tool_arg_checks": [
+          {
+            "tool": "write_file",
+            "contains_all": [
+              "turing_browser_notes.txt",
+              "Alan Turing"
+            ],
+            "contains_any": [
+              "mathematician",
+              "computer scientist",
+              "cryptanalyst"
+            ]
+          }
+        ],
+        "artifact_checks": [
+          {
+            "path": "turing_browser_notes.txt",
+            "must_exist": true,
+            "contains_all": [
+              "Alan Turing"
+            ],
+            "contains_any": [
+              "mathematician",
+              "computer scientist",
+              "cryptanalyst"
+            ]
+          }
+        ],
+        "final_answer_forbidden_phrases": [
+          "error in model generation",
+          "context window"
+        ],
+        "max_unsupported_tool_attempts": 0,
+        "max_tool_errors": 1,
+        "min_tool_calls": 5
+      }
+    },
+    {
+      "name": "nested-file-navigation-open",
+      "prompt": "Create a nested folder structure protocol_files/inbox and protocol_files/archive. Create three text notes in inbox named urgent_note.txt, routine_note.txt, and later_note.txt. Move only the urgent note into archive, rename it final_reminder.txt, verify the inbox and archive contents, and open final_reminder.txt so it is visible on the desktop.",
+      "expectations": {
+        "required_tool_sequence": [
+          "write_file",
+          [
+            "run_command",
+            "execute_command"
+          ],
+          [
+            "list_dir",
+            "find_files",
+            "read_file"
+          ],
+          [
+            "open_file",
+            "run_command",
+            "execute_command"
+          ],
+          [
+            "describe_screen",
+            "observe_desktop",
+            "ocr_screen"
+          ]
+        ],
+        "tool_arg_checks": [
+          {
+            "tool": "write_file",
+            "contains_all": [
+              "protocol_files",
+              "urgent_note.txt",
+              "urgent"
+            ]
+          }
+        ],
+        "artifact_checks": [
+          {
+            "path": "protocol_files/archive/final_reminder.txt",
+            "must_exist": true,
+            "contains_all": [
+              "urgent"
+            ]
+          },
+          {
+            "path": "protocol_files/inbox/urgent_note.txt",
+            "must_exist": false
+          }
+        ],
+        "final_answer_forbidden_phrases": [
+          "error in model generation",
+          "context window"
+        ],
+        "max_unsupported_tool_attempts": 0,
+        "max_tool_errors": 0,
+        "min_tool_calls": 6
+      }
+    },
+    {
+      "name": "python-grade-report-coding",
+      "prompt": "Create a small Python CLI tool named grade_report.py and a sample grades.csv. The CSV should contain Ada=91, Grace=84, Linus=73, and Katherine=98. The script must read grades.csv, compute average_score, highest_student, highest_score, and pass_count for scores >= 80, write grade_summary.json, then run the script and verify the JSON output.",
+      "expectations": {
+        "required_tool_sequence": [
+          "write_file",
+          [
+            "run_command",
+            "execute_command"
+          ],
+          [
+            "read_file",
+            "run_command",
+            "execute_command"
+          ]
+        ],
+        "tool_arg_checks": [
+          {
+            "tool": "write_file",
+            "contains_all": [
+              "grade_report.py",
+              "grade_summary.json",
+              "average_score"
+            ]
+          },
+          {
+            "tool": "write_file",
+            "contains_all": [
+              "grades.csv",
+              "Ada",
+              "Katherine"
+            ]
+          }
+        ],
+        "artifact_checks": [
+          {
+            "path": "grade_summary.json",
+            "must_exist": true,
+            "contains_all": [
+              "average_score",
+              "highest_student",
+              "Katherine",
+              "pass_count"
+            ],
+            "contains_any": [
+              "86.5",
+              "86.50"
+            ]
+          }
+        ],
+        "final_answer_forbidden_phrases": [
+          "error in model generation",
+          "context window"
+        ],
+        "max_unsupported_tool_attempts": 0,
+        "max_tool_errors": 0,
+        "min_tool_calls": 4
+      }
+    },
+    {
+      "name": "local-counter-webapp-run-browser",
+      "prompt": "Create a tiny local browser app in a folder named counter_protocol with index.html and any needed CSS or JS. It should show a counter starting at 0 with an Increment button. Run a local HTTP server for the folder, open it in the isolated browser, click Increment twice, verify the counter shows 2, then save counter_protocol_result.txt with the observed final value.",
+      "expectations": {
+        "required_tool_sequence": [
+          "write_file",
+          [
+            "run_background_command",
+            "run_command",
+            "execute_command"
+          ],
+          [
+            "browser_navigate",
+            "open_browser"
+          ],
+          [
+            "browser_snapshot",
+            "observe_browser",
+            "browser_read_text"
+          ],
+          [
+            "browser_click_ref",
+            "click"
+          ],
+          [
+            "browser_read_text",
+            "browser_snapshot",
+            "observe_browser"
+          ],
+          "write_file"
+        ],
+        "tool_arg_checks": [
+          {
+            "tool": "write_file",
+            "contains_all": [
+              "counter_protocol",
+              "index.html",
+              "Increment"
+            ]
+          },
+          {
+            "tool": "write_file",
+            "contains_all": [
+              "counter_protocol_result.txt",
+              "2"
+            ]
+          }
+        ],
+        "artifact_checks": [
+          {
+            "path": "counter_protocol/index.html",
+            "must_exist": true,
+            "contains_all": [
+              "Increment"
+            ]
+          },
+          {
+            "path": "counter_protocol_result.txt",
+            "must_exist": true,
+            "contains_all": [
+              "2"
+            ]
+          }
+        ],
+        "final_answer_forbidden_phrases": [
+          "error in model generation",
+          "context window"
+        ],
+        "max_unsupported_tool_attempts": 0,
+        "max_tool_errors": 1,
+        "min_tool_calls": 7
+      }
+    }
+  ]
+}

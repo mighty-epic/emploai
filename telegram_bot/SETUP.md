@@ -246,7 +246,7 @@ Once the bot is running, these commands are available in Telegram:
 |---|---|
 | `/start` | Initialize the agent |
 | `/help` | Show all commands |
-| `/mode` | Set agent mode (manual/semi/auto) |
+| `/mode` | Set agent mode (manual/auto) |
 | `/variant` | Set model variant |
 | `/model` | Switch AI model |
 | `/models` | List all available models |
@@ -294,7 +294,6 @@ Once the bot is running, these commands are available in Telegram:
 - **`/task` command**: Uses the unified agent for multi-turn browser/desktop automation.
 - **`/mode`**: Controls how agents interact:
   - `manual` — Isolated agents, no context sharing
-  - `semi` — Partial sync via summaries
   - `auto` — Unified agent with all tools merged
 
 ---

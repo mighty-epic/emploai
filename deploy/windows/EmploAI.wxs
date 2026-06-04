@@ -16,7 +16,7 @@
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of EmploAI is already installed." />
     <MediaTemplate EmbedCab="yes" />
-    <UIRef Id="WixUI_FeatureTree" />
+    <UIRef Id="WixUI_Minimal" />
     <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
 
     <Property Id="ARPNOREPAIR" Value="1" />
@@ -24,18 +24,29 @@
     <CustomAction Id="SetLaunchTarget" Property="WixShellExecTarget" Value="[INSTALLDIR]EmploAI.exe" Execute="immediate" />
     <CustomAction Id="LaunchInstalledApplication" BinaryKey="WixCA" DllEntry="WixShellExec" Impersonate="yes" />
     <CustomAction
-      Id="SetBootstrapInstallerVoicePacks"
-      Property="BootstrapInstallerVoicePacks"
-      Value="&quot;[INSTALLDIR]backend\EmploAIBackend.exe&quot; bootstrap-installer-voice-packs --json-only"
+      Id="SetCleanupInstalledBackend"
+      Property="CleanupInstalledBackend"
+      Value="&quot;[SystemFolder]cmd.exe&quot; /d /c if exist &quot;[INSTALLDIR]resources\app\backend&quot; rmdir /s /q &quot;[INSTALLDIR]resources\app\backend&quot;"
       Execute="immediate" />
     <CustomAction
-      Id="BootstrapInstallerVoicePacks"
+      Id="CleanupInstalledBackend"
       BinaryKey="WixCA"
-      DllEntry="WixQuietExec"
+      DllEntry="CAQuietExec"
       Execute="deferred"
       Return="ignore"
       Impersonate="yes" />
-
+    <CustomAction
+      Id="SetCleanupManagedVoicePacks"
+      Property="CleanupManagedVoicePacks"
+      Value="&quot;[INSTALLDIR]resources\app\backend\EmploAIBackend.exe&quot; cleanup-runtime-home"
+      Execute="immediate" />
+    <CustomAction
+      Id="CleanupManagedVoicePacks"
+      BinaryKey="WixCA"
+      DllEntry="CAQuietExec"
+      Execute="deferred"
+      Return="ignore"
+      Impersonate="yes" />
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="LocalAppDataFolder">
         <Directory Id="ProgramsFolderDir" Name="Programs">
@@ -55,20 +66,6 @@
         <ComponentRef Id="StartMenuShortcutComponent" />
         <ComponentRef Id="VoicePackSelectionSchemaComponent" />
       </Feature>
-      <Feature
-        Id="EnglishVoicePackFeature"
-        Title="English Voice Pack"
-        Description="Install the local English voice input pack during setup so it is ready on first launch."
-        Level="1">
-        <ComponentRef Id="EnglishVoicePackSelectionComponent" />
-      </Feature>
-      <Feature
-        Id="HebrewVoicePackFeature"
-        Title="Hebrew Voice Pack"
-        Description="Install the local Hebrew voice input pack during setup so it is ready on first launch."
-        Level="2">
-        <ComponentRef Id="HebrewVoicePackSelectionComponent" />
-      </Feature>
     </Feature>
 
     <UI>
@@ -87,8 +84,10 @@
     </UI>
 
     <InstallExecuteSequence>
-      <Custom Action="SetBootstrapInstallerVoicePacks" After="WriteRegistryValues">NOT Installed AND NOT WIX_UPGRADE_DETECTED</Custom>
-      <Custom Action="BootstrapInstallerVoicePacks" After="SetBootstrapInstallerVoicePacks">NOT Installed AND NOT WIX_UPGRADE_DETECTED</Custom>
+      <Custom Action="SetCleanupInstalledBackend" Before="CleanupInstalledBackend">NOT REMOVE="ALL"</Custom>
+      <Custom Action="CleanupInstalledBackend" Before="InstallFiles">NOT REMOVE="ALL"</Custom>
+      <Custom Action="SetCleanupManagedVoicePacks" Before="CleanupManagedVoicePacks">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+      <Custom Action="CleanupManagedVoicePacks" Before="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
     </InstallExecuteSequence>
   </Product>
 
@@ -98,26 +97,6 @@
         Root="HKCU"
         Key="Software\MightyEpic\EmploAI\VoicePacks"
         Name="SelectionSchemaVersion"
-        Type="integer"
-        Value="1"
-        KeyPath="yes" />
-    </Component>
-
-    <Component Id="EnglishVoicePackSelectionComponent" Guid="3C4FF8A7-E680-4DAB-8D5F-81F58A79B23B" Directory="INSTALLDIR">
-      <RegistryValue
-        Root="HKCU"
-        Key="Software\MightyEpic\EmploAI\VoicePacks"
-        Name="EnglishRequested"
-        Type="integer"
-        Value="1"
-        KeyPath="yes" />
-    </Component>
-
-    <Component Id="HebrewVoicePackSelectionComponent" Guid="7001F6F5-1A27-4EFD-896F-4AA0B0453CB0" Directory="INSTALLDIR">
-      <RegistryValue
-        Root="HKCU"
-        Key="Software\MightyEpic\EmploAI\VoicePacks"
-        Name="HebrewRequested"
         Type="integer"
         Value="1"
         KeyPath="yes" />

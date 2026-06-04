@@ -70,6 +70,10 @@ A Textual-based terminal UI for local use.
 - Rich terminal interface with command palette, session switcher, and message styling
 - Same agent capabilities as the Telegram bot
 
+### Selected Project Docs
+
+- `docs/hebrew_live_voice_path.md` — current working Hebrew local live voice path, runtime notes, and deferred desktop/MSI integration plan
+
 ---
 
 ## Supported Models

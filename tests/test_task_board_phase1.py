@@ -19,8 +19,11 @@ create_task_board = _TASK_BOARD_MODULE.create_task_board
 finalize_task_board_turn = _TASK_BOARD_MODULE.finalize_task_board_turn
 get_active_task_board = _TASK_BOARD_MODULE.get_active_task_board
 get_display_task_board = _TASK_BOARD_MODULE.get_display_task_board
+get_task_board_armed_next_turn = _TASK_BOARD_MODULE.get_task_board_armed_next_turn
 handle_tool_result = _TASK_BOARD_MODULE.handle_tool_result
 note_user_turn = _TASK_BOARD_MODULE.note_user_turn
+recover_stale_task_board = _TASK_BOARD_MODULE.recover_stale_task_board
+set_task_board_armed_next_turn = _TASK_BOARD_MODULE.set_task_board_armed_next_turn
 
 
 def _make_session() -> Session:
@@ -38,7 +41,7 @@ def _make_session() -> Session:
     return session
 
 
-def test_same_tool_twice_does_not_activate_until_third_qualifying_call():
+def test_unarmed_tool_calls_never_activate_board_even_after_multiple_calls():
     session = _make_session()
 
     note_user_turn(session, session.last_user_message)
@@ -68,16 +71,28 @@ def test_same_tool_twice_does_not_activate_until_third_qualifying_call():
 
     assert first["created"] is False
     assert second["created"] is False
-    assert third["created"] is True
-    assert board is not None
-    assert board["main_goal"] == "Open Spotify and play a song"
-    assert board["qualifying_tool_calls"] == 3
+    assert third["created"] is False
+    assert board is None
 
 
-def test_two_distinct_tool_families_activate_immediately():
+def test_armed_next_turn_activates_board_once_and_consumes_arm():
     session = _make_session()
+    assert get_task_board_armed_next_turn(session) is False
 
-    note_user_turn(session, session.last_user_message)
+    set_task_board_armed_next_turn(session, True)
+    summary = note_user_turn(session, "Open Spotify and play a song")
+    board = get_active_task_board(session)
+
+    assert summary is not None
+    assert board is not None
+    assert board["origin"] == "armed_next_turn"
+    assert board["main_goal"] == "Open Spotify and play a song"
+    assert get_task_board_armed_next_turn(session) is False
+
+    finalize_task_board_turn(session, "Spotify is open and playing.")
+    assert get_active_task_board(session) is None
+
+    follow_up_summary = note_user_turn(session, "continue")
     first = handle_tool_result(
         session,
         tool_name="describe_screen",
@@ -93,12 +108,10 @@ def test_two_distinct_tool_families_activate_immediately():
         channel="telegram",
     )
 
-    board = get_active_task_board(session)
-
+    assert follow_up_summary is None
     assert first["created"] is False
-    assert second["created"] is True
-    assert board is not None
-    assert board["qualifying_tool_calls"] == 2
+    assert second["created"] is False
+    assert get_active_task_board(session) is None
 
 
 def test_chat_only_and_single_tool_turn_never_activate_board():
@@ -216,7 +229,8 @@ def test_only_allowed_user_blockers_move_board_to_blocked_waiting_user():
         },
     )
 
-    assert board["state"] == "blocked_waiting_user"
+    assert get_active_task_board(session) is None
+    assert board["state"] == "history_collapsed"
     assert board["status"] == "blocked"
     assert "credentials" in str(board.get("blocked_reason"))
     assert result["prompt_messages"]
@@ -262,24 +276,25 @@ def test_verified_completion_immediately_collapses_into_completed_history():
     assert finalized is not None
     assert active is None
     assert len(completed) == 1
-    assert completed[0]["state"] == "completed_collapsed"
-    assert completed[0]["display_mode"] == "completed_collapsed"
+    assert completed[0]["state"] == "history_collapsed"
+    assert completed[0]["display_mode"] == "history_collapsed"
     assert completed[0]["collapsed_title"] == f"[x] {completed[0]['main_goal']}"
     assert completed[0]["verification_status"] == "done"
 
 
-def test_unverified_done_message_does_not_collapse_board():
+def test_any_final_reply_archives_the_board_out_of_live_state():
     session = _make_session()
-    board = create_task_board(session, user_message="Open Spotify and play a song")
+    create_task_board(session, user_message="Open Spotify and play a song")
 
     note_user_turn(session, "continue")
     finalized = finalize_task_board_turn(session, "Done.")
+    completed = completed_task_boards(session)
 
     assert finalized is not None
-    assert finalized["summary"] is None
-    assert finalized["completed_boards"] == []
-    assert get_active_task_board(session) is board
-    assert completed_task_boards(session) == []
+    assert finalized["summary"] == "Done"
+    assert get_active_task_board(session) is None
+    assert len(completed) == 1
+    assert completed[0]["status"] == "completed"
 
 
 def test_completed_history_keeps_last_five_collapsed_boards():
@@ -294,7 +309,7 @@ def test_completed_history_keeps_last_five_collapsed_boards():
     completed = completed_task_boards(session)
 
     assert len(completed) == 5
-    assert all(item["display_mode"] == "completed_collapsed" for item in completed)
+    assert all(item["display_mode"] == "history_collapsed" for item in completed)
     titles = [item["main_goal"] for item in completed]
     assert "Task 0" not in titles
     assert "Task 5" in titles
@@ -312,4 +327,18 @@ def test_session_round_trip_preserves_active_and_completed_task_board_state():
 
     assert restored.active_task_id == active_board["task_id"]
     assert any(item["task_id"] == active_board["task_id"] for item in restored.task_history)
-    assert any(item["task_id"] == completed_board["task_id"] and item["display_mode"] == "completed_collapsed" for item in restored.task_history)
+    assert any(item["task_id"] == completed_board["task_id"] and item["display_mode"] == "history_collapsed" for item in restored.task_history)
+
+
+def test_recover_stale_task_board_archives_interrupted_when_run_is_idle():
+    session = _make_session()
+    board = create_task_board(session, user_message="Open Spotify and play a song")
+    session.is_processing = False
+
+    recovered = recover_stale_task_board(session)
+
+    assert recovered is board
+    assert get_active_task_board(session) is None
+    completed = completed_task_boards(session)
+    assert len(completed) == 1
+    assert completed[0]["status"] == "interrupted"

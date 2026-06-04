@@ -1,9 +1,81 @@
-import os
 import platform
 import subprocess
 import logging
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _foreground_window_title() -> str:
+    if platform.system() != "Windows":
+        return ""
+    try:
+        import win32gui  # type: ignore
+
+        hwnd = win32gui.GetForegroundWindow()
+        return str(win32gui.GetWindowText(hwnd) or "").strip()
+    except Exception:
+        return ""
+
+
+def get_active_windows_snapshot(limit: int = 30) -> List[Dict[str, Optional[object]]]:
+    """Return a lightweight live window snapshot for prompt/context use."""
+    try:
+        if platform.system() == "Windows":
+            from pywinauto import Desktop
+
+            foreground_title = _foreground_window_title()
+            seen = set()
+            snapshot: List[Dict[str, Optional[object]]] = []
+            for win in Desktop(backend="uia").windows():
+                title = str(win.window_text() or "").strip()
+                if not title or len(title) <= 2 or title in seen:
+                    continue
+                seen.add(title)
+                snapshot.append(
+                    {
+                        "title": title,
+                        "is_active": title == foreground_title if foreground_title else None,
+                    }
+                )
+                if len(snapshot) >= max(1, int(limit or 30)):
+                    break
+            return snapshot
+
+        if platform.system() == "Linux":
+            try:
+                from telegram_bot.linux.system_info_ext import get_linux_active_windows
+
+                titles = [
+                    part.strip()
+                    for part in str(get_linux_active_windows() or "").replace("\n", ",").split(",")
+                    if part.strip()
+                ]
+                return [
+                    {"title": title, "is_active": None}
+                    for title in titles[: max(1, int(limit or 30))]
+                ]
+            except Exception:
+                return []
+    except Exception:
+        logger.debug("Failed to gather active window snapshot", exc_info=True)
+    return []
+
+
+def format_active_windows_snapshot(limit: int = 30) -> str:
+    windows = get_active_windows_snapshot(limit=limit)
+    if not windows:
+        return "Unavailable"
+    lines = []
+    for index, item in enumerate(windows, start=1):
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        active = item.get("is_active")
+        state = "active" if active is True else "inactive" if active is False else "unknown"
+        lines.append(f"{index}. [{state}] {title}")
+    return "\n".join(lines) if lines else "Unavailable"
+
 
 def get_system_info() -> str:
     """Gather system hardware and OS information for the agent prompt."""
@@ -57,29 +129,7 @@ def get_system_info() -> str:
             except Exception:
                 pass
 
-        active_windows = "Unknown"
-        if platform.system() == "Windows":
-            try:
-                from pywinauto import Desktop
-                windows = Desktop(backend="uia").windows()
-                window_titles = [w.window_text() for w in windows if w.window_text()]
-                if window_titles:
-                    # Filter out duplicates and small useless titles
-                    seen = set()
-                    filtered = []
-                    for t in window_titles:
-                        if t not in seen and len(t) > 2:
-                            filtered.append(t)
-                            seen.add(t)
-                    active_windows = ", ".join(filtered[:15]) # Limit to top 15
-            except Exception:
-                active_windows = "Unavailable"
-        elif platform.system() == "Linux":
-            try:
-                from telegram_bot.linux.system_info_ext import get_linux_active_windows
-                active_windows = get_linux_active_windows()
-            except ImportError:
-                active_windows = "Unavailable (linux module not found)"
+        active_windows = format_active_windows_snapshot(limit=15)
 
         return (
             f"OS: {os_info}\n"

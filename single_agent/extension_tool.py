@@ -10,7 +10,7 @@ import json
 import logging
 import time
 import uuid
-from threading import Thread
+from threading import Lock, Thread
 from typing import Any, Dict, Optional
 
 from single_agent.browser_actions import browser_error, browser_success, stable_snapshot_hash
@@ -18,6 +18,8 @@ from single_agent.browser_actions import browser_error, browser_success, stable_
 logger = logging.getLogger(__name__)
 
 HEARTBEAT_STALE_SECONDS = 30.0
+_TOOL_SINGLETONS: Dict[tuple[str, int], "ExtensionTool"] = {}
+_TOOL_SINGLETONS_LOCK = Lock()
 
 
 class ExtensionTool:
@@ -35,13 +37,19 @@ class ExtensionTool:
         self.last_heartbeat_at: Optional[float] = None
         self.server = None
         self._stop_event = None
+        self._port_conflict_until: float = 0.0
+        self._last_start_error: Optional[str] = None
+        self._start_inflight = False
 
     def start_server(self):
         """Start the WebSocket bridge server in a background thread."""
-        if self.is_running:
+        if self.is_running or self._start_inflight:
+            return
+        if time.monotonic() < self._port_conflict_until:
             return
 
         self.last_heartbeat_at = time.monotonic()
+        self._start_inflight = True
 
         def run_loop():
             self.loop = asyncio.new_event_loop()
@@ -115,6 +123,10 @@ class ExtensionTool:
                 self.loop.run_until_complete(start())
             except Exception as exc:
                 print(f"[BRIDGE] Server thread CRASHED: {exc}")
+                self._last_start_error = str(exc)
+                lowered = self._last_start_error.lower()
+                if "10048" in lowered or "address already in use" in lowered or "only one usage of each socket address" in lowered:
+                    self._port_conflict_until = time.monotonic() + 30.0
                 self.is_running = False
             finally:
                 pending = [task for task in asyncio.all_tasks(self.loop) if not task.done()]
@@ -128,6 +140,7 @@ class ExtensionTool:
                 self._stop_event = None
                 self.connection = None
                 self.is_running = False
+                self._start_inflight = False
 
         self.server_thread = Thread(target=run_loop, daemon=True)
         self.server_thread.start()
@@ -148,6 +161,8 @@ class ExtensionTool:
             self.server_thread.join(timeout=2.0)
 
     async def _wait_for_connection(self, timeout: float = 5.0, poll_interval: float = 0.25) -> bool:
+        if time.monotonic() < self._port_conflict_until:
+            return False
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.connection:
@@ -185,6 +200,7 @@ class ExtensionTool:
 
     def get_status(self) -> Dict[str, Any]:
         heartbeat_age = self._heartbeat_age()
+        port_conflict_active = time.monotonic() < self._port_conflict_until
         return {
             "backend": "extension",
             "server_running": self.is_running,
@@ -194,6 +210,8 @@ class ExtensionTool:
             "pending_requests": len(self.pending_requests),
             "host": self.host,
             "port": self.port,
+            "port_conflict_active": port_conflict_active,
+            "last_start_error": self._last_start_error,
         }
 
     async def _send_command(self, action: str, params: Optional[Dict[str, Any]] = None, timeout: int = 30) -> Dict[str, Any]:
@@ -293,8 +311,18 @@ class ExtensionTool:
             )
         return self._normalize_state(result.get("result", {}))
 
-    def _get_page_text(self, tab_id: Optional[Any] = None) -> Dict[str, Any]:
-        result = self._command("get_text_content", self._state_params(tab_id), timeout=10)
+    def _get_page_text(
+        self,
+        tab_id: Optional[Any] = None,
+        *,
+        selector: Optional[str] = None,
+        max_chars: int = 50000,
+    ) -> Dict[str, Any]:
+        params = self._state_params(tab_id)
+        if selector:
+            params["selector"] = selector
+        params["maxChars"] = max_chars
+        result = self._command("get_text_content", params, timeout=10)
         if not result.get("success"):
             return browser_error(
                 "extension",
@@ -738,6 +766,56 @@ class ExtensionTool:
                 "image_captured": True,
                 "image_base64": data.get("image"),
                 "description": "Native extension screenshot captured.",
+                "mode": self.get_current_mode(),
+            },
+        )
+
+    def read_text(
+        self,
+        *,
+        selector: Optional[str] = None,
+        max_chars: int = 4000,
+        tab_id: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        state = self._get_state(tab_id)
+        if "error" in state:
+            return state
+
+        text_result = self._get_page_text(
+            state.get("tab_id"),
+            selector=selector,
+            max_chars=max_chars,
+        )
+        if "error" in text_result:
+            return text_result
+        if selector and not bool(text_result.get("matched", True)):
+            return browser_error(
+                "extension",
+                f"No element matched selector: {selector}",
+                error_type="command",
+                tab_id=state.get("tab_id"),
+                window_id=state.get("window_id"),
+                url=state.get("url"),
+                title=state.get("title"),
+                extras={"selector": selector, "mode": self.get_current_mode()},
+            )
+
+        return browser_success(
+            "extension",
+            tab_id=state.get("tab_id"),
+            window_id=state.get("window_id"),
+            url=state.get("url"),
+            title=state.get("title", ""),
+            wait_reason="text_read",
+            snapshot_hash=state.get("snapshot_hash"),
+            interactive_count=state.get("interactive_count"),
+            focused_ref=state.get("focused_ref"),
+            extras={
+                "mode": self.get_current_mode(),
+                "text": str(text_result.get("text") or ""),
+                "selector": text_result.get("selector"),
+                "truncated": bool(text_result.get("truncated", False)),
+                "full_length": int(text_result.get("fullLength") or text_result.get("full_length") or 0),
             },
         )
 
@@ -971,5 +1049,11 @@ class ExtensionTool:
         return {"status": "Extension bridge remains active", "backend": "extension"}
 
 
-def create_extension_tool() -> ExtensionTool:
-    return ExtensionTool()
+def create_extension_tool(host: str = "127.0.0.1", port: int = 8765) -> ExtensionTool:
+    key = (str(host), int(port))
+    with _TOOL_SINGLETONS_LOCK:
+        tool = _TOOL_SINGLETONS.get(key)
+        if tool is None:
+            tool = ExtensionTool(host=host, port=port)
+            _TOOL_SINGLETONS[key] = tool
+        return tool

@@ -1,25 +1,79 @@
 .env
+.env.*
+!.env.example
 LOCAL_TOOLS.md
 agent_data/LOCAL_TOOLS.md
 
 # local runtime state / secrets / logs
 MEMORY.md
+WORK_IN_PROGRESS.md
+jobs.json
+bot_core/data/analytics.json
+SYSTEM_HEALTH_REPORT.md
+config.local.json
+config.*.local.json
+jobs.local.json
 memory/
 .xauth/
+.electron-data/
 venv/
+node_modules/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.log
+.coverage
+.cache/
+.mypy_cache/
+.ruff_cache/
 .pytest_cache/
 telegram_bot/jobs.json
 telegram_bot/logs/
 telegram_bot/single_agent/screenshots/
+single_agent/screenshots/
 test_outputs/whisper_cpp/
+test_outputs/
+
+# agent eval workspace outputs
+tests/fixtures/agent_eval/**/browser_link_protocol.txt
+tests/fixtures/agent_eval/**/counter_protocol/
+tests/fixtures/agent_eval/**/counter_protocol_result.txt
+tests/fixtures/agent_eval/**/eval_rng_page.html
+tests/fixtures/agent_eval/**/eval_summary.txt
+tests/fixtures/agent_eval/**/example_heading.txt
+tests/fixtures/agent_eval/**/grade_report.py
+tests/fixtures/agent_eval/**/grade_summary.json
+tests/fixtures/agent_eval/**/grades.csv
+tests/fixtures/agent_eval/**/iana_example_domains.txt
+tests/fixtures/agent_eval/**/protocol_browser_heading.txt
+tests/fixtures/agent_eval/**/protocol_files/
+tests/fixtures/agent_eval/**/random_report.py
+tests/fixtures/agent_eval/**/random_report.txt
+tests/fixtures/agent_eval/**/reserved_domains.txt
+tests/fixtures/agent_eval/**/scheduler_note.txt
+tests/fixtures/agent_eval/**/screen_observation.txt
+tests/fixtures/agent_eval/**/stock_signals_protocol.txt
+tests/fixtures/agent_eval/**/summary_rng.py
+tests/fixtures/agent_eval/**/summary_with_rng.txt
+tests/fixtures/agent_eval/**/turing_browser_notes.txt
+tests/fixtures/agent_eval/**/calculator_protocol/
 
 # local scratch / clones
 emplo-own/
 git-push-test/
 agent_data/AGENTS.md
 m/
+temp/
+tmp/
+tmp_*
+.tmp_*/
+example_heading.txt
+chat-preview-workspace.png
+
+# local model/data artifacts
+voice_packs/
+marketing_assets/generated/
 
 # Windows beta release artifacts
 build/
@@ -30,3 +84,7 @@ desktop_app/node_modules/
 desktop_app/backend/
 desktop_app/renderer/
 mobile_app/client/dist/
+mobile_app/client/node_modules/
+mobile_app/client/.expo/
+mobile_app/client/.eas/
+*.tsbuildinfo

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+from mobile_app.backend.session_bridge import AppSessionBridge
 from single_agent.cron_scheduler import get_scheduler
+from shared.artifact_store import ChatArtifactStore
+from shared.cron_feed_store import CronFeedStore
+from shared.runtime_paths import default_workspace_root
 
 if TYPE_CHECKING:
     from telegram_bot.telegram_session_state import TelegramSession
@@ -27,6 +30,9 @@ def _run_cron_job_via_unified_flow():
 
 
 def _workspace() -> Path:
+    configured_workspace = default_workspace_root()
+    if configured_workspace is not None:
+        return configured_workspace
     runtime_home = os.getenv("EMPLOAI_HOME", "").strip()
     if runtime_home:
         return Path(runtime_home).expanduser().resolve()
@@ -47,45 +53,59 @@ def get_cron_runtime_session(user_id: int = 0) -> TelegramSession:
 
 
 async def cron_announcement_callback(message: str) -> None:
-    session = get_cron_runtime_session()
-    session.chat_history.append(
-        {
-            "role": "system",
-            "content": message,
-            "timestamp": datetime.now().isoformat(),
-            "scheduled_job": True,
-            "channel": "system",
-            "source_format": "scheduled_job_announcement",
-            "display_label": "Scheduled Job",
-        }
-    )
-    session.save_session()
+    feed = CronFeedStore(user_id=0)
+    feed.append(kind="announcement", content=message, status="running")
 
 
 async def cron_spawn_callback(job_id: str, prompt: str) -> None:
     scheduler = get_scheduler()
     job = scheduler.get_job(job_id)
     owner_user_id = int(job.owner_user_id) if job and job.owner_user_id is not None else 0
-    session = get_cron_runtime_session(owner_user_id)
+    feed = CronFeedStore(user_id=owner_user_id)
+    bridge = AppSessionBridge(user_id=owner_user_id, workspace=_workspace())
+    target_session_id = str(getattr(job, "origin_session_id", "") or "").strip()
+    if target_session_id:
+        session = bridge.orchestrator.get_worker(target_session_id)
+    else:
+        session = get_cron_runtime_session(owner_user_id)
+        target_session_id = str(getattr(getattr(session, "session", None), "id", "") or "").strip()
+    target_session = bridge.get_session(target_session_id) if target_session_id else None
+    bot_config_id = str(getattr(job, "origin_telegram_bot_config_id", "") or "").strip() or getattr(target_session, "telegram_bot_config_id", None)
+    bot_config = bridge.orchestrator.telegram_bots.get_config(bot_config_id) if bot_config_id else None
+    bot_label = str(bot_config.get("label") or "").strip() if bot_config else None
 
     if job and job.owner_user_id:
-        try:
-            session.chat_history.append(
-                {
-                    "role": "system",
-                    "content": f"Scheduled job running: {job.name}",
-                    "timestamp": datetime.now().isoformat(),
-                    "scheduled_job": True,
-                    "scheduled_job_id": job_id,
-                    "scheduled_job_name": job.name,
-                    "channel": "system",
-                    "source_format": "scheduled_job_announcement",
-                    "display_label": "Scheduled Job",
-                }
+        feed.append(
+            kind="announcement",
+            content=f"Scheduled job running: {job.name}",
+            session_id=target_session_id or None,
+            session_name=getattr(target_session, "name", None),
+            job_id=job_id,
+            job_name=job.name,
+            telegram_bot_config_id=bot_config_id or None,
+            telegram_bot_label=bot_label or None,
+            status="running",
+        )
+        if target_session_id:
+            ChatArtifactStore(user_id=owner_user_id, session_id=target_session_id).create_text_artifact(
+                artifact_kind="cron_output",
+                title=f"Cron announcement: {job.name}",
+                text=f"Scheduled job running: {job.name}",
+                source_kind="cron",
+                payload_file_name=f"cron-announcement-{job_id}.txt",
+                summary_text=f"Scheduled job running: {job.name}",
+                preview_text=f"Scheduled job running: {job.name}",
+                search_text=f"{job.name}\n{prompt}",
+                source_command=job.name,
+                file_path=None,
+                workspace=getattr(target_session, "workspace", None),
+                metadata={
+                    "job_id": job_id,
+                    "job_name": job.name,
+                    "prompt": prompt,
+                    "status": "running",
+                },
             )
-            session.save_session()
-        except Exception:
-            pass
 
     result = await _run_cron_job_via_unified_flow()(
         session,
@@ -94,23 +114,36 @@ async def cron_spawn_callback(job_id: str, prompt: str) -> None:
     )
 
     if job and job.owner_user_id:
-        try:
-            session.chat_history.append(
-                {
-                    "role": "assistant",
-                    "content": result,
-                    "timestamp": datetime.now().isoformat(),
-                    "scheduled_job": True,
-                    "scheduled_job_id": job_id,
-                    "scheduled_job_name": job.name if job else None,
-                    "channel": "system",
-                    "source_format": "scheduled_job_result",
-                    "display_label": "Scheduled Job",
-                }
+        feed.append(
+            kind="result",
+            content=result,
+            session_id=target_session_id or None,
+            session_name=getattr(target_session, "name", None),
+            job_id=job_id,
+            job_name=job.name if job else None,
+            telegram_bot_config_id=bot_config_id or None,
+            telegram_bot_label=bot_label or None,
+            status="completed",
+        )
+        if target_session_id:
+            ChatArtifactStore(user_id=owner_user_id, session_id=target_session_id).create_text_artifact(
+                artifact_kind="cron_output",
+                title=f"Cron result: {job.name}",
+                text=result,
+                source_kind="cron",
+                payload_file_name=f"cron-result-{job_id}.txt",
+                summary_text=result,
+                preview_text=result[:2400],
+                search_text=f"{job.name}\n{prompt}\n{result}",
+                source_command=job.name,
+                workspace=getattr(target_session, "workspace", None),
+                metadata={
+                    "job_id": job_id,
+                    "job_name": job.name,
+                    "prompt": prompt,
+                    "status": "completed",
+                },
             )
-            session.save_session()
-        except Exception:
-            pass
 
 
 async def ensure_global_cron_scheduler_started() -> None:

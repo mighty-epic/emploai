@@ -23,8 +23,28 @@ def collect_tree(src: Path, prefix: str):
 
 
 hiddenimports = []
-for package_name in ("telegram_bot", "single_agent", "shared", "bot_core", "cli", "mobile_app.backend", "certifi"):
+for package_name in (
+    "telegram_bot",
+    "single_agent",
+    "shared",
+    "bot_core",
+    "cli",
+    "mobile_app.backend",
+    "certifi",
+    "mss",
+    "PIL",
+    "pytesseract",
+):
     hiddenimports += collect_submodules(package_name)
+hiddenimports += [
+    "transformers",
+    "transformers.utils",
+    "transformers.models.whisper",
+    "transformers.models.whisper.feature_extraction_whisper",
+    "transformers.models.whisper.modeling_whisper",
+    "transformers.models.whisper.tokenization_whisper_fast",
+]
+hiddenimports.append("regex")
 
 
 datas = [
@@ -40,11 +60,6 @@ datas += collect_tree(project_root / ".agents", ".agents")
 tesseract_bundle = os.environ.get("EMPLOAI_TESSERACT_BUNDLE", "").strip()
 if tesseract_bundle:
     datas += collect_tree(Path(tesseract_bundle), "vendor/tesseract")
-
-whisper_bundle = os.environ.get("EMPLOAI_WHISPER_BUNDLE", "").strip()
-if whisper_bundle:
-    datas += collect_tree(Path(whisper_bundle), "vendor/whisper")
-
 
 a = Analysis(
     [str(project_root / "deploy" / "windows" / "release_backend.py")],

@@ -30,6 +30,7 @@ from cli.tui_constants import (
 from single_agent.agent import SingleAgent
 from cli.agent_tools.executor import ToolExecutor
 from skills import get_skill_registry
+from shared.tool_packs import default_enabled_tool_packs
 from telegram_bot.telegram_unified_agent import build_unified_system_prompt
 
 
@@ -63,6 +64,8 @@ class _TuiPromptSession:
         self.browser_task_context = _TuiBrowserTaskContext(task_id=0)
         self.system_info = system_info
         self.context_loader = None
+        self.enabled_tool_packs = default_enabled_tool_packs()
+        self._active_tool_packs_for_current_run = list(self.enabled_tool_packs)
 
     def get_browser_task_context(self):
         return self.browser_task_context

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -34,6 +35,64 @@ def test_resolve_pairing_user_id_falls_back_to_default(monkeypatch):
     monkeypatch.setattr(app_server, "_default_user_id", lambda: 11)
 
     assert app_server._resolve_pairing_user_id("pair-2") == 11
+
+
+def test_app_default_user_id_ignores_allowed_user_ids(monkeypatch):
+    monkeypatch.setenv("ALLOWED_USER_IDS", "8562474049")
+
+    assert app_server._default_user_id() == app_server.DEFAULT_APP_USER_ID
+
+
+@pytest.mark.asyncio
+async def test_send_realtime_event_treats_closed_socket_send_as_disconnect():
+    class ClosedSocket:
+        client_state = object()
+        application_state = object()
+
+        async def send_json(self, _payload):
+            raise RuntimeError('Cannot call "send" once a close message has been sent.')
+
+    lock = asyncio.Lock()
+    event = app_server.RealtimeServerEvent(type="status", payload={"message": "ok"})
+
+    with pytest.raises(app_server.WebSocketDisconnect):
+        await app_server._send_realtime_event(ClosedSocket(), lock, event)
+
+
+def test_context_usage_counts_prompt_envelope_and_tool_schemas(tmp_path: Path):
+    runtime = SimpleNamespace(
+        current_model="gpt-5.4-mini",
+        current_variant="standard",
+        chat_history=[{"role": "user", "content": "Inspect the README file"}],
+        enabled_tool_packs=["workspace_read"],
+        _active_tool_packs_for_current_run=[],
+        workspace=tmp_path,
+        system_info="OS: Windows\nActive Windows: Codex",
+        context_loader=None,
+        live_config={},
+        session_context=None,
+        memory_manager=None,
+        skill_registry=None,
+        active_skills=[],
+        pending_files=[],
+        last_user_message="Inspect the README file",
+        task_history=[],
+        active_task_id=None,
+        session_manager=SimpleNamespace(get_current_session_id=lambda: "sess-context"),
+        user_id=None,
+        last_context_compaction=None,
+        context_manager=None,
+    )
+
+    usage = app_server._context_usage(runtime)
+
+    assert usage["system_prompt_tokens"] > 0
+    assert usage["injected_context_tokens"] > 0
+    assert usage["chat_history_tokens"] > 0
+    assert usage["tool_schema_tokens"] > 0
+    assert usage["tool_schema_count"] > 0
+    assert usage["message_count"] == usage["prompt_message_count"]
+    assert usage["estimated_tokens"] > usage["chat_history_tokens"]
 
 
 def test_app_session_bridge_uses_shared_telegram_runtime(monkeypatch, tmp_path: Path):
@@ -171,6 +230,147 @@ def test_app_session_bridge_create_session_inherits_runtime_defaults(monkeypatch
     assert load_calls == [created.id]
 
 
+def test_session_model_normalizes_runtime_home_workspace_to_default_workspace(monkeypatch, tmp_path: Path):
+    runtime_home = (tmp_path / "runtime-home").resolve()
+    runtime_home.mkdir()
+    default_workspace = (tmp_path / "Documents" / "EmploAI").resolve()
+    default_workspace.mkdir(parents=True)
+
+    monkeypatch.setenv("EMPLOAI_HOME", str(runtime_home))
+    monkeypatch.setenv("DEFAULT_WORKSPACE", str(default_workspace))
+
+    session = Session.from_dict(
+        {
+            "id": "sess-legacy",
+            "name": "Legacy",
+            "created_at": "2026-05-25T00:00:00",
+            "updated_at": "2026-05-25T00:00:00",
+            "workspace": str(runtime_home),
+            "chat_history": [],
+        }
+    )
+
+    assert session.workspace == str(default_workspace)
+    assert session.to_summary().workspace == str(default_workspace)
+
+
+def test_app_session_bridge_prefers_newer_disk_session_over_stale_runtime(monkeypatch, tmp_path: Path):
+    manager = SessionManager(base_path=tmp_path)
+    created = manager.create_session(
+        name="Shared",
+        workspace=tmp_path,
+        model="gpt-5.2",
+        variant="standard",
+        agent_mode="auto",
+    )
+    created.chat_history = [
+        {
+            "role": "user",
+            "content": "hello from app",
+            "timestamp": "2026-05-25T00:00:00",
+            "channel": "app",
+        }
+    ]
+    manager.save_session(created)
+
+    disk_session = manager.load_session(created.id, set_current=False)
+    disk_session.chat_history.append(
+        {
+            "role": "user",
+            "content": "hello from telegram",
+            "timestamp": "2026-05-25T00:01:00",
+            "channel": "telegram",
+        }
+    )
+    manager.save_session(disk_session)
+
+    stale_runtime_session = Session(
+        id=created.id,
+        name="Shared",
+        created_at=created.created_at,
+        updated_at="2026-05-25T00:00:30",
+        workspace=str(tmp_path),
+        model="gpt-5.2",
+        variant="standard",
+        agent_mode="auto",
+        chat_history=[created.chat_history[0]],
+    )
+
+    load_calls: list[str] = []
+    runtime = SimpleNamespace(
+        is_processing=False,
+        session=stale_runtime_session,
+        session_manager=manager,
+    )
+
+    def load_session_by_id(session_id: str) -> None:
+        load_calls.append(session_id)
+        runtime.session = manager.load_session(session_id, set_current=False)
+
+    runtime.load_session_by_id = load_session_by_id
+
+    monkeypatch.setattr(session_bridge, "SessionManager", lambda base_path: manager)
+    monkeypatch.setattr(session_bridge, "user_sessions", {5: runtime})
+
+    bridge = session_bridge.AppSessionBridge(user_id=5, workspace=tmp_path)
+    resolved = bridge.get_session(created.id)
+
+    assert load_calls == [created.id]
+    assert [item["content"] for item in resolved.chat_history] == [
+        "hello from app",
+        "hello from telegram",
+    ]
+
+
+def test_telegram_session_initial_session_prefers_default_workspace_over_runtime_home(monkeypatch, tmp_path: Path):
+    runtime_home = (tmp_path / "runtime-home").resolve()
+    runtime_home.mkdir()
+    default_workspace = (tmp_path / "Documents" / "Primary").resolve()
+    default_workspace.mkdir(parents=True)
+
+    created_workspaces: list[Path] = []
+
+    class DummySessionManager:
+        def get_current_session_id(self):
+            return None
+
+        def create_session(self, **kwargs):
+            created_workspaces.append(kwargs["workspace"])
+            return Session(
+                id="sess-init",
+                name="Session 12:00",
+                created_at="2026-05-25T12:00:00",
+                updated_at="2026-05-25T12:00:00",
+                workspace=str(kwargs["workspace"]),
+                model=kwargs["model"],
+                variant=kwargs["variant"],
+                agent_mode=kwargs["agent_mode"],
+                planner_model=kwargs["planner_model"],
+            )
+
+        def set_current_session(self, _session_id: str):
+            return None
+
+    runtime = object.__new__(TelegramSession)
+    runtime.session_manager = DummySessionManager()
+    runtime.create_new_session_on_init = False
+    runtime.workspace = runtime_home
+    runtime.current_model = "gpt-5.2"
+    runtime.current_variant = "standard"
+    runtime.planner_model = None
+    runtime.default_planner_model = None
+    runtime.shared_current_session_id = None
+    runtime.load_session_by_id = lambda _session_id: None
+    runtime._resolve_shared_current_session_id = lambda: None
+
+    monkeypatch.setenv("EMPLOAI_HOME", str(runtime_home))
+    monkeypatch.setenv("DEFAULT_WORKSPACE", str(default_workspace))
+
+    TelegramSession._initialize_runtime_session(runtime)
+
+    assert created_workspaces == [default_workspace]
+
+
 def test_app_session_bridge_create_session_uses_explicit_workspace_override(monkeypatch, tmp_path: Path):
     created = Session(
         id="new12347",
@@ -293,6 +493,77 @@ def test_app_session_bridge_create_session_uses_runtime_default_planner_when_ses
         "model": "gpt-5.4",
         "variant": "thinking",
         "planner_model": "gpt-5.4-mini",
+        "agent_mode": "auto",
+    }
+    assert saved == ["saved"]
+    assert manager.set_calls == [created.id]
+    assert load_calls == [created.id]
+
+
+def test_app_session_bridge_create_session_prefers_configured_workspace_over_runtime_home(monkeypatch, tmp_path: Path):
+    created = Session(
+        id="new-home-fallback",
+        name="New Session",
+        created_at="2026-04-18T00:00:00",
+        updated_at="2026-04-18T00:00:00",
+        workspace=str(tmp_path / "created"),
+        model="gpt-5.4",
+        variant="thinking",
+        agent_mode="auto",
+    )
+
+    class DummySessionManager:
+        def __init__(self, base_path: Path):
+            self.base_path = base_path
+            self.create_kwargs: dict | None = None
+            self.set_calls: list[str] = []
+
+        def create_session(self, **kwargs):
+            self.create_kwargs = kwargs
+            return created
+
+        def set_current_session(self, session_id: str):
+            self.set_calls.append(session_id)
+
+        def load_session(self, session_id: str, *, set_current: bool = True):
+            assert session_id == created.id
+            return created
+
+    runtime_home = (tmp_path / "runtime-home").resolve()
+    runtime_home.mkdir()
+    default_workspace = (tmp_path / "Documents" / "EmploAI").resolve()
+    default_workspace.mkdir(parents=True)
+
+    load_calls: list[str] = []
+    saved: list[str] = []
+    runtime = SimpleNamespace(
+        is_processing=False,
+        workspace=runtime_home,
+        current_model="gpt-5.4",
+        current_variant="thinking",
+        planner_model=None,
+        default_planner_model=None,
+        save_session=lambda: saved.append("saved"),
+        load_session_by_id=lambda session_id: load_calls.append(session_id),
+        session=created,
+    )
+    manager = DummySessionManager(tmp_path)
+
+    monkeypatch.setenv("EMPLOAI_HOME", str(runtime_home))
+    monkeypatch.setenv("DEFAULT_WORKSPACE", str(default_workspace))
+    monkeypatch.setattr(session_bridge, "SessionManager", lambda base_path: manager)
+    monkeypatch.setattr(session_bridge, "user_sessions", {9: runtime})
+
+    bridge = session_bridge.AppSessionBridge(user_id=9, workspace=runtime_home)
+    result = bridge.create_session("Fresh")
+
+    assert result is created
+    assert manager.create_kwargs == {
+        "name": "Fresh",
+        "workspace": default_workspace,
+        "model": "gpt-5.4",
+        "variant": "thinking",
+        "planner_model": None,
         "agent_mode": "auto",
     }
     assert saved == ["saved"]
@@ -641,6 +912,7 @@ def test_app_session_bridge_detailed_session_view_includes_task_board(tmp_path: 
     loaded = bridge.get_session(session.id)
     detail = bridge.detailed_session_view(loaded)
 
-    assert detail["task_board"] is not None
-    assert detail["task_board"]["main_goal"] == "Open Spotify and play a song"
-    assert detail["completed_task_boards"] == []
+    assert detail["task_board"] is None
+    assert len(detail["completed_task_boards"]) == 1
+    assert detail["completed_task_boards"][0]["main_goal"] == "Open Spotify and play a song"
+    assert detail["completed_task_boards"][0]["status"] == "interrupted"

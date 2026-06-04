@@ -7,6 +7,7 @@ import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+from shared.channel_events import publish_current_session_changed
 from shared.channel_sync import get_channel_sync_hub
 
 
@@ -353,6 +354,7 @@ def build_callback_handlers(
 
                 # Save current if exists
                 session.save_session()
+                previous_id = session.session_manager.get_current_session_id() if session.session_manager else None
                 
                 # Create and load new
                 new_sess = session.session_manager.create_session(
@@ -362,6 +364,13 @@ def build_callback_handlers(
                     workspace=session.workspace
                 )
                 session.load_session_by_id(new_sess.id)
+                publish_current_session_changed(
+                    user_id=user.id,
+                    session_id=new_sess.id,
+                    previous_session_id=previous_id,
+                    origin_channel="telegram",
+                    reason="session_created",
+                )
                 
                 await safe_edit(query, f"✅ Created and switched to new session: **{new_sess.name}**")
             else:
@@ -373,10 +382,18 @@ def build_callback_handlers(
                             return
 
                     # Save current before switching
+                    previous_id = session.session_manager.get_current_session_id() if session.session_manager else None
                     session.save_session()
                     
                     # Load the requested one
                     session.load_session_by_id(session_id)
+                    publish_current_session_changed(
+                        user_id=user.id,
+                        session_id=session_id,
+                        previous_session_id=previous_id,
+                        origin_channel="telegram",
+                        reason="session_activated",
+                    )
                     await safe_edit(query, f"✅ Switched to session: **{session.session_manager.current_session.name}**")
                 except RuntimeError as exc:
                     await safe_edit(query, f"⚠️ {exc}")

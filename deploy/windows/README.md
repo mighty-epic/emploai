@@ -10,37 +10,29 @@ The MSI installs the Electron desktop UI. It is no longer a console-only beta fl
 
 ## Optional voice packs
 
-The MSI now exposes optional feature selection for local voice packs:
+The MSI now installs only the core desktop app and packaged backend.
 
-- English voice pack
-- Hebrew voice pack
+- No English voice pack is bundled in the MSI.
+- No Hebrew voice pack is bundled in the MSI.
+- The installer does not download voice packs during setup.
 
-Users can choose:
+Voice is now fully app-driven after install:
 
-- English only
-- Hebrew only
-- both
-- neither
+- install English from the desktop setup/settings panel
+- install Hebrew from the desktop setup/settings panel
+- remove either pack from the same UI
+- switch the default engine from the same UI
 
-The installer records those choices and now tries to install the requested packs during setup through the packaged backend helper. If a voice-pack download fails, the MSI still completes and the desktop setup panel shows the pack as requested-but-missing so it can be retried later.
-
-If the user skips a pack during MSI, they can still install it later from the desktop app setup/settings panel. Installed packs can also be deleted from that same UI.
-
-English is intentionally no longer bundled by default in the build. The build script now expects voice assets to be optional downloads unless you explicitly pass:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\deploy\windows\build_beta_release.ps1 -BundleEnglishVoicePack
-```
+Both voice packs are expected to come from pinned Hugging Face sources configured for the release.
 
 ## Beta tester experience
 
 1. Download `EmploAI.msi` from the latest GitHub release.
 2. Run the installer.
-3. Choose the optional English/Hebrew voice packs you want in the MSI feature tree.
-4. Keep `Launch EmploAI now` checked on the installer finish page, or launch `EmploAI` later from the Start Menu.
-5. Complete setup in the desktop app if required.
-6. Start the app. Requested packs should already be ready unless setup-time download failed.
-7. The local runtime starts from the desktop app and serves the same app API used by local development.
+3. Keep `Launch EmploAI now` checked on the installer finish page, or launch `EmploAI` later from the Start Menu.
+4. Complete setup in the desktop app if required.
+5. If you want local voice, install English or Hebrew from the app.
+6. The local runtime starts from the desktop app and serves the same app API used by local development.
 
 Writable runtime files are stored under:
 
@@ -56,7 +48,7 @@ That folder contains:
 - `memory\`
 - `logs\`
 - `browser_extension\`
-- `voice_packs\` for managed downloadable packs such as Hebrew local voice
+- `voice_packs\` for managed downloadable English/Hebrew local voice packs
 
 ## Architecture
 
@@ -112,18 +104,12 @@ If you also want a portable zip fallback:
 powershell -ExecutionPolicy Bypass -File .\deploy\windows\build_beta_release.ps1 -IncludeZip
 ```
 
-If you also want to publish the pass-3 Hebrew runtime as the download target used by MSI-time install:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\deploy\windows\build_beta_release.ps1 -IncludeHebrewVoicePackArchive -HebrewVoicePackSourceDir "C:\path\to\hebrew-whisper-small-pass3-knesset-runtime-ready"
-```
-
 The build machine must have:
 
 - Node/npm available for the Expo web export and Electron packaging.
 - Python capable of installing the project dependencies used by PyInstaller analysis.
 - Tesseract OCR 5.5.2 installed or `EMPLOAI_TESSERACT_ROOT` pointing to a matching bundle.
-- Network access the first time Whisper/Tesseract/WiX assets must be prepared.
+- Network access the first time Tesseract/WiX assets must be prepared.
 
 ## Release parity checklist
 
@@ -148,36 +134,49 @@ Check that:
 - The desktop app opens without falling back to the "renderer not built" screen.
 - Setup state loads inside the desktop UI.
 - The local runtime reaches `/api/app/health` with `"ok": true`.
-- `dependency_status.voice.ok` is true.
-- Voice recording reaches `/ws/app/voice` and returns transcript events.
-- MSI-selected voice packs are shown correctly in desktop setup and can be installed/removed there.
+- Voice setup offers English/Hebrew install actions when no pack is installed.
+- Voice recording reaches `/ws/app/voice` and returns transcript events after a pack is installed from the app.
 - Switching English/Hebrew from the conversation voice panel changes the actual backend engine and survives restart.
 - Sending text and finalized voice transcripts uses the same shared session.
 - Closing the app respects `channels.desktop.keep_runtime_on_app_close`.
 
-## Publishing the Hebrew pack
+## Publishing the voice packs
 
-The Windows release now expects a downloadable pass-3 Hebrew archive. By default, the packaged backend derives the archive URL from `deploy/windows/release_info.json` using:
+The packaged app expects pinned Hugging Face sources for both optional voice packs.
 
-- `github_repo`
-- `hebrew_voice_pack_asset`
-- `hebrew_voice_pack_release_tag` (or the main `release_tag`)
+English helpers:
 
-So the release process should upload the Hebrew archive to the same GitHub release as the MSI.
+```powershell
+python .\scripts\prepare_english_voice_pack.py
+python .\scripts\publish_english_voice_pack.py --repo-id your-org/english-whisper-cpp-desktop-pack
+```
 
-Prepared helper:
+Hebrew helper:
 
 ```powershell
 python .\scripts\publish_hebrew_voice_pack.py --repo-id your-org/hebrew-whisper-small-continue-public-v1
 ```
 
-The desktop backend can source Hebrew from:
+Release configuration lives in `deploy/windows/release_info.json`. For public builds, set:
 
-- `EMPLO_APP_STT_HEBREW_MODEL_REPO`
-- `EMPLOAI_HEBREW_VOICE_PACK_ARCHIVE_URL`
-- `EMPLOAI_HEBREW_VOICE_PACK_SOURCE_DIR`
+- `english_voice_pack_repo`
+- `english_voice_pack_revision`
+- `hebrew_voice_pack_repo`
+- `hebrew_voice_pack_revision`
 
-For release builds intended for external users, prefer the archive URL / GitHub release asset path so the MSI and desktop setup panel both install the same pass-3 runtime-ready pack.
+Optional archive-url overrides are still supported, but the standard packaged flow is now Hugging Face first.
+
+## Startup parity
+
+Compare the packaged backend bootstrap timings against the validated local desktop baseline:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\deploy\windows\measure_startup_parity.ps1
+```
+
+Target:
+
+- packaged cold/warm startup should stay within `25%` or `2 seconds`, whichever is larger, of the local baseline on the same machine
 
 ## Updates
 

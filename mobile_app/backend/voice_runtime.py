@@ -15,11 +15,7 @@ from typing import Dict, Optional, Set
 from mobile_app.backend.whisper_cpp_runtime import (
     DEFAULT_BINARY_FLAVOR,
     DEFAULT_LANGUAGE,
-    DEFAULT_RELEASE_TAG,
     WhisperFixture,
-    ensure_ggml_model,
-    ensure_prebuilt_whisper_cpp,
-    models_root,
     output_root,
     recommended_thread_count,
     runtime_root,
@@ -30,6 +26,8 @@ from mobile_app.backend.whisper_cpp_runtime import (
 from mobile_app.backend.voice_pack_manager import (
     VOICE_ENGINE_ENGLISH,
     VOICE_ENGINE_HEBREW,
+    english_pack_cli_path,
+    english_pack_model_path,
     get_english_pack_status,
     get_hebrew_pack_status,
     hebrew_pack_runtime_dir,
@@ -85,8 +83,8 @@ DEFAULT_DRAFT_MIN_CHARS = 10
 DEFAULT_KNOWN_TERMS = ("telegram_agent.py", ".env")
 DEFAULT_HEBREW_LANGUAGE = "he"
 HEBREW_SEQUENCE_MS = 1200
-HEBREW_DRAFT_INTERVAL_MS = 1200
-HEBREW_DRAFT_MIN_MS = 1400
+HEBREW_DRAFT_INTERVAL_MS = 900
+HEBREW_DRAFT_MIN_MS = 700
 HEBREW_DRAFT_CONFIDENCE = 0.82
 HEBREW_DRAFT_MIN_CHARS = 4
 HEBREW_FINAL_DISCARD_CONFIDENCE = 0.35
@@ -98,12 +96,6 @@ MAX_TTS_CHARS = 4000
 _stt_client: Optional[OpenAI] = None
 _whisper_cli_cache: Optional[Path] = None
 _model_cache: dict[str, Path] = {}
-_WHISPER_ASSET_DIRS = {
-    "plain": "whisper-bin-x64",
-    "blas": "whisper-blas-bin-x64",
-    "cublas-11.8": "whisper-cublas-11.8.0-bin-x64",
-    "cublas-12.4": "whisper-cublas-12.4.0-bin-x64",
-}
 
 
 def _hebrew_transformers_runtime():
@@ -118,6 +110,14 @@ def hebrew_looks_repetitive(text: str) -> bool:
 
 def transcribe_hebrew_wav_bytes(*args, **kwargs):
     return _hebrew_transformers_runtime().transcribe_wav_bytes(*args, **kwargs)
+
+
+def hebrew_model_bundle_loaded() -> bool:
+    return bool(_hebrew_transformers_runtime().model_bundle_loaded())
+
+
+def preload_hebrew_model_bundle() -> None:
+    _hebrew_transformers_runtime().preload_model_bundle()
 
 
 def _get_stt_client() -> Optional[OpenAI]:
@@ -138,9 +138,9 @@ def _get_stt_client() -> Optional[OpenAI]:
 
 def _voice_engine_selection() -> Dict[str, object]:
     config = get_live_config(runtime_root() / "config.json")
-    english_requested = bool(config.get("voice.packs.english_local.requested", True))
+    english_requested = bool(config.get("voice.packs.english_local.requested", False))
     hebrew_requested = bool(config.get("voice.packs.hebrew_local.requested", False))
-    default_engine = str(config.get("voice.default_engine", VOICE_ENGINE_ENGLISH) or VOICE_ENGINE_ENGLISH).strip().lower()
+    default_engine = str(config.get("voice.default_engine", VOICE_ENGINE_NONE) or VOICE_ENGINE_NONE).strip().lower()
     if default_engine not in {VOICE_ENGINE_NONE, VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW}:
         default_engine = VOICE_ENGINE_ENGLISH if english_requested else VOICE_ENGINE_HEBREW if hebrew_requested else VOICE_ENGINE_NONE
     if default_engine == VOICE_ENGINE_ENGLISH and not english_requested:
@@ -180,6 +180,7 @@ def ensure_hebrew_model_downloaded(*, force: bool = False, final: bool = True) -
 def preload_hebrew_models() -> dict[str, float]:
     start = time.perf_counter()
     ensure_hebrew_model_downloaded(force=False)
+    preload_hebrew_model_bundle()
     return {
         "final_seconds": round(time.perf_counter() - start, 3),
         "draft_seconds": 0.0,
@@ -228,13 +229,27 @@ def get_voice_runtime_status() -> Dict[str, object]:
         issues.append("Assistant audio is enabled but the `openai` Python package is missing.")
     issues = [*input_issues, *issues]
 
+    if default_engine == VOICE_ENGINE_NONE:
+        selected_engine_state = "disabled"
+    elif input_issues:
+        selected_engine_state = "error"
+    elif default_engine == VOICE_ENGINE_HEBREW:
+        selected_engine_state = "ready" if hebrew_model_bundle_loaded() else "warming"
+    else:
+        selected_engine_state = "ready"
+
     return {
         "ok": not issues,
         "input_ok": not input_issues,
         "issues": issues,
         "stt_backend": stt_backend,
         "stt_model": (
-            str(hebrew_pack_status.get("model_dir") or "")
+            str(
+                (hebrew_pack_status.get("manifest") or {}).get("asset_name")
+                or (hebrew_pack_status.get("manifest") or {}).get("pack_id")
+                or hebrew_pack_status.get("model_dir")
+                or ""
+            )
             if default_engine == VOICE_ENGINE_HEBREW
             else _local_model_name()
             if stt_backend != "openai"
@@ -260,13 +275,40 @@ def get_voice_runtime_status() -> Dict[str, object]:
         "hebrew_pack_ready": hebrew_pack_ready,
         "english_pack_status": english_pack_status,
         "hebrew_pack_status": hebrew_pack_status,
+        "english_pack_manifest": english_pack_status.get("manifest"),
+        "english_pack_manifest_verified": bool(english_pack_status.get("manifest_verified")),
+        "hebrew_pack_manifest": hebrew_pack_status.get("manifest"),
+        "hebrew_pack_manifest_verified": bool(hebrew_pack_status.get("manifest_verified")),
         "hebrew_model_root": str(hebrew_pack_status.get("model_dir") or ""),
         "hebrew_draft_model_root": str(hebrew_pack_status.get("model_dir") or ""),
+        "selected_engine_state": selected_engine_state,
+        "selected_engine_ready": selected_engine_state == "ready",
     }
 
 
 def _normalize_transcript(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip())
+
+
+def _collapse_repeated_phrase(text: str) -> str:
+    normalized = _normalize_transcript(text)
+    words = [part for part in normalized.split(" ") if part]
+    if len(words) < 2:
+        return normalized
+    if len(set(words)) == 1:
+        return words[0]
+
+    max_phrase_words = min(len(words) // 2, 6)
+    for phrase_words in range(1, max_phrase_words + 1):
+        if len(words) % phrase_words != 0:
+            continue
+        phrase = words[:phrase_words]
+        repetitions = len(words) // phrase_words
+        if repetitions < 2:
+            continue
+        if phrase * repetitions == words:
+            return " ".join(phrase)
+    return normalized
 
 
 def _normalize_tts_text(text: str) -> str:
@@ -291,11 +333,6 @@ def _local_draft_model_name() -> str:
 
 def _local_binary_flavor() -> str:
     return os.getenv(APP_STT_BINARY_FLAVOR_ENV, DEFAULT_BINARY_FLAVOR).strip() or DEFAULT_BINARY_FLAVOR
-
-
-def _expected_local_whisper_cli() -> Path:
-    asset_dir = _WHISPER_ASSET_DIRS.get(_local_binary_flavor(), _local_binary_flavor())
-    return models_root().parent / asset_dir / "Release" / "whisper-cli.exe"
 
 
 def _int_env(name: str, default: int) -> int:
@@ -343,16 +380,13 @@ def _known_terms_prompt() -> str:
 def _resolve_whisper_cli() -> Path:
     global _whisper_cli_cache
     if _whisper_cli_cache is None:
-        _whisper_cli_cache = ensure_prebuilt_whisper_cpp(
-            release_tag=DEFAULT_RELEASE_TAG,
-            flavor=_local_binary_flavor(),
-        )
+        _whisper_cli_cache = english_pack_cli_path()
     return _whisper_cli_cache
 
 
 def _resolve_model(model_name: str) -> Path:
     if model_name not in _model_cache:
-        _model_cache[model_name] = ensure_ggml_model(model_name)
+        _model_cache[model_name] = english_pack_model_path(model_name)
     return _model_cache[model_name]
 
 
@@ -573,6 +607,8 @@ class VoiceDraftState:
     sample_rate: Optional[int] = None
     draft_text: str = ""
     final_text: str = ""
+    previous_final_text: str = ""
+    fresh_output_confirmed: bool = False
     state: str = "idle"
     revision: int = 0
     pending_tasks: Set[asyncio.Task] = field(default_factory=set, repr=False)
@@ -580,6 +616,7 @@ class VoiceDraftState:
 
     def reset(self) -> int:
         self.revision += 1
+        previous_text = _normalize_transcript(self.final_text or self.draft_text or self.transcript())
         self.segment_texts.clear()
         self.wav_chunks.clear()
         self.last_sequence = 0
@@ -587,8 +624,22 @@ class VoiceDraftState:
         self.sample_rate = None
         self.draft_text = ""
         self.final_text = ""
+        self.previous_final_text = previous_text
+        self.fresh_output_confirmed = False
         self.state = "idle"
         return self.revision
+
+    def _strip_stale_prefix(self, text: str) -> str:
+        normalized = _normalize_transcript(text)
+        if self.fresh_output_confirmed:
+            return normalized
+        previous = _normalize_transcript(self.previous_final_text)
+        if not previous:
+            return normalized
+        prefix = f"{previous} "
+        if normalized.startswith(prefix):
+            return _normalize_transcript(normalized[len(prefix):])
+        return normalized
 
     def transcript(self) -> str:
         if self.final_text:
@@ -625,12 +676,12 @@ class VoiceDraftState:
 
     def _draft_min_ms(self) -> int:
         if _selected_voice_engine() == VOICE_ENGINE_HEBREW:
-            return HEBREW_DRAFT_MIN_MS
+            return max(300, _int_env(APP_STT_DRAFT_MIN_MS_ENV, HEBREW_DRAFT_MIN_MS))
         return max(300, _int_env(APP_STT_DRAFT_MIN_MS_ENV, DEFAULT_DRAFT_MIN_MS))
 
     def _draft_interval_ms(self) -> int:
         if _selected_voice_engine() == VOICE_ENGINE_HEBREW:
-            return HEBREW_DRAFT_INTERVAL_MS
+            return max(200, _int_env(APP_STT_DRAFT_INTERVAL_MS_ENV, HEBREW_DRAFT_INTERVAL_MS))
         return max(200, _int_env(APP_STT_DRAFT_INTERVAL_MS_ENV, DEFAULT_DRAFT_INTERVAL_MS))
 
     def _draft_min_chars(self) -> int:
@@ -745,6 +796,7 @@ class VoiceDraftState:
             if active_revision != self.revision:
                 return self.transcript()
 
+            text = self._strip_stale_prefix(_collapse_repeated_phrase(text))
             min_confidence = self._draft_confidence_threshold()
             min_chars = self._draft_min_chars()
             if selected_engine == VOICE_ENGINE_HEBREW and hebrew_looks_repetitive(text):
@@ -753,6 +805,7 @@ class VoiceDraftState:
                 self.draft_text = text
                 self.segment_texts[seq] = text
                 self.last_draft_sequence = seq
+                self.fresh_output_confirmed = True
             return self.transcript()
 
         async with self.transcription_slots:
@@ -807,6 +860,7 @@ class VoiceDraftState:
         if active_revision != self.revision:
             return self.transcript()
 
+        text = self._strip_stale_prefix(_collapse_repeated_phrase(text))
         if selected_engine == VOICE_ENGINE_HEBREW:
             min_chars = self._draft_min_chars()
             discard_threshold = self._final_discard_threshold()
@@ -825,4 +879,5 @@ class VoiceDraftState:
         self.final_text = text
         if text:
             self.segment_texts[max(1, self.last_sequence)] = text
+            self.fresh_output_confirmed = True
         return self.transcript()

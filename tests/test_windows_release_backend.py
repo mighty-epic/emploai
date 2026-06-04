@@ -20,6 +20,12 @@ def test_installer_backend_cleanup_uses_quoted_cmd():
     assert '&quot;[SystemFolder]cmd.exe&quot; /d /c if exist &quot;[INSTALLDIR]resources\\app\\backend&quot;' in payload
 
 
+def test_default_app_user_id_ignores_allowed_user_ids(monkeypatch):
+    monkeypatch.setenv("ALLOWED_USER_IDS", "8562474049,42")
+
+    assert release_backend._default_user_id() == release_backend.DEFAULT_APP_USER_ID
+
+
 def test_ensure_runtime_manual_start_ignores_auto_start(monkeypatch, tmp_path: Path):
     config = DesktopRuntimeConfig(
         enabled=True,
@@ -263,6 +269,31 @@ def test_daemon_mode_runs_remote_control_worker_when_configured(monkeypatch, tmp
     assert result == 0
     assert recorded["remote_worker"][0] is True
     assert recorded["server"] == ("127.0.0.1", 8787)
+
+
+def test_ensure_telegram_worker_cleans_duplicate_local_workers(monkeypatch, tmp_path: Path):
+    live_pids = {101, 202}
+    terminated: list[int] = []
+    launched: list[Path] = []
+
+    monkeypatch.setattr(release_backend, "_managed_telegram_worker_pids", lambda _home: sorted(live_pids))
+    monkeypatch.setattr(release_backend, "_terminate_pid", lambda pid: terminated.append(pid) or live_pids.discard(pid))
+    monkeypatch.setattr(release_backend.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(release_backend, "_read_telegram_pid_record", lambda _home: None)
+    monkeypatch.setattr(release_backend, "_read_telegram_status_record", lambda _home: None)
+    monkeypatch.setattr(release_backend, "_write_telegram_status_record", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(release_backend, "_clear_telegram_status_record", lambda _home: None)
+    monkeypatch.setattr(release_backend, "_launch_detached_telegram_worker", lambda home: launched.append(home))
+
+    release_backend._ensure_telegram_worker(
+        tmp_path,
+        enabled=True,
+        configured=True,
+        config_fingerprint="token:users",
+    )
+
+    assert terminated == [101, 202]
+    assert launched == [tmp_path]
 
 
 def test_runtime_compatibility_issue_flags_app_only_runtime_when_telegram_is_configured(monkeypatch, tmp_path: Path):

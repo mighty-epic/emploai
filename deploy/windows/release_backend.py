@@ -84,6 +84,7 @@ DEFAULT_DESKTOP_PORT = 8787
 DEFAULT_DEVICE_NAME = "EmploAI Desktop"
 DEFAULT_DEVICE_PLATFORM = "desktop-electron"
 DEFAULT_DEVICE_KEY = "desktop-local"
+DEFAULT_APP_USER_ID = 0
 TOKEN_TTL_SECONDS = 60 * 60 * 24 * 180
 TELEGRAM_STATUS_PATH_ENV = "EMPLOAI_TELEGRAM_STATUS_PATH"
 TELEGRAM_NOTIFY_ON_READY_ENV = "EMPLOAI_TELEGRAM_NOTIFY_ON_READY"
@@ -493,16 +494,7 @@ def _voice_pack_bootstrap_report_path(home: Path) -> Path:
 
 
 def _default_user_id() -> int:
-    allowed = os.getenv("ALLOWED_USER_IDS", "").split(",")
-    for item in allowed:
-        value = item.strip()
-        if not value:
-            continue
-        try:
-            return int(value)
-        except ValueError:
-            continue
-    return 0
+    return DEFAULT_APP_USER_ID
 
 
 def _normalize_allowed_user_ids(raw_value: str) -> str:
@@ -776,9 +768,7 @@ def _clear_remote_control_status_record(home: Path) -> None:
 
 
 def _stop_telegram_worker(home: Path) -> None:
-    record = _read_telegram_pid_record(home)
-    pid = int(record.get("pid") or 0) if record else 0
-    if pid and _process_exists(pid):
+    for pid in _managed_telegram_worker_pids(home):
         _terminate_pid(pid)
         time.sleep(0.2)
     _telegram_runtime_pid_path(home).unlink(missing_ok=True)
@@ -843,7 +833,7 @@ def _launch_detached_daemon(config: "DesktopRuntimeConfig", home: Path) -> None:
 
 
 def _launch_detached_telegram_worker(home: Path) -> None:
-    command = [*_self_command(), "run-telegram-worker"]
+    command = [*_self_command(), "run-telegram-worker", "--home", str(home)]
     env = os.environ.copy()
     env["EMPLOAI_HOME"] = str(home)
     env["EMPLOAI_SKIP_EMBEDDED_APP_SERVER"] = "1"
@@ -971,9 +961,12 @@ def _telegram_service_status(home: Path, *, enabled: bool, configured: bool) -> 
     log_path = _telegram_runtime_log_path(home)
     record = _read_telegram_pid_record(home)
     status_record = _read_telegram_status_record(home) or {}
-    pid = int(record.get("pid") or 0) if record else 0
-    if pid and not _process_exists(pid):
-        pid = 0
+    worker_pids = _managed_telegram_worker_pids(home)
+    pid = worker_pids[0] if len(worker_pids) == 1 else 0
+    if not pid and record:
+        recorded_pid = int(record.get("pid") or 0)
+        if recorded_pid and _process_exists(recorded_pid):
+            pid = recorded_pid
     status_state = str(status_record.get("state") or "").strip().lower()
     status_detail = str(status_record.get("detail") or "").strip() or None
     ready_at = str(status_record.get("readyAt") or "").strip() or None
@@ -999,6 +992,16 @@ def _telegram_service_status(home: Path, *, enabled: bool, configured: bool) -> 
         )
 
     tail = _tail_text(log_path)
+    if len(worker_pids) > 1:
+        return TelegramServiceStatus(
+            enabled=True,
+            configured=True,
+            state="degraded",
+            detail=f"Multiple local Telegram workers are running ({len(worker_pids)}). Restarting the managed worker will clean them up.",
+            log_path=str(log_path),
+            ready_at=ready_at,
+        )
+
     if pid:
         if "telegram.error.Conflict" in tail or "terminated by other getUpdates request" in tail:
             return TelegramServiceStatus(
@@ -1089,6 +1092,10 @@ def _ensure_telegram_worker(
         or ""
     ).strip()
     if config_fingerprint and record_fingerprint != config_fingerprint:
+        _stop_telegram_worker(home)
+
+    worker_pids = _managed_telegram_worker_pids(home)
+    if len(worker_pids) > 1:
         _stop_telegram_worker(home)
 
     status = _telegram_service_status(home, enabled=enabled, configured=configured)
@@ -1400,6 +1407,57 @@ def _process_command_line(pid: int) -> str:
         return ""
 
 
+def _process_ids_for_command_markers(*markers: str) -> set[int]:
+    normalized_markers = [str(marker or "").strip().lower() for marker in markers if str(marker or "").strip()]
+    if not normalized_markers:
+        return set()
+
+    try:
+        if os.name == "nt":
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    (
+                        "Get-CimInstance Win32_Process | ForEach-Object { "
+                        "if ($_.CommandLine) { \"{0}`t{1}\" -f $_.ProcessId, $_.CommandLine } "
+                        "}"
+                    ),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        else:
+            result = subprocess.run(
+                ["ps", "-eo", "pid=,command="],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        pids: set[int] = set()
+        for line in result.stdout.splitlines():
+            if os.name == "nt":
+                pid_text, separator, command_line = line.partition("\t")
+            else:
+                stripped = line.strip()
+                pid_text, separator, command_line = stripped.partition(" ")
+            if not separator:
+                continue
+            normalized_command_line = command_line.lower()
+            if not all(marker in normalized_command_line for marker in normalized_markers):
+                continue
+            try:
+                pids.add(int(pid_text.strip()))
+            except ValueError:
+                continue
+        return pids
+    except Exception:
+        return set()
+
+
 def _process_executable_path(pid: int) -> str:
     if pid <= 0:
         return ""
@@ -1550,12 +1608,32 @@ def _managed_runtime_pids(home: Path, config: "DesktopRuntimeConfig", *, status:
     return sorted(pids)
 
 
+def _managed_telegram_worker_pids(home: Path) -> list[int]:
+    pids: set[int] = set()
+    record = _read_telegram_pid_record(home)
+    recorded_pid = int(record.get("pid") or 0) if record else 0
+    if recorded_pid and _process_exists(recorded_pid):
+        pids.add(recorded_pid)
+
+    for pid in _process_ids_for_command_markers("run-telegram-worker"):
+        if pid == os.getpid() or not _process_exists(pid):
+            continue
+        command_line = _process_command_line(pid).lower()
+        if "run-telegram-worker" not in command_line:
+            continue
+        if (
+            "deploy.windows.release_backend" not in command_line
+            and "emploaibackend" not in command_line
+        ):
+            continue
+        pids.add(pid)
+
+    return sorted(pids)
+
+
 def _managed_service_pids(home: Path, config: "DesktopRuntimeConfig", *, status: Any | None = None) -> list[int]:
     pids = set(_managed_runtime_pids(home, config, status=status))
-    telegram_record = _read_telegram_pid_record(home)
-    telegram_pid = int(telegram_record.get("pid") or 0) if telegram_record else 0
-    if telegram_pid and _process_exists(telegram_pid):
-        pids.add(telegram_pid)
+    pids.update(_managed_telegram_worker_pids(home))
     remote_record = _read_remote_control_pid_record(home)
     remote_pid = int(remote_record.get("pid") or 0) if remote_record else 0
     if remote_pid and _process_exists(remote_pid):
@@ -2329,7 +2407,8 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run-daemon", help="run the managed local runtime daemon")
     run_parser.add_argument("--host", default=None)
     run_parser.add_argument("--port", type=int, default=None)
-    subparsers.add_parser("run-telegram-worker", help="run the managed Telegram worker without starting the app server")
+    telegram_worker_parser = subparsers.add_parser("run-telegram-worker", help="run the managed Telegram worker without starting the app server")
+    telegram_worker_parser.add_argument("--home", default=None)
     subparsers.add_parser("run-remote-control-worker", help="run the managed remote control worker")
     return parser
 
@@ -2436,6 +2515,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_daemon(args.host, args.port)
 
     if args.command == "run-telegram-worker":
+        if args.home:
+            os.environ["EMPLOAI_HOME"] = str(Path(args.home).resolve())
         return _run_telegram_worker()
 
     if args.command == "run-remote-control-worker":

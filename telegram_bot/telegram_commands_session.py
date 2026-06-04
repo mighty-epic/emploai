@@ -9,6 +9,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from cli.tui_constants import AGENT_MODE_LABELS, MODEL_CONTEXT_SIZES
+from shared.channel_events import publish_current_session_changed
 from shared import compact_session_history
 
 
@@ -64,7 +65,15 @@ def build_session_command_handlers(
             workspace=session.workspace,
             name=f"New Session {datetime.now().strftime('%H:%M')}"
         )
+        previous_id = session.session_manager.get_current_session_id() if session.session_manager else None
         session.load_session_by_id(new_session_obj.id)
+        publish_current_session_changed(
+            user_id=user.id,
+            session_id=new_session_obj.id,
+            previous_session_id=previous_id,
+            origin_channel="telegram",
+            reason="session_created",
+        )
         
         # Clear agent histories
         if session.unified_agent:

@@ -1,0 +1,1 @@
+export const DESKTOP_RECT_BUTTON_RADIUS = 10;

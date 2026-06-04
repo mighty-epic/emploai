@@ -3,9 +3,11 @@ Unified agent helpers for the Telegram agent.
 """
 
 import asyncio
+import os
 import logging
 import time
 import base64
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Callable, List, Optional
 
@@ -30,12 +32,22 @@ except Exception as exc:
 try:
     import mss
     from PIL import Image
+    SCREEN_CAPTURE_AVAILABLE = True
+except Exception:
+    mss = None
+    Image = None
+    SCREEN_CAPTURE_AVAILABLE = False
+
+try:
     import pytesseract
     from shared.tesseract_runtime import configure_pytesseract_runtime, normalize_tesseract_error
     configure_pytesseract_runtime(pytesseract)
-    TESSERACT_AVAILABLE = True
-except ImportError:
-    TESSERACT_AVAILABLE = False
+    OCR_AVAILABLE = SCREEN_CAPTURE_AVAILABLE
+except Exception:
+    pytesseract = None
+    OCR_AVAILABLE = False
+
+TESSERACT_AVAILABLE = OCR_AVAILABLE
 
 try:
     import pyperclip
@@ -50,7 +62,13 @@ from shared import (
     create_unified_agent,
     get_heartbeat_manager,
 )
-from shared.task_board import TASK_BOARD_INTERNAL_TOOL_NAME, build_task_board_prompt
+from shared.task_board import TASK_BOARD_INTERNAL_TOOL_NAME, build_task_board_prompt, get_active_task_board
+from shared.tool_packs import (
+    PACK_BROWSER_ISOLATED,
+    PACK_INTERACTIVE_DESKTOP,
+    PACK_SCHEDULER,
+    build_tool_pack_prompt,
+)
 from single_agent.browser_tool import create_browser_tool
 from single_agent.extension_tool import create_extension_tool
 from single_agent.cron_scheduler import CRON_TOOL_DEFINITIONS, parse_schedule_with_error
@@ -58,8 +76,94 @@ from single_agent.cron_scheduler import CRON_TOOL_DEFINITIONS, parse_schedule_wi
 
 logger = logging.getLogger(__name__)
 
+
+PACK_SCOPED_UNIFIED_AGENT_CORE_PROMPT = """
+You are an advanced AI assistant operating in AUTO MODE.
+
+## CORE CONTRACT
+- Execute the user's request using only the tool packs and tool names explicitly listed in the tool-pack authority block above.
+- If a tool or pack is not listed there, it is unavailable in this chat. Do not mention it as available, do not plan around it, and do not hallucinate access.
+- If the task needs a disabled capability, say that the capability is unavailable in the current tool-pack configuration and continue with the tools that are actually enabled.
+- Prefer action and verification over long explanations.
+- Keep working through normal failures. Only stop for a true blocker or a tool-pack limitation that the user must change.
+
+## OPERATING STYLE
+- Verify after every meaningful action.
+- Prefer the lowest-risk tool that can prove progress.
+- Do not assume a visually presented action succeeded. Verify the resulting state with the cheapest trustworthy observation tool for that environment. For desktop GUI state, prefer describe_screen. For browser-native state, prefer browser tools first, and use describe_screen only when the browser is headed and browser-native evidence is inconclusive.
+- Do not chain clicks, typing, hotkeys, or other interactive GUI actions without first verifying that the previous step landed the way you intended.
+- If a local dependency, runtime, app launch path, file association, or environment detail is broken but safely repairable, fix it and continue instead of treating it as a blocker.
+- Prefer reversible, task-scoped repairs before broader machine changes. Avoid global installs, default-app changes, registry or PATH edits, deleting user data, killing unrelated processes, or closing the user's apps, tabs, or documents unless the task clearly requires it or the user asked for it.
+- Prefer native file tools over shell-generated file edits whenever those tools are available.
+- On Windows, prefer `py` before `python3` and avoid Unix shell assumptions such as `cat`, `pwd`, heredocs, `/tmp`, `/root`, or `/workspace`.
+- Use the workspace/root path from the WORKSPACE/PATH RUNTIME STATUS section for file-grounding. Relative paths from file tools are workspace-relative; native desktop Open/Save dialogs usually are not.
+- Before typing a path into a desktop file picker or opening a saved file through a host app, resolve the exact absolute path with available file or command tools. Do not guess locations such as Downloads or `C:\\Users\\Public`.
+- If the current directory is uncertain, inspect it first with available tools such as `list_dir('.')`, `find_files`, or a Windows command like `Get-Location` or `Resolve-Path`.
+- For desktop launches, window switches, clicks, typing, and other physical desktop actions, treat the action as an attempt until the resulting state is visually verified.
+- `open_app` does not prove an app opened. If a launch produces an error dialog, the wrong window, or no target window, treat that as failure and recover.
+- Do not final-answer while the task is incomplete and a safe next route exists; take the next safe route instead of saying you can try it.
+- For failed app, file, browser, or desktop actions, discover alternatives from current state and available surfaces such as existing windows, taskbar/dock icons, OS launcher/search, full paths, file associations, workspace files, installed commands, browser tabs, and trusted web equivalents.
+- The user may move focus, click, or type while you work. Do not panic or stop. Re-observe, correct the state, and continue the task.
+- Use the chain of escalation and degradation for tools. If a task is naturally browser-first, stay in the browser toolchain until browser-native methods genuinely stop being sufficient, then fall back to desktop vision and interactive tools only as needed.
+- Native desktop apps, including third-party apps, require interactive desktop tools and visual verification. Do not assume a hidden app-specific control path.
+- Any GUI without a dedicated tool path should be treated as a vision-and-interaction task. For Chrome or browser tasks, use browser tools when the runtime says that path is valid; otherwise fall back to desktop vision and interactive tools.
+- When you open an app, browser window, or file in a visually-presented way, verify that the exact requested target actually became visible. Opening a host app like Notepad is not proof that the requested file opened inside it, and a blank window, wrong document, wrong tab, wrong chat, or generic host UI is not success.
+- For desktop-visible opens and window changes, prefer describe_screen to confirm that the intended target actually appeared. For browser-visible results, prefer browser-native verification and use browser_screenshot as proof when it is available and the task still needs visual confirmation.
+- When you call describe_screen or browser_screenshot for visual interpretation, ask a precise question about what changed, what should now be visible, what error or dialog might be present, or what control you need to identify. Avoid vague prompts like 'what is on screen?' unless no narrower question exists.
+- Before final-answering with partial, failed, or blocked status, check whether there is a safe, relevant next action you can take now. If yes, take it instead of saying you can try it.
+- Prefer keyboard-first desktop interaction when a reliable shortcut, tab path, or confirm key can do the job more safely than clicking.
+- Before using hotkeys, press_key, type_text, Enter, Escape, Tab, or any key combo that affects the visible UI, make sure the intended target window, dialog, or control is focused; if focus is uncertain or another window is active, re-observe and focus the correct target before sending keys.
+- Treat a wrong click, stale observation, or user-caused focus change as a recoverable state problem. Re-observe, diagnose, correct, and continue.
+- AGENTS.md, SOUL.md, USER.md, TOOLS.md, and MEMORY.md are already loaded into prompt context when available. Do not re-open them with file tools during normal execution.
+- Do not read MEMORY.md just to start a task. Touch memory only when you are intentionally saving durable reusable information.
+- Save durable reusable insights about websites, apps, and workflows to memory. Save durable account facts, usernames, emails, profile choices, login requirements, and persistent personal information that will help future tasks, but never store raw secrets such as passwords, tokens, API keys, or 2FA codes in MEMORY.md.
+- When the injected skills index shows a relevant specialized skill for a complex or domain-specific request, use `pull_skill` before improvising a long workflow from scratch.
+- Stop researching once the requested facts are verified from sufficient evidence, and do not broaden into adjacent categories unless the prompt explicitly asks for that.
+- When you write a file or run code, report the verified result from stdout, file read-back, DOM text, or another observed output instead of from your intended content.
+- When starting a local dev server only for task verification, bind it to `127.0.0.1` or `localhost` when supported unless the user requested LAN or public access.
+- Treat the user's machine, files, and sessions carefully.
+- Keep responses concise and grounded in what you actually observed or changed.
+""".strip()
+
 if PYAUTOGUI_IMPORT_ERROR is not None:
     logger.warning("pyautogui unavailable; desktop input tools disabled: %s", PYAUTOGUI_IMPORT_ERROR)
+
+
+def build_current_time_prompt() -> str:
+    now = datetime.now().astimezone()
+    tz_name = now.tzname() or "local"
+    offset = now.strftime("%z")
+    offset_text = (
+        f"{offset[:3]}:{offset[3:]}"
+        if len(offset) == 5
+        else offset or "unknown"
+    )
+    return "\n".join(
+        [
+            "# CURRENT DATE/TIME",
+            f"- Local date/time now: {now.strftime('%Y-%m-%d %H:%M:%S')} {tz_name} (UTC{offset_text})",
+            "- Use this for time-sensitive tasks such as 'now', 'today', 'in 5 minutes', scheduling, deadlines, and deciding whether a requested run time has already passed.",
+        ]
+    )
+
+
+def build_workspace_path_runtime_prompt(session) -> str:
+    raw_workspace = getattr(session, "workspace", None) or Path.cwd()
+    try:
+        workspace = str(Path(raw_workspace).expanduser().resolve())
+    except Exception:
+        workspace = str(raw_workspace)
+
+    return "\n".join(
+        [
+            "# WORKSPACE/PATH RUNTIME STATUS",
+            f"- Current workspace/root directory: {workspace}",
+            "- File tools resolve relative paths against this workspace unless a tool says otherwise.",
+            "- Native desktop file pickers and app Open/Save dialogs do not automatically start in this workspace. Use absolute paths when passing workspace files into GUI apps.",
+            "- If the current directory or target file path is uncertain, use available workspace or command tools to inspect it before typing into a GUI. On Windows, a command like `Get-Location` or `Resolve-Path <relative-path>` is the right way to confirm.",
+            "- Do not invent paths under Downloads, Desktop, Documents, or `C:\\Users\\Public`; use paths you created, listed, read, or resolved.",
+        ]
+    )
 
 # Linux compatibility: host-authoritative detection only. Cross-OS env
 # overrides are ignored so local Windows desktops never activate Linux tools
@@ -100,11 +204,15 @@ AUTO_MODE_BROWSER_TOOLS = [
         "type": "function",
         "function": {
             "name": "browser_navigate",
-            "description": "Navigate the browser to a URL. Works with Selenium or the native Chrome extension bridge.",
+            "description": "Navigate the browser to a URL. Works with Selenium or the native Chrome extension bridge. When you explicitly provide headless=true/false, that choice applies only to the Selenium-backed isolated browser.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "url": {"type": "string", "description": "URL to navigate to"},
+                    "headless": {
+                        "type": "boolean",
+                        "description": "Optional Selenium mode selector. Use true when you want isolated headless browser work. Use false only when you intentionally need the Selenium window visible on the live desktop.",
+                    },
                 },
                 "required": ["url"],
             },
@@ -114,8 +222,29 @@ AUTO_MODE_BROWSER_TOOLS = [
         "type": "function",
         "function": {
             "name": "browser_snapshot",
-            "description": "Get an ARIA snapshot of the current page with interactive [ref=N] IDs.",
+            "description": "Get an ARIA snapshot of the current page with interactive [ref=N] IDs. Best for interactive structure and ref-based actions, not for full page text extraction.",
             "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_read_text",
+            "description": "Read visible page text from the current browser page. Use this for static text, headings, rendered values, and exact text extraction on isolated browser pages.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "Optional CSS selector for a specific element to read. Omit to read visible text from the whole page body.",
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "description": "Maximum number of characters to return.",
+                        "default": 4000,
+                    },
+                },
+            },
         },
     },
     {
@@ -227,8 +356,16 @@ AUTO_MODE_BROWSER_TOOLS = [
         "type": "function",
         "function": {
             "name": "browser_screenshot",
-            "description": "Capture a screenshot of the current browser page.",
-            "parameters": {"type": "object", "properties": {}},
+            "description": "Capture a screenshot of the current browser page for proof and stored artifacts. When you need visual interpretation, ask a precise question about what should be visible. Do not rely on this alone for exact text extraction inside the same turn.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "Optional precise visual question for the browser screenshot sidecar, such as whether the expected page, file, dialog, or error is visibly open.",
+                    }
+                },
+            },
         },
     },
     {
@@ -313,6 +450,7 @@ def get_auto_mode_tool_handlers(session) -> Dict[str, Callable[[Dict[str, Any]],
         "browser_extension_toggle": lambda args: _execute_browser_extension_toggle(session, args),
         "browser_navigate": lambda args: _execute_browser_navigate(session, args),
         "browser_snapshot": lambda args: _execute_browser_snapshot(session, args),
+        "browser_read_text": lambda args: _execute_browser_read_text(session, args),
         "browser_click_ref": lambda args: _execute_browser_click_ref(session, args),
         "browser_type": lambda args: _execute_browser_type(session, args),
         "browser_clear_ref": lambda args: _execute_browser_clear_ref(session, args),
@@ -337,7 +475,10 @@ def get_auto_mode_tool_handlers(session) -> Dict[str, Callable[[Dict[str, Any]],
         "enable_job": lambda args: _execute_enable_job(session, args),
         "disable_job": lambda args: _execute_disable_job(session, args),
         # Backwards-compatible aliases used by the legacy SingleAgent schema/prompt.
-        "open_browser": lambda args: _execute_browser_navigate(session, {"url": args["url"]}),
+        "open_browser": lambda args: _execute_browser_navigate(
+            session,
+            {"url": args["url"], **({"headless": args["headless"]} if "headless" in args else {})},
+        ),
         "observe_browser": lambda args: _execute_observe_browser(session, args),
         "switch_tab": lambda args: _execute_browser_switch_tab(session, {"index": args["index"]}),
         "close_tab": lambda args: _execute_browser_close_tab(session, args),
@@ -450,6 +591,7 @@ def _build_unified_tool_executor(session) -> Callable[[str, Dict], Any]:
         'browser_scroll': lambda args: _execute_browser_scroll(session, args),
         'browser_screenshot': lambda args: _execute_browser_screenshot(session, args),
         'browser_snapshot': lambda args: _execute_browser_snapshot(session, args),
+        'browser_read_text': lambda args: _execute_browser_read_text(session, args),
         'browser_click_ref': lambda args: _execute_browser_click_ref(session, args),
         'browser_back': lambda args: _execute_browser_back(session, args),
         'browser_forward': lambda args: _execute_browser_forward(session, args),
@@ -493,6 +635,12 @@ def _build_unified_tool_executor(session) -> Callable[[str, Dict], Any]:
                 tool_map[name] = lambda args, f=func: f(session, args)
 
     def unified_tool_executor(tool_name: str, tool_args: Dict) -> Any:
+        allowed_tool_names = getattr(session, "current_turn_allowed_tool_names", None)
+        if allowed_tool_names is not None and tool_name not in allowed_tool_names:
+            return {
+                "error": f"Tool '{tool_name}' is not enabled for this chat's current tool-pack configuration.",
+                "error_type": "policy",
+            }
         executor = tool_map.get(tool_name)
         if executor:
             return executor(tool_args)
@@ -666,6 +814,22 @@ def _get_selenium_tool(session):
     return session.browser_tool
 
 
+def _configured_selenium_mode(session) -> str:
+    browser_tool = getattr(session, "browser_tool", None)
+    if browser_tool and hasattr(browser_tool, "get_current_mode"):
+        return str(browser_tool.get_current_mode() or "headless")
+
+    if session.refined_agent and hasattr(session.refined_agent, "browser") and session.refined_agent.browser:
+        browser = session.refined_agent.browser
+        if hasattr(browser, "get_current_mode"):
+            return str(browser.get_current_mode() or "headless")
+
+    env_headless = str(os.getenv("HEADLESS", "") or "").strip().lower()
+    if env_headless in {"false", "0", "no", "off"}:
+        return "headed"
+    return "headless"
+
+
 def _get_browser_tool(session):
     """Return the current preferred browser tool for compatibility callers."""
     context = session.get_browser_task_context()
@@ -701,6 +865,7 @@ def get_browser_bridge_status(session) -> Dict[str, Any]:
     return {
         "desired_backend": desired_backend,
         "effective_backend": effective_backend,
+        "selenium_mode": _configured_selenium_mode(session),
         "task_backend": context.backend,
         "task_id": context.task_id,
         "healthy": context.healthy,
@@ -720,8 +885,9 @@ def get_browser_bridge_status(session) -> Dict[str, Any]:
     }
 
 
-def build_browser_runtime_prompt(session) -> str:
+def build_browser_runtime_prompt(session, *, has_interactive_desktop: bool) -> str:
     status = get_browser_bridge_status(session)
+    selenium_mode = str(status.get("selenium_mode") or "headless")
     heartbeat_age = (status.get("extension") or {}).get("heartbeat_age_seconds")
     heartbeat_text = f"{heartbeat_age}s" if heartbeat_age is not None else "unknown"
     last_title = status.get("last_title")
@@ -753,8 +919,12 @@ def build_browser_runtime_prompt(session) -> str:
     user_chrome_rule = (
         "If the task is about the user's existing Chrome tab, page, or logged-in session and "
         "Real Chrome available now is NO, browser_* tools are unavailable for that task. "
-        "Do NOT use Selenium as a substitute. Use describe_screen, ocr_screen, click, "
-        "type_text, hotkey, and other desktop actions instead."
+        + (
+            "Do NOT use Selenium as a substitute. Use describe_screen, ocr_screen, click, "
+            "type_text, hotkey, and other desktop actions instead."
+            if has_interactive_desktop
+            else "Do NOT use Selenium as a substitute. You do not have live-desktop fallback in this chat unless the interactive desktop pack is enabled."
+        )
     )
 
     if status["task_tab_available"]:
@@ -774,6 +944,7 @@ def build_browser_runtime_prompt(session) -> str:
             "# LIVE BROWSER RUNTIME STATUS (Overrides browser preference below)",
             f"- Desired backend preference: {status['desired_backend']}",
             f"- Effective backend right now: {status['effective_backend']}",
+            f"- Isolated Selenium mode configured now: {selenium_mode}",
             f"- Task backend pin: {status.get('task_backend') or 'unassigned'}",
             f"- Task depends on user's Chrome: {'YES' if status['requires_real_chrome'] else 'NO'}",
             f"- Real Chrome available now: {'YES' if status['real_browser_available'] else 'NO'}",
@@ -789,7 +960,33 @@ def build_browser_runtime_prompt(session) -> str:
             f"- {user_chrome_rule}",
             f"- {task_tab_rule}",
             "- Never claim the extension is active unless Real Chrome available now is YES.",
-            "- When you need to visually locate buttons or understand layout, prefer describe_screen before ocr_screen.",
+            "- browser_snapshot and observe_browser mainly report interactive structure, refs, title, URL, and high-level page state. They are not full page-text extraction tools.",
+            "- For static content, headings, rendered text, and exact values on the current browser page, prefer browser_read_text. Use browser_wait_for(text_contains=...) to confirm appearance before reading when needed.",
+            "- browser_screenshot captures proof and stored artifacts. Do NOT claim exact text or numeric values from browser_screenshot alone unless another tool extracted that text.",
+            "- browser_read_text is the primary browser-native tool for visible page text, headings, labels, and exact rendered values.",
+            "- browser_wait_for is for confirming that expected text, selectors, navigation, or load state appeared before you act or read.",
+            "- open_browser controls the isolated browser instance and its headless/headed mode. It does not prove anything about the user's live Chrome session.",
+            "- If you opened or navigated a browser page and the task depends on that visual result, verify the intended page state with browser_read_text, browser_snapshot, browser_wait_for, or browser_screenshot before assuming the page is ready.",
+            "- If a browser window, page, or file should now be visibly open and browser-native evidence is still inconclusive, use browser_screenshot as visual proof before you assume that the intended browser result actually appeared.",
+            "- If a browser snapshot, tab list, or other browser-native result already answers the question, do not escalate to screenshots, OCR, or desktop tools just to restate it.",
+            "- If the task is naturally browser-first, stay in browser-native tools as long as they can still produce trustworthy evidence before falling back to desktop vision or desktop interaction.",
+            "- If one browser-native method is inconclusive, try another browser-native method such as browser_read_text, browser_wait_for, browser_snapshot, or observe_browser before leaving the browser environment.",
+            "- If isolated browser automation is blocked and the task depends on a real authenticated browser session, prefer the extension-backed real Chrome path when it is available before dropping to desktop-only interaction.",
+            (
+                "- If isolated Selenium is headless, describe_screen and ocr_screen cannot inspect that browser page. Do not use desktop vision/OCR to reason about headless Selenium output."
+                if has_interactive_desktop
+                else "- When live Chrome is unavailable, stay inside the isolated browser toolchain and do not imply live-desktop fallback."
+            ),
+            (
+                "- If isolated Selenium is headed, desktop vision/OCR may only be used for that browser page after you have verified the Selenium window is actually the visible target on the live desktop."
+                if has_interactive_desktop
+                else "- When the isolated browser is the active path, prefer browser-native text and DOM tools over any desktop fallback wording."
+            ),
+            (
+                "- If a major headed-browser action still needs visual confirmation after browser-native tools were inconclusive, verify that the Selenium window is the visible desktop target first, then use desktop vision/OCR only for that visible window."
+                if has_interactive_desktop
+                else "- If browser-native tools are inconclusive, prefer another browser-native method before implying any desktop fallback."
+            ),
         ]
     )
 
@@ -812,6 +1009,27 @@ def build_desktop_runtime_prompt(session) -> str:
             "- The startup SYSTEM_INFO already contains the initial desktop/window snapshot for this turn.",
             "- Do NOT spend a turn on observe_desktop or focus_window if that snapshot already identifies the target window and nothing has changed yet.",
             "- Re-check the desktop only after an action changed state, the user may have changed it, or the target window is still uncertain.",
+            "- open_app only submits a launch request. It does not prove the app opened successfully.",
+            "- After major desktop actions such as app launches, window switches, clicks, typing, hotkeys, or send/submit actions, visually verify the resulting state before assuming success.",
+            "- Do not chain desktop clicks, typing, hotkeys, or other interactive GUI actions without first verifying that the previous action landed correctly.",
+            "- If a launch attempt shows a Windows error dialog, the wrong window, or leaves the target missing, treat that as a failed launch and recover instead of pretending success.",
+            "- Do not final-answer while the task is incomplete and a safe next route exists; take the next safe route instead of saying you can try it.",
+            "- For failed app, file, browser, or desktop actions, discover alternatives from current state and available surfaces such as existing windows, taskbar/dock icons, OS launcher/search, full paths, file associations, workspace files, installed commands, browser tabs, and trusted web equivalents.",
+            "- Native desktop apps, including third-party apps, require interactive desktop tools and visual verification. Do not assume a browser or DOM control path for them.",
+            "- The user may move focus, click, or type while you work. If that happens, re-observe, correct the state, and continue instead of treating it as a blocker.",
+            "- Any GUI without a dedicated tool path should be handled as a vision-and-interaction task.",
+            "- describe_screen is the primary desktop verification and layout-understanding tool. Use it to confirm visible state, identify controls, and understand what changed.",
+            "- ocr_screen is for exact visible text and coordinates. Prefer describe_screen first, then OCR when exact text or coordinate fallback is required.",
+            "- observe_desktop tells you which windows exist and which one is active. It does not replace visual verification of on-screen controls.",
+            "- If you opened an app, switched windows, or tried to open a file visually, verify that the exact requested target window and content actually appeared. Opening a host app alone is not proof that the requested file is open inside it, and a blank window, wrong document, wrong tab, wrong chat, or generic host UI is not success.",
+            "- For desktop-visible opens and window changes, prefer describe_screen to confirm that the intended target actually appeared before you continue.",
+            "- Prefer keyboard-first desktop interaction when a reliable shortcut or tab path exists. Use hotkey, press_key, Enter, Escape, Tab, Shift+Tab, Ctrl+L, Ctrl+S, and similar keys before coordinate clicking when they accomplish the same task more safely.",
+            "- Do not use broad close shortcuts such as Alt+F4 for ambiguous cleanup. Use close_window with an exact target title, Escape/Cancel for a visible modal, or another targeted route.",
+            "- Before physical typing, hotkeys, or key combos that affect the visible UI, make sure the intended target window, dialog, or control is still active. If focus is uncertain or another window is active, re-observe and focus the correct target before sending keys.",
+            "- Before final-answering with partial, failed, or blocked status, check whether there is a safe, relevant next action you can take now. If yes, take it instead of saying you can try it.",
+            "- A wrong click, stale desktop observation, or user-caused focus change is a recoverable state problem. Re-observe, diagnose, correct, and continue.",
+            "- If a local launch path, file association, or other safely repairable desktop/runtime detail is broken, repair it and continue instead of treating it as a blocker.",
+            "- Prefer reversible, task-scoped repairs before broader machine changes. Do not change global defaults, install software system-wide, kill unrelated processes, delete user data, or close the user's windows unless that is clearly necessary for the requested task or the user asked for it.",
         ]
     )
 
@@ -823,11 +1041,16 @@ def build_unified_system_prompt(
     skills_index: str = "",
     active_skills_context: str = "",
 ) -> str:
-    from cli.tui_constants import UNIFIED_AGENT_PROMPT
-
     workspace_context = ""
     if getattr(session, "context_loader", None):
         workspace_context = session.context_loader.build_system_prompt_context()
+    active_tool_packs = list(
+        getattr(session, "_active_tool_packs_for_current_run", None)
+        or getattr(session, "enabled_tool_packs", [])
+        or []
+    )
+    has_interactive_desktop = PACK_INTERACTIVE_DESKTOP in active_tool_packs
+    has_browser_pack = has_interactive_desktop or PACK_BROWSER_ISOLATED in active_tool_packs
 
     cron_prompt = """
 ## SCHEDULING TOOLS
@@ -844,11 +1067,14 @@ Supported schedules include: 'every 30 seconds', 'every 5 minutes', 'every 1 hou
 """.strip()
 
     sections = [
-        build_task_board_prompt(session),
-        build_browser_runtime_prompt(session),
-        build_desktop_runtime_prompt(session),
-        cron_prompt,
-        UNIFIED_AGENT_PROMPT,
+        build_task_board_prompt(session) if get_active_task_board(session) else "",
+        build_browser_runtime_prompt(session, has_interactive_desktop=has_interactive_desktop) if has_browser_pack else "",
+        build_desktop_runtime_prompt(session) if has_interactive_desktop else "",
+        build_workspace_path_runtime_prompt(session),
+        build_current_time_prompt(),
+        cron_prompt if PACK_SCHEDULER in active_tool_packs else "",
+        build_tool_pack_prompt(active_tool_packs),
+        PACK_SCOPED_UNIFIED_AGENT_CORE_PROMPT,
         workspace_context.strip() if workspace_context else "",
         memory_context.strip() if memory_context else "",
         skills_index.strip() if skills_index else "",
@@ -876,9 +1102,16 @@ def _blocked_user_chrome_browser_result(reason: str) -> Dict[str, Any]:
     }
 
 
-def _run_browser_action(session, extension_action, selenium_action, *, own_tab: bool = False) -> Dict[str, Any]:
+def _run_browser_action(
+    session,
+    extension_action,
+    selenium_action,
+    *,
+    own_tab: bool = False,
+    force_selenium: bool = False,
+) -> Dict[str, Any]:
     context = session.get_browser_task_context()
-    use_extension = _bridge_enabled(session) and context.backend != "selenium"
+    use_extension = (not force_selenium) and _bridge_enabled(session) and context.backend != "selenium"
 
     if _browser_tools_blocked_for_user_chrome_task(context):
         if not _bridge_enabled(session):
@@ -962,6 +1195,8 @@ def _browser_result_summary(action: str, result: Dict[str, Any], *, detail: Opti
     state_bits = []
     if result.get("backend"):
         state_bits.append(f"backend={result['backend']}")
+    if result.get("mode"):
+        state_bits.append(f"mode={result['mode']}")
     if result.get("tab_id") is not None:
         state_bits.append(f"tab={result['tab_id']}")
     if result.get("wait_reason"):
@@ -1002,11 +1237,17 @@ def _execute_browser_extension_toggle(session, args: Dict) -> str:
 
 
 def _execute_browser_navigate(session, args: Dict) -> str:
+    force_selenium = "headless" in args
     result = _run_browser_action(
         session,
         lambda browser, context: browser.navigate(args["url"], tab_id=context.primary_tab_id),
-        lambda browser, context: browser.navigate(args["url"], tab_id=context.primary_tab_id),
+        lambda browser, context: browser.navigate(
+            args["url"],
+            tab_id=context.primary_tab_id,
+            headless=args.get("headless"),
+        ),
         own_tab=True,
+        force_selenium=force_selenium,
     )
     if "error" in result:
         return _browser_action_error("Browser error", result)
@@ -1145,6 +1386,11 @@ def _execute_browser_screenshot(session, args: Dict) -> Dict:
     )
     if "error" in result:
         return {"error": f"Screenshot error: {result['error']}"}
+    question = str(args.get("question") or "").strip()
+    if question:
+        enriched = dict(result)
+        enriched["question"] = question
+        return enriched
     return result
 
 
@@ -1157,7 +1403,49 @@ def _execute_browser_snapshot(session, args: Dict) -> str:
     if "error" in result:
         return _browser_action_error("Snapshot error", result)
     metadata = f"Snapshot: {(result.get('title') or '(no title)')} - {(result.get('url') or '(no url)')}"
-    return f"{metadata}\nBrowser ARIA Snapshot:\n{result.get('formatted', 'No interactive elements found')}"
+    return (
+        f"{metadata}\n"
+        f"Browser ARIA Snapshot:\n{result.get('formatted', 'No interactive elements found')}\n"
+        "Snapshot semantics: interactive structure and refs only. Use browser_read_text for full visible page text or exact rendered values."
+    )
+
+
+def _execute_browser_read_text(session, args: Dict) -> str:
+    selector = str(args.get("selector") or "").strip() or None
+    try:
+        max_chars = int(args.get("max_chars") or 4000)
+    except Exception:
+        max_chars = 4000
+    max_chars = max(200, min(max_chars, 12000))
+
+    result = _run_browser_action(
+        session,
+        lambda browser, context: browser.read_text(
+            selector=selector,
+            max_chars=max_chars,
+            tab_id=context.primary_tab_id,
+        ),
+        lambda browser, context: browser.read_text(
+            selector=selector,
+            max_chars=max_chars,
+            tab_id=context.primary_tab_id,
+        ),
+    )
+    if "error" in result:
+        return _browser_action_error("Read text error", result)
+
+    extracted_text = str(result.get("text") or "").strip()
+    selector_detail = f"Selector: {selector}" if selector else "Selector: <page body>"
+    truncation_detail = ""
+    if result.get("truncated"):
+        truncation_detail = f"\nTruncated: yes (full_length={int(result.get('full_length') or len(extracted_text))})"
+    return (
+        f"Browser text: {(result.get('title') or '(no title)')} - {(result.get('url') or '(no url)')}\n"
+        f"{selector_detail}\n"
+        f"Mode: {result.get('mode') or result.get('backend') or 'unknown'}{truncation_detail}\n"
+        "Visible page text:\n"
+        f"{extracted_text or '(no visible text extracted)'}"
+    )
 
 
 def _execute_observe_browser(session, args: Dict) -> str:
@@ -1177,6 +1465,7 @@ def _execute_observe_browser(session, args: Dict) -> str:
         f"Interactive elements detected: {interactive_count}",
         "Key elements:",
         result.get("formatted", "No interactive elements found"),
+        "Observe-browser semantics: page state and interactive structure only. Use browser_read_text for full visible page text or exact rendered values.",
     ]
     if result.get("bridge_fallback_reason"):
         lines.append(f"Bridge fallback: {result['bridge_fallback_reason']}")
@@ -1364,8 +1653,8 @@ def _execute_change_directory(session, args: Dict) -> str:
 
 
 def _execute_describe_screen(session, args: Dict) -> Dict:
-    if not TESSERACT_AVAILABLE:
-        return {"error": "Vision/Screenshot tools not available (missing mss/PIL/pytesseract)"}
+    if not SCREEN_CAPTURE_AVAILABLE:
+        return {"error": "Screenshot tools unavailable (missing mss/Pillow)"}
     
     try:
         with mss.mss() as sct:
@@ -1392,8 +1681,8 @@ def _execute_describe_screen(session, args: Dict) -> Dict:
 
 
 def _execute_ocr_screen(session, args: Dict) -> str:
-    if not TESSERACT_AVAILABLE:
-        return "OCR tools not available"
+    if not OCR_AVAILABLE:
+        return "OCR tools unavailable (missing pytesseract/Tesseract runtime)"
     
     try:
         with mss.mss() as sct:
@@ -1517,7 +1806,10 @@ def _execute_open_app(session, args: Dict) -> str:
         time.sleep(0.5)
         pyautogui.write(args['name'])
         pyautogui.press('enter')
-        return f"Attempted to open: {args['name']}"
+        return (
+            f"Launch request sent for: {args['name']}. "
+            "This does not confirm success; verify the resulting window or error state visually before assuming the app opened."
+        )
     except Exception as e:
         return f"Error opening app: {str(e)}"
 

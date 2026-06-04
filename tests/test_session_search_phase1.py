@@ -17,7 +17,7 @@ def _create_session_with_messages(
     return session
 
 
-def test_session_search_ranks_projects_then_sessions_then_messages(tmp_path: Path):
+def test_session_search_ranks_sessions_then_messages(tmp_path: Path):
     manager = SessionManager(base_path=tmp_path)
     project = tmp_path / "5070 ti lab"
     project.mkdir()
@@ -41,10 +41,10 @@ def test_session_search_ranks_projects_then_sessions_then_messages(tmp_path: Pat
         limit=10,
     )
 
-    assert [item["kind"] for item in results[:3]] == ["project", "session", "message"]
-    assert results[0]["project_name"] == "5070 ti lab"
-    assert results[1]["session_name"] == "5070 Ti Notes"
-    assert "5070 TI" in results[2]["snippet"]
+    assert [item["kind"] for item in results[:2]] == ["session", "message"]
+    assert all(item["kind"] != "project" for item in results)
+    assert results[0]["session_name"] == "5070 Ti Notes"
+    assert "5070 TI" in results[1]["snippet"]
 
 
 def test_session_search_is_case_insensitive_and_prefers_newer_phrase_matches(tmp_path: Path):

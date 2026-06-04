@@ -52,15 +52,28 @@ except Exception as exc:
     PYWINAUTO_IMPORT_ERROR = exc
 
 try:
-    import pytesseract
     from PIL import Image
     import mss
-    configure_pytesseract_runtime(pytesseract)
-    TESSERACT_AVAILABLE = True
-    TESSERACT_IMPORT_ERROR = None
+    SCREEN_CAPTURE_AVAILABLE = True
+    SCREEN_CAPTURE_IMPORT_ERROR = None
 except Exception as exc:
-    TESSERACT_AVAILABLE = False
-    TESSERACT_IMPORT_ERROR = exc
+    Image = None
+    mss = None
+    SCREEN_CAPTURE_AVAILABLE = False
+    SCREEN_CAPTURE_IMPORT_ERROR = exc
+
+try:
+    import pytesseract
+    configure_pytesseract_runtime(pytesseract)
+    OCR_AVAILABLE = SCREEN_CAPTURE_AVAILABLE
+    OCR_IMPORT_ERROR = None if OCR_AVAILABLE else SCREEN_CAPTURE_IMPORT_ERROR
+except Exception as exc:
+    pytesseract = None
+    OCR_AVAILABLE = False
+    OCR_IMPORT_ERROR = exc
+
+TESSERACT_AVAILABLE = OCR_AVAILABLE
+TESSERACT_IMPORT_ERROR = OCR_IMPORT_ERROR
 
 
 # ============================================================
@@ -88,7 +101,7 @@ AGENT_TOOLS = [
     {"type": "function", "function": {"name": "go_forward", "description": "Navigate forward in browser history.", "parameters": {"type": "object", "properties": {}}}},
     
     # --- DESKTOP TOOLS ---
-    {"type": "function", "function": {"name": "open_app", "description": "Open a Windows application by name.", "parameters": {"type": "object", "properties": {"app_name": {"type": "string", "description": "Name of app to open (e.g., 'notepad', 'spotify', 'chrome')"}}, "required": ["app_name"]}}},
+    {"type": "function", "function": {"name": "open_app", "description": "Submit a Windows Run launch request for an application by name. This does not confirm success; verify the resulting window or error dialog visually before assuming the app opened.", "parameters": {"type": "object", "properties": {"app_name": {"type": "string", "description": "Name of app to open (e.g., 'notepad', 'spotify', 'chrome')"}}, "required": ["app_name"]}}},
     {"type": "function", "function": {"name": "focus_window", "description": "Bring a window to foreground by title.", "parameters": {"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]}}},
     {"type": "function", "function": {"name": "minimize_window", "description": "Minimize a window by title.", "parameters": {"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]}}},
     {"type": "function", "function": {"name": "maximize_window", "description": "Maximize a window by title.", "parameters": {"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]}}},
@@ -100,7 +113,7 @@ AGENT_TOOLS = [
     {"type": "function", "function": {"name": "double_click", "description": "Double-click at screen coordinates.", "parameters": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}, "required": ["x", "y"]}}},
     {"type": "function", "function": {"name": "type_text", "description": "Type text using keyboard. MANDATORY: After calling this, you MUST verify the text appeared correctly before taking any other action.", "parameters": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}},
     {"type": "function", "function": {"name": "press_key", "description": "Press a single key (enter, tab, escape, f1, etc).", "parameters": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}}},
-    {"type": "function", "function": {"name": "hotkey", "description": "Press a key combination (e.g., ctrl+c, alt+tab, ctrl+shift+n). MANDATORY: After calling this, you MUST verify the action worked before taking any other action.", "parameters": {"type": "object", "properties": {"keys": {"type": "string", "description": "Keys separated by + (e.g., 'ctrl+c', 'alt+f4')"}}, "required": ["keys"]}}},
+    {"type": "function", "function": {"name": "hotkey", "description": "Press a key combination (e.g., ctrl+c, alt+tab, ctrl+shift+n). MANDATORY: After calling this, you MUST verify the action worked before taking any other action.", "parameters": {"type": "object", "properties": {"keys": {"type": "string", "description": "Keys separated by + (e.g., 'ctrl+c', 'ctrl+l')"}}, "required": ["keys"]}}},
     {"type": "function", "function": {"name": "scroll", "description": "Scroll at current mouse position.", "parameters": {"type": "object", "properties": {"direction": {"type": "string", "enum": ["up", "down"]}, "amount": {"type": "integer", "default": 3}}}}},
     {"type": "function", "function": {"name": "drag_and_drop", "description": "Drag from one position to another.", "parameters": {"type": "object", "properties": {"start_x": {"type": "integer"}, "start_y": {"type": "integer"}, "end_x": {"type": "integer"}, "end_y": {"type": "integer"}}, "required": ["start_x", "start_y", "end_x", "end_y"]}}},
     
@@ -341,8 +354,8 @@ class SingleAgent:
         Capture the screen for visual analysis.
         The primary model will use the captured image to answer your question.
         """
-        if not TESSERACT_AVAILABLE:
-            return {"error": "Vision tools not available (missing mss/PIL/pytesseract)"}
+        if not SCREEN_CAPTURE_AVAILABLE:
+            return {"error": "Screenshot tools unavailable (missing mss/Pillow)"}
             
         try:
             with mss.mss() as sct:
@@ -365,8 +378,8 @@ class SingleAgent:
     
     def _ocr_screen(self) -> Dict:
         """OCR the entire screen. Returns text with bounding box coordinates."""
-        if not TESSERACT_AVAILABLE:
-            return {"error": "OCR tools unavailable (missing Pillow/pytesseract)"}
+        if not OCR_AVAILABLE:
+            return {"error": "OCR tools unavailable (missing pytesseract/Tesseract runtime)"}
         try:
             with mss.mss() as sct:
                 screenshot = sct.grab(sct.monitors[1])
@@ -654,7 +667,12 @@ class SingleAgent:
             pyautogui.write(app_name)
             pyautogui.press('enter')
             time.sleep(1)
-            return {"success": True, "opened": app_name}
+            return {
+                "success": True,
+                "launch_requested": app_name,
+                "verified": False,
+                "note": "Launch request submitted only. Verify the resulting window or error state visually before assuming success.",
+            }
         except Exception as e:
             return {"error": str(e)}
     

@@ -33,6 +33,11 @@ class CronJob:
     error_count: int = 0
     timezone_offset_hours: Optional[int] = None
     owner_user_id: Optional[int] = None
+    origin_session_id: Optional[str] = None
+    origin_telegram_bot_config_id: Optional[str] = None
+    origin_workspace: Optional[str] = None
+    origin_model: Optional[str] = None
+    origin_enabled_tool_packs: List[str] = field(default_factory=list)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -245,6 +250,11 @@ class CronScheduler:
         run_immediately: bool = False,
         timezone_offset_hours: Optional[int] = None,
         owner_user_id: Optional[int] = None,
+        origin_session_id: Optional[str] = None,
+        origin_telegram_bot_config_id: Optional[str] = None,
+        origin_workspace: Optional[str] = None,
+        origin_model: Optional[str] = None,
+        origin_enabled_tool_packs: Optional[List[str]] = None,
     ) -> str:
         """
         Add a new recurring job.
@@ -280,6 +290,11 @@ class CronScheduler:
             enabled=enabled,
             timezone_offset_hours=timezone_offset_hours,
             owner_user_id=owner_user_id,
+            origin_session_id=origin_session_id,
+            origin_telegram_bot_config_id=origin_telegram_bot_config_id,
+            origin_workspace=origin_workspace,
+            origin_model=origin_model,
+            origin_enabled_tool_packs=list(origin_enabled_tool_packs or []),
         )
         
         async def _add():

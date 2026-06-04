@@ -65,26 +65,26 @@ class FileProcessor:
         try:
             from PIL import Image
             self.has_pil = True
-        except ImportError:
-            logger.warning("PIL not available - image processing disabled")
+        except Exception as exc:
+            logger.warning("PIL not available - image processing disabled (%s: %s)", type(exc).__name__, exc)
         
         try:
             import pytesseract
             self.has_pytesseract = True
-        except ImportError:
-            logger.warning("pytesseract not available - OCR disabled")
+        except Exception as exc:
+            logger.warning("pytesseract not available - OCR disabled (%s: %s)", type(exc).__name__, exc)
         
         try:
             import fitz  # PyMuPDF
             self.has_pymupdf = True
-        except ImportError:
-            logger.warning("PyMuPDF not available - PDF processing limited")
+        except Exception as exc:
+            logger.warning("PyMuPDF not available - PDF processing limited (%s: %s)", type(exc).__name__, exc)
         
         try:
             import docx
             self.has_docx = True
-        except ImportError:
-            logger.warning("python-docx not available - DOCX processing disabled")
+        except Exception as exc:
+            logger.warning("python-docx not available - DOCX processing disabled (%s: %s)", type(exc).__name__, exc)
     
     async def process_telegram_file(self, file_obj, bot) -> ProcessedFile:
         """

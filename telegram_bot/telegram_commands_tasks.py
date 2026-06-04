@@ -9,7 +9,17 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from single_agent.cron_scheduler import parse_schedule
-from shared.task_board import format_task_board_for_user, get_active_task_board, get_display_task_board, request_task_board_reassessment
+from shared.channel_events import publish_status_update
+from shared.channel_sync import get_channel_sync_hub
+from shared.task_board import (
+    archive_active_task_board,
+    completed_task_board_views,
+    format_task_board_for_user,
+    get_active_task_board,
+    get_display_task_board,
+    request_task_board_reassessment,
+    task_board_view,
+)
 
 
 def build_task_command_handlers(
@@ -60,6 +70,8 @@ def build_task_command_handlers(
         session = get_session(user.id)
 
         stopped = False
+        archived_board = None
+        current_session_id = session.session_manager.get_current_session_id() if session.session_manager else None
         async with session.lock:
             if session.unified_agent and session.unified_agent.current_task:
                 session.unified_agent.stop()
@@ -76,8 +88,38 @@ def build_task_command_handlers(
             if stopped:
                 session.is_processing = False
                 session.should_interrupt = True
+                archived_board = archive_active_task_board(
+                    session,
+                    status="interrupted",
+                    summary="The current managed task was stopped by the user.",
+                )
+                session.save_session()
 
         if stopped:
+            publish_status_update(
+                user_id=user.id,
+                session_id=current_session_id,
+                origin_channel="telegram",
+                message="ready",
+                run_state="idle",
+            )
+            if archived_board:
+                get_channel_sync_hub().publish(
+                    user_id=user.id,
+                    event={
+                        "type": "task_board",
+                        "session_id": current_session_id,
+                        "origin_channel": "telegram",
+                        "payload": {
+                            "board": task_board_view(get_active_task_board(session)),
+                            "completed_task_boards": completed_task_board_views(session),
+                            "summary": archived_board.get("completion_summary")
+                            or archived_board.get("progress_summary")
+                            or archived_board.get("latest_summary")
+                            or "The current managed task was stopped by the user.",
+                        },
+                    },
+                )
             await safe_reply(update, "⏹️ **Stopped.**")
         else:
             await safe_reply(update, "❌ No task is currently running.")

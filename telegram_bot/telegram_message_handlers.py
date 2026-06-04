@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Dict
 
 from telegram import Update
 from telegram.ext import ContextTypes
+
+from mobile_app.backend.session_bridge import AppSessionBridge
+from shared.channel_events import publish_current_session_changed
+from shared.telegram_bot_config_store import TelegramBotConfigStore
 
 
 def build_message_handlers(
@@ -44,6 +49,30 @@ def build_message_handlers(
             return
 
         session = get_session(user.id)
+        bridge = AppSessionBridge(user_id=user.id, workspace=Path(getattr(session, "workspace", Path.cwd())))
+        bot_token = str(getattr(getattr(context, "bot", None), "token", "") or "").strip()
+        bot_store = TelegramBotConfigStore(user_id=user.id)
+        matched_bot_config_id = None
+        for item in bot_store.list_configs():
+            if str(item.get("bot_token") or "").strip() == bot_token:
+                matched_bot_config_id = str(item.get("id") or "").strip() or None
+                break
+        focused_session_id = str(getattr(session, "shared_current_session_id", "") or "").strip() or bridge.session_manager.get_current_session_id()
+        target_session_id = bridge.orchestrator.resolve_session_for_inbound_bot(
+            bot_config_id=matched_bot_config_id,
+            focused_session_id=focused_session_id,
+        )
+        if target_session_id:
+            previous_session_id = bridge.session_manager.get_current_session_id()
+            bridge.session_manager.set_current_session(target_session_id)
+            publish_current_session_changed(
+                user_id=user.id,
+                session_id=target_session_id,
+                previous_session_id=previous_session_id,
+                origin_channel="telegram",
+                reason="telegram_inbound_focus",
+            )
+            session = bridge.orchestrator.get_worker(target_session_id)
 
         async with session.lock:
             session.session_context.update_activity()

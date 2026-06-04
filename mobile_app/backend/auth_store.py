@@ -9,8 +9,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from shared.runtime_paths import auth_store_root
+
 
 AUTH_STORE_FILENAME = "app_auth_store.json"
+LAST_USED_WRITE_INTERVAL_SECONDS = 30.0
+SAVE_REPLACE_RETRIES = 5
+SAVE_REPLACE_RETRY_DELAY_SECONDS = 0.05
 
 
 def _utc_iso(timestamp: Optional[float]) -> Optional[str]:
@@ -25,7 +30,7 @@ def _hash_token(token: str) -> str:
 
 class AppAuthStore:
     def __init__(self, root_path: Optional[Path] = None):
-        self.root_path = root_path or (Path.home() / ".agentshell")
+        self.root_path = root_path or auth_store_root()
         self.file_path = self.root_path / AUTH_STORE_FILENAME
         self._lock = threading.RLock()
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -57,9 +62,32 @@ class AppAuthStore:
         return loaded
 
     def _save(self) -> None:
-        temp_path = self.file_path.with_suffix(".tmp")
+        temp_path = self.file_path.with_name(
+            f"{self.file_path.name}.{threading.get_ident()}.{secrets.token_hex(6)}.tmp"
+        )
         temp_path.write_text(json.dumps(self._data, indent=2, sort_keys=True), encoding="utf-8")
-        temp_path.replace(self.file_path)
+        last_error: Optional[PermissionError] = None
+        try:
+            for attempt in range(SAVE_REPLACE_RETRIES):
+                try:
+                    temp_path.replace(self.file_path)
+                    return
+                except PermissionError as exc:
+                    last_error = exc
+                    time.sleep(SAVE_REPLACE_RETRY_DELAY_SECONDS * (attempt + 1))
+            if last_error is not None:
+                raise last_error
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+    def _save_last_used_best_effort(self) -> None:
+        try:
+            self._save()
+        except PermissionError:
+            # A last-used timestamp refresh should never reject an otherwise valid
+            # desktop token. On Windows the Electron helper and API process can
+            # briefly contend over the same JSON store during startup fan-out.
+            return
 
     def _cleanup(self, data: Optional[Dict[str, Any]] = None) -> None:
         target = data or self._data
@@ -206,9 +234,15 @@ class AppAuthStore:
                 return None
 
             now = time.time()
+            token_last_used_at = float(token_record.get("last_used_at", 0) or 0)
+            device_last_used_at = float(device_record.get("last_used_at", 0) or 0)
+            should_persist_last_used = (
+                now - max(token_last_used_at, device_last_used_at) >= LAST_USED_WRITE_INTERVAL_SECONDS
+            )
             token_record["last_used_at"] = now
             device_record["last_used_at"] = now
-            self._save()
+            if should_persist_last_used:
+                self._save_last_used_best_effort()
             return {
                 "device_id": device_id,
                 "user_id": int(token_record.get("user_id", 0)),

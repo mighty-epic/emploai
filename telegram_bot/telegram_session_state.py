@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from telegram import Bot
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import Application
 
@@ -46,6 +47,9 @@ from shared.model_availability import (
     first_available_model,
     group_models_by_provider,
 )
+from shared.runtime_paths import normalize_legacy_workspace_path, user_state_root
+from shared.telegram_bot_config_store import TelegramBotConfigStore
+from shared.tool_packs import default_enabled_tool_packs
 
 from openai import OpenAI
 from anthropic import Anthropic
@@ -59,6 +63,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 _telegram_application: Optional[Application] = None
 _telegram_loop: Optional[asyncio.AbstractEventLoop] = None
+_BASE64_KEYS = frozenset({"image_base64", "base64", "image_data", "data", "screenshot"})
 
 
 REAL_CHROME_TASK_HINTS = (
@@ -97,6 +102,43 @@ def _task_requires_real_chrome(task_text: Optional[str]) -> bool:
     return any(hint in normalized for hint in REAL_CHROME_TASK_HINTS)
 
 
+def _format_verbose_tool_message(payload: Dict[str, Any]) -> str:
+    tool_name = str(payload.get("tool_name") or "").strip() or "tool"
+    args = payload.get("tool_args") or {}
+    result = payload.get("tool_result")
+    duration_ms = float(payload.get("duration_ms") or 0.0)
+
+    short_parts: list[str] = []
+    for key, value in list(args.items())[:4]:
+        value_text = str(value)
+        if key in _BASE64_KEYS and len(value_text) > 100:
+            continue
+        if len(value_text) > 80:
+            value_text = value_text[:77] + "..."
+        short_parts.append(f"{key}: {value_text}")
+    args_text = ", ".join(short_parts)
+    if len(args_text) > 200:
+        args_text = args_text[:197] + "..."
+
+    if isinstance(result, dict):
+        if "error" in result:
+            result_text = f"❌ {str(result.get('error') or '')[:180]}"
+        else:
+            safe_keys = [str(key) for key in result.keys() if str(key) not in _BASE64_KEYS]
+            result_text = f"✅ {', '.join(safe_keys[:5]) or 'ok'}"
+    else:
+        result_value = str(result or "").strip()
+        if len(result_value) > 180:
+            result_value = result_value[:177] + "..."
+        if result_value.lower().startswith("error"):
+            result_text = f"❌ {result_value}"
+        else:
+            result_text = f"✅ {result_value or 'ok'}"
+
+    call_text = f"{tool_name}({args_text})" if args_text else f"{tool_name}()"
+    return f"🧰 *Command*\n`{call_text}`\n\n*Command Result*\n{result_text} ({duration_ms:.0f}ms)"
+
+
 @dataclass
 class BrowserTaskContext:
     """Tracks the browser backend and primary task-owned tab for one task."""
@@ -121,6 +163,9 @@ class TelegramSession:
     current_variant: str = "standard"
     planner_model: Optional[str] = None
     default_planner_model: Optional[str] = None
+    enabled_tool_packs: List[str] = field(default_factory=default_enabled_tool_packs)
+    telegram_bot_config_id: Optional[str] = None
+    headless_eligible: bool = False
     agent_mode: str = "auto"  # Default to auto for full autonomous behavior
     max_turns: int = 100
     chat_history: List[Dict] = field(default_factory=list)
@@ -198,6 +243,7 @@ class TelegramSession:
     message_id_map: Dict[int, int] = field(default_factory=dict)
     task_history: List[Dict[str, Any]] = field(default_factory=list)
     active_task_id: Optional[str] = None
+    task_board_armed_next_turn: bool = False
     active_skills: List[str] = field(default_factory=list)
     last_context_compaction: Optional[Dict[str, Any]] = None
 
@@ -208,7 +254,8 @@ class TelegramSession:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     workspace: Path = field(default_factory=lambda: Path.cwd())
-    create_new_session_on_init: bool = True
+    create_new_session_on_init: bool = False
+    shared_current_session_id: Optional[str] = None
 
     def refresh_system_info(self):
         """Update system info string with current windows and hardware state."""
@@ -220,7 +267,7 @@ class TelegramSession:
 
     def __post_init__(self):
         # Isolation: Ensure each user has their own dedicated data and workspace directory
-        user_data_path = Path.home() / ".agentshell" / f"user_{self.user_id}"
+        user_data_path = user_state_root(self.user_id)
         user_data_path.mkdir(parents=True, exist_ok=True)
         
         # If workspace is still the implicit cwd default in local/dev runs, switch
@@ -249,7 +296,7 @@ class TelegramSession:
         self.default_planner_model = str(os.getenv("PLANNER_MODEL", "")).strip() or None
 
         # Initialize existing managers - isolation by user_id
-        user_base_path = Path.home() / ".agentshell" / f"user_{self.user_id}"
+        user_base_path = user_state_root(self.user_id)
         self.session_manager = SessionManager(base_path=user_base_path)
 
         self._initialize_runtime_session()
@@ -296,17 +343,21 @@ class TelegramSession:
 
         if should_create:
             self.session = self.session_manager.create_session(
-                workspace=self.workspace,
+                workspace=self._preferred_session_workspace(),
                 name=f"Session {datetime.datetime.now().strftime('%H:%M')}",
                 model=self.current_model,
                 variant=self.current_variant,
                 agent_mode="auto",
                 planner_model=self.planner_model or self.default_planner_model,
+                enabled_tool_packs=list(self.enabled_tool_packs),
+                telegram_bot_config_id=self.telegram_bot_config_id,
+                headless_eligible=self.headless_eligible,
             )
             self.session_manager.set_current_session(self.session.id)
             target_session_id = self.session.id
 
         if not target_session_id:
+            self.shared_current_session_id = self._resolve_shared_current_session_id()
             return
 
         try:
@@ -315,15 +366,53 @@ class TelegramSession:
             if should_create:
                 raise
             self.session = self.session_manager.create_session(
-                workspace=self.workspace,
+                workspace=self._preferred_session_workspace(),
                 name=f"Session {datetime.datetime.now().strftime('%H:%M')}",
                 model=self.current_model,
                 variant=self.current_variant,
                 agent_mode="auto",
                 planner_model=self.planner_model or self.default_planner_model,
+                enabled_tool_packs=list(self.enabled_tool_packs),
+                telegram_bot_config_id=self.telegram_bot_config_id,
+                headless_eligible=self.headless_eligible,
             )
             self.session_manager.set_current_session(self.session.id)
             self.load_session_by_id(self.session.id)
+        self.shared_current_session_id = self._resolve_shared_current_session_id()
+
+    def _resolve_external_app_current_session_id(self) -> Optional[str]:
+        runtime_home = os.getenv("EMPLOAI_HOME", "").strip()
+        if runtime_home:
+            workspace = Path(runtime_home).expanduser().resolve()
+        else:
+            workspace = Path(__file__).resolve().parent.parent
+        try:
+            from mobile_app.backend.session_bridge import AppSessionBridge
+
+            bridge = AppSessionBridge(user_id=self.user_id, workspace=workspace)
+            current = bridge.get_current_session()
+        except Exception:
+            return None
+        session_id = str(getattr(current, "id", "") or "").strip()
+        return session_id or None
+
+    def _resolve_shared_current_session_id(self) -> Optional[str]:
+        external_id = self._resolve_external_app_current_session_id()
+        if external_id:
+            return external_id
+        if self.session_manager:
+            current_id = str(self.session_manager.get_current_session_id() or "").strip()
+            if current_id:
+                return current_id
+        if self.session:
+            session_id = str(getattr(self.session, "id", "") or "").strip()
+            if session_id:
+                return session_id
+        return None
+
+    def _preferred_session_workspace(self) -> Path:
+        preferred = normalize_legacy_workspace_path(self.workspace, fallback=self.workspace)
+        return preferred or self.workspace
 
     def rebuild_tool_executor(self, confirm_callback=None) -> ToolExecutor:
         """Rebuild the tool executor while preserving session wiring."""
@@ -348,6 +437,9 @@ class TelegramSession:
             has_deferred_interrupts=self.has_deferred_interrupts,
             skill_registry=self.skill_registry,
             active_skills=self.active_skills,
+        )
+        self.tool_executor.allowed_tool_names_provider = (
+            lambda: getattr(self, "current_turn_allowed_tool_names", None)
         )
         self.tool_executor.custom_tool_handlers = existing_handlers
         return self.tool_executor
@@ -639,12 +731,14 @@ class TelegramSession:
             return
 
         # Get the current session object from manager or create/use current
-        current_id = self.session_manager.get_current_session_id()
+        current_id = str(getattr(getattr(self, "session", None), "id", "") or "").strip()
+        if not current_id:
+            current_id = self.session_manager.get_current_session_id()
         session_obj = None
         
         if current_id:
             try:
-                session_obj = self.session_manager.load_session(current_id)
+                session_obj = self.session_manager.load_session(current_id, set_current=False)
             except ValueError:
                 pass
         
@@ -654,7 +748,10 @@ class TelegramSession:
                 variant=self.current_variant,
                 agent_mode=self.agent_mode,
                 planner_model=self.planner_model or self.default_planner_model,
-                workspace=self.workspace
+                workspace=self._preferred_session_workspace(),
+                enabled_tool_packs=list(getattr(self, "enabled_tool_packs", []) or []),
+                telegram_bot_config_id=getattr(self, "telegram_bot_config_id", None),
+                headless_eligible=bool(getattr(self, "headless_eligible", False)),
             )
 
         # Update session with current runtime state
@@ -664,15 +761,19 @@ class TelegramSession:
         session_obj.variant = self.current_variant
         session_obj.agent_mode = "auto"
         session_obj.planner_model = self.planner_model
+        session_obj.enabled_tool_packs = list(getattr(self, "enabled_tool_packs", []) or [])
+        session_obj.telegram_bot_config_id = getattr(self, "telegram_bot_config_id", None)
+        session_obj.headless_eligible = bool(getattr(self, "headless_eligible", False))
         session_obj.task_history = self.task_history
         session_obj.active_task_id = self.active_task_id
+        session_obj.task_board_armed_next_turn = bool(self.task_board_armed_next_turn)
         session_obj.active_skills = self.active_skills
         session_obj.last_context_compaction = self.last_context_compaction
 
         # Save to disk
         self.session_manager.save_session(session_obj)
 
-    def load_session_by_id(self, session_id: str):
+    def load_session_by_id(self, session_id: str, *, set_current: bool = True):
         """Load session state from disk into this TelegramSession."""
         if not self.session_manager:
             return
@@ -683,7 +784,7 @@ class TelegramSession:
                 return
             raise RuntimeError("Cannot switch sessions while a task is still running")
 
-        session_obj = self.session_manager.load_session(session_id)
+        session_obj = self.session_manager.load_session(session_id, set_current=set_current)
         self.session = session_obj
 
         # Sync to runtime state
@@ -693,11 +794,16 @@ class TelegramSession:
         self.current_model = session_obj.model
         self.current_variant = session_obj.variant
         self.planner_model = session_obj.planner_model
+        self.enabled_tool_packs = list(getattr(session_obj, "enabled_tool_packs", []) or [])
+        self.telegram_bot_config_id = getattr(session_obj, "telegram_bot_config_id", None)
+        self.headless_eligible = bool(getattr(session_obj, "headless_eligible", False))
         self.agent_mode = "auto"
         self.task_history = session_obj.task_history
         self.active_task_id = session_obj.active_task_id
+        self.task_board_armed_next_turn = bool(getattr(session_obj, "task_board_armed_next_turn", False))
         self.active_skills = session_obj.active_skills
         self.last_context_compaction = session_obj.last_context_compaction
+        self.shared_current_session_id = str(session_obj.id or "").strip() or self.shared_current_session_id
 
         # Clear specific agent histories to avoid context leaks
         if self.single_agent:
@@ -706,6 +812,26 @@ class TelegramSession:
             self.refined_agent.messages = []
         if self.unified_agent:
             self.unified_agent.conversation_history = []
+
+    def refresh_session_from_disk(self, session_id: Optional[str] = None) -> bool:
+        """Refresh the active shared session from disk when the runtime is idle."""
+        if not self.session_manager or self.is_processing:
+            return False
+
+        target_session_id = str(
+            session_id
+            or self.shared_current_session_id
+            or self.session_manager.get_current_session_id()
+            or ""
+        ).strip()
+        if not target_session_id:
+            return False
+
+        try:
+            self.load_session_by_id(target_session_id)
+        except Exception:
+            return False
+        return True
 
     def _summarize_history(self, history: List[Dict], max_messages: int = 10) -> str:
         """Simple history summarizer for context sharing."""
@@ -937,32 +1063,85 @@ class TelegramSession:
             loop=self._loop,
         )
 
+    def _telegram_bot_store(self) -> TelegramBotConfigStore:
+        store = TelegramBotConfigStore(user_id=self.user_id)
+        store.ensure_default_from_env(bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""))
+        return store
+
+    def _resolved_telegram_bot_config(self) -> Optional[Dict[str, Any]]:
+        store = self._telegram_bot_store()
+        target_id = str(getattr(self, "telegram_bot_config_id", "") or "").strip()
+        if target_id:
+            config = store.get_config(target_id)
+            if config:
+                return config
+        return store.default_config()
+
+    def _resolved_telegram_bot(self) -> Optional[Bot]:
+        config = self._resolved_telegram_bot_config()
+        if not config:
+            return getattr(self._app, "bot", None)
+        token = str(config.get("bot_token") or "").strip()
+        if not token:
+            return getattr(self._app, "bot", None)
+        current_token = str(os.getenv("TELEGRAM_BOT_TOKEN", "") or "").strip()
+        if current_token and token == current_token and self._app:
+            return self._app.bot
+        return Bot(token=token)
+
+    def _mark_last_emitting_session(self) -> None:
+        config = self._resolved_telegram_bot_config()
+        session_id = str(getattr(getattr(self, "session", None), "id", "") or "").strip()
+        if not config or not session_id:
+            return
+        self._telegram_bot_store().set_last_emitting_session(
+            bot_config_id=str(config.get("id") or ""),
+            session_id=session_id,
+        )
+
+    def _current_session_label(self) -> str:
+        name = str(getattr(getattr(self, "session", None), "name", "") or "").strip()
+        return name or "App Chat"
+
+    def _telegram_chat_id(self) -> Optional[int]:
+        try:
+            chat_id = int(getattr(self, "user_id", 0) or 0)
+        except Exception:
+            return None
+        return chat_id if chat_id > 0 else None
+
     async def _safe_send_bot_message(self, text: str) -> None:
-        if not self._app:
+        bot = self._resolved_telegram_bot()
+        chat_id = self._telegram_chat_id()
+        if not bot or chat_id is None:
             return
         if len(text) > 4000:
             text = text[:3900] + "... (truncated)"
         try:
-            await self._app.bot.send_message(
-                chat_id=self.user_id,
+            await bot.send_message(
+                chat_id=chat_id,
                 text=text,
                 parse_mode=ParseMode.MARKDOWN,
             )
+            self._mark_last_emitting_session()
         except Exception:
             try:
                 clean_text = text.replace("*", "").replace("_", "").replace("`", "")
-                await self._app.bot.send_message(chat_id=self.user_id, text=clean_text)
+                await bot.send_message(chat_id=chat_id, text=clean_text)
+                self._mark_last_emitting_session()
             except Exception:
                 logger.exception("Failed to mirror synchronized message to Telegram")
 
     async def _handle_channel_sync_event(self, event: Dict[str, Any]) -> None:
-        if not self._app:
+        bot = self._resolved_telegram_bot()
+        chat_id = self._telegram_chat_id()
+        if not bot or chat_id is None:
             return
 
         event_session_id = str(event.get("session_id") or "").strip()
-        current_id = self.session_manager.get_current_session_id() if self.session_manager else None
-        if not event_session_id or event_session_id != current_id:
-            return
+        current_id = str(self.shared_current_session_id or "").strip()
+        if not current_id and self.session_manager:
+            current_id = str(self.session_manager.get_current_session_id() or "").strip()
 
         origin_channel = str(event.get("origin_channel") or "").strip().lower()
         if origin_channel == "telegram":
@@ -970,6 +1149,38 @@ class TelegramSession:
 
         payload = event.get("payload") or {}
         event_type = str(event.get("type") or "").strip()
+        session_reloaded = False
+
+        if event_type == "current_session_changed":
+            next_session_id = event_session_id or str(payload.get("current_session_id") or "").strip()
+            if not next_session_id:
+                return
+            self.shared_current_session_id = next_session_id
+            if next_session_id != current_id:
+                try:
+                    self.load_session_by_id(next_session_id)
+                    session_reloaded = True
+                except Exception:
+                    logger.info("Following shared current session %s without local Telegram session file", next_session_id)
+            else:
+                session_reloaded = self.refresh_session_from_disk(next_session_id)
+            return
+
+        if event_session_id and event_session_id != current_id and origin_channel == "app":
+            self.shared_current_session_id = event_session_id
+            try:
+                self.load_session_by_id(event_session_id)
+                session_reloaded = True
+                current_id = event_session_id
+            except Exception:
+                logger.info("Mirroring app-origin shared session %s without local Telegram session file", event_session_id)
+                current_id = event_session_id
+
+        if not event_session_id or event_session_id != current_id:
+            return
+
+        if origin_channel == "app" and not session_reloaded:
+            self.refresh_session_from_disk(event_session_id)
 
         if event_type == "user_message":
             message = payload.get("message") or {}
@@ -978,17 +1189,28 @@ class TelegramSession:
                 return
             display_label = str(message.get("display_label") or "App").strip() or "App"
             try:
-                await self._app.bot.send_chat_action(chat_id=self.user_id, action=ChatAction.TYPING)
+                bot = self._resolved_telegram_bot()
+                if bot:
+                    await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
             except Exception:
                 pass
-            await self._safe_send_bot_message(f"📲 *{display_label}*\n\n{text}")
+            await self._safe_send_bot_message(
+                f"📲 *{self._current_session_label()} · {display_label}*\n\n{text}"
+            )
             return
 
         if event_type == "assistant_final":
             text = str(payload.get("text") or "").strip()
             if not text:
                 return
-            await self._safe_send_bot_message(text)
+            await self._safe_send_bot_message(f"*{self._current_session_label()}*\n\n{text}")
+            return
+
+        if event_type == "tool_use":
+            if not self.verbose_mode:
+                return
+            formatted = _format_verbose_tool_message(payload)
+            await self._safe_send_bot_message(f"*{self._current_session_label()}*\n\n{formatted}")
             return
 
     async def _send_log(self, message: str):
@@ -1034,14 +1256,16 @@ class TelegramSession:
             text = message
 
         try:
-            await self._app.bot.send_message(
+            await bot.send_message(
                 chat_id=self.user_id,
                 text=text,
                 parse_mode=ParseMode.MARKDOWN,
             )
+            self._mark_last_emitting_session()
         except Exception:
             try:
-                await self._app.bot.send_message(chat_id=self.user_id, text=text)
+                await bot.send_message(chat_id=self.user_id, text=text)
+                self._mark_last_emitting_session()
             except Exception:
                 pass
 
@@ -1056,13 +1280,19 @@ def set_telegram_application(application: Application) -> None:
         _telegram_loop = asyncio.get_running_loop()
     except RuntimeError:
         _telegram_loop = None
+    if _telegram_application is not None and _telegram_loop is not None:
+        for session in user_sessions.values():
+            try:
+                session.bind_telegram_runtime(_telegram_application, _telegram_loop)
+            except Exception:
+                logger.exception("Failed to bind Telegram runtime for user %s", session.user_id)
 
 
 def get_session(
     user_id: int,
     *,
     workspace: Optional[Path] = None,
-    create_new_session: bool = True,
+    create_new_session: bool = False,
 ) -> TelegramSession:
     """Get or create the live runtime session for a user."""
     if user_id not in user_sessions:

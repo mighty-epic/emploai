@@ -93,6 +93,14 @@ def test_context_loader_prefers_bundled_runtime_agent_data_over_case_mismatched_
     assert "repo-development file" not in prompt_context
 
 
+def test_agents_template_discourages_rereading_injected_context_files():
+    template = ContextLoader._get_agents_template()
+
+    assert "Do NOT spend file-search or file-read tool calls re-opening those files" in template
+    assert "Do NOT read `MEMORY.md` just to start a task." in template
+    assert "Before doing anything:\n1. Read `SOUL.md`" not in template
+
+
 def test_legacy_semi_mode_is_normalized_to_auto():
     session = Session.from_dict(
         {

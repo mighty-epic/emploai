@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Optional
 
 # Tool names for easy reference
 TOOL_READ_FILE = "read_file"
+TOOL_OPEN_FILE = "open_file"
 TOOL_WRITE_FILE = "write_file"
 TOOL_APPEND_FILE = "append_file"
 TOOL_EDIT_FILE = "edit_file"
@@ -34,6 +35,18 @@ CLI_AGENT_TOOLS = [
                 "path": {"type": "string", "description": "Path to the file to read. Can use relative paths like '../file.txt' to access parent directories."},
                 "start_line": {"type": "integer", "description": "Line number to start reading from (1-indexed)."},
                 "end_line": {"type": "integer", "description": "Line number to stop reading at (inclusive)."}
+            },
+            "required": ["path"]
+        }
+    },
+    {
+        "name": TOOL_OPEN_FILE,
+        "description": "Open an existing local file visibly through the operating system or a specified app. Use this for 'open/show this saved file' tasks after resolving the exact path. This submits a direct file-open request; verify the resulting window/content visually before claiming success.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Exact file path to open. Relative paths resolve against the current workspace; absolute paths are accepted."},
+                "app": {"type": "string", "description": "Optional app/executable to open the file with, such as notepad. Omit to use the OS file association."}
             },
             "required": ["path"]
         }

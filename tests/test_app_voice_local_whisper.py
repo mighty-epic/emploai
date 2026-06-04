@@ -145,6 +145,85 @@ def test_get_voice_runtime_status_reports_voice_pack_statuses(monkeypatch):
     assert status["hebrew_pack_status"]["source"] == "managed"
 
 
+def test_get_voice_runtime_status_exposes_verified_hebrew_pack_manifest(monkeypatch):
+    monkeypatch.setattr(voice_runtime, "_stt_backend", lambda: "local_whisper")
+    monkeypatch.setattr(
+        voice_runtime,
+        "_voice_engine_selection",
+        lambda: {
+            "default_engine": voice_runtime.VOICE_ENGINE_HEBREW,
+            "english_requested": False,
+            "hebrew_requested": True,
+        },
+    )
+    monkeypatch.setattr(
+        voice_runtime,
+        "get_english_pack_status",
+        lambda: {"installed": False, "available": False, "issues": []},
+    )
+    monkeypatch.setattr(
+        voice_runtime,
+        "get_hebrew_pack_status",
+        lambda: {
+            "installed": True,
+            "available": True,
+            "issues": [],
+            "source": "managed",
+            "model_dir": "C:/models/hebrew",
+            "manifest": {
+                "pack_id": "hebrew-pass3-knesset",
+                "asset_name": "hebrew-whisper-small-pass3-knesset-runtime-ready.zip",
+            },
+            "manifest_verified": True,
+        },
+    )
+
+    status = voice_runtime.get_voice_runtime_status()
+
+    assert status["stt_model"] == "hebrew-whisper-small-pass3-knesset-runtime-ready.zip"
+    assert status["hebrew_pack_manifest_verified"] is True
+    assert status["hebrew_pack_manifest"]["pack_id"] == "hebrew-pass3-knesset"
+
+
+def test_get_voice_runtime_status_exposes_verified_english_pack_manifest(monkeypatch):
+    monkeypatch.setattr(voice_runtime, "_stt_backend", lambda: "local_whisper")
+    monkeypatch.setattr(
+        voice_runtime,
+        "_voice_engine_selection",
+        lambda: {
+            "default_engine": voice_runtime.VOICE_ENGINE_ENGLISH,
+            "english_requested": True,
+            "hebrew_requested": False,
+        },
+    )
+    monkeypatch.setattr(
+        voice_runtime,
+        "get_english_pack_status",
+        lambda: {
+            "installed": True,
+            "available": True,
+            "issues": [],
+            "source": "managed",
+            "manifest": {
+                "pack_id": "english-whisper-cpp-desktop",
+                "repo_id": "org/english-pack",
+                "model_name": "base.en-q5_1",
+            },
+            "manifest_verified": True,
+        },
+    )
+    monkeypatch.setattr(
+        voice_runtime,
+        "get_hebrew_pack_status",
+        lambda: {"installed": False, "available": False, "issues": []},
+    )
+
+    status = voice_runtime.get_voice_runtime_status()
+
+    assert status["english_pack_manifest_verified"] is True
+    assert status["english_pack_manifest"]["pack_id"] == "english-whisper-cpp-desktop"
+
+
 def test_hebrew_final_transcript_falls_back_to_draft_when_final_is_repetitive(monkeypatch):
     def fake_hebrew(data: bytes, *, sequence: int, revision: int, initial_prompt: str | None, final: bool):
         del data, sequence, revision, initial_prompt

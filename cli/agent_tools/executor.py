@@ -3,6 +3,7 @@
 import os
 import subprocess
 import shlex
+import sys
 import threading
 import uuid
 from collections import deque
@@ -11,6 +12,15 @@ from typing import Dict, Any, Optional, List
 from .web_tools import duckduckgo_search
 import shutil
 from cli.config_manager import get_config_manager
+
+INJECTED_CONTEXT_FILENAMES = {
+    "agents.md",
+    "soul.md",
+    "user.md",
+    "tools.md",
+    "memory.md",
+}
+
 
 class ToolExecutor:
     def __init__(
@@ -45,8 +55,56 @@ class ToolExecutor:
         self.active_skills = active_skills if active_skills is not None else []
         # Optional session-specific handlers (used by Telegram auto mode).
         self.custom_tool_handlers: Dict[str, Any] = {}
+        # Optional callback that returns the current allowed tool-name set for the turn.
+        self.allowed_tool_names_provider = None
         # Track background processes: {command_id: {process, output_lines, thread, command, ...}}
         self._background_commands: Dict[str, Dict[str, Any]] = {}
+
+    def _terminate_process_tree(self, process: subprocess.Popen, *, timeout: float = 3.0) -> None:
+        if process.poll() is not None:
+            return
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=max(1.0, timeout),
+                    check=False,
+                )
+                return
+            except Exception:
+                pass
+        try:
+            process.terminate()
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+
+    def _context_file_access_error(self, name: str, args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        target_name = ""
+        if name == "read_file":
+            target_name = Path(str(args.get("path") or "")).name.lower()
+        elif name == "find_files":
+            target_name = str(args.get("pattern") or "").strip().lower()
+
+        if target_name and target_name in INJECTED_CONTEXT_FILENAMES:
+            return {
+                "error": (
+                    f"{target_name} is already injected into the runtime prompt context. "
+                    "Do not spend tool calls searching for or reading it again during normal execution."
+                ),
+                "error_type": "redundant_context_lookup",
+                "tool_name": name,
+                "target": target_name,
+            }
+        return None
 
     def _is_safe_path(self, path_str: str) -> bool:
         """
@@ -106,6 +164,20 @@ class ToolExecutor:
     def execute(self, name: str, args: Dict[str, Any]) -> Any:
         """Dispatcher for tool execution."""
         try:
+            allowed_tool_names = None
+            if callable(self.allowed_tool_names_provider):
+                allowed_tool_names = self.allowed_tool_names_provider()
+            if allowed_tool_names is not None and name not in allowed_tool_names:
+                return {
+                    "error": f"Tool '{name}' is not enabled for this chat's current tool-pack configuration.",
+                    "error_type": "policy",
+                    "tool_name": name,
+                }
+
+            context_lookup_error = self._context_file_access_error(name, args)
+            if context_lookup_error is not None:
+                return context_lookup_error
+
             # Check for interruption before executing (optional callback)
             if self.check_interruption and self.check_interruption():
                 return {"interrupted": True, "message": "Execution interrupted by user"}
@@ -139,7 +211,7 @@ class ToolExecutor:
                 if hasattr(self.single_agent, "_execute_tool"):
                     return self.single_agent._execute_tool(name, args)
 
-            return {"error": f"Unknown tool: {name}"}
+            return {"error": f"Unknown tool: {name}", "error_type": "unknown_tool", "tool_name": name}
         except PermissionError as e:
             return {"error": str(e)}
         except ValueError as e:
@@ -171,6 +243,49 @@ class ToolExecutor:
             content = "".join(lines)
             
         return {"content": content, "lines": len(lines)}
+
+    def tool_open_file(self, path: str, app: str = "") -> Dict[str, Any]:
+        """Open an existing file directly through an app or OS file association."""
+        p = self._resolve_path(path)
+        if not p.is_file():
+            return {"error": f"Not a file: {path}", "error_type": "not_found", "path": str(p)}
+
+        app_name = str(app or "").strip()
+        try:
+            if app_name:
+                subprocess.Popen(
+                    [app_name, str(p)],
+                    cwd=str(self.workspace_path),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                method = app_name
+            elif os.name == "nt":
+                os.startfile(str(p))  # type: ignore[attr-defined]
+                method = "os.startfile"
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                method = "open"
+            else:
+                subprocess.Popen(["xdg-open", str(p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                method = "xdg-open"
+            return {
+                "success": True,
+                "path": str(p),
+                "launch_requested": True,
+                "method": method,
+                "verified": False,
+                "NEXT": "Verify the exact file window/content is visible before claiming success.",
+            }
+        except FileNotFoundError:
+            return {
+                "error": f"App or opener not found: {app_name or 'system file association'}",
+                "error_type": "opener_not_found",
+                "path": str(p),
+                "retry": True,
+            }
+        except Exception as exc:
+            return {"error": f"Failed to open file: {exc}", "error_type": "open_failed", "path": str(p), "retry": True}
 
     def tool_write_file(self, path: str, content: str) -> Dict[str, Any]:
         """
@@ -479,7 +594,7 @@ class ToolExecutor:
             while process.poll() is None:
                 # Check for interruption flag
                 if self.check_interruption and self.check_interruption():
-                    process.terminate()
+                    self._terminate_process_tree(process)
                     return {
                         "error": "Command terminated by user interruption.",
                         "interrupted": True,
@@ -488,7 +603,7 @@ class ToolExecutor:
                 
                 # Check for timeout
                 if time.time() - start_time > timeout:
-                    process.kill()
+                    self._terminate_process_tree(process)
                     return {"error": f"Command timed out after {timeout} seconds."}
                 
                 time.sleep(0.1) # Poll every 100ms
@@ -624,12 +739,7 @@ class ToolExecutor:
             }
 
         try:
-            proc.terminate()
-            try:
-                proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=2)
+            self._terminate_process_tree(proc)
         except Exception as e:
             return {"error": f"Failed to kill command: {str(e)}"}
 

@@ -1,0 +1,135 @@
+{
+  "name": "agent-smoke-suite",
+  "profile": "smoke",
+  "workspace": ".",
+  "model": "gpt-5.4-mini",
+  "variant": "standard",
+  "enabled_tool_packs": [
+    "interactive_desktop",
+    "browser_isolated",
+    "workspace_write",
+    "workspace_read",
+    "web_research",
+    "scheduler",
+    "app_runtime"
+  ],
+  "repeat": 1,
+  "fresh_runtime": true,
+  "fresh_session_per_case": true,
+  "capture_prompt_snapshot": true,
+  "cases": [
+    {
+      "name": "greeting",
+      "prompt": "hey",
+      "expectations": {
+        "max_tool_calls": 0,
+        "final_answer_forbidden_phrases": [
+          "error in model generation",
+          "context window"
+        ]
+      }
+    },
+    {
+      "name": "workspace-list-current-dir",
+      "prompt": "Inspect the current workspace and list the top-level files and folders. Do not change anything.",
+      "expectations": {
+        "required_tools_any": [
+          "list_dir",
+          "list_files",
+          "find_files"
+        ],
+        "forbidden_tools": [
+          "web_search",
+          "fetch_url",
+          "browser_navigate",
+          "open_browser",
+          "describe_screen",
+          "observe_desktop",
+          "write_file",
+          "edit_file",
+          "append_file",
+          "execute_command",
+          "run_command"
+        ],
+        "max_unsupported_tool_attempts": 0,
+        "max_tool_errors": 0,
+        "min_tool_calls": 1
+      }
+    },
+    {
+      "name": "screen-observation-current-window",
+      "prompt": "Tell me the main app or window currently visible on screen.",
+      "expectations": {
+        "required_tools_any": [
+          "describe_screen",
+          "observe_desktop",
+          "ocr_screen"
+        ],
+        "forbidden_tools": [
+          "read_file",
+          "list_dir",
+          "write_file",
+          "web_search",
+          "fetch_url",
+          "browser_navigate",
+          "open_browser"
+        ],
+        "max_unsupported_tool_attempts": 0
+      }
+    },
+    {
+      "name": "browser-heading-to-file",
+      "prompt": "Open https://example.com, capture the main heading, write it to example_heading.txt, then verify the saved file.",
+      "expectations": {
+        "required_tool_sequence": [
+          [
+            "browser_navigate",
+            "open_browser"
+          ],
+          [
+            "browser_snapshot",
+            "observe_browser",
+            "browser_read_text"
+          ],
+          "write_file",
+          "read_file"
+        ],
+        "required_tool_order": [
+          {
+            "before": "write_file",
+            "after": "read_file"
+          }
+        ],
+        "tool_arg_checks": [
+          {
+            "tool": "write_file",
+            "contains_all": [
+              "example_heading.txt",
+              "Example Domain"
+            ]
+          }
+        ],
+        "tool_result_checks": [
+          {
+            "tool": "read_file",
+            "contains_all": [
+              "Example Domain"
+            ]
+          }
+        ],
+        "artifact_checks": [
+          {
+            "path": "example_heading.txt",
+            "must_exist": true,
+            "contains_all": [
+              "Example Domain"
+            ]
+          }
+        ],
+        "max_unsupported_tool_attempts": 0,
+        "max_tool_errors": 0,
+        "min_tool_calls": 4
+      }
+    }
+  ]
+}

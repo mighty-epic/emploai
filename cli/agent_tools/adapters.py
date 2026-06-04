@@ -5,8 +5,6 @@ from typing import List, Dict, Any, Iterable, Optional, Tuple
 from .definitions import CLI_AGENT_TOOLS
 
 OPENAI_COMPATIBLE_PROVIDERS = {"openai", "xai", "deepseek", "openrouter"}
-ANTHROPIC_NATIVE_TOOL_NAMES = {"str_replace_based_edit_tool"}
-TEXT_EDITOR_REPLACES = {"write_file", "edit_file", "read_file"}
 GOOGLE_UNSUPPORTED_SCHEMA_KEYS = {
     "additionalProperties",
     "default",
@@ -39,14 +37,14 @@ def _tool_name(tool: Dict[str, Any]) -> str:
     return str(tool.get("name") or "")
 
 
-def _is_anthropic_native_tool(tool: Dict[str, Any]) -> bool:
+def _is_provider_only_native_tool(tool: Dict[str, Any]) -> bool:
     tool_type = str(tool.get("type") or "")
-    return tool_type.startswith("text_editor_") or _tool_name(tool) in ANTHROPIC_NATIVE_TOOL_NAMES
+    return tool_type.startswith("text_editor_")
 
 
 def _extract_tool_parts(tool: Dict[str, Any]) -> Optional[Tuple[str, str, Dict[str, Any]]]:
     """Return name, description, schema from canonical/OpenAI/Anthropic tool shapes."""
-    if not isinstance(tool, dict) or _is_anthropic_native_tool(tool):
+    if not isinstance(tool, dict) or _is_provider_only_native_tool(tool):
         return None
 
     if "function" in tool and isinstance(tool["function"], dict):
@@ -99,6 +97,40 @@ def _provider_tool_names(tools: List[Any]) -> set[str]:
     return names
 
 
+def canonical_tool_names(tools: Iterable[Dict[str, Any]]) -> set[str]:
+    names: set[str] = set()
+    for tool in tools or []:
+        parts = _extract_tool_parts(tool)
+        if not parts:
+            continue
+        name, _description, _parameters = parts
+        if name:
+            names.add(name)
+    return names
+
+
+def validate_provider_tool_names(
+    provider_tools: Iterable[Any],
+    *,
+    allowed_names: Iterable[str],
+) -> Optional[str]:
+    allowed = {str(name).strip() for name in allowed_names or [] if str(name).strip()}
+    if not allowed:
+        return None
+
+    provided = [name for name in get_tool_names(list(provider_tools or [])) if name]
+    invalid = sorted({name for name in provided if name not in allowed})
+    if not invalid:
+        return None
+
+    return (
+        "Provider tool inventory exposed unsupported tool names: "
+        + ", ".join(invalid)
+        + ". Allowed canonical tool names: "
+        + ", ".join(sorted(allowed))
+    )
+
+
 def _sanitize_google_schema(value: Any) -> Any:
     """Trim JSON Schema down to fields accepted by google-generativeai."""
     if isinstance(value, list):
@@ -140,7 +172,9 @@ def to_openai_format(tools: List[Dict[str, Any]] = None) -> List[Dict[str, Any]]
         })
     return openai_tools
 
-def to_anthropic_format(tools: List[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+def to_anthropic_format(
+    tools: List[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
     """
     Convert tools to Anthropic tool use format.
     Handles both:
@@ -148,35 +182,23 @@ def to_anthropic_format(tools: List[Dict[str, Any]] = None) -> List[Dict[str, An
     - OpenAI format: {"type": "function", "function": {"name": ..., ...}}
     Used by: Anthropic (Claude).
     
-    When using default CLI tools, replaces custom write_file/edit_file/read_file
-    with Claude's native text_editor_20250728 tool for reliable file operations.
+    Anthropic receives the same canonical callable tool names as the rest of the app.
+    Provider-specific transport formatting must not change the model-visible capability set.
     """
-    is_default = tools is None
     if tools is None:
         tools = CLI_AGENT_TOOLS
     
     anthropic_tools = []
-    
-    # Add Claude's native text_editor tool ONLY for default CLI tools
-    if is_default:
-        anthropic_tools.append({
-            "type": "text_editor_20250728",
-            "name": "str_replace_based_edit_tool"
-        })
-    
+
     for tool in tools:
-        if _is_anthropic_native_tool(tool):
+        if _is_provider_only_native_tool(tool):
             continue
 
         parts = _extract_tool_parts(tool)
         if not parts:
             continue
         name, description, parameters = parts
-        
-        # Skip tools replaced by native text_editor when using default CLI tools
-        if is_default and name in TEXT_EDITOR_REPLACES:
-            continue
-        
+
         anthropic_tools.append({
             "name": name,
             "description": description,
@@ -226,40 +248,47 @@ def to_google_format(tools: List[Dict[str, Any]] = None) -> List[Any]:
             ))
     return [genai.types.Tool(function_declarations=functions)] if functions else []
 
-def get_tools_for_provider(provider: str) -> List[Any]:
+def get_tools_for_provider(provider: str, base_tools: List[Dict[str, Any]] = None) -> List[Any]:
     """Get tools in the correct format for the given provider."""
     # Canonicalize provider name
     provider = normalize_provider(provider)
-    
+    source_tools = CLI_AGENT_TOOLS if base_tools is None else base_tools
+
     if provider == "anthropic":
-        return to_anthropic_format()
+        return to_anthropic_format(source_tools)
     if provider == "google":
-        return to_google_format()
+        return to_google_format(source_tools)
     # All others use OpenAI format or compatible
-    return to_openai_format()
+    return to_openai_format(source_tools)
 
 
-def build_tools_for_provider(provider: str, extra_tools: List[Dict[str, Any]] = None) -> List[Any]:
+def build_tools_for_provider(
+    provider: str,
+    extra_tools: List[Dict[str, Any]] = None,
+    *,
+    base_tools: List[Dict[str, Any]] = None,
+) -> List[Any]:
     """Build the full provider-specific tool list without cross-provider leakage."""
     provider = normalize_provider(provider)
-    base_tools = get_tools_for_provider(provider)
+    provider_base_tools = get_tools_for_provider(provider, base_tools=base_tools)
 
     if not extra_tools:
-        return base_tools
+        return provider_base_tools
 
     if provider == "anthropic":
-        skip_names = _provider_tool_names(base_tools) | TEXT_EDITOR_REPLACES
+        skip_names = _provider_tool_names(provider_base_tools)
         converted_extra = to_anthropic_format(_dedupe_tools(extra_tools, skip_names=skip_names))
-        return base_tools + converted_extra
+        return provider_base_tools + converted_extra
 
     if provider == "google":
-        base_names = set(_tool_name(tool) for tool in CLI_AGENT_TOOLS)
+        base_source_tools = CLI_AGENT_TOOLS if base_tools is None else base_tools
+        base_names = set(_tool_name(tool) for tool in base_source_tools)
         converted_extra = to_google_format(_dedupe_tools(extra_tools, skip_names=base_names))
-        return base_tools + converted_extra
+        return provider_base_tools + converted_extra
 
-    skip_names = _openai_tool_names(base_tools)
+    skip_names = _openai_tool_names(provider_base_tools)
     converted_extra = to_openai_format(_dedupe_tools(extra_tools, skip_names=skip_names))
-    return base_tools + converted_extra
+    return provider_base_tools + converted_extra
 
 
 def get_tool_names(tools: List[Any]) -> List[str]:

@@ -54,16 +54,29 @@ except ImportError:
 
 
 try:
-    import pytesseract
     from PIL import Image
     import mss
     import base64
-    configure_pytesseract_runtime(pytesseract)
-    TESSERACT_AVAILABLE = True
-    TESSERACT_IMPORT_ERROR = None
+    SCREEN_CAPTURE_AVAILABLE = True
+    SCREEN_CAPTURE_IMPORT_ERROR = None
 except Exception as exc:
-    TESSERACT_AVAILABLE = False
-    TESSERACT_IMPORT_ERROR = exc
+    Image = None
+    mss = None
+    SCREEN_CAPTURE_AVAILABLE = False
+    SCREEN_CAPTURE_IMPORT_ERROR = exc
+
+try:
+    import pytesseract
+    configure_pytesseract_runtime(pytesseract)
+    OCR_AVAILABLE = SCREEN_CAPTURE_AVAILABLE
+    OCR_IMPORT_ERROR = None if OCR_AVAILABLE else SCREEN_CAPTURE_IMPORT_ERROR
+except Exception as exc:
+    pytesseract = None
+    OCR_AVAILABLE = False
+    OCR_IMPORT_ERROR = exc
+
+TESSERACT_AVAILABLE = OCR_AVAILABLE
+TESSERACT_IMPORT_ERROR = OCR_IMPORT_ERROR
 
 
 # ============================================================
@@ -95,7 +108,7 @@ The browser uses ARIA snapshots for reliable interaction. Instead of guessing se
 - describe_screen(question): AI vision description of current screen
 - ocr_screen(): OCR text extraction with element coordinates
 - observe_desktop(): List all open windows
-- open_app(app_name): Open application via Win+R
+- open_app(app_name): Submit an app launch request via Win+R. This does not prove the app opened; verify the resulting window or error dialog visually.
 - focus_window(title): Bring window to front
 - minimize/maximize/close_window(title): Window management
 
@@ -152,6 +165,7 @@ The browser uses ARIA snapshots for reliable interaction. Instead of guessing se
 7. **Safe Execution**: All tools have error handling. Report failures clearly and suggest alternatives.
 
 8. **Vision-Free Browsing**: Rely on ARIA snapshots for complex pages - they're more reliable than visual analysis for interaction.
+9. **Desktop App Verification**: For native desktop apps, third-party apps, and Win+R launches, verify the visible result after every major action. A launch request is not proof that the target app opened.
 
 Remember: You're running in {mode} mode (headless=True means invisible browser, False means visible)."""
 
@@ -465,8 +479,8 @@ class RefinedAgent:
         Capture the screen for visual analysis.
         The primary model will use the captured image to answer your question.
         """
-        if not TESSERACT_AVAILABLE:
-            return {"error": "Vision tools not available (missing mss/PIL/pytesseract)"}
+        if not SCREEN_CAPTURE_AVAILABLE:
+            return {"error": "Screenshot tools unavailable (missing mss/Pillow)"}
             
         try:
             with mss.mss() as sct:
@@ -489,8 +503,8 @@ class RefinedAgent:
     
     def _ocr_screen(self) -> Dict:
         """OCR screen for text and coordinates."""
-        if not TESSERACT_AVAILABLE:
-            return {"error": "OCR tools unavailable (missing Pillow/pytesseract)"}
+        if not OCR_AVAILABLE:
+            return {"error": "OCR tools unavailable (missing pytesseract/Tesseract runtime)"}
         
         try:
             with mss.mss() as sct:
@@ -559,7 +573,12 @@ class RefinedAgent:
             pyautogui.write(app_name)
             pyautogui.press('enter')
             time.sleep(1)
-            return {"success": True, "opened": app_name}
+            return {
+                "success": True,
+                "launch_requested": app_name,
+                "verified": False,
+                "note": "Launch request submitted only. Verify the resulting window or error state visually before assuming success.",
+            }
         except Exception as e:
             return {"error": str(e)}
     
@@ -1164,7 +1183,7 @@ class RefinedAgent:
                 "type": "function",
                 "function": {
                     "name": "open_app",
-                    "description": "Open a Windows application by name",
+                    "description": "Submit a Windows Run launch request for an application by name. This does not confirm success; verify the resulting window or error dialog visually before assuming the app opened.",
                     "parameters": {
                         "type": "object",
                         "properties": {

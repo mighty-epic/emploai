@@ -12,9 +12,15 @@ from typing import Callable, Dict, Mapping, MutableMapping
 
 from dotenv import dotenv_values, load_dotenv
 
+from cli.tui_constants import AVAILABLE_MODELS, MODEL_CONFIGS
 from mobile_app.backend.voice_pack_manager import (
     get_english_pack_status,
     get_hebrew_pack_status,
+)
+from shared.model_availability import (
+    enabled_providers_from_env,
+    filter_models_by_provider_access,
+    group_models_by_provider,
 )
 from shared.tesseract_runtime import resolve_tesseract_runtime
 
@@ -1135,6 +1141,38 @@ def configured_provider_labels(values: Mapping[str, str]) -> list[str]:
     return labels
 
 
+def configured_model_groups(values: Mapping[str, str]) -> list[dict[str, object]]:
+    normalized = _normalized_existing_values(values)
+    enabled_providers = enabled_providers_from_env(normalized)
+    available_models = filter_models_by_provider_access(
+        AVAILABLE_MODELS,
+        MODEL_CONFIGS,
+        enabled_providers,
+    )
+    return group_models_by_provider(available_models, MODEL_CONFIGS)
+
+
+def configured_planner_models(values: Mapping[str, str]) -> list[str]:
+    normalized = _normalized_existing_values(values)
+    enabled_providers = enabled_providers_from_env(normalized)
+    available_models = filter_models_by_provider_access(
+        AVAILABLE_MODELS,
+        MODEL_CONFIGS,
+        enabled_providers,
+    )
+    supported: list[str] = []
+    for model in available_models:
+        config = MODEL_CONFIGS.get(model, {})
+        provider = str(config.get("provider", "unknown"))
+        api = str(config.get("api", "chat"))
+        if provider == "google":
+            supported.append(model)
+            continue
+        if provider in {"openai", "anthropic", "xai", "deepseek", "openrouter"} and api != "responses":
+            supported.append(model)
+    return supported
+
+
 def validate_setup_values(values: Mapping[str, str]) -> list[str]:
     normalized = _normalized_existing_values(values)
     issues: list[str] = []
@@ -1312,6 +1350,8 @@ def build_setup_state(
         "values": values,
         "validationIssues": validation_issues,
         "configuredProviders": configured_provider_labels(normalized),
+        "modelGroups": configured_model_groups(normalized),
+        "plannerModels": configured_planner_models(normalized),
         "telegramConfigured": False if telegram_rebind_required else bool(normalized.get("TELEGRAM_BOT_TOKEN") and normalized.get("ALLOWED_USER_IDS")),
         "telegramPartiallyConfigured": False if telegram_rebind_required else bool(
             bool(normalized.get("TELEGRAM_BOT_TOKEN")) ^ bool(normalized.get("ALLOWED_USER_IDS"))

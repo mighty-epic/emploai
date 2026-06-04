@@ -1,0 +1,399 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
+
+
+PACK_INTERACTIVE_DESKTOP = "interactive_desktop"
+PACK_BROWSER_ISOLATED = "browser_isolated"
+PACK_WORKSPACE_WRITE = "workspace_write"
+PACK_WORKSPACE_READ = "workspace_read"
+PACK_WEB_RESEARCH = "web_research"
+PACK_SCHEDULER = "scheduler"
+PACK_APP_RUNTIME = "app_runtime"
+
+
+@dataclass(frozen=True)
+class ToolPackDefinition:
+    id: str
+    label: str
+    description: str
+    tool_names: Set[str]
+    prompt_fragment: str
+    interactive: bool = False
+    workspace_write: bool = False
+
+
+def _tool_name_from_definition(tool: Dict[str, Any]) -> str:
+    if not isinstance(tool, dict):
+        return ""
+    if "function" in tool and isinstance(tool["function"], dict):
+        return str(tool["function"].get("name") or "").strip()
+    return str(tool.get("name") or "").strip()
+
+
+_PACKS: Dict[str, ToolPackDefinition] = {
+    PACK_INTERACTIVE_DESKTOP: ToolPackDefinition(
+        id=PACK_INTERACTIVE_DESKTOP,
+        label="Interactive Desktop",
+        description="Vision, OCR, desktop input, window control, and user-Chrome/browser-extension tools.",
+        tool_names={
+            "describe_screen",
+            "ocr_screen",
+            "observe_desktop",
+            "open_file",
+            "open_app",
+            "focus_window",
+            "minimize_window",
+            "maximize_window",
+            "close_window",
+            "click",
+            "right_click",
+            "double_click",
+            "type_text",
+            "press_key",
+            "hotkey",
+            "scroll",
+            "drag_and_drop",
+            "get_clipboard",
+            "set_clipboard",
+            "browser_extension_toggle",
+            "browser_navigate",
+            "browser_snapshot",
+            "browser_read_text",
+            "browser_click_ref",
+            "browser_type",
+            "browser_clear_ref",
+            "browser_select_option_ref",
+            "browser_press_key",
+            "browser_wait_for",
+            "browser_scroll",
+            "browser_screenshot",
+            "browser_back",
+            "browser_forward",
+            "browser_switch_tab",
+            "browser_list_tabs",
+            "browser_activate_tab",
+            "browser_close_tab",
+            "browser_stop",
+            "open_browser",
+            "observe_browser",
+            "switch_tab",
+            "close_tab",
+            "go_back",
+            "go_forward",
+            "wait",
+        },
+        prompt_fragment=(
+            "PACK: Interactive Desktop\n"
+            "- You are operating directly on the user's live desktop and browser contexts.\n"
+            "- Always observe before acting, then verify after every mutating action.\n"
+            "- open_app only submits a launch request. Verify the resulting window or error state before assuming the app opened.\n"
+            "- For exact local file opening, prefer open_file(path, app?) with a resolved absolute path over manipulating a host app's Open dialog.\n"
+            "- If a launch attempt shows a Windows error dialog, the wrong app, or no target window, treat that as failure and recover.\n"
+            "- Use the current-user Chrome/extension path only when that environment is actually available.\n"
+            "- Treat clicks, typing, and window changes as high-risk and verify each one immediately.\n"
+            "- Do not chain interactive GUI actions without first verifying that the previous step landed correctly.\n"
+            "- The user may move focus, click, or type while you work. Re-observe, correct the state, and continue.\n"
+            "- Native desktop apps, including third-party apps, require interactive desktop tools and visual verification. Do not assume a hidden app-specific control path.\n"
+            "- Any GUI without a dedicated tool path should be treated as a vision-and-interaction task.\n"
+            "- For failed app, file, browser, or desktop actions, discover alternatives by inspecting available surfaces: existing windows, taskbar/dock icons, OS search/launcher, full paths or file associations, workspace files, installed commands, browser tabs, and trusted web equivalents.\n"
+            "- Do not stop with an 'I can try next' final answer when a safe next route is available; take it and verify.\n"
+            "- Prefer keyboard-first desktop interaction when a reliable shortcut or tab path can do the job more safely than clicking.\n"
+            "- Before using hotkeys, press_key, type_text, Enter, Escape, Tab, or any key combo that affects the visible UI, make sure the intended target window, dialog, or control is focused; if focus is uncertain or another window is active, re-observe and focus the correct target before sending keys.\n"
+            "- Do not use broad close shortcuts such as Alt+F4 for ambiguous cleanup. Use close_window with an exact target title, Escape/Cancel for a visible modal, or another targeted route.\n"
+            "- Prefer broad visual observation before OCR, and use OCR mainly when exact text or coordinates are required.\n"
+            "- describe_screen is the primary desktop verification and layout-understanding tool; use OCR after that when exact text or coordinates are needed.\n"
+            "- When you call describe_screen for visual interpretation, ask a precise question about what changed, what should now be visible, what error or dialog might be present, or what control you need to identify.\n"
+            "- observe_desktop tells you which windows exist and which one is active, but it does not replace visual verification of on-screen controls.\n"
+            "- When you open an app or file visually, verify that the exact requested target actually appeared. Opening a host app alone is not proof that the requested file is open inside it, and a blank window, wrong document, wrong tab, wrong chat, or generic host UI is not success.\n"
+            "- For desktop-visible opens and window changes, prefer describe_screen to confirm that the intended target actually appeared before you continue.\n"
+            "- For isolated browser headings, static content, and exact rendered values, prefer browser_read_text over desktop OCR.\n"
+            "- Treat browser_screenshot as proof/artifact capture, not as exact text extraction inside the same turn.\n"
+            "- Do not use desktop vision/OCR to reason about a headless isolated browser page.\n"
+            "- If an isolated Selenium window is intentionally headed, use desktop vision/OCR on it only after verifying that window is actually the visible desktop target.\n"
+        ),
+        interactive=True,
+    ),
+    PACK_BROWSER_ISOLATED: ToolPackDefinition(
+        id=PACK_BROWSER_ISOLATED,
+        label="Browser Isolated",
+        description="Isolated Selenium/browser automation without desktop interaction.",
+        tool_names={
+            "browser_navigate",
+            "browser_snapshot",
+            "browser_read_text",
+            "browser_click_ref",
+            "browser_type",
+            "browser_clear_ref",
+            "browser_select_option_ref",
+            "browser_press_key",
+            "browser_wait_for",
+            "browser_scroll",
+            "browser_screenshot",
+            "browser_back",
+            "browser_forward",
+            "browser_switch_tab",
+            "browser_list_tabs",
+            "browser_activate_tab",
+            "browser_close_tab",
+            "browser_stop",
+            "open_browser",
+            "observe_browser",
+            "switch_tab",
+            "close_tab",
+            "go_back",
+            "go_forward",
+            "wait",
+        },
+        prompt_fragment=(
+            "PACK: Browser Isolated\n"
+            "- You are using the isolated automation browser only.\n"
+            "- Prefer ref-based DOM interactions over synthetic keypresses.\n"
+            "- Never assume control over the user's live Chrome unless the interactive desktop pack is also enabled.\n"
+            "- If a task is naturally browser-first, stay in browser-native tools until they genuinely stop being sufficient.\n"
+            "- browser_snapshot and observe_browser are mainly for interactive structure and page state, not full page-text extraction.\n"
+            "- Prefer browser_read_text or browser_wait_for(text_contains=...) for static page text, headings, and exact rendered values.\n"
+            "- browser_read_text is the primary browser-native tool for visible page text, headings, labels, and exact rendered values.\n"
+            "- browser_wait_for is for confirming that expected text, selectors, navigation, or load state appeared before you act or read.\n"
+            "- When you call browser_screenshot for visual interpretation, ask a precise question about what page, file, dialog, or error state you need verified instead of a vague screenshot request.\n"
+            "- If you opened or navigated a browser page and the task depends on that visual result, verify the intended page state before assuming the page is ready.\n"
+            "- If a browser page, browser-opened file, or browser window should now be visibly open and browser-native evidence is still inconclusive, use browser_screenshot as visual proof before assuming it appeared.\n"
+            "- When the isolated Selenium browser is headless, desktop vision/OCR cannot inspect that page.\n"
+            "- browser_screenshot is for proof/artifacts; do not treat it as exact text extraction inside the same turn.\n"
+            "- If a browser snapshot or DOM result already answers the question, do not escalate to screenshots or desktop tools.\n"
+            "- If one browser-native method is inconclusive, try another browser-native method before leaving the browser environment.\n"
+            "- Do not use run_command to spin side-channel browser scripts unless browser-native tools genuinely failed or are unavailable."
+        ),
+    ),
+    PACK_WORKSPACE_WRITE: ToolPackDefinition(
+        id=PACK_WORKSPACE_WRITE,
+        label="Workspace Write",
+        description="File editing and other workspace-mutating tools.",
+        tool_names={
+            "write_file",
+            "edit_file",
+            "append_file",
+            "run_command",
+            "run_background_command",
+            "command_status",
+            "send_input",
+            "kill_command",
+            "execute_command",
+            "change_directory",
+        },
+        prompt_fragment=(
+            "PACK: Workspace Write\n"
+            "- You may change files and run mutating workspace commands.\n"
+            "- Keep edits scoped, verify outputs, and do not assume exclusive write access outside your lock.\n"
+            "- Prefer write_file, edit_file, and append_file over shell-generated file edits when those tools are available.\n"
+            "- On Windows, prefer py before python3 and avoid Unix-specific shell patterns."
+        ),
+        workspace_write=True,
+    ),
+    PACK_WORKSPACE_READ: ToolPackDefinition(
+        id=PACK_WORKSPACE_READ,
+        label="Workspace Read",
+        description="Read/search/diff/test and non-mutating workspace tools.",
+        tool_names={
+            "read_file",
+            "list_files",
+            "list_dir",
+            "find_file",
+            "find_files",
+            "grep_search",
+        },
+        prompt_fragment=(
+            "PACK: Workspace Read\n"
+            "- You are in a read/inspect/test posture.\n"
+            "- Prefer non-mutating inspection, diff, and verification before proposing changes.\n"
+            "- If the answer is already available from injected prompt context, do not spend file tools re-reading those context files."
+        ),
+    ),
+    PACK_WEB_RESEARCH: ToolPackDefinition(
+        id=PACK_WEB_RESEARCH,
+        label="Web Research",
+        description="Search and fetch web content.",
+        tool_names={"web_search", "fetch_url"},
+        prompt_fragment=(
+            "PACK: Web Research\n"
+            "- Focus on finding current source-backed information efficiently.\n"
+            "- Summarize only what is relevant to the task at hand.\n"
+            "- Stop once the requested facts are verified from sufficient evidence, and do not broaden into adjacent categories unless asked."
+        ),
+    ),
+    PACK_SCHEDULER: ToolPackDefinition(
+        id=PACK_SCHEDULER,
+        label="Scheduler",
+        description="Cron and recurring job operations.",
+        tool_names={
+            "schedule_job",
+            "list_scheduled_jobs",
+            "get_scheduled_job",
+            "update_scheduled_job",
+            "run_scheduled_job_now",
+            "remove_scheduled_job",
+            "enable_job",
+            "disable_job",
+        },
+        prompt_fragment=(
+            "PACK: Scheduler\n"
+            "- You may create and manage recurring jobs.\n"
+            "- Preserve the originating chat context and route outputs back to the correct cron feed and Telegram bot."
+        ),
+    ),
+    PACK_APP_RUNTIME: ToolPackDefinition(
+        id=PACK_APP_RUNTIME,
+        label="App Runtime",
+        description="Session/runtime coordination tools that are safe for the chat.",
+        tool_names={},
+        prompt_fragment=(
+            "PACK: App Runtime\n"
+            "- You may reason about app/runtime/session state, but still prefer task-local changes and explicit verification."
+        ),
+    ),
+}
+
+DEFAULT_TOOL_PACKS: List[str] = list(_PACKS.keys())
+
+
+def all_tool_packs() -> List[ToolPackDefinition]:
+    return list(_PACKS.values())
+
+
+def pack_ids() -> List[str]:
+    return list(_PACKS.keys())
+
+
+def get_tool_pack(pack_id: str) -> Optional[ToolPackDefinition]:
+    return _PACKS.get(str(pack_id or "").strip())
+
+
+def normalize_enabled_tool_packs(value: Optional[Sequence[str]]) -> List[str]:
+    if not value:
+        return []
+    normalized: List[str] = []
+    seen: Set[str] = set()
+    for item in value:
+        pack_id = str(item or "").strip()
+        if not pack_id or pack_id not in _PACKS or pack_id in seen:
+            continue
+        normalized.append(pack_id)
+        seen.add(pack_id)
+    return normalized
+
+
+def default_enabled_tool_packs() -> List[str]:
+    return list(DEFAULT_TOOL_PACKS)
+
+
+def _enabled_definitions(enabled_packs: Sequence[str]) -> List[ToolPackDefinition]:
+    return [
+        _PACKS[pack_id]
+        for pack_id in normalize_enabled_tool_packs(enabled_packs)
+        if pack_id in _PACKS
+    ]
+
+
+def tools_for_enabled_packs(enabled_packs: Sequence[str]) -> Set[str]:
+    allowed: Set[str] = set()
+    for definition in _enabled_definitions(enabled_packs):
+        allowed.update(definition.tool_names)
+    return allowed
+
+
+def filter_openai_tools_by_enabled_packs(
+    tools: Iterable[Dict[str, Any]],
+    enabled_packs: Sequence[str],
+) -> List[Dict[str, Any]]:
+    return filter_tools_by_enabled_packs(tools, enabled_packs)
+
+
+def filter_tools_by_enabled_packs(
+    tools: Iterable[Dict[str, Any]],
+    enabled_packs: Sequence[str],
+) -> List[Dict[str, Any]]:
+    allowed = tools_for_enabled_packs(enabled_packs)
+    if not allowed:
+        return []
+
+    filtered: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for tool in tools:
+        name = _tool_name_from_definition(tool)
+        if not name or name in seen or name not in allowed:
+            continue
+        filtered.append(tool)
+        seen.add(name)
+    return filtered
+
+
+def build_tool_pack_prompt(enabled_packs: Sequence[str]) -> str:
+    definitions = _enabled_definitions(enabled_packs)
+    lines: List[str] = [
+        "# TOOL-PACK AUTHORITY",
+        "- The enabled packs listed below are the only tool capabilities available in this chat.",
+        "- If a pack or tool is not listed below, you do NOT have it here. Do not mention it as available, do not plan around it, and do not pretend you can use it.",
+        "- If the user asks what tools you have, answer only from the enabled packs and tool names listed below.",
+        "- When a task needs a disabled capability, say it is unavailable in the current tool-pack configuration instead of hallucinating access.",
+        "- AGENTS.md, SOUL.md, USER.md, TOOLS.md, and MEMORY.md are already injected into prompt context when available. Do not spend file-search or file-read tool calls trying to rediscover them during normal execution.",
+        "- Do not read MEMORY.md just to begin work. Touch memory only when you are intentionally saving durable reusable information.",
+        "- If a local dependency, runtime, app launch path, file association, or other safely repairable environment detail is broken, repair it and continue instead of treating it as a blocker.",
+        "- Prefer reversible, task-scoped repairs before broader machine changes. Avoid global installs, default-app changes, registry or PATH edits, deleting user data, killing unrelated processes, or closing the user's apps, tabs, or documents unless the task clearly requires it or the user asked for it.",
+        "- Save durable reusable insights about websites, apps, and workflows to memory. Save durable account facts, usernames, emails, profile choices, login requirements, and persistent personal information that helps future tasks, but never store raw secrets such as passwords, tokens, API keys, or 2FA codes in MEMORY.md.",
+        "- If the injected skills index lists a relevant specialized skill for a complex or domain-specific task, use pull_skill before improvising a long workflow from scratch.",
+    ]
+
+    if not definitions:
+        lines.extend(
+            [
+                "",
+                "## Enabled Packs",
+                "- None. No callable tool packs are enabled for this chat right now.",
+            ]
+        )
+        return "\n".join(lines)
+
+    for definition in definitions:
+        tool_names = sorted(definition.tool_names)
+        guidance_lines = [
+            line.strip()
+            for line in str(definition.prompt_fragment or "").splitlines()
+            if line.strip()
+        ]
+        if guidance_lines and guidance_lines[0].startswith("PACK:"):
+            guidance_lines = guidance_lines[1:]
+
+        lines.extend(
+            [
+                "",
+                f"## Enabled Pack: {definition.label}",
+                f"- Description: {definition.description}",
+                (
+                    "- Callable tools: " + ", ".join(tool_names)
+                    if tool_names
+                    else "- Callable tools: none. This pack only changes runtime/session reasoning constraints."
+                ),
+            ]
+        )
+        lines.extend(guidance_lines)
+
+    return "\n".join(lines)
+
+
+def pack_requires_interactive(pack_id: str) -> bool:
+    definition = _PACKS.get(pack_id)
+    return bool(definition and definition.interactive)
+
+
+def pack_requires_workspace_write(pack_id: str) -> bool:
+    definition = _PACKS.get(pack_id)
+    return bool(definition and definition.workspace_write)
+
+
+def enabled_pack_requires_interactive(enabled_packs: Sequence[str]) -> bool:
+    return any(pack_requires_interactive(pack_id) for pack_id in normalize_enabled_tool_packs(enabled_packs))
+
+
+def enabled_pack_requires_workspace_write(enabled_packs: Sequence[str]) -> bool:
+    return any(pack_requires_workspace_write(pack_id) for pack_id in normalize_enabled_tool_packs(enabled_packs))

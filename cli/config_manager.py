@@ -16,6 +16,7 @@ from openai import OpenAI
 from anthropic import Anthropic
 
 from cli.models.config import ProviderConfig, AppConfig
+from shared.runtime_paths import scoped_keyring_service, shared_state_root
 
 
 # Service name for keyring storage
@@ -41,10 +42,11 @@ class ConfigManager:
         Args:
             base_path: Base path for storing config. Defaults to ~/.agentshell
         """
-        self.base_path = base_path or Path.home() / ".agentshell"
+        self.base_path = base_path or shared_state_root()
         self.config_file = self.base_path / "config.json"
         self.base_path.mkdir(parents=True, exist_ok=True)
         self._config: Optional[AppConfig] = None
+        self.keyring_service = scoped_keyring_service(KEYRING_SERVICE)
     
     def load(self) -> AppConfig:
         """Load configuration from disk.
@@ -87,7 +89,7 @@ class ConfigManager:
         # Try keyring first
         if KEYRING_AVAILABLE:
             try:
-                key = keyring.get_password(KEYRING_SERVICE, provider)
+                key = keyring.get_password(self.keyring_service, provider)
                 if key:
                     return key
             except Exception:
@@ -120,7 +122,7 @@ class ConfigManager:
             return False
         
         try:
-            keyring.set_password(KEYRING_SERVICE, provider, key)
+            keyring.set_password(self.keyring_service, provider, key)
             
             # Update config to mark provider as enabled
             config = self.load()
@@ -147,7 +149,7 @@ class ConfigManager:
             return False
         
         try:
-            keyring.delete_password(KEYRING_SERVICE, provider)
+            keyring.delete_password(self.keyring_service, provider)
             
             # Update config to mark provider as disabled
             config = self.load()

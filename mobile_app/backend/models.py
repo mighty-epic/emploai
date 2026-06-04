@@ -353,6 +353,13 @@ class ContextUsageView(BaseModel):
     threshold_percent: float = 40.0
     needs_compaction: bool = False
     compaction_state: Literal["ok", "needs_compaction", "compacted"] = "ok"
+    token_strategy: str = "rough"
+    system_prompt_tokens: int = 0
+    injected_context_tokens: int = 0
+    chat_history_tokens: int = 0
+    tool_schema_tokens: int = 0
+    tool_schema_count: int = 0
+    prompt_message_count: int = 0
     last_compaction: Optional[ContextCompactionView] = None
 
 

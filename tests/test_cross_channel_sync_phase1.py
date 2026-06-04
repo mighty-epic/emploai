@@ -7,6 +7,7 @@ from mobile_app.backend import app_server
 from mobile_app.backend import runtime as app_runtime
 from mobile_app.backend.models import SessionDetailView
 from shared import channel_runtime
+from shared.task_intent import is_screen_observation_message, is_task_like_message
 from telegram_bot.telegram_session_state import TelegramSession
 
 
@@ -146,9 +147,11 @@ def test_run_reserved_chat_turn_publishes_live_events(monkeypatch):
         "assistant_delta",
         "assistant_delta",
         "assistant_final",
+        "status",
     ]
-    assert hub.events[-1][1]["payload"]["message"]["channel"] == "app"
-    assert hub.events[-1][1]["source_client_id"] == "client-1"
+    assert hub.events[-2][1]["payload"]["message"]["channel"] == "app"
+    assert hub.events[-2][1]["source_client_id"] == "client-1"
+    assert hub.events[-1][1]["payload"]["run_state"] == "idle"
 
 
 def test_sync_event_to_realtime_event_filters_same_client():
@@ -209,6 +212,49 @@ def test_sync_event_to_realtime_event_translates_task_board():
     assert translated is not None
     assert translated.type == "task_board"
     assert translated.payload == sync_event["payload"]
+
+
+def test_sync_event_to_realtime_event_translates_current_session_changed():
+    sync_event = {
+        "type": "current_session_changed",
+        "session_id": "sess-board",
+        "payload": {"current_session_id": "sess-board", "reason": "session_activated"},
+    }
+
+    translated = app_server._sync_event_to_realtime_event(
+        sync_event,
+        active_session_id="sess-board",
+        client_id="client-b",
+        verbose_mode=True,
+    )
+
+    assert translated is not None
+    assert translated.type == "current_session_changed"
+    assert translated.payload["current_session_id"] == "sess-board"
+
+
+def test_sync_event_to_realtime_event_translates_session_deleted_to_previous_active_session():
+    sync_event = {
+        "type": "current_session_changed",
+        "session_id": None,
+        "payload": {
+            "current_session_id": None,
+            "previous_session_id": "sess-deleted",
+            "reason": "session_deleted",
+        },
+    }
+
+    translated = app_server._sync_event_to_realtime_event(
+        sync_event,
+        active_session_id="sess-deleted",
+        client_id="client-b",
+        verbose_mode=True,
+    )
+
+    assert translated is not None
+    assert translated.type == "current_session_changed"
+    assert translated.session_id == "sess-deleted"
+    assert translated.payload["current_session_id"] is None
 
 
 def test_resolve_external_current_session_id_switches_when_bridge_current_matches_event():
@@ -323,6 +369,19 @@ def test_session_detail_view_accepts_historic_telegram_response_source_format():
     assert detail.messages[0].source_format == "telegram_response"
 
 
+def test_task_intent_classifier_keeps_hello_conversational():
+    assert is_task_like_message("hello") is False
+    assert is_task_like_message("thanks") is False
+    assert is_task_like_message("describe what is on the screen") is True
+    assert is_task_like_message("can you open chrome?") is True
+
+
+def test_screen_observation_classifier_prefers_live_vision_over_filesystem():
+    assert is_screen_observation_message("what do you see right now?") is True
+    assert is_screen_observation_message("look again") is True
+    assert is_screen_observation_message("tell me the directory contents and the path") is False
+
+
 def test_telegram_session_mirrors_non_telegram_events():
     sent_messages: list[str] = []
     chat_actions: list[str] = []
@@ -379,6 +438,183 @@ def test_telegram_session_mirrors_non_telegram_events():
 
     assert chat_actions == ["typing"]
     assert sent_messages == [
-        "📲 *App*\n\nhello from app",
-        "assistant reply",
+        "📲 *App Chat · App*\n\nhello from app",
+        "*App Chat*\n\nassistant reply",
     ]
+
+
+def test_app_runtime_user_zero_does_not_send_telegram_mirror():
+    class DummyBot:
+        async def send_message(self, **_kwargs):
+            raise AssertionError("desktop app user 0 must not send Telegram messages")
+
+        async def send_chat_action(self, **_kwargs):
+            raise AssertionError("desktop app user 0 must not send Telegram chat actions")
+
+    runtime = object.__new__(TelegramSession)
+    runtime.user_id = 0
+    runtime._app = SimpleNamespace(bot=DummyBot())
+    runtime.session_manager = SimpleNamespace(get_current_session_id=lambda: "sess-9")
+
+    asyncio.run(
+        runtime._handle_channel_sync_event(
+            {
+                "type": "user_message",
+                "session_id": "sess-9",
+                "origin_channel": "app",
+                "payload": {
+                    "message": {
+                        "content": "desktop-only message",
+                        "display_label": "App",
+                    }
+                },
+            }
+        )
+    )
+
+
+def test_telegram_session_refreshes_same_shared_session_before_mirroring_app_event():
+    sent_messages: list[str] = []
+    refreshed_session_ids: list[str] = []
+
+    class DummyBot:
+        async def send_message(self, *, chat_id: int, text: str, parse_mode=None):
+            assert chat_id == 99
+            sent_messages.append(text)
+
+        async def send_chat_action(self, *, chat_id: int, action: str):
+            assert chat_id == 99
+
+    runtime = object.__new__(TelegramSession)
+    runtime.user_id = 99
+    runtime._app = SimpleNamespace(bot=DummyBot())
+    runtime.session_manager = SimpleNamespace(get_current_session_id=lambda: "sess-9")
+    runtime.shared_current_session_id = "sess-9"
+    runtime.is_processing = False
+    runtime.load_session_by_id = lambda session_id: refreshed_session_ids.append(session_id)
+
+    asyncio.run(
+        runtime._handle_channel_sync_event(
+            {
+                "type": "user_message",
+                "session_id": "sess-9",
+                "origin_channel": "app",
+                "payload": {
+                    "message": {
+                        "content": "hello from app",
+                        "display_label": "App",
+                    }
+                },
+            }
+        )
+    )
+
+    assert refreshed_session_ids == ["sess-9"]
+    assert sent_messages == ["📲 *App Chat · App*\n\nhello from app"]
+
+
+def test_telegram_session_follows_explicit_current_session_change():
+    switched_to: list[str] = []
+
+    runtime = object.__new__(TelegramSession)
+    runtime.user_id = 99
+    runtime._app = SimpleNamespace(bot=SimpleNamespace())
+    runtime.session_manager = SimpleNamespace(get_current_session_id=lambda: "sess-old")
+    runtime.load_session_by_id = lambda session_id: switched_to.append(session_id)
+
+    asyncio.run(
+        runtime._handle_channel_sync_event(
+            {
+                "type": "current_session_changed",
+                "session_id": "sess-new",
+                "origin_channel": "app",
+                "payload": {"current_session_id": "sess-new"},
+            }
+        )
+    )
+
+    assert switched_to == ["sess-new"]
+
+
+def test_telegram_session_follows_app_message_session_before_mirroring():
+    sent_messages: list[str] = []
+    switched_to: list[str] = []
+    current_session_id = "sess-old"
+
+    class DummyBot:
+        async def send_message(self, *, chat_id: int, text: str, parse_mode=None):
+            assert chat_id == 99
+            sent_messages.append(text)
+
+        async def send_chat_action(self, *, chat_id: int, action: str):
+            return None
+
+    runtime = object.__new__(TelegramSession)
+    runtime.user_id = 99
+    runtime._app = SimpleNamespace(bot=DummyBot())
+
+    def load_session_by_id(session_id: str) -> None:
+        nonlocal current_session_id
+        switched_to.append(session_id)
+        current_session_id = session_id
+
+    runtime.session_manager = SimpleNamespace(get_current_session_id=lambda: current_session_id)
+    runtime.load_session_by_id = load_session_by_id
+
+    asyncio.run(
+        runtime._handle_channel_sync_event(
+            {
+                "type": "user_message",
+                "session_id": "sess-new",
+                "origin_channel": "app",
+                "payload": {
+                    "message": {
+                        "content": "hello from desktop",
+                        "display_label": "App",
+                    }
+                },
+            }
+        )
+    )
+
+    assert switched_to == ["sess-new"]
+    assert sent_messages == ["📲 *App Chat · App*\n\nhello from desktop"]
+
+
+def test_telegram_session_mirrors_verbose_tool_events():
+    sent_messages: list[str] = []
+
+    class DummyBot:
+        async def send_message(self, *, chat_id: int, text: str, parse_mode=None):
+            assert chat_id == 99
+            sent_messages.append(text)
+
+        async def send_chat_action(self, *, chat_id: int, action: str):
+            return None
+
+    runtime = object.__new__(TelegramSession)
+    runtime.user_id = 99
+    runtime._app = SimpleNamespace(bot=DummyBot())
+    runtime.session_manager = SimpleNamespace(get_current_session_id=lambda: "sess-9")
+    runtime.verbose_mode = True
+
+    asyncio.run(
+        runtime._handle_channel_sync_event(
+            {
+                "type": "tool_use",
+                "session_id": "sess-9",
+                "origin_channel": "app",
+                "payload": {
+                    "tool_name": "describe_screen",
+                    "tool_args": {"question": "what changed"},
+                    "tool_result": {"description": "Codex is open"},
+                    "duration_ms": 128.0,
+                },
+            }
+        )
+    )
+
+    assert len(sent_messages) == 1
+    assert "Command" in sent_messages[0]
+    assert "describe_screen" in sent_messages[0]
+    assert "Command Result" in sent_messages[0]

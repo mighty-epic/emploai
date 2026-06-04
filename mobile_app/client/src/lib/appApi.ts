@@ -266,6 +266,13 @@ export type ContextUsage = {
   threshold_percent: number;
   needs_compaction: boolean;
   compaction_state: 'ok' | 'needs_compaction' | 'compacted';
+  token_strategy?: string;
+  system_prompt_tokens?: number;
+  injected_context_tokens?: number;
+  chat_history_tokens?: number;
+  tool_schema_tokens?: number;
+  tool_schema_count?: number;
+  prompt_message_count?: number;
   last_compaction?: ContextCompaction | null;
 };
 

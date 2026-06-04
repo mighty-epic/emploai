@@ -1,0 +1,3 @@
+- Keep the fixture small.
+- Prefer deterministic seed files over generated content.
+- Use this workspace for cross-model behavior evals.

@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
+  Animated,
+  Easing,
+  Image,
   Platform,
   Pressable,
   ScrollView,
@@ -7,40 +10,67 @@ import {
   Text,
   TextInput,
   View,
+  type LayoutChangeEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
+  type TextInputContentSizeChangeEventData,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 
 import { buildWsBaseUrl } from '../../lib/appConfig';
 import { describeError, logDiagnostic } from '../../lib/diagnostics';
+import { DESKTOP_RECT_BUTTON_RADIUS } from './desktopUiTokens';
 import {
   activateSession,
   appendSessionTimelineEvent,
   configureAgent,
   controlAgentRun,
   createSession,
+  deleteSession,
   fetchAgentConfig,
   fetchAgentOverview,
   fetchJobs,
   fetchProfile,
+  fetchRuntimeOrchestratorStatus,
+  fetchSessionArtifactBlob,
+  fetchSessionArtifactDetail,
+  fetchSessionArtifacts,
   fetchSessionDetail,
   fetchSessions,
+  fetchTelegramBotConfigs,
+  fetchVoiceRuntimeStatus,
+  setTaskBoardArmedNextTurn,
   searchSessions,
+  configureHeadlessRuntime,
+  updateSessionHeadlessEligibility,
+  updateSessionTelegramBotAssignment,
+  updateSessionToolPacks,
   updateAgentConfig,
+  warmVoiceRuntime,
   type AgentOverview,
+  type ArtifactDetail,
+  type ArtifactSummary,
+  type ModelProviderGroup,
+  type RuntimeOrchestratorStatus,
   type ScheduledJob,
   type SessionDetail,
   type SessionMessage,
   type SessionSearchResult,
   type SessionSummary,
   type SessionTimelineEvent,
+  type TelegramBotConfig,
   type TaskBoard,
 } from '@/lib/appApi';
 import {
+  checkoutDesktopGitBranch,
+  getDesktopGitRepoInfo,
+  getDesktopPathStatus,
+  loadDesktopBootstrap,
   loadDesktopSidebarState,
   pickDesktopFolder,
   saveDesktopSidebarState,
+  type DesktopGitRepoState,
+  type DesktopPathStatus,
   type DesktopVoicePackState,
   type DesktopRuntimeStatus,
   type DesktopSidebarProjectActivity,
@@ -68,12 +98,12 @@ const VOICE_GATE_FRAME_MS = 30;
 const VOICE_GATE_MAX_MS = 30000;
 const VOICE_DEFERRED_FRAME_MAX_MS = 15000;
 const HEBREW_VOICE_SEGMENT_MS = 1200;
-const HEBREW_VOICE_GATE_DBFS = -44.0;
+const HEBREW_VOICE_GATE_DBFS = -39.5;
 const HEBREW_VOICE_GATE_RELEASE_MS = 900;
 const HEBREW_VOICE_GATE_PREROLL_MS = 300;
 const HEBREW_VOICE_GATE_MAX_MS = 3600;
 const SOCKET_RECONNECT_MS = 1600;
-const SIDEBAR_REFRESH_MS = 5000;
+const SIDEBAR_REFRESH_MS = 15000;
 const MAX_ACTIVITY_ITEMS = 40;
 const TRANSCRIPT_AUTO_SCROLL_IDLE_MS = 15000;
 const TRANSCRIPT_SCROLL_UP_THRESHOLD = 6;
@@ -90,10 +120,14 @@ type MessageSourceFormat = 'app_text' | 'app_voice_transcript';
 type RealtimeChannel = 'chat' | 'voice';
 type VoiceCaptureMode = 'push_to_talk' | 'always_on';
 type StartupReadinessState = 'warming' | 'chat_ready' | 'fatal_error';
+type ComposerInputOrigin = 'manual' | 'voice' | 'system';
 type ActiveCommandPanel =
   | { kind: 'model' }
-  | { kind: 'planner' }
-  | { kind: 'session' }
+  | { kind: 'tools' }
+  | { kind: 'draftProject' }
+  | { kind: 'draftBranch' }
+  | { kind: 'session'; sessionId: string }
+  | { kind: 'verbose' }
   | { kind: 'command'; command: string; description: string }
   | null;
 
@@ -103,6 +137,8 @@ type DesktopMessage = {
   timestamp?: string | null;
   displayLabel?: string | null;
   channel?: 'telegram' | 'app' | 'system' | null;
+  sourceFormat?: string | null;
+  messageKey?: string;
   pending?: boolean;
   localOnly?: boolean;
   localSessionId?: string | null;
@@ -137,6 +173,11 @@ type TimelineEntry =
       body: string;
       tone: 'neutral' | 'accent' | 'warn' | 'error';
     };
+
+type TranscriptMessageEntry = {
+  fullIndex: number;
+  message: DesktopMessage;
+};
 
 type PendingSearchJump = {
   sessionId: string;
@@ -184,7 +225,10 @@ type Props = {
   runtimeMode?: string;
   runtimeStatus?: DesktopRuntimeStatus | null;
   envFilePath?: string;
+  defaultWorkspace?: string | null;
   defaultInterruptPolicy?: string | null;
+  configuredModelGroups?: ModelProviderGroup[];
+  configuredPlannerModels?: string[];
   voicePackState?: DesktopVoicePackState | null;
   voiceStatus?: DesktopVoiceRuntimeStatus | null;
   onSelectVoiceEngine?: (engine: string) => Promise<boolean> | boolean;
@@ -205,6 +249,11 @@ function normalizeInterruptPolicyValue(value: string | null | undefined): Interr
   return normalized === 'steer_now' || normalized === 'after_tool' ? normalized : 'none';
 }
 
+function strOrNull(value: string | null | undefined) {
+  const normalized = String(value || '').trim();
+  return normalized || null;
+}
+
 type ReferenceEntry = {
   id: string;
   index: number;
@@ -217,6 +266,27 @@ type SidebarDraftChat = {
   id: '__draft__';
   projectPath: string;
   title: string;
+  telegramBotConfigId?: string | null;
+  model?: string | null;
+  variant?: string | null;
+  plannerModel?: string | null;
+  enabledToolPacks?: string[];
+  selectedBranch?: string | null;
+};
+
+type SidebarChatTooltipState = {
+  sessionId: string;
+  title: string;
+  projectPath: string;
+  botLabel: string;
+  top: number;
+  left: number;
+};
+
+type ToolPackInfoPopupState = {
+  packId: string;
+  top: number;
+  left: number;
 };
 
 type SidebarProjectGroup = {
@@ -225,6 +295,7 @@ type SidebarProjectGroup = {
   hint: string;
   pinned: boolean;
   collapsed: boolean;
+  folderAvailable: boolean;
   activity: DesktopSidebarProjectActivity[];
   sessions: SessionSummary[];
   matchesSearch: boolean;
@@ -240,15 +311,26 @@ type SearchResultTarget =
   | { kind: 'session'; sessionId: string; projectPath: string }
   | { kind: 'message'; sessionId: string; projectPath: string; messageIndex: number };
 
+type ToolPackDefinition = {
+  id: string;
+  label: string;
+  description: string;
+};
+
 type MonoIconName =
   | 'menu'
   | 'settings'
   | 'compose'
   | 'search'
+  | 'info'
   | 'voice'
   | 'history'
   | 'folder_closed'
   | 'folder_open'
+  | 'branch'
+  | 'chevron_down'
+  | 'chevron_up'
+  | 'check'
   | 'pin'
   | 'more'
   | 'plus';
@@ -256,15 +338,63 @@ type MonoIconName =
 const DESKTOP_SIDEBAR_STATE_VERSION = 1;
 const DESKTOP_SIDEBAR_ACTIVITY_LIMIT = 8;
 const SIDEBAR_DRAFT_CHAT_ID = '__draft__';
+const COMPOSER_MIN_LINES = 1;
+const COMPOSER_MAX_LINES = 8;
+const COMPOSER_LINE_HEIGHT = 22;
+const COMPOSER_MIN_HEIGHT = COMPOSER_MIN_LINES * COMPOSER_LINE_HEIGHT;
+const COMPOSER_MAX_HEIGHT = COMPOSER_MAX_LINES * COMPOSER_LINE_HEIGHT;
+const TOOL_PACK_DEFINITIONS: ToolPackDefinition[] = [
+  {
+    id: 'interactive_desktop',
+    label: 'Interactive Desktop',
+    description: 'Vision, OCR, clicking, typing, windows, and browser-extension actions.',
+  },
+  {
+    id: 'browser_isolated',
+    label: 'Isolated Browser',
+    description: 'Selenium-style browser automation without using the live desktop.',
+  },
+  {
+    id: 'workspace_write',
+    label: 'Workspace Write',
+    description: 'Editing files and running mutating workspace commands.',
+  },
+  {
+    id: 'workspace_read',
+    label: 'Workspace Read',
+    description: 'Reading files, searching code, tests, diffs, and safe shell reads.',
+  },
+  {
+    id: 'web_research',
+    label: 'Web Research',
+    description: 'Search and fetch external documentation or websites.',
+  },
+  {
+    id: 'scheduler',
+    label: 'Scheduler',
+    description: 'Cron jobs, recurring tasks, run-now, and scheduler inspection.',
+  },
+  {
+    id: 'app_runtime',
+    label: 'App Runtime',
+    description: 'Session and runtime controls that are safe for this chat.',
+  },
+];
+const DEFAULT_TOOL_PACK_IDS = TOOL_PACK_DEFINITIONS.map((item) => item.id);
 const MONO_ICON_GLYPHS: Record<MonoIconName, string> = {
   menu: '≡',
   settings: '⛭',
   compose: '✎',
   search: '⌕',
+  info: '',
   voice: '◌',
   history: '◷',
   folder_closed: '',
   folder_open: '',
+  branch: '⎇',
+  chevron_down: '',
+  chevron_up: '',
+  check: '✓',
   pin: '⌖',
   more: '⋯',
   plus: '+',
@@ -338,6 +468,48 @@ function MonoIcon({
       </View>
     );
   }
+  if (name === 'info') {
+    return (
+      <View style={[flattened, { width: size + 2, height: size + 2, alignItems: 'center', justifyContent: 'center' }]}>
+        <View style={{ width: size, height: size, position: 'relative' }}>
+          <View
+            style={{
+              position: 'absolute',
+              left: size * 0.12,
+              top: size * 0.12,
+              width: size * 0.76,
+              height: size * 0.76,
+              borderWidth: 1.4,
+              borderColor: color,
+              borderRadius: size * 0.38,
+            }}
+          />
+          <View
+            style={{
+              position: 'absolute',
+              left: size * 0.45,
+              top: size * 0.28,
+              width: size * 0.1,
+              height: size * 0.1,
+              borderRadius: size * 0.05,
+              backgroundColor: color,
+            }}
+          />
+          <View
+            style={{
+              position: 'absolute',
+              left: size * 0.46,
+              top: size * 0.42,
+              width: size * 0.08,
+              height: size * 0.22,
+              backgroundColor: color,
+              borderRadius: 999,
+            }}
+          />
+        </View>
+      </View>
+    );
+  }
   if (name === 'folder_closed' || name === 'folder_open') {
     return (
       <View style={[flattened, { width: size + 2, height: size, alignItems: 'center', justifyContent: 'center' }]}>
@@ -385,6 +557,39 @@ function MonoIcon({
       </View>
     );
   }
+  if (name === 'chevron_down' || name === 'chevron_up') {
+    const isUp = name === 'chevron_up';
+    return (
+      <View style={[flattened, { width: size, height: size, alignItems: 'center', justifyContent: 'center' }]}>
+        <View style={{ width: size, height: size * 0.7, position: 'relative' }}>
+          <View
+            style={{
+              position: 'absolute',
+              left: size * 0.19,
+              top: size * 0.26,
+              width: size * 0.36,
+              height: 1.5,
+              backgroundColor: color,
+              borderRadius: 999,
+              transform: [{ rotate: isUp ? '-42deg' : '42deg' }],
+            }}
+          />
+          <View
+            style={{
+              position: 'absolute',
+              right: size * 0.19,
+              top: size * 0.26,
+              width: size * 0.36,
+              height: 1.5,
+              backgroundColor: color,
+              borderRadius: 999,
+              transform: [{ rotate: isUp ? '42deg' : '-42deg' }],
+            }}
+          />
+        </View>
+      </View>
+    );
+  }
   return <Text style={[styles.monoIconBase, style]}>{MONO_ICON_GLYPHS[name]}</Text>;
 }
 
@@ -399,6 +604,47 @@ function normalizeWorkspacePath(value: string | null | undefined) {
     return '';
   }
   return trimmed.replace(/\//g, '\\').replace(/\\+$/, '');
+}
+
+function isWorkspacePathAllowed(projectPath: string, allowedRoot: string) {
+  const normalizedProjectPath = normalizeWorkspacePath(projectPath);
+  const normalizedAllowedRoot = normalizeWorkspacePath(allowedRoot);
+  if (!normalizedProjectPath) {
+    return false;
+  }
+  if (!normalizedAllowedRoot) {
+    return true;
+  }
+  const candidate = normalizedProjectPath.toLowerCase();
+  const root = normalizedAllowedRoot.toLowerCase();
+  return candidate === root || candidate.startsWith(`${root}\\`);
+}
+
+function shouldKeepSidebarProjectPath(
+  projectPath: string,
+  options: {
+    allowedRoot: string;
+    sessionProjectPaths: Set<string>;
+    draftProjectPath?: string | null;
+  },
+) {
+  const { allowedRoot, sessionProjectPaths, draftProjectPath } = options;
+  const normalized = normalizeWorkspacePath(projectPath);
+  if (!normalized) {
+    return false;
+  }
+  if (sessionProjectPaths.has(normalized)) {
+    return true;
+  }
+  if (normalizeWorkspacePath(draftProjectPath) === normalized) {
+    return true;
+  }
+  return isWorkspacePathAllowed(normalized, allowedRoot);
+}
+
+function isAbsoluteWindowsPath(projectPath: string) {
+  const normalized = normalizeWorkspacePath(projectPath);
+  return /^[a-zA-Z]:\\/.test(normalized) || normalized.startsWith('\\\\');
 }
 
 function projectPathBasename(projectPath: string) {
@@ -432,6 +678,178 @@ function composeVoiceDraftInput(baseInput: string, draftText: string) {
     return draft;
   }
   return `${baseWithoutTrailingWhitespace} ${draft}`;
+}
+
+function appendVoiceTranscriptSegment(baseInput: string, segmentText: string) {
+  const segment = String(segmentText || '').trim();
+  const base = String(baseInput || '').trim();
+  if (!segment) {
+    return base;
+  }
+  if (!base) {
+    return segment;
+  }
+  if (base === segment || base.endsWith(` ${segment}`)) {
+    return base;
+  }
+  return `${base} ${segment}`;
+}
+
+const TIMELINE_BASE64_KEYS = new Set(['image_base64', 'base64', 'image_data', 'data', 'screenshot']);
+
+function truncateTimelinePreview(value: unknown, limit = 220) {
+  const text = String(value ?? '').trim();
+  if (text.length <= limit) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, limit - 3))}...`;
+}
+
+function safeTimelineValuePreview(value: unknown, limit = 80) {
+  if (Array.isArray(value)) {
+    return truncateTimelinePreview(`Array[${value.length}]`, limit);
+  }
+  if (value && typeof value === 'object') {
+    const keys = Object.keys(value as Record<string, unknown>).filter((key) => !TIMELINE_BASE64_KEYS.has(key));
+    return truncateTimelinePreview(keys.slice(0, 4).join(', ') || 'object', limit);
+  }
+  return truncateTimelinePreview(value, limit);
+}
+
+function toolArgsPreview(toolArgs: Record<string, any>) {
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(toolArgs || {}).slice(0, 4)) {
+    const valueString = String(value ?? '');
+    if (TIMELINE_BASE64_KEYS.has(key) && valueString.length > 100) {
+      continue;
+    }
+    parts.push(`${key}: ${safeTimelineValuePreview(value, 80)}`);
+  }
+  return truncateTimelinePreview(parts.join(', '), 240);
+}
+
+function toolResultPreview(toolResult: unknown) {
+  if (toolResult && typeof toolResult === 'object' && !Array.isArray(toolResult)) {
+    const resultRecord = toolResult as Record<string, unknown>;
+    if ('error' in resultRecord) {
+      return {
+        tone: 'error' as const,
+        text: `Error: ${truncateTimelinePreview(resultRecord.error, 220)}`,
+      };
+    }
+    const safeKeys = Object.keys(resultRecord).filter((key) => !TIMELINE_BASE64_KEYS.has(key));
+    return {
+      tone: 'accent' as const,
+      text: truncateTimelinePreview(safeKeys.slice(0, 6).join(', ') || 'ok', 220),
+    };
+  }
+  if (typeof toolResult === 'string') {
+    const clean = truncateTimelinePreview(toolResult, 220);
+    return {
+      tone: clean.startsWith('Error') ? ('error' as const) : ('accent' as const),
+      text: clean || 'ok',
+    };
+  }
+  return {
+    tone: 'accent' as const,
+    text: safeTimelineValuePreview(toolResult, 220) || 'ok',
+  };
+}
+
+function createLocalToolTimelineEvent(payload: Record<string, any>): SessionTimelineEvent | null {
+  const toolName = String(payload.tool_name || '').trim();
+  if (!toolName) {
+    return null;
+  }
+  const argsPreview = toolArgsPreview((payload.tool_args || {}) as Record<string, any>);
+  const resultPreview = toolResultPreview(payload.tool_result);
+  const durationMs = Number(payload.duration_ms || 0);
+  const callPreview = argsPreview ? `${toolName}(${argsPreview})` : `${toolName}()`;
+  return {
+    id: '',
+    kind: 'tool',
+    title: `Tool · ${toolName}`,
+    content: `${callPreview}\n-> ${resultPreview.text} (${durationMs.toFixed(0)}ms)`,
+    tone: resultPreview.tone,
+    timestamp: typeof payload.timestamp === 'string' && payload.timestamp.trim()
+      ? payload.timestamp.trim()
+      : new Date().toISOString(),
+    channel: 'app',
+    source_format: 'app_text',
+    metadata: payload,
+  };
+}
+
+function timelineEventFallbackFingerprint(event: SessionTimelineEvent, includeTimestamp = true) {
+  return [
+    String(event.kind || 'note'),
+    String(event.title || 'Event'),
+    String(event.content || ''),
+    includeTimestamp ? String(event.timestamp || '') : '',
+    String(event.tone || 'neutral'),
+  ].join('|');
+}
+
+function timelineEventMergeKey(event: SessionTimelineEvent) {
+  const kind = String(event.kind || '').trim().toLowerCase();
+  if (kind === 'tool') {
+    return `fp:${timelineEventFallbackFingerprint(event, false)}`;
+  }
+  const id = String(event.id || '').trim();
+  if (id) {
+    return `id:${id}`;
+  }
+  return `fp:${timelineEventFallbackFingerprint(event, true)}`;
+}
+
+function normalizeTimelineEvents(events: SessionTimelineEvent[]) {
+  const unique: SessionTimelineEvent[] = [];
+  const seen = new Set<string>();
+  for (const event of events) {
+    const key = timelineEventMergeKey(event);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(event);
+  }
+  return unique
+    .map((event, index) => ({
+      event,
+      index,
+      timestamp: timelineEventTimestampValue(event),
+    }))
+    .sort((left, right) => {
+      if (left.timestamp != null && right.timestamp != null && left.timestamp !== right.timestamp) {
+        return left.timestamp - right.timestamp;
+      }
+      if (left.timestamp != null && right.timestamp == null) {
+        return -1;
+      }
+      if (left.timestamp == null && right.timestamp != null) {
+        return 1;
+      }
+      return left.index - right.index;
+    })
+    .map((entry) => entry.event);
+}
+
+function mergeTimelineEventState(previous: SessionTimelineEvent[], incoming: SessionTimelineEvent[]) {
+  const next = normalizeTimelineEvents(incoming);
+  const seen = new Set(next.map((event) => timelineEventMergeKey(event)));
+  for (const event of previous) {
+    const kind = String(event.kind || '').trim().toLowerCase();
+    if (kind !== 'tool' && kind !== 'command') {
+      continue;
+    }
+    const key = timelineEventMergeKey(event);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    next.push(event);
+  }
+  return normalizeTimelineEvents(next);
 }
 
 function createEmptySidebarState(): DesktopSidebarState {
@@ -513,6 +931,33 @@ function sessionUiOrder(sessionMeta: Record<string, DesktopSidebarSessionState>,
   return typeof value === 'number' ? value : Number.MAX_SAFE_INTEGER;
 }
 
+function sessionSidebarSortTime(session: SessionSummary) {
+  return String(session.created_at || session.updated_at || '');
+}
+
+function sessionSidebarSortComparator(
+  left: SessionSummary,
+  right: SessionSummary,
+  sessionMeta: Record<string, DesktopSidebarSessionState>,
+) {
+  const leftPinned = Boolean(sessionMeta[left.id]?.pinned);
+  const rightPinned = Boolean(sessionMeta[right.id]?.pinned);
+  if (leftPinned !== rightPinned) {
+    return leftPinned ? -1 : 1;
+  }
+  const leftOrder = sessionUiOrder(sessionMeta, left.id);
+  const rightOrder = sessionUiOrder(sessionMeta, right.id);
+  if (leftOrder !== rightOrder) {
+    return leftOrder - rightOrder;
+  }
+  const leftTime = sessionSidebarSortTime(left);
+  const rightTime = sessionSidebarSortTime(right);
+  if (leftTime !== rightTime) {
+    return leftTime < rightTime ? 1 : -1;
+  }
+  return left.name.localeCompare(right.name);
+}
+
 function toDesktopMessage(message: SessionMessage): DesktopMessage {
   return {
     role: message.role || 'assistant',
@@ -520,6 +965,65 @@ function toDesktopMessage(message: SessionMessage): DesktopMessage {
     timestamp: message.timestamp,
     displayLabel: message.display_label,
     channel: message.channel,
+    sourceFormat: message.source_format,
+  };
+}
+
+function messageIdentitySeed(message: Pick<DesktopMessage, 'role' | 'content' | 'timestamp' | 'channel' | 'displayLabel' | 'sourceFormat'>) {
+  return [
+    message.role || 'assistant',
+    message.timestamp || '',
+    message.channel || '',
+    message.sourceFormat || '',
+    message.displayLabel || '',
+    message.content || '',
+  ].join('|');
+}
+
+function messageIdentitySeedFromSessionMessage(message: SessionMessage) {
+  const raw = (message.raw || {}) as Record<string, unknown>;
+  const explicitId = String(
+    raw.message_id
+      || raw.id
+      || raw.telegram_message_id
+      || raw.app_message_id
+      || '',
+  ).trim();
+  if (explicitId) {
+    return `message:${explicitId}`;
+  }
+  return messageIdentitySeed({
+    role: message.role || 'assistant',
+    content: message.content || '',
+    timestamp: message.timestamp,
+    channel: message.channel,
+    displayLabel: message.display_label,
+    sourceFormat: message.source_format,
+  });
+}
+
+function toDesktopMessages(messages: SessionMessage[]): DesktopMessage[] {
+  const occurrenceCounts = new Map<string, number>();
+  return messages.map((message) => {
+    const seed = messageIdentitySeedFromSessionMessage(message);
+    const occurrence = (occurrenceCounts.get(seed) || 0) + 1;
+    occurrenceCounts.set(seed, occurrence);
+    return {
+      ...toDesktopMessage(message),
+      messageKey: `${seed}#${occurrence}`,
+    };
+  });
+}
+
+function toLiveDesktopMessage(message: SessionMessage, existingMessages: DesktopMessage[]) {
+  const seed = messageIdentitySeedFromSessionMessage(message);
+  const occurrence = existingMessages.reduce((count, current) => {
+    const currentSeed = current.messageKey?.replace(/#\d+$/, '') || messageIdentitySeed(current);
+    return currentSeed === seed ? count + 1 : count;
+  }, 0) + 1;
+  return {
+    ...toDesktopMessage(message),
+    messageKey: `${seed}#${occurrence}`,
   };
 }
 
@@ -643,6 +1147,8 @@ function taskBoardStatusLabel(status: string | null | undefined) {
       return 'Completed';
     case 'blocked':
       return 'Blocked';
+    case 'interrupted':
+      return 'Interrupted';
     case 'paused':
       return 'Paused';
     default:
@@ -701,20 +1207,20 @@ function timelineEventTimestampValue(event: SessionTimelineEvent) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
-function mergeTimelineEntries(messages: DesktopMessage[], timelineEvents: SessionTimelineEvent[]) {
-  const messageEntries: TimelineEntry[] = messages
-    .filter((message) => !message.localOnly)
-    .map((message, index) => ({
-    id: `message-${message.timestamp || 'pending'}-${index}`,
-    kind: 'message',
-    sourceMessageIndex: index,
-    timestamp: message.timestamp || null,
-    sortValue: messageTimestampValue(message) ?? Number.MAX_SAFE_INTEGER - 1 + index,
-    label: labelForMessage(message),
-    eyebrow: message.role === 'assistant' ? 'Assistant' : message.role === 'system' ? 'System' : 'User',
-    body: String(message.content || ''),
-    tone: message.role === 'assistant' ? 'accent' : message.role === 'system' ? 'neutral' : 'neutral',
-  }));
+function mergeTimelineEntries(messageRows: TranscriptMessageEntry[], timelineEvents: SessionTimelineEvent[]) {
+  const messageEntries: TimelineEntry[] = messageRows
+    .filter(({ message }) => !message.localOnly)
+    .map(({ message, fullIndex }) => ({
+      id: message.messageKey || `message-${message.timestamp || 'pending'}-${fullIndex}`,
+      kind: 'message',
+      sourceMessageIndex: fullIndex,
+      timestamp: message.timestamp || null,
+      sortValue: messageTimestampValue(message) ?? Number.MAX_SAFE_INTEGER - 1 + fullIndex,
+      label: labelForMessage(message),
+      eyebrow: message.role === 'assistant' ? 'Assistant' : message.role === 'system' ? 'System' : 'User',
+      body: String(message.content || ''),
+      tone: message.role === 'assistant' ? 'accent' : message.role === 'system' ? 'neutral' : 'neutral',
+    }));
 
   const eventEntries: TimelineEntry[] = timelineEvents.map((event, index) => ({
     id: event.id || `event-${event.timestamp || 'pending'}-${index}`,
@@ -875,7 +1381,10 @@ export function DesktopConversationView({
   runtimeMode,
   runtimeStatus,
   envFilePath,
+  defaultWorkspace,
   defaultInterruptPolicy,
+  configuredModelGroups = [],
+  configuredPlannerModels = [],
   voicePackState,
   voiceStatus,
   onSelectVoiceEngine,
@@ -892,6 +1401,7 @@ export function DesktopConversationView({
   const pendingMessagesRef = useRef<QueuedMessage[]>([]);
   const scrollRef = useRef<ScrollView | null>(null);
   const historyScrollRef = useRef<ScrollView | null>(null);
+  const shellRef = useRef<any>(null);
   const sidebarSearchInputRef = useRef<TextInput | null>(null);
   const sessionIdRef = useRef<string | undefined>(undefined);
   const voiceStreamRef = useRef<MediaStream | null>(null);
@@ -911,9 +1421,11 @@ export function DesktopConversationView({
   const voiceRecordingRef = useRef(false);
   const voiceComposerBaseInputRef = useRef('');
   const voiceComposerDraftRef = useRef('');
+  const lastComposerInputOriginRef = useRef<ComposerInputOrigin>('system');
   const deferredAlwaysOnFramesRef = useRef<Float32Array[]>([]);
   const deferredAlwaysOnSampleCountRef = useRef(0);
   const drainingDeferredAlwaysOnFramesRef = useRef(false);
+  const lastVoiceWarmRequestEngineRef = useRef<string | null>(null);
   const assistantAudioRef = useRef<HTMLAudioElement | null>(null);
   const transcriptAutoScrollSuspendedRef = useRef(false);
   const transcriptAutoScrollResumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -930,6 +1442,7 @@ export function DesktopConversationView({
     status: null,
   });
   const startupSidebarReadyRef = useRef(false);
+  const startupSessionStateReadyRef = useRef(false);
   const startupChatSocketReadyRef = useRef(false);
   const startupTerminalStateRef = useRef<StartupReadinessState | null>(null);
   const draftChatRef = useRef<SidebarDraftChat | null>(null);
@@ -939,6 +1452,28 @@ export function DesktopConversationView({
   const historyMessageLayoutRef = useRef<Record<number, number>>({});
   const searchJumpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const floatingPanelRef = useRef<any>(null);
+  const modelTriggerRef = useRef<any>(null);
+  const toolsTriggerRef = useRef<any>(null);
+  const draftProjectTriggerRef = useRef<any>(null);
+  const draftBranchTriggerRef = useRef<any>(null);
+  const sidebarSearchLauncherRef = useRef<any>(null);
+  const sidebarSearchModalRef = useRef<any>(null);
+  const commandSuggestionMenuRef = useRef<any>(null);
+  const composerTextRegionRef = useRef<any>(null);
+  const projectMenuRefs = useRef<Record<string, any>>({});
+  const projectMenuTriggerRefs = useRef<Record<string, any>>({});
+  const sessionRowRefs = useRef<Record<string, any>>({});
+  const sessionMenuRefs = useRef<Record<string, any>>({});
+  const sessionMenuTriggerRefs = useRef<Record<string, any>>({});
+  const toolPackInfoButtonRefs = useRef<Record<string, any>>({});
+  const sidebarChatTooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toolPackInfoHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sidebarCollectionsRefreshInFlightRef = useRef(false);
+  const overviewRefreshInFlightRef = useRef(false);
+  const chatRunActiveRef = useRef(false);
+  const assistantDeltaBufferRef = useRef('');
+  const assistantDeltaFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [sessionId, setSessionId] = useState<string | undefined>(initialSessionId || undefined);
   const [sessionName, setSessionName] = useState('Shared session');
@@ -947,19 +1482,27 @@ export function DesktopConversationView({
   const [timelineEvents, setTimelineEvents] = useState<SessionTimelineEvent[]>([]);
   const [jobs, setJobs] = useState<ScheduledJob[]>([]);
   const [overview, setOverview] = useState<AgentOverview | null>(null);
+  const [cachedModelGroups, setCachedModelGroups] = useState<ModelProviderGroup[]>(configuredModelGroups);
+  const [cachedPlannerModels, setCachedPlannerModels] = useState<string[]>(configuredPlannerModels);
+  const [orchestratorStatus, setOrchestratorStatus] = useState<RuntimeOrchestratorStatus | null>(null);
+  const [telegramBotConfigs, setTelegramBotConfigs] = useState<TelegramBotConfig[]>([]);
   const [taskBoard, setTaskBoard] = useState<TaskBoard | null>(null);
   const [completedTaskBoards, setCompletedTaskBoards] = useState<TaskBoard[]>([]);
+  const [taskBoardArmedNextTurn, setTaskBoardArmedNextTurnState] = useState(false);
   const [taskBoardCollapsed, setTaskBoardCollapsed] = useState(false);
   const [expandedCompletedTaskIds, setExpandedCompletedTaskIds] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState('loading shared session');
   const [socketState, setSocketState] = useState('connecting');
   const [input, setInput] = useState('');
+  const [composerInputHeight, setComposerInputHeight] = useState(COMPOSER_MIN_HEIGHT);
   const [activeCommandPanel, setActiveCommandPanel] = useState<ActiveCommandPanel>(null);
   const [assistantDraft, setAssistantDraft] = useState('');
   const [thinking, setThinking] = useState('');
+  const [lastAssistantOutputAt, setLastAssistantOutputAt] = useState<number | null>(null);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [interruptPolicy, setInterruptPolicy] = useState<InterruptPolicy>(() => normalizeInterruptPolicyValue(defaultInterruptPolicy));
   const [chatRunActive, setChatRunActive] = useState(false);
+  const [runtimeRunState, setRuntimeRunState] = useState<'idle' | 'running'>('idle');
   const [queuedComposerMessages, setQueuedComposerMessages] = useState<QueuedComposerMessage[]>([]);
   const [voiceState, setVoiceState] = useState('connecting');
   const [voiceDraft, setVoiceDraft] = useState('');
@@ -968,6 +1511,7 @@ export function DesktopConversationView({
   const [voiceRecording, setVoiceRecording] = useState(false);
   const [voiceMode, setVoiceMode] = useState<VoiceCaptureMode>('push_to_talk');
   const [voiceEngineChanging, setVoiceEngineChanging] = useState(false);
+  const [liveVoiceStatus, setLiveVoiceStatus] = useState<DesktopVoiceRuntimeStatus | null>(voiceStatus || null);
   const [alwaysOnEnabled, setAlwaysOnEnabled] = useState(false);
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const [sidebarSearch, setSidebarSearch] = useState('');
@@ -975,12 +1519,21 @@ export function DesktopConversationView({
   const [sidebarSearchLoading, setSidebarSearchLoading] = useState(false);
   const [sidebarSearchError, setSidebarSearchError] = useState<string | null>(null);
   const [sidebarSearchResults, setSidebarSearchResults] = useState<SessionSearchResult[]>([]);
+  const [draftGitRepoState, setDraftGitRepoState] = useState<DesktopGitRepoState | null>(null);
+  const [draftGitRepoLoading, setDraftGitRepoLoading] = useState(false);
+  const [draftProjectSearch, setDraftProjectSearch] = useState('');
+  const [draftBranchSearch, setDraftBranchSearch] = useState('');
   const [sidebarState, setSidebarState] = useState<DesktopSidebarState>(createEmptySidebarState());
   const [sidebarStateReady, setSidebarStateReady] = useState(false);
+  const [projectPathStatuses, setProjectPathStatuses] = useState<Record<string, DesktopPathStatus>>({});
   const [draftChat, setDraftChat] = useState<SidebarDraftChat | null>(null);
   const [dragState, setDragState] = useState<SidebarDragState>(null);
   const [hoveredProjectPath, setHoveredProjectPath] = useState<string | null>(null);
   const [openProjectMenuPath, setOpenProjectMenuPath] = useState<string | null>(null);
+  const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null);
+  const [openSessionMenuId, setOpenSessionMenuId] = useState<string | null>(null);
+  const [sidebarChatTooltip, setSidebarChatTooltip] = useState<SidebarChatTooltipState | null>(null);
+  const [pendingDraftBotProjectPath, setPendingDraftBotProjectPath] = useState<string | null>(null);
   const [pendingSessionSwitch, setPendingSessionSwitch] = useState<
     | { mode: 'session'; sessionId: string; jumpMessageIndex?: number | null }
     | { mode: 'draft_send'; projectPath: string; text: string; sourceFormat: MessageSourceFormat }
@@ -991,22 +1544,269 @@ export function DesktopConversationView({
   const [showControls, setShowControls] = useState(false);
   const [showVoicePanel, setShowVoicePanel] = useState(false);
   const [showReferenceRail, setShowReferenceRail] = useState(false);
+  const [showArtifactRail, setShowArtifactRail] = useState(false);
+  const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
+  const [artifactsLoading, setArtifactsLoading] = useState(false);
+  const [artifactError, setArtifactError] = useState<string | null>(null);
+  const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
+  const [selectedArtifactDetail, setSelectedArtifactDetail] = useState<ArtifactDetail | null>(null);
+  const [artifactDetailLoading, setArtifactDetailLoading] = useState(false);
+  const [toolPackMutationInFlight, setToolPackMutationInFlight] = useState<string | null>(null);
+  const [hoveredToolPackInfoId, setHoveredToolPackInfoId] = useState<string | null>(null);
+  const [pinnedToolPackInfoId, setPinnedToolPackInfoId] = useState<string | null>(null);
+  const [toolPackInfoPopup, setToolPackInfoPopup] = useState<ToolPackInfoPopupState | null>(null);
+  const [sessionSettingsMutationInFlight, setSessionSettingsMutationInFlight] = useState(false);
+  const thinkingShineProgress = useRef(new Animated.Value(0)).current;
   const [voicePanelHidden, setVoicePanelHidden] = useState(false);
   const [dismissedCommandSuggestionInput, setDismissedCommandSuggestionInput] = useState<string | null>(null);
   const [keepRuntimeOnAppClose, setKeepRuntimeOnAppClose] = useState(false);
   const [savingCloseBehavior, setSavingCloseBehavior] = useState(false);
   const [contextUsageHovered, setContextUsageHovered] = useState(false);
-  const selectedVoiceEngine = voicePackState?.defaultEngine || voiceStatus?.selected_engine || VOICE_ENGINE_NONE;
+  const selectedVoiceEngine = voicePackState?.defaultEngine || liveVoiceStatus?.selected_engine || voiceStatus?.selected_engine || VOICE_ENGINE_NONE;
+  const allowedWorkspaceRoot = normalizeWorkspacePath(defaultWorkspace);
   const usingHebrewVoiceEngine = selectedVoiceEngine === VOICE_ENGINE_HEBREW;
   const activeVoiceSegmentMs = usingHebrewVoiceEngine ? HEBREW_VOICE_SEGMENT_MS : VOICE_SEGMENT_MS;
   const activeVoiceGateDbfs = usingHebrewVoiceEngine ? HEBREW_VOICE_GATE_DBFS : VOICE_GATE_DBFS;
   const activeVoiceGateReleaseMs = usingHebrewVoiceEngine ? HEBREW_VOICE_GATE_RELEASE_MS : VOICE_GATE_RELEASE_MS;
+
+  const setProjectMenuRef = (projectPath: string) => (node: any) => {
+    if (node) {
+      projectMenuRefs.current[projectPath] = node;
+      return;
+    }
+    delete projectMenuRefs.current[projectPath];
+  };
+
+  const setProjectMenuTriggerRef = (projectPath: string) => (node: any) => {
+    if (node) {
+      projectMenuTriggerRefs.current[projectPath] = node;
+      return;
+    }
+    delete projectMenuTriggerRefs.current[projectPath];
+  };
+
+  const setSessionRowRef = (targetSessionId: string) => (node: any) => {
+    if (node) {
+      sessionRowRefs.current[targetSessionId] = node;
+      return;
+    }
+    delete sessionRowRefs.current[targetSessionId];
+  };
+
+  const setSessionMenuRef = (targetSessionId: string) => (node: any) => {
+    if (node) {
+      sessionMenuRefs.current[targetSessionId] = node;
+      return;
+    }
+    delete sessionMenuRefs.current[targetSessionId];
+  };
+
+  const setSessionMenuTriggerRef = (targetSessionId: string) => (node: any) => {
+    if (node) {
+      sessionMenuTriggerRefs.current[targetSessionId] = node;
+      return;
+    }
+    delete sessionMenuTriggerRefs.current[targetSessionId];
+  };
+
+  const setToolPackInfoButtonRef = (packId: string) => (node: any) => {
+    if (node) {
+      toolPackInfoButtonRefs.current[packId] = node;
+      return;
+    }
+    delete toolPackInfoButtonRefs.current[packId];
+  };
   const activeVoiceGatePrerollMs = usingHebrewVoiceEngine ? HEBREW_VOICE_GATE_PREROLL_MS : VOICE_GATE_PREROLL_MS;
   const activeVoiceGateMaxMs = usingHebrewVoiceEngine ? HEBREW_VOICE_GATE_MAX_MS : VOICE_GATE_MAX_MS;
+
+  const clearSidebarChatTooltipTimer = () => {
+    if (sidebarChatTooltipTimerRef.current) {
+      clearTimeout(sidebarChatTooltipTimerRef.current);
+      sidebarChatTooltipTimerRef.current = null;
+    }
+  };
+
+  const hideSidebarChatTooltip = (targetSessionId?: string | null) => {
+    setSidebarChatTooltip((current) => {
+      if (!current) {
+        return null;
+      }
+      if (targetSessionId && current.sessionId !== targetSessionId) {
+        return current;
+      }
+      return null;
+    });
+  };
+
+  const clearToolPackInfoHideTimer = () => {
+    if (toolPackInfoHideTimerRef.current) {
+      clearTimeout(toolPackInfoHideTimerRef.current);
+      toolPackInfoHideTimerRef.current = null;
+    }
+  };
+
+  const hideToolPackInfoPopup = (targetPackId?: string | null) => {
+    clearToolPackInfoHideTimer();
+    setToolPackInfoPopup((current) => {
+      if (!current) {
+        return null;
+      }
+      if (targetPackId && current.packId !== targetPackId) {
+        return current;
+      }
+      return null;
+    });
+    setHoveredToolPackInfoId((current) => (
+      !targetPackId || current === targetPackId ? null : current
+    ));
+    setPinnedToolPackInfoId((current) => (
+      !targetPackId || current === targetPackId ? null : current
+    ));
+  };
+
+  const showToolPackInfoPopup = (packId: string, options?: { pinned?: boolean }) => {
+    clearToolPackInfoHideTimer();
+    if (options?.pinned) {
+      setPinnedToolPackInfoId(packId);
+    } else {
+      setHoveredToolPackInfoId(packId);
+    }
+    if (Platform.OS !== 'web') {
+      setToolPackInfoPopup({
+        packId,
+        top: 0,
+        left: 0,
+      });
+      return;
+    }
+    const buttonNode = toolPackInfoButtonRefs.current[packId];
+    const layerNode = floatingPanelRef.current;
+    if (
+      !buttonNode
+      || !layerNode
+      || typeof buttonNode.getBoundingClientRect !== 'function'
+      || typeof layerNode.getBoundingClientRect !== 'function'
+    ) {
+      setToolPackInfoPopup({
+        packId,
+        top: 0,
+        left: 0,
+      });
+      return;
+    }
+    const buttonRect = buttonNode.getBoundingClientRect();
+    const layerRect = layerNode.getBoundingClientRect();
+    const bubbleWidth = 292;
+    const bubbleHeight = 136;
+    const leftPreferred = buttonRect.left - layerRect.left - bubbleWidth - 12;
+    const leftFallback = buttonRect.right - layerRect.left + 12;
+    const nextLeft = leftPreferred >= 12
+      ? leftPreferred
+      : Math.max(12, Math.min(layerRect.width - bubbleWidth - 12, leftFallback));
+    const unclampedTop = buttonRect.top - layerRect.top + buttonRect.height / 2 - bubbleHeight / 2;
+    const nextTop = Math.max(12, Math.min(layerRect.height - bubbleHeight - 12, unclampedTop));
+    setToolPackInfoPopup({
+      packId,
+      top: nextTop,
+      left: nextLeft,
+    });
+  };
+
+  const scheduleHideToolPackInfoPopup = (packId: string) => {
+    clearToolPackInfoHideTimer();
+    toolPackInfoHideTimerRef.current = setTimeout(() => {
+      setHoveredToolPackInfoId((current) => (current === packId ? null : current));
+      setToolPackInfoPopup((current) => {
+        if (!current || current.packId !== packId || pinnedToolPackInfoId === packId) {
+          return current;
+        }
+        return null;
+      });
+    }, 120);
+  };
+
+  const showSidebarChatTooltip = (targetSession: SessionSummary, projectPath: string) => {
+    if (Platform.OS !== 'web') {
+      return;
+    }
+    const rowNode = sessionRowRefs.current[targetSession.id];
+    const shellNode = shellRef.current;
+    if (
+      !rowNode
+      || !shellNode
+      || typeof rowNode.getBoundingClientRect !== 'function'
+      || typeof shellNode.getBoundingClientRect !== 'function'
+    ) {
+      return;
+    }
+    const rowRect = rowNode.getBoundingClientRect();
+    const shellRect = shellNode.getBoundingClientRect();
+    const tooltipWidth = 296;
+    const tooltipHeight = 86;
+    const nextLeft = Math.max(14, rowRect.left - shellRect.left - tooltipWidth - 16);
+    const unclampedTop = rowRect.top - shellRect.top + rowRect.height / 2 - tooltipHeight / 2;
+    const nextTop = Math.max(14, Math.min(shellRect.height - tooltipHeight - 14, unclampedTop));
+    setSidebarChatTooltip({
+      sessionId: targetSession.id,
+      title: targetSession.name,
+      projectPath,
+      botLabel: telegramBotLabelForSession(targetSession),
+      top: nextTop,
+      left: nextLeft,
+    });
+  };
+
+  const scheduleSidebarChatTooltip = (targetSession: SessionSummary, projectPath: string) => {
+    if (Platform.OS !== 'web') {
+      return;
+    }
+    clearSidebarChatTooltipTimer();
+    sidebarChatTooltipTimerRef.current = setTimeout(() => {
+      showSidebarChatTooltip(targetSession, projectPath);
+    }, 2000);
+  };
 
   useEffect(() => {
     setInterruptPolicy(normalizeInterruptPolicyValue(defaultInterruptPolicy));
   }, [defaultInterruptPolicy]);
+
+  useEffect(() => (
+    () => {
+      clearSidebarChatTooltipTimer();
+      clearToolPackInfoHideTimer();
+    }
+  ), []);
+
+  useEffect(() => {
+    if (sidebarExpanded) {
+      return;
+    }
+    clearSidebarChatTooltipTimer();
+    hideSidebarChatTooltip();
+  }, [sidebarExpanded]);
+
+  useEffect(() => {
+    if (activeCommandPanel?.kind === 'tools') {
+      return;
+    }
+    hideToolPackInfoPopup();
+  }, [activeCommandPanel]);
+
+  useEffect(() => {
+    if (draftChat || (activeCommandPanel?.kind !== 'draftBranch' && activeCommandPanel?.kind !== 'draftProject')) {
+      return;
+    }
+    setActiveCommandPanel(null);
+  }, [draftChat, activeCommandPanel]);
+
+  useEffect(() => {
+    if (activeCommandPanel?.kind !== 'draftProject') {
+      setDraftProjectSearch('');
+    }
+    if (activeCommandPanel?.kind !== 'draftBranch') {
+      setDraftBranchSearch('');
+    }
+  }, [activeCommandPanel]);
 
   const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
   const lastMessageSignature = lastMessage
@@ -1025,12 +1825,87 @@ export function DesktopConversationView({
   ].join('|');
 
   useEffect(() => {
+    chatRunActiveRef.current = chatRunActive;
+  }, [chatRunActive]);
+
+  useEffect(() => {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
 
   useEffect(() => {
     draftChatRef.current = draftChat;
   }, [draftChat]);
+
+  useEffect(() => {
+    if (!draftChat?.projectPath) {
+      setDraftGitRepoState(null);
+      setDraftGitRepoLoading(false);
+      return;
+    }
+    let disposed = false;
+    setDraftGitRepoLoading(true);
+    void getDesktopGitRepoInfo(draftChat.projectPath).then((nextState) => {
+      if (disposed) {
+        return;
+      }
+      setDraftGitRepoState(nextState);
+      setDraftGitRepoLoading(false);
+      if (!nextState?.isGitRepo) {
+        setDraftChat((current) => (
+          current?.projectPath === draftChat.projectPath && current.selectedBranch
+            ? {
+                ...current,
+                selectedBranch: null,
+              }
+            : current
+        ));
+        return;
+      }
+      const currentBranch = String(nextState.currentBranch || '').trim() || null;
+      const branches = Array.isArray(nextState.branches) ? nextState.branches : [];
+      setDraftChat((current) => {
+        if (!current || current.projectPath !== draftChat.projectPath) {
+          return current;
+        }
+        if (current.selectedBranch && branches.includes(current.selectedBranch)) {
+          return current;
+        }
+        return {
+          ...current,
+          selectedBranch: currentBranch,
+        };
+      });
+    }).catch(() => {
+      if (!disposed) {
+        setDraftGitRepoState(null);
+        setDraftGitRepoLoading(false);
+      }
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [draftChat?.projectPath]);
+
+  useEffect(() => {
+    if (configuredModelGroups.length) {
+      setCachedModelGroups(configuredModelGroups);
+    }
+  }, [configuredModelGroups]);
+
+  useEffect(() => {
+    if (configuredPlannerModels.length) {
+      setCachedPlannerModels(configuredPlannerModels);
+    }
+  }, [configuredPlannerModels]);
+
+  useEffect(() => {
+    if (overview?.model_groups?.length) {
+      setCachedModelGroups(overview.model_groups);
+    }
+    if (overview?.available_planner_models?.length) {
+      setCachedPlannerModels(overview.available_planner_models);
+    }
+  }, [overview]);
 
   useEffect(() => {
     let disposed = false;
@@ -1058,6 +1933,57 @@ export function DesktopConversationView({
     }
     void saveDesktopSidebarState(sidebarState).catch(() => {});
   }, [sidebarState, sidebarStateReady]);
+
+  useEffect(() => {
+    let disposed = false;
+    const sessionProjectPaths = new Set(
+      sessions
+        .map((item) => normalizeWorkspacePath(item.workspace))
+        .filter(Boolean),
+    );
+    const projectPaths = Array.from(new Set([
+      ...sidebarState.projectOrder.map((item) => normalizeWorkspacePath(item)),
+      ...Object.keys(sidebarState.projects).map((item) => normalizeWorkspacePath(item)),
+      ...sessions.map((item) => normalizeWorkspacePath(item.workspace)),
+      ...(draftChat ? [draftChat.projectPath] : []),
+    ].filter(Boolean))).filter((projectPath) => shouldKeepSidebarProjectPath(projectPath, {
+      allowedRoot: allowedWorkspaceRoot,
+      sessionProjectPaths,
+      draftProjectPath: draftChat?.projectPath,
+    }));
+    if (!projectPaths.length) {
+      setProjectPathStatuses({});
+      return () => {
+        disposed = true;
+      };
+    }
+    void Promise.all(projectPaths.map(async (projectPath) => [projectPath, await getDesktopPathStatus(projectPath)] as const))
+      .then((entries) => {
+        if (disposed) {
+          return;
+        }
+        setProjectPathStatuses((current) => {
+          const next: Record<string, DesktopPathStatus> = {};
+          for (const [projectPath, status] of entries) {
+            if (projectPath && status) {
+              next[projectPath] = status;
+            } else if (projectPath && current[projectPath]) {
+              next[projectPath] = current[projectPath];
+            }
+          }
+          return next;
+        });
+      })
+      .catch(() => {
+        if (!disposed) {
+          setProjectPathStatuses((current) => current);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [allowedWorkspaceRoot, draftChat, sessions, sidebarState.projectOrder, sidebarState.projects]);
 
   useEffect(() => (
     () => {
@@ -1134,7 +2060,11 @@ export function DesktopConversationView({
     if (startupTerminalStateRef.current) {
       return;
     }
-    if (startupSidebarReadyRef.current && startupChatSocketReadyRef.current && sessionIdRef.current) {
+    if (
+      startupSidebarReadyRef.current
+      && startupSessionStateReadyRef.current
+      && startupChatSocketReadyRef.current
+    ) {
       emitStartupState('chat_ready');
     }
   };
@@ -1146,12 +2076,6 @@ export function DesktopConversationView({
   useEffect(() => {
     alwaysOnEnabledRef.current = alwaysOnEnabled;
   }, [alwaysOnEnabled]);
-
-  useEffect(() => {
-    if (!(voiceCaptureModeRef.current === 'always_on' && voiceRecordingRef.current)) {
-      voiceComposerBaseInputRef.current = input;
-    }
-  }, [input]);
 
   useEffect(() => {
     if (!pendingSearchJump || pendingSearchJump.sessionId !== sessionId) {
@@ -1268,6 +2192,23 @@ export function DesktopConversationView({
     voiceRecordingRef.current = voiceRecording;
   }, [voiceRecording]);
 
+  const clearAssistantDeltaFlushTimer = () => {
+    if (assistantDeltaFlushTimerRef.current) {
+      clearTimeout(assistantDeltaFlushTimerRef.current);
+      assistantDeltaFlushTimerRef.current = null;
+    }
+  };
+
+  const flushAssistantDeltaBuffer = () => {
+    clearAssistantDeltaFlushTimer();
+    if (!assistantDeltaBufferRef.current) {
+      return;
+    }
+    const delta = assistantDeltaBufferRef.current;
+    assistantDeltaBufferRef.current = '';
+    setAssistantDraft((previous) => previous + delta);
+  };
+
   const clearTranscriptAutoScrollResumeTimer = () => {
     if (transcriptAutoScrollResumeTimerRef.current) {
       clearTimeout(transcriptAutoScrollResumeTimerRef.current);
@@ -1301,6 +2242,7 @@ export function DesktopConversationView({
 
   useEffect(() => () => {
     clearTranscriptAutoScrollResumeTimer();
+    clearAssistantDeltaFlushTimer();
   }, []);
 
   useEffect(() => {
@@ -1422,7 +2364,7 @@ export function DesktopConversationView({
     draftChatRef.current = null;
     setDraftChat(null);
     if (options?.clearInput) {
-      setInput('');
+      setComposerInputValue('');
     }
   };
 
@@ -1546,36 +2488,81 @@ export function DesktopConversationView({
   };
 
   const applySessionDetail = (detail: SessionDetail) => {
-    if (detail.id !== sessionIdRef.current) {
+    const switchingSessions = detail.id !== sessionIdRef.current;
+    const nextEnabledToolPacks = Array.isArray(detail.enabled_tool_packs) ? detail.enabled_tool_packs : [];
+    const nextAvailableToolPacks = Array.isArray(detail.available_tool_packs) ? detail.available_tool_packs : [];
+    const nextLockStatus = detail.lock_status || {};
+    if (switchingSessions) {
       resetTranscriptAutoScrollState();
       setTaskBoardCollapsed(false);
       setExpandedCompletedTaskIds({});
       transcriptMessageLayoutRef.current = {};
       historyMessageLayoutRef.current = {};
+      setArtifacts([]);
+      setSelectedArtifactId(null);
+      setSelectedArtifactDetail(null);
+      setArtifactError(null);
     }
     setSessionId(detail.id);
     setSessionName(detail.name);
     setTaskBoard(resolveTaskBoardState(detail.task_board, detail.id, sessionIdRef.current));
     setCompletedTaskBoards(normalizeCompletedTaskBoards(detail.completed_task_boards));
-    setTimelineEvents(detail.timeline_events || []);
-    const syncedMessages = detail.messages.map((message) => toDesktopMessage(message));
+    setTaskBoardArmedNextTurnState(Boolean(detail.task_board_armed_next_turn));
+    setTimelineEvents((previous) => (
+      switchingSessions
+        ? normalizeTimelineEvents(detail.timeline_events || [])
+        : mergeTimelineEventState(previous, detail.timeline_events || [])
+    ));
+    const syncedMessages = toDesktopMessages(detail.messages || []);
     setMessages((previous) => mergeLocalMessages(syncedMessages, previous, detail.id));
+    setSessions((previous) => previous.map((item) => (
+      item.id === detail.id
+        ? {
+            ...item,
+            name: detail.name,
+            updated_at: detail.updated_at,
+            model: detail.model,
+            workspace: detail.workspace,
+            enabled_tool_packs: nextEnabledToolPacks,
+            available_tool_packs: nextAvailableToolPacks,
+            lock_status: nextLockStatus,
+            telegram_bot_config_id: detail.telegram_bot_config_id ?? item.telegram_bot_config_id ?? null,
+            headless_eligible: Boolean(detail.headless_eligible),
+            artifact_count: Number(detail.artifact_count || 0),
+            latest_artifact_at: detail.latest_artifact_at ?? item.latest_artifact_at ?? null,
+            is_running: Boolean(detail.is_running),
+            run_state: detail.run_state || item.run_state,
+          }
+        : item
+    )));
+    setOverview((previous) => {
+      if (!previous || previous.session_id !== detail.id) {
+        return previous;
+      }
+      return {
+        ...previous,
+        run_state: detail.run_state || previous.run_state,
+        enabled_tool_packs: nextEnabledToolPacks,
+        available_tool_packs: nextAvailableToolPacks,
+        lock_status: nextLockStatus,
+      };
+    });
     discardDraftChat();
     selectProjectPath(detail.workspace);
   };
 
   const appendTimelineEvent = (event: SessionTimelineEvent) => {
-    if (!event?.id) {
+    if (!event) {
       return;
     }
     setTimelineEvents((previous) => {
-      const existingIndex = previous.findIndex((item) => item.id === event.id);
-      if (existingIndex >= 0) {
-        const next = previous.slice();
-        next[existingIndex] = event;
-        return next;
+      const existingIndex = previous.findIndex((item) => timelineEventMergeKey(item) === timelineEventMergeKey(event));
+      if (existingIndex < 0) {
+        return normalizeTimelineEvents([...previous, event]);
       }
-      return [...previous, event];
+      const next = previous.slice();
+      next[existingIndex] = event;
+      return normalizeTimelineEvents(next);
     });
   };
 
@@ -1617,12 +2604,16 @@ export function DesktopConversationView({
   const applySessionSync = (payload: Record<string, any>) => {
     const detail = payload.session as SessionDetail | undefined;
     const syncedSessions = payload.sessions as SessionSummary[] | undefined;
+    const syncedRuntime = payload.runtime as RuntimeOrchestratorStatus | undefined;
     if (Array.isArray(syncedSessions)) {
       reconcileSidebarProjects(syncedSessions, {
         preferredSelectedProjectPath: draftChatRef.current?.projectPath || undefined,
         activeSessionWorkspace: detail?.workspace,
       });
       setSessions(syncedSessions);
+    }
+    if (syncedRuntime) {
+      setOrchestratorStatus(syncedRuntime);
     }
     if (detail?.id) {
       const modelChanged = Boolean(
@@ -1643,6 +2634,7 @@ export function DesktopConversationView({
           current_model: detail.model,
           current_variant: detail.variant,
           planner_model: detail.planner_model ?? previous.planner_model ?? null,
+          task_board_armed_next_turn: Boolean(detail.task_board_armed_next_turn),
           task_board: detail.task_board ?? null,
           completed_task_boards: normalizeCompletedTaskBoards(detail.completed_task_boards),
           context_usage: {
@@ -1652,8 +2644,115 @@ export function DesktopConversationView({
         };
       });
       if (modelChanged) {
-        void refreshSidebarState(detail.id, true);
+        void refreshOverviewState(detail.id);
       }
+    }
+  };
+
+  const refreshSidebarCollections = async (preferredSessionId?: string | null, quiet = true) => {
+    if (sidebarCollectionsRefreshInFlightRef.current) {
+      return;
+    }
+    sidebarCollectionsRefreshInFlightRef.current = true;
+    try {
+      const [profile, sessionList, jobList, botConfigList, runtimeSummary] = await Promise.all([
+        fetchProfile(apiBaseUrl, token),
+        fetchSessions(apiBaseUrl, token),
+        fetchJobs(apiBaseUrl, token),
+        fetchTelegramBotConfigs(apiBaseUrl, token).catch(() => []),
+        fetchRuntimeOrchestratorStatus(apiBaseUrl, token).catch(() => null),
+      ]);
+
+      const currentSelectedSessionId = sessionIdRef.current || sessionId || null;
+      const resolvedSessionId = draftChatRef.current
+        ? null
+        : preferredSessionId
+          || profile.current_session_id
+          || (currentSelectedSessionId && sessionList.some((item) => item.id === currentSelectedSessionId) ? currentSelectedSessionId : null)
+          || sessionList[0]?.id
+          || null;
+      const activeSessionWorkspace = resolvedSessionId
+        ? currentWorkspaceBySessionRef.current[resolvedSessionId]
+          || sessions.find((item) => item.id === resolvedSessionId)?.workspace
+        : undefined;
+
+      reconcileSidebarProjects(sessionList, {
+        preferredSelectedProjectPath: draftChatRef.current?.projectPath || undefined,
+        activeSessionWorkspace,
+      });
+      setSessions(sessionList);
+      setJobs(jobList);
+      setTelegramBotConfigs(Array.isArray(botConfigList) ? botConfigList : []);
+      setOrchestratorStatus(runtimeSummary);
+      if (!quiet) {
+        setStatus('ready');
+        maybeResolveStartupReady();
+      }
+    } catch (error) {
+      if (!quiet) {
+        const message = describeError(error);
+        setStatus(message);
+        if (!startupTerminalStateRef.current) {
+          emitStartupState('fatal_error', message);
+        }
+      }
+    } finally {
+      sidebarCollectionsRefreshInFlightRef.current = false;
+    }
+  };
+
+  const refreshOverviewState = async (
+    preferredSessionId?: string | null,
+    options?: { includeCloseBehavior?: boolean; quiet?: boolean },
+  ) => {
+    if (overviewRefreshInFlightRef.current) {
+      return;
+    }
+    const includeCloseBehavior = Boolean(options?.includeCloseBehavior);
+    const quiet = Boolean(options?.quiet);
+    const resolvedSessionId = draftChatRef.current
+      ? null
+      : preferredSessionId || sessionIdRef.current || null;
+    if (!resolvedSessionId) {
+      if (!quiet) {
+        setOverview(null);
+      }
+      return;
+    }
+
+    overviewRefreshInFlightRef.current = true;
+    try {
+      const [nextOverview, closeBehaviorConfig] = await Promise.all([
+        fetchAgentOverview(apiBaseUrl, token, {
+          sessionId: resolvedSessionId || undefined,
+        }),
+        includeCloseBehavior
+          ? fetchAgentConfig(
+              apiBaseUrl,
+              token,
+              'channels.desktop.keep_runtime_on_app_close',
+              resolvedSessionId || undefined,
+            ).catch(() => ({ items: [] }))
+          : Promise.resolve<{ items: Array<{ value?: unknown }> }>({ items: [] }),
+      ]);
+      setOverview(nextOverview);
+      setRuntimeRunState(nextOverview?.run_state ?? 'idle');
+      setTaskBoardArmedNextTurnState(Boolean(nextOverview?.task_board_armed_next_turn ?? false));
+      setTaskBoard(resolveTaskBoardState(nextOverview?.task_board ?? null, resolvedSessionId, sessionIdRef.current));
+      setCompletedTaskBoards(normalizeCompletedTaskBoards(nextOverview?.completed_task_boards ?? []));
+      if (includeCloseBehavior) {
+        setKeepRuntimeOnAppClose(Boolean(closeBehaviorConfig.items?.[0]?.value));
+      }
+    } catch (error) {
+      if (!quiet) {
+        const message = describeError(error);
+        setStatus(message);
+        if (!startupTerminalStateRef.current) {
+          emitStartupState('fatal_error', message);
+        }
+      }
+    } finally {
+      overviewRefreshInFlightRef.current = false;
     }
   };
 
@@ -1664,13 +2763,20 @@ export function DesktopConversationView({
     }
 
     try {
-      let [profile, sessionList, jobList] = await Promise.all([
+      let [profile, sessionList, jobList, botConfigList, runtimeSummary] = await Promise.all([
         fetchProfile(apiBaseUrl, token),
         fetchSessions(apiBaseUrl, token),
         fetchJobs(apiBaseUrl, token),
+        fetchTelegramBotConfigs(apiBaseUrl, token).catch(() => []),
+        fetchRuntimeOrchestratorStatus(apiBaseUrl, token).catch(() => null),
       ]);
 
-      let resolvedSessionId = preferredSessionId || profile.current_session_id || sessionList[0]?.id || null;
+      const currentSelectedSessionId = sessionIdRef.current || sessionId || null;
+      let resolvedSessionId = preferredSessionId
+        || profile.current_session_id
+        || (currentSelectedSessionId && sessionList.some((item) => item.id === currentSelectedSessionId) ? currentSelectedSessionId : null)
+        || sessionList[0]?.id
+        || null;
       let detail: SessionDetail | null = null;
       if (draftChatRef.current) {
         resolvedSessionId = null;
@@ -1678,22 +2784,24 @@ export function DesktopConversationView({
 
       if (!detail && resolvedSessionId) {
         detail = preferredSessionId && preferredSessionId !== profile.current_session_id
-          ? await activateSession(apiBaseUrl, token, resolvedSessionId)
+          ? await activateSessionWithRecovery(resolvedSessionId)
           : await fetchSessionDetail(apiBaseUrl, token, resolvedSessionId);
       }
 
       let nextOverview: AgentOverview | null = null;
       let closeBehaviorConfig: { items: Array<{ value?: unknown }> } = { items: [] };
       if (resolvedSessionId) {
-        nextOverview = await fetchAgentOverview(apiBaseUrl, token, {
-          sessionId: resolvedSessionId || undefined,
-        });
-        closeBehaviorConfig = await fetchAgentConfig(
-          apiBaseUrl,
-          token,
-          'channels.desktop.keep_runtime_on_app_close',
-          resolvedSessionId || undefined
-        ).catch(() => ({ items: [] }));
+        [nextOverview, closeBehaviorConfig] = await Promise.all([
+          fetchAgentOverview(apiBaseUrl, token, {
+            sessionId: resolvedSessionId || undefined,
+          }),
+          fetchAgentConfig(
+            apiBaseUrl,
+            token,
+            'channels.desktop.keep_runtime_on_app_close',
+            resolvedSessionId || undefined
+          ).catch(() => ({ items: [] })),
+        ]);
       }
 
       reconcileSidebarProjects(sessionList, {
@@ -1702,7 +2810,11 @@ export function DesktopConversationView({
       });
       setSessions(sessionList);
       setJobs(jobList);
+      setTelegramBotConfigs(Array.isArray(botConfigList) ? botConfigList : []);
+      setOrchestratorStatus(runtimeSummary);
       setOverview(nextOverview);
+      setRuntimeRunState(nextOverview?.run_state ?? 'idle');
+      setTaskBoardArmedNextTurnState(Boolean(nextOverview?.task_board_armed_next_turn ?? detail?.task_board_armed_next_turn ?? false));
       setTaskBoard(resolveTaskBoardState(nextOverview?.task_board ?? detail?.task_board ?? null, resolvedSessionId, sessionIdRef.current));
       setCompletedTaskBoards(normalizeCompletedTaskBoards(nextOverview?.completed_task_boards ?? detail?.completed_task_boards ?? []));
       setKeepRuntimeOnAppClose(Boolean(closeBehaviorConfig.items?.[0]?.value));
@@ -1715,9 +2827,15 @@ export function DesktopConversationView({
         setTimelineEvents([]);
         setTaskBoard(null);
         setCompletedTaskBoards([]);
+        setTaskBoardArmedNextTurnState(false);
+      } else if (preferredProjectPath) {
+        resetConversationForDraft(preferredProjectPath);
+        setDraftChat(buildDraftChatState(preferredProjectPath));
+      } else {
+        clearConversationSelection();
       }
       startupSidebarReadyRef.current = true;
-      startupChatSocketReadyRef.current = Boolean(resolvedSessionId) ? startupChatSocketReadyRef.current : true;
+      startupSessionStateReadyRef.current = true;
       setStatus('ready');
       maybeResolveStartupReady();
     } catch (error) {
@@ -1729,16 +2847,71 @@ export function DesktopConversationView({
     }
   };
 
+  const refreshVoiceRuntimeState = async () => {
+    if (!apiBaseUrl || !token) {
+      return null;
+    }
+    const next = await fetchVoiceRuntimeStatus(apiBaseUrl, token);
+    setLiveVoiceStatus(next as DesktopVoiceRuntimeStatus);
+    return next as DesktopVoiceRuntimeStatus;
+  };
+
+  const warmSelectedVoicePath = async (engineOverride?: string) => {
+    const engine = engineOverride || selectedVoiceEngine;
+    if (!apiBaseUrl || !token || engine !== VOICE_ENGINE_HEBREW) {
+      return refreshVoiceRuntimeState();
+    }
+    lastVoiceWarmRequestEngineRef.current = engine;
+    setVoiceState('warming');
+    setStatus('warming Hebrew voice path');
+    const warmed = await warmVoiceRuntime(apiBaseUrl, token);
+    setLiveVoiceStatus(warmed as DesktopVoiceRuntimeStatus);
+    if ((warmed?.selected_engine_state || '') === 'ready') {
+      setVoiceState(alwaysOnEnabledRef.current ? 'always_on' : 'ready');
+      setStatus('voice ready');
+    } else if (warmed?.issues?.[0]) {
+      setVoiceError(String(warmed.issues[0]));
+      setVoiceState('error');
+      setStatus(String(warmed.issues[0]));
+    }
+    return warmed as DesktopVoiceRuntimeStatus;
+  };
+
   useEffect(() => {
     if (!apiBaseUrl || !token) return;
     void refreshSidebarState(initialSessionId, false);
   }, [apiBaseUrl, initialSessionId, token]);
 
   useEffect(() => {
+    setLiveVoiceStatus(voiceStatus || null);
+  }, [voiceStatus]);
+
+  useEffect(() => {
+    if (!apiBaseUrl || !token) {
+      return;
+    }
+    if (selectedVoiceEngine !== VOICE_ENGINE_HEBREW) {
+      lastVoiceWarmRequestEngineRef.current = null;
+      return;
+    }
+    if ((liveVoiceStatus?.selected_engine_state || '') === 'ready') {
+      lastVoiceWarmRequestEngineRef.current = selectedVoiceEngine;
+      return;
+    }
+    if (lastVoiceWarmRequestEngineRef.current === selectedVoiceEngine || voiceEngineChanging) {
+      return;
+    }
+    void warmSelectedVoicePath(selectedVoiceEngine);
+  }, [apiBaseUrl, token, selectedVoiceEngine, liveVoiceStatus?.selected_engine_state, voiceEngineChanging]);
+
+  useEffect(() => {
     if (!apiBaseUrl || !token || !sessionId) return;
 
     const intervalId = setInterval(() => {
-      void refreshSidebarState(sessionId, true);
+      if (chatRunActiveRef.current) {
+        return;
+      }
+      void refreshSidebarCollections(sessionId, true);
     }, SIDEBAR_REFRESH_MS);
 
     return () => clearInterval(intervalId);
@@ -1782,6 +2955,8 @@ export function DesktopConversationView({
         timestamp: new Date().toISOString(),
         displayLabel: sourceFormat === 'app_voice_transcript' ? 'Voice' : 'You',
         channel: 'app',
+        sourceFormat,
+        messageKey: `pending:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
         pending: true,
       },
     ]);
@@ -1793,9 +2968,23 @@ export function DesktopConversationView({
       sessionId: activeSessionId,
     });
 
+    if (taskBoardArmedNextTurn && activeSessionId === sessionIdRef.current) {
+      setTaskBoardArmedNextTurnState(false);
+      setOverview((previous) => (
+        previous
+          ? {
+              ...previous,
+              task_board_armed_next_turn: false,
+            }
+          : previous
+      ));
+    }
+
     const ws = chatWsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       setChatRunActive(true);
+      setRuntimeRunState('running');
+      setLastAssistantOutputAt(null);
       flushPendingMessages();
       setStatus(sourceFormat === 'app_voice_transcript' ? 'sending voice transcript' : 'sending message');
     } else {
@@ -1822,6 +3011,62 @@ export function DesktopConversationView({
     setStatus('message queued for the current run');
   };
 
+  const setComposerInputValue = (
+    nextInput: string,
+    options?: { syncVoiceBase?: boolean; origin?: ComposerInputOrigin },
+  ) => {
+    setInput(nextInput);
+    lastComposerInputOriginRef.current = options?.origin ?? 'system';
+    if (options?.syncVoiceBase === false) {
+      return;
+    }
+    voiceComposerBaseInputRef.current = nextInput;
+    if (!nextInput) {
+      voiceComposerDraftRef.current = '';
+    }
+  };
+
+  const handleComposerContentSizeChange = (
+    event: NativeSyntheticEvent<TextInputContentSizeChangeEventData>,
+  ) => {
+    const nextHeight = event.nativeEvent.contentSize?.height;
+    if (typeof nextHeight !== 'number' || Number.isNaN(nextHeight)) {
+      return;
+    }
+    const clampedHeight = Math.max(COMPOSER_MIN_HEIGHT, Math.min(COMPOSER_MAX_HEIGHT, Math.ceil(nextHeight)));
+    setComposerInputHeight((current) => (
+      Math.abs(current - clampedHeight) < 1 ? current : clampedHeight
+    ));
+  };
+
+  const handleComposerMeasureLayout = (event: LayoutChangeEvent) => {
+    if (Platform.OS !== 'web') {
+      return;
+    }
+    const nextHeight = event.nativeEvent.layout.height;
+    if (typeof nextHeight !== 'number' || Number.isNaN(nextHeight)) {
+      return;
+    }
+    const clampedHeight = Math.max(COMPOSER_MIN_HEIGHT, Math.min(COMPOSER_MAX_HEIGHT, Math.ceil(nextHeight)));
+    setComposerInputHeight((current) => (
+      Math.abs(current - clampedHeight) < 1 ? current : clampedHeight
+    ));
+  };
+
+  const handleComposerInputChange = (nextInput: string) => {
+    setComposerInputValue(nextInput, { syncVoiceBase: false, origin: 'manual' });
+    if (!(voiceCaptureModeRef.current === 'always_on' && (voiceRecordingRef.current || voiceRunningRef.current))) {
+      voiceComposerBaseInputRef.current = nextInput;
+      voiceComposerDraftRef.current = '';
+    }
+  };
+
+  useEffect(() => {
+    if (!input) {
+      setComposerInputHeight(COMPOSER_MIN_HEIGHT);
+    }
+  }, [input]);
+
   const appendLocalMessage = (
     content: string,
     role: DesktopMessage['role'],
@@ -1841,6 +3086,8 @@ export function DesktopConversationView({
         timestamp: new Date().toISOString(),
         displayLabel,
         channel,
+        sourceFormat: 'app_system',
+        messageKey: `local:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
         localOnly: true,
         localSessionId: activeSessionId,
       },
@@ -1890,6 +3137,26 @@ export function DesktopConversationView({
     voiceGateStateRef.current = createVoiceGateState();
     deferredAlwaysOnFramesRef.current = [];
     deferredAlwaysOnSampleCountRef.current = 0;
+  };
+
+  const resetVoiceCaptureBuffers = (options?: { clearProgrammaticComposerInput?: boolean }) => {
+    voiceChunkSequenceRef.current = 0;
+    voiceChunkChainRef.current = Promise.resolve();
+    voiceChunkSamplesRef.current = [];
+    voiceChunkSampleCountRef.current = 0;
+    voiceGateStateRef.current = createVoiceGateState();
+    deferredAlwaysOnFramesRef.current = [];
+    deferredAlwaysOnSampleCountRef.current = 0;
+    drainingDeferredAlwaysOnFramesRef.current = false;
+    voiceComposerBaseInputRef.current = '';
+    voiceComposerDraftRef.current = '';
+    const lastInputOrigin = lastComposerInputOriginRef.current;
+    lastComposerInputOriginRef.current = 'system';
+    setVoiceDraft('');
+    setVoiceError(null);
+    if (options?.clearProgrammaticComposerInput && lastInputOrigin !== 'manual') {
+      setComposerInputValue('', { syncVoiceBase: false, origin: 'system' });
+    }
   };
 
   const cleanupAssistantAudio = async () => {
@@ -1994,7 +3261,13 @@ export function DesktopConversationView({
     voiceChunkSamplesRef.current = [];
     voiceChunkSampleCountRef.current = 0;
     if (mode === 'always_on') {
-      voiceComposerBaseInputRef.current = input;
+      // Only seed always-on accumulation from a real manual composer draft.
+      // Older programmatic voice text should not leak into a new segment.
+      if (lastComposerInputOriginRef.current === 'manual') {
+        voiceComposerBaseInputRef.current = input;
+      } else if (!voiceComposerBaseInputRef.current) {
+        voiceComposerBaseInputRef.current = '';
+      }
       voiceComposerDraftRef.current = '';
     }
     setVoiceDraft('');
@@ -2055,7 +3328,7 @@ export function DesktopConversationView({
     } else {
       if (mode === 'always_on') {
         voiceComposerDraftRef.current = '';
-        setInput(voiceComposerBaseInputRef.current);
+        setComposerInputValue(voiceComposerBaseInputRef.current, { syncVoiceBase: false, origin: 'voice' });
       }
       setVoiceDraft('');
       voiceRunningRef.current = false;
@@ -2221,6 +3494,7 @@ export function DesktopConversationView({
         setSessionId(event.session_id);
       }
       setChatRunActive(false);
+      setLastAssistantOutputAt(null);
       setStatus('ready');
       return;
     }
@@ -2234,14 +3508,29 @@ export function DesktopConversationView({
     if (event.type === 'user_message') {
       const message = payload.message as SessionMessage | undefined;
       if (message) {
-        setMessages((previous) => [...previous, toDesktopMessage(message)]);
+        setMessages((previous) => [...previous, toLiveDesktopMessage(message, previous)]);
       }
       return;
     }
 
     if (event.type === 'assistant_delta') {
       setChatRunActive(true);
-      setAssistantDraft((previous) => previous + String(payload.delta || ''));
+      setRuntimeRunState('running');
+      setLastAssistantOutputAt(Date.now());
+      assistantDeltaBufferRef.current += String(payload.delta || '');
+      if (!assistantDeltaFlushTimerRef.current) {
+        assistantDeltaFlushTimerRef.current = setTimeout(() => {
+          flushAssistantDeltaBuffer();
+        }, 40);
+      }
+      setOverview((previous) => (
+        previous
+          ? {
+              ...previous,
+              run_state: 'running',
+            }
+          : previous
+      ));
       if (channel === 'voice') {
         setVoiceRunning(true);
       }
@@ -2251,8 +3540,11 @@ export function DesktopConversationView({
     if (event.type === 'assistant_final') {
       const finalText = String(payload.text || '');
       const message = payload.message as SessionMessage | undefined;
+      assistantDeltaBufferRef.current = '';
+      clearAssistantDeltaFlushTimer();
       setAssistantDraft('');
       setThinking('');
+      setLastAssistantOutputAt(Date.now());
       if (channel === 'voice') {
         voiceRunningRef.current = false;
         voiceRecordingRef.current = false;
@@ -2262,7 +3554,7 @@ export function DesktopConversationView({
       if (message) {
         setMessages((previous) => [
           ...previous,
-          toDesktopMessage(message),
+          toLiveDesktopMessage(message, previous),
         ]);
       } else if (finalText.trim()) {
         setMessages((previous) => [
@@ -2273,12 +3565,24 @@ export function DesktopConversationView({
             timestamp: new Date().toISOString(),
             displayLabel: 'Assistant',
             channel: 'app',
+            sourceFormat: 'app_text',
+            messageKey: `assistant:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
           },
         ]);
       }
       setChatRunActive(false);
+      setRuntimeRunState('idle');
+      setOverview((previous) => (
+        previous
+          ? {
+              ...previous,
+              run_state: 'idle',
+            }
+          : previous
+      ));
       setStatus('ready');
-      void refreshSidebarState(event.session_id || sessionIdRef.current, true);
+      void refreshSidebarCollections(event.session_id || sessionIdRef.current, true);
+      void refreshOverviewState(event.session_id || sessionIdRef.current, { quiet: true });
       return;
     }
 
@@ -2292,13 +3596,50 @@ export function DesktopConversationView({
 
     if (event.type === 'thinking') {
       setChatRunActive(true);
+      setRuntimeRunState('running');
       setThinking(String(payload.formatted || payload.text || ''));
+      setOverview((previous) => (
+        previous
+          ? {
+              ...previous,
+              run_state: 'running',
+            }
+          : previous
+      ));
       return;
     }
 
     if (event.type === 'tool_event') {
       setChatRunActive(true);
+      setRuntimeRunState('running');
+      setOverview((previous) => (
+        previous
+          ? {
+              ...previous,
+              run_state: 'running',
+            }
+          : previous
+      ));
+      const toolTimelineEvent = createLocalToolTimelineEvent(payload);
+      if (toolTimelineEvent) {
+        appendTimelineEvent(toolTimelineEvent);
+      }
       pushActivity(summarizeToolPayload(payload), 'accent');
+      return;
+    }
+
+    if (event.type === 'artifact_created') {
+      const created = Array.isArray(payload.artifacts) ? payload.artifacts as ArtifactSummary[] : [];
+      if (created.length > 0) {
+        setArtifacts((previous) => {
+          const seen = new Set(previous.map((item) => item.artifact_id));
+          const merged = [...created.filter((item) => !seen.has(item.artifact_id)), ...previous];
+          return merged.sort((left, right) => String(right.created_at || '').localeCompare(String(left.created_at || '')));
+        });
+        if (!selectedArtifactId) {
+          setSelectedArtifactId(created[0].artifact_id);
+        }
+      }
       return;
     }
 
@@ -2317,12 +3658,18 @@ export function DesktopConversationView({
       const eventSessionId = event.session_id || sessionIdRef.current;
       setTaskBoard(resolveTaskBoardState(board, eventSessionId, sessionIdRef.current));
       setCompletedTaskBoards(completedBoards);
+      if (board?.status === 'active') {
+        setTaskBoardArmedNextTurnState(false);
+      }
       setOverview((previous) => (
         previous
           ? {
               ...previous,
               task_board: resolveTaskBoardState(board, eventSessionId, sessionIdRef.current),
               completed_task_boards: completedBoards,
+              task_board_armed_next_turn: board?.status === 'active'
+                ? false
+                : previous.task_board_armed_next_turn,
             }
           : previous
       ));
@@ -2337,6 +3684,18 @@ export function DesktopConversationView({
       return;
     }
 
+    if (event.type === 'current_session_changed') {
+      const rawCurrentSessionId = payload.current_session_id;
+      const currentSessionKnown = rawCurrentSessionId === null || rawCurrentSessionId === undefined
+        ? null
+        : String(rawCurrentSessionId || '').trim();
+      const nextSessionId = currentSessionKnown !== null
+        ? (currentSessionKnown || null)
+        : event.session_id || sessionIdRef.current;
+      void refreshSidebarCollections(nextSessionId, true);
+      return;
+    }
+
     if (event.type === 'log') {
       const message = String(payload.message || '');
       const tone = payload.level === 'error' ? 'error' : payload.level === 'warn' ? 'warn' : 'neutral';
@@ -2346,6 +3705,32 @@ export function DesktopConversationView({
 
     if (event.type === 'status') {
       const message = String(payload.message || event.message || '');
+      const runState = payload.run_state === 'running'
+        ? 'running'
+        : payload.run_state === 'idle'
+          ? 'idle'
+          : message === 'running'
+            ? 'running'
+            : message === 'ready'
+              ? 'idle'
+              : null;
+      if (runState) {
+        setRuntimeRunState(runState);
+        setChatRunActive(runState === 'running');
+        if (runState === 'idle') {
+          setAssistantDraft('');
+          setThinking('');
+          setLastAssistantOutputAt(null);
+        }
+        setOverview((previous) => (
+          previous
+            ? {
+                ...previous,
+                run_state: runState,
+              }
+            : previous
+        ));
+      }
       if (message) {
         if (message === 'ready') {
           setChatRunActive(false);
@@ -2367,7 +3752,17 @@ export function DesktopConversationView({
         setVoiceRecording(false);
       }
       setChatRunActive(false);
-      void refreshSidebarState(event.session_id || sessionIdRef.current, true);
+      setRuntimeRunState('idle');
+      setLastAssistantOutputAt(null);
+      setOverview((previous) => (
+        previous
+          ? {
+              ...previous,
+              run_state: 'idle',
+            }
+          : previous
+      ));
+      void refreshSidebarCollections(event.session_id || sessionIdRef.current, true);
       pushActivity(message, 'warn');
       return;
     }
@@ -2384,6 +3779,16 @@ export function DesktopConversationView({
         setVoiceRecording(false);
       }
       setChatRunActive(false);
+      setRuntimeRunState('idle');
+      setLastAssistantOutputAt(null);
+      setOverview((previous) => (
+        previous
+          ? {
+              ...previous,
+              run_state: 'idle',
+            }
+          : previous
+      ));
       pushActivity(message, 'error');
       return;
     }
@@ -2415,7 +3820,10 @@ export function DesktopConversationView({
       setVoiceRunning(true);
       if (alwaysOnEnabledRef.current) {
         voiceComposerDraftRef.current = text;
-        setInput(composeVoiceDraftInput(voiceComposerBaseInputRef.current, text));
+        setComposerInputValue(
+          composeVoiceDraftInput(voiceComposerBaseInputRef.current, text),
+          { syncVoiceBase: false, origin: 'voice' }
+        );
       }
       return;
     }
@@ -2426,12 +3834,18 @@ export function DesktopConversationView({
         return;
       }
       if (alwaysOnEnabledRef.current && !ALWAYS_ON_VOICE_AUTO_SEND) {
-        voiceComposerDraftRef.current = text;
-        setInput(composeVoiceDraftInput(voiceComposerBaseInputRef.current, text));
+        const nextInput = appendVoiceTranscriptSegment(voiceComposerBaseInputRef.current, text);
+        voiceComposerBaseInputRef.current = nextInput;
+        voiceComposerDraftRef.current = '';
+        setComposerInputValue(nextInput, { syncVoiceBase: false, origin: 'voice' });
       } else {
         setInput((current) => {
           const existing = current.trim();
-          return existing ? `${existing} ${text}` : text;
+          const nextInput = existing ? `${existing} ${text}` : text;
+          voiceComposerBaseInputRef.current = nextInput;
+          voiceComposerDraftRef.current = '';
+          lastComposerInputOriginRef.current = 'voice';
+          return nextInput;
         });
       }
       setVoiceDraft(text);
@@ -2463,6 +3877,8 @@ export function DesktopConversationView({
           timestamp: new Date().toISOString(),
           displayLabel: 'Voice',
           channel: 'app',
+          sourceFormat: 'app_voice_transcript',
+          messageKey: `voice:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
         },
       ]);
       pushActivity(`Voice transcript captured: ${text}`, 'accent');
@@ -2488,6 +3904,7 @@ export function DesktopConversationView({
     });
 
     const timelineSessionId = result.nextSessionId || sessionIdRef.current;
+    let commandTimelineRecorded = false;
     if (timelineSessionId) {
       const timelineContent = result.output || `${commandLabel} completed.`;
       const response = await appendSessionTimelineEvent(apiBaseUrl, token, timelineSessionId, {
@@ -2505,6 +3922,7 @@ export function DesktopConversationView({
       }).catch(() => null);
       if (response?.event) {
         appendTimelineEvent(response.event);
+        commandTimelineRecorded = true;
       }
     }
 
@@ -2513,12 +3931,14 @@ export function DesktopConversationView({
     }
 
     if (result.output) {
-      appendLocalSystemMessage(result.output, 'Command Result');
+      if (!commandTimelineRecorded) {
+        appendLocalSystemMessage(result.output, 'Command Result');
+      }
       const activityPreview = result.output.split('\n', 1)[0]?.trim();
       if (activityPreview) {
         pushActivity(activityPreview, 'accent');
       }
-    } else if (result.handled) {
+    } else if (result.handled && !commandTimelineRecorded) {
       appendLocalSystemMessage(`${commandLabel} completed.`, 'Command Result');
     }
     setStatus(result.status || 'ready');
@@ -2530,8 +3950,8 @@ export function DesktopConversationView({
     } catch (error) {
       const message = describeError(error);
       setStatus(message);
-      appendLocalSystemMessage(message, 'Command Error');
       pushActivity(message, 'error');
+      let commandTimelineRecorded = false;
       if (sessionIdRef.current) {
         const response = await appendSessionTimelineEvent(apiBaseUrl, token, sessionIdRef.current, {
           kind: 'command',
@@ -2548,9 +3968,30 @@ export function DesktopConversationView({
         }).catch(() => null);
         if (response?.event) {
           appendTimelineEvent(response.event);
+          commandTimelineRecorded = true;
         }
       }
+      if (!commandTimelineRecorded) {
+        appendLocalSystemMessage(message, 'Command Error');
+      }
     }
+  };
+
+  const runVerboseCommand = async (arg?: 'on' | 'off' | 'status') => {
+    const commandText = arg ? `/verbose ${arg}` : '/verbose';
+    setActiveCommandPanel(null);
+    if (arg === 'on' || arg === 'off') {
+      const nextVerboseMode = arg === 'on';
+      setOverview((previous) => (
+        previous
+          ? {
+              ...previous,
+              verbose_mode: nextVerboseMode,
+            }
+          : previous
+      ));
+    }
+    await runSlashCommandFromComposer(commandText);
   };
 
   const openCommandPanelForInput = (text: string) => {
@@ -2577,6 +4018,12 @@ export function DesktopConversationView({
       return true;
     }
 
+    if (command.name === 'verbose') {
+      setActiveCommandPanel({ kind: 'verbose' });
+      setStatus('choose verbose mode');
+      return true;
+    }
+
     if (command.name === 'compact') {
       return false;
     }
@@ -2592,6 +4039,20 @@ export function DesktopConversationView({
   };
 
   const chooseModel = async (model: string) => {
+    if (!sessionIdRef.current && draftChatRef.current) {
+      setDraftChat((current) => (
+        current
+          ? {
+              ...current,
+              model,
+              variant: null,
+            }
+          : current
+      ));
+      setActiveCommandPanel(null);
+      setStatus(`draft model ${model}`);
+      return;
+    }
     setStatus(`switching model to ${model}`);
     try {
       await configureAgent(apiBaseUrl, token, { model }, sessionIdRef.current);
@@ -2609,6 +4070,19 @@ export function DesktopConversationView({
   };
 
   const choosePlannerModel = async (plannerModel: string | null) => {
+    if (!sessionIdRef.current && draftChatRef.current) {
+      setDraftChat((current) => (
+        current
+          ? {
+              ...current,
+              plannerModel,
+            }
+          : current
+      ));
+      setActiveCommandPanel(null);
+      setStatus(plannerModel ? `draft planner ${plannerModel}` : 'draft planner auto');
+      return;
+    }
     setStatus(plannerModel ? `switching planner to ${plannerModel}` : 'restoring automatic planner selection');
     try {
       await configureAgent(apiBaseUrl, token, { planner_model: plannerModel }, sessionIdRef.current);
@@ -2635,6 +4109,112 @@ export function DesktopConversationView({
     }
   };
 
+  const toggleCurrentSessionToolPack = async (packId: string) => {
+    const activeSessionId = sessionIdRef.current;
+    if (!activeSessionId && draftChatRef.current) {
+      setDraftChat((current) => {
+        if (!current) {
+          return current;
+        }
+        const draftEnabled = current.enabledToolPacks ?? [...DEFAULT_TOOL_PACK_IDS];
+        const nextEnabled = draftEnabled.includes(packId)
+          ? draftEnabled.filter((item) => item !== packId)
+          : [...draftEnabled, packId];
+        return {
+          ...current,
+          enabledToolPacks: nextEnabled,
+        };
+      });
+      setPinnedToolPackInfoId(null);
+      setHoveredToolPackInfoId(null);
+      setToolPackInfoPopup(null);
+      setStatus(`${currentEnabledToolPacks.includes(packId) ? 'disabled' : 'enabled'} ${TOOL_PACK_DEFINITIONS.find((item) => item.id === packId)?.label || packId}`);
+      return;
+    }
+    if (!activeSessionId) {
+      setStatus('open a chat before changing tool packs');
+      return;
+    }
+    const currentlyEnabled = currentEnabledToolPacks.includes(packId);
+    if (!currentlyEnabled && currentDisabledPackReasons[packId]) {
+      setStatus(currentDisabledPackReasons[packId]);
+      return;
+    }
+    const nextEnabled = currentlyEnabled
+      ? currentEnabledToolPacks.filter((item) => item !== packId)
+      : [...currentEnabledToolPacks, packId];
+    setToolPackMutationInFlight(packId);
+    try {
+      const detail = await updateSessionToolPacks(apiBaseUrl, token, activeSessionId, {
+        enabled_tool_packs: nextEnabled,
+      });
+      applySessionDetail(detail);
+      setPinnedToolPackInfoId(null);
+      setHoveredToolPackInfoId(null);
+      setToolPackInfoPopup(null);
+      await refreshSidebarState(activeSessionId, true);
+      setStatus(`${currentlyEnabled ? 'disabled' : 'enabled'} ${TOOL_PACK_DEFINITIONS.find((item) => item.id === packId)?.label || packId}`);
+    } catch (error) {
+      setStatus(describeError(error));
+    } finally {
+      setToolPackMutationInFlight(null);
+    }
+  };
+
+  const updateChatTelegramBotAssignment = async (targetSessionId: string, telegramBotConfigId: string | null) => {
+    setSessionSettingsMutationInFlight(true);
+    try {
+      const detail = await updateSessionTelegramBotAssignment(apiBaseUrl, token, targetSessionId, {
+        telegram_bot_config_id: telegramBotConfigId,
+      });
+      if (detail.id === sessionIdRef.current) {
+        applySessionDetail(detail);
+      }
+      await refreshSidebarState(sessionIdRef.current, true);
+      const nextBot = telegramBotConfigs.find((item) => item.id === (telegramBotConfigId || defaultTelegramBotConfigId)) || null;
+      setStatus(nextBot ? `chat assigned to ${nextBot.label}` : 'chat bot assignment cleared');
+    } catch (error) {
+      setStatus(describeError(error));
+    } finally {
+      setSessionSettingsMutationInFlight(false);
+    }
+  };
+
+  const updateChatHeadlessEligibility = async (targetSessionId: string, headlessEligible: boolean) => {
+    setSessionSettingsMutationInFlight(true);
+    try {
+      const detail = await updateSessionHeadlessEligibility(apiBaseUrl, token, targetSessionId, {
+        headless_eligible: headlessEligible,
+      });
+      if (detail.id === sessionIdRef.current) {
+        applySessionDetail(detail);
+      }
+      await refreshSidebarState(sessionIdRef.current, true);
+      setStatus(headlessEligible ? 'chat can be used for sleep mode' : 'chat removed from sleep eligibility');
+    } catch (error) {
+      setStatus(describeError(error));
+    } finally {
+      setSessionSettingsMutationInFlight(false);
+    }
+  };
+
+  const setSleepChatForBot = async (botConfigId: string, targetSessionId: string | null) => {
+    setSessionSettingsMutationInFlight(true);
+    try {
+      const nextRuntime = await configureHeadlessRuntime(apiBaseUrl, token, {
+        default_sleep_session_by_bot: {
+          [botConfigId]: targetSessionId,
+        },
+      });
+      setOrchestratorStatus(nextRuntime);
+      setStatus(targetSessionId ? 'sleep chat updated' : 'sleep chat cleared');
+    } catch (error) {
+      setStatus(describeError(error));
+    } finally {
+      setSessionSettingsMutationInFlight(false);
+    }
+  };
+
   const sendQueuedComposerSlice = (items: QueuedComposerMessage[], actionPolicy: InterruptPolicy) => {
     if (!items.length) {
       return;
@@ -2649,11 +4229,12 @@ export function DesktopConversationView({
   const sendText = async () => {
     const trimmed = input.trim();
     if (!trimmed) return;
-    setInput('');
-    setAssistantDraft('');
-    setThinking('');
 
     if (isDesktopSlashCommand(trimmed)) {
+      setComposerInputValue('');
+      setAssistantDraft('');
+      setThinking('');
+      setLastAssistantOutputAt(null);
       if (openCommandPanelForInput(trimmed)) {
         return;
       }
@@ -2661,16 +4242,16 @@ export function DesktopConversationView({
       return;
     }
 
-    setVoiceDraft('');
-    if (draftChatRef.current) {
+    let targetSessionId = sessionIdRef.current || null;
+    const pendingProjectPath = draftChatRef.current?.projectPath || selectedProjectPath || '';
+    if (!targetSessionId || draftChatRef.current) {
       try {
-        const nextSessionId = await materializeDraftSession(draftChatRef.current.projectPath);
-        queueMessage(trimmed, 'app_text', nextSessionId);
+        targetSessionId = await ensureSessionForOutgoingMessage();
       } catch (error) {
-        if (isBusySessionSwitchError(error)) {
+        if (isBusySessionSwitchError(error) && pendingProjectPath) {
           setPendingSessionSwitch({
             mode: 'draft_send',
-            projectPath: draftChatRef.current.projectPath,
+            projectPath: pendingProjectPath,
             text: trimmed,
             sourceFormat: 'app_text',
           });
@@ -2678,26 +4259,37 @@ export function DesktopConversationView({
           return;
         }
         setStatus(describeError(error));
+        return;
       }
-      return;
+      if (!targetSessionId) {
+        setStatus('choose a folder to start a new chat');
+        return;
+      }
     }
+
+    setComposerInputValue('');
+    setAssistantDraft('');
+    setThinking('');
+    setLastAssistantOutputAt(null);
+    setVoiceDraft('');
 
     if (agentRunActive) {
       if (interruptPolicy === 'none') {
-        queueComposerMessage(trimmed, 'app_text');
+        queueComposerMessage(trimmed, 'app_text', targetSessionId);
       } else {
-        queueMessage(trimmed, 'app_text', undefined, interruptPolicy);
+        queueMessage(trimmed, 'app_text', targetSessionId, interruptPolicy);
       }
       return;
     }
 
-    queueMessage(trimmed, 'app_text');
+    queueMessage(trimmed, 'app_text', targetSessionId);
   };
 
   const selectCommandSuggestion = async (command: string) => {
-    setInput('');
+    setComposerInputValue('');
     setAssistantDraft('');
     setThinking('');
+    setLastAssistantOutputAt(null);
     setDismissedCommandSuggestionInput(null);
     if (openCommandPanelForInput(command)) {
       return;
@@ -2794,7 +4386,7 @@ export function DesktopConversationView({
         chatWsRef.current = null;
       }
     };
-  }, [apiBaseUrl, selectedVoiceEngine, sessionId, token]);
+  }, [apiBaseUrl, token]);
 
   useEffect(() => {
     if (!apiBaseUrl || !token) {
@@ -2894,17 +4486,33 @@ export function DesktopConversationView({
       alwaysOnEnabledRef.current = false;
       setAlwaysOnEnabled(false);
       stopVoiceTracks();
+      resetVoiceCaptureBuffers();
       voiceRunningRef.current = false;
       voiceRecordingRef.current = false;
       void cleanupAssistantAudio();
     };
-  }, [apiBaseUrl, sessionId, token]);
+  }, [apiBaseUrl, sessionId, selectedVoiceEngine, token]);
 
   const startVoiceCapture = async () => {
     if (!apiBaseUrl || !token) {
       voicePressActiveRef.current = false;
       setVoiceState('unavailable');
       setStatus('voice unavailable');
+      return;
+    }
+    if (!sessionIdRef.current) {
+      voicePressActiveRef.current = false;
+      setStatus('start a chat first to enable voice');
+      return;
+    }
+    if (selectedVoiceEngine === VOICE_ENGINE_NONE || liveVoiceStatus?.input_ok === false) {
+      voicePressActiveRef.current = false;
+      setStatus(liveVoiceStatus?.issues?.[0] || 'Select an English or Hebrew voice path first.');
+      return;
+    }
+    if (voiceEngineChanging || selectedVoiceEngineState === 'warming') {
+      voicePressActiveRef.current = false;
+      setStatus('Hebrew voice path is still warming up');
       return;
     }
     if (!voiceWsRef.current || voiceWsRef.current.readyState !== WebSocket.OPEN) {
@@ -2987,6 +4595,18 @@ export function DesktopConversationView({
     if (!apiBaseUrl || !token) {
       setVoiceState('unavailable');
       setStatus('voice unavailable');
+      return;
+    }
+    if (!sessionIdRef.current) {
+      setStatus('start a chat first to enable voice');
+      return;
+    }
+    if (selectedVoiceEngine === VOICE_ENGINE_NONE || liveVoiceStatus?.input_ok === false) {
+      setStatus(liveVoiceStatus?.issues?.[0] || 'Select an English or Hebrew voice path first.');
+      return;
+    }
+    if (voiceEngineChanging || selectedVoiceEngineState === 'warming') {
+      setStatus('Hebrew voice path is still warming up');
       return;
     }
     if (!voiceWsRef.current || voiceWsRef.current.readyState !== WebSocket.OPEN) {
@@ -3090,19 +4710,99 @@ export function DesktopConversationView({
     describeError(error).toLowerCase().includes('finish or stop the current task')
   );
 
-  const selectedProjectPath = normalizeWorkspacePath(
+  const isRecoverableSessionActivationError = (error: unknown) => {
+    const detail = describeError(error).toLowerCase();
+    return (
+      detail.includes('failed to fetch')
+      || detail.includes('networkerror')
+      || detail.includes('network request failed')
+      || detail.includes('load failed')
+    );
+  };
+
+  const activateSessionWithRecovery = async (targetSessionId: string) => {
+    try {
+      return await activateSession(apiBaseUrl, token, targetSessionId);
+    } catch (error) {
+      if (!isRecoverableSessionActivationError(error)) {
+        throw error;
+      }
+
+      setStatus('reconnecting local runtime');
+      await loadDesktopBootstrap({ force: true }).catch(() => null);
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      return activateSession(apiBaseUrl, token, targetSessionId);
+    }
+  };
+
+  const selectedProjectPathCandidate = normalizeWorkspacePath(
     draftChat?.projectPath
     || sidebarState.selectedProjectPath
     || sidebarState.lastSelectedProjectPath
     || sessions.find((item) => item.id === sessionIdRef.current)?.workspace
     || '',
   );
+  const selectedProjectPath = isWorkspacePathAllowed(selectedProjectPathCandidate, allowedWorkspaceRoot)
+    ? selectedProjectPathCandidate
+    : '';
+  const preferredProjectPath = selectedProjectPath || allowedWorkspaceRoot;
+  const preferredFolderPickerPath = isWorkspacePathAllowed(preferredProjectPath, allowedWorkspaceRoot)
+    ? preferredProjectPath
+    : (allowedWorkspaceRoot || preferredProjectPath || null);
+  const emptyConversationProjectPath = normalizeWorkspacePath(
+    draftChat?.projectPath
+    || selectedProjectPath
+    || currentWorkspaceBySessionRef.current[sessionIdRef.current || '']
+    || sessions.find((item) => item.id === sessionIdRef.current)?.workspace
+    || '',
+  );
+  const emptyConversationProjectName = emptyConversationProjectPath
+    ? projectPathBasename(emptyConversationProjectPath)
+    : '';
+
+  const buildDraftChatState = (
+    projectPath: string,
+    telegramBotConfigId?: string | null,
+  ): SidebarDraftChat => {
+    const currentSessionSummary = sessions.find((item) => item.id === sessionIdRef.current || item.id === sessionId) || null;
+    const nextDraftModel = strOrNull(
+      overview?.current_model
+      || currentSessionSummary?.model
+      || cachedModelGroups[0]?.models?.[0]
+      || '',
+    );
+    const nextDraftVariant = strOrNull(overview?.current_variant || '');
+    const nextDraftPlannerModel = strOrNull(
+      overview?.planner_model
+      || configuredPlannerModels[0]
+      || cachedPlannerModels[0]
+      || '',
+    );
+    const nextDraftEnabledToolPacks = Array.isArray(overview?.enabled_tool_packs) && overview.enabled_tool_packs.length > 0
+      ? [...overview.enabled_tool_packs]
+      : Array.isArray(currentSessionSummary?.enabled_tool_packs) && currentSessionSummary.enabled_tool_packs.length > 0
+        ? [...currentSessionSummary.enabled_tool_packs]
+        : [...DEFAULT_TOOL_PACK_IDS];
+    return {
+      id: SIDEBAR_DRAFT_CHAT_ID,
+      projectPath,
+      title: 'New chat',
+      telegramBotConfigId: strOrNull(telegramBotConfigId) || defaultTelegramBotConfigId,
+      model: nextDraftModel,
+      variant: nextDraftVariant,
+      plannerModel: nextDraftPlannerModel,
+      enabledToolPacks: nextDraftEnabledToolPacks,
+      selectedBranch: null,
+    };
+  };
 
   const resetConversationForDraft = (projectPath: string) => {
     setSessionId(undefined);
     setSessionName('New chat');
     setMessages([]);
     setTimelineEvents([]);
+    setTaskBoardArmedNextTurnState(false);
+    setRuntimeRunState('idle');
     setTaskBoard(null);
     setCompletedTaskBoards([]);
     setTaskBoardCollapsed(false);
@@ -3113,29 +4813,79 @@ export function DesktopConversationView({
     selectProjectPath(projectPath);
   };
 
-  const openDraftChat = (projectPath: string) => {
+  const clearConversationSelection = (projectPath?: string | null) => {
+    setSessionId(undefined);
+    setSessionName('New chat');
+    setMessages([]);
+    setTimelineEvents([]);
+    setOverview(null);
+    setTaskBoardArmedNextTurnState(false);
+    setRuntimeRunState('idle');
+    setTaskBoard(null);
+    setCompletedTaskBoards([]);
+    setTaskBoardCollapsed(false);
+    setExpandedCompletedTaskIds({});
+    setAssistantDraft('');
+    setThinking('');
+    setShowReferenceRail(false);
+    if (projectPath) {
+      selectProjectPath(projectPath);
+    }
+  };
+
+  const resolveAllowedProjectPath = async (projectPath: string) => {
     const normalized = normalizeWorkspacePath(projectPath);
     if (!normalized) {
-      return;
+      return { requestedPath: '', targetPath: '', status: null as DesktopPathStatus | null };
     }
-    discardDraftChat({ clearInput: true });
-    const nextDraft: SidebarDraftChat = {
-      id: SIDEBAR_DRAFT_CHAT_ID,
-      projectPath: normalized,
-      title: 'New chat',
+
+    const knownStatus = projectPathStatuses[normalized] || null;
+    const status = knownStatus || await getDesktopPathStatus(normalized).catch(() => null);
+    const resolvedStatusPath = normalizeWorkspacePath(status?.resolvedPath || '');
+    const fallbackRootCandidate = (
+      !isAbsoluteWindowsPath(normalized) && allowedWorkspaceRoot
+        ? normalizeWorkspacePath(`${allowedWorkspaceRoot}\\${normalized.replace(/^\\+/, '')}`)
+        : ''
+    );
+    const allowedCandidates = [
+      resolvedStatusPath,
+      normalized,
+      fallbackRootCandidate,
+    ].filter((candidate, index, values) => (
+      Boolean(candidate)
+      && values.indexOf(candidate) === index
+      && isWorkspacePathAllowed(candidate, allowedWorkspaceRoot)
+    ));
+
+    let targetPath = allowedCandidates[0] || '';
+    if (!targetPath && fallbackRootCandidate) {
+      const fallbackStatus = await getDesktopPathStatus(fallbackRootCandidate).catch(() => null);
+      if (fallbackStatus?.exists && fallbackStatus.isDirectory) {
+        targetPath = normalizeWorkspacePath(fallbackStatus.resolvedPath || fallbackRootCandidate) || fallbackRootCandidate;
+      }
+    }
+
+    return {
+      requestedPath: normalized,
+      targetPath,
+      status,
     };
-    setSidebarExpanded(true);
-    resetConversationForDraft(normalized);
-    setDraftChat(nextDraft);
-    setStatus(`new chat in ${projectPathBasename(normalized)}`);
   };
 
   const promptForProjectFolder = async () => {
-    const picked = await pickDesktopFolder(selectedProjectPath || null);
+    const picked = await pickDesktopFolder(preferredFolderPickerPath || null);
     if (!picked) {
       return null;
     }
     const normalized = normalizeWorkspacePath(picked);
+    if (!isWorkspacePathAllowed(normalized, allowedWorkspaceRoot)) {
+      setStatus(
+        allowedWorkspaceRoot
+          ? `Choose a folder inside ${allowedWorkspaceRoot}`
+          : 'Choose a valid workspace folder',
+      );
+      return null;
+    }
     updateSidebarState((current) => {
       const ensured = ensureSidebarProjectEntry(current, normalized);
       return {
@@ -3155,8 +4905,131 @@ export function DesktopConversationView({
     return normalized;
   };
 
+  const resolveProjectPathForNewChat = async (projectPath: string) => {
+    const { requestedPath, targetPath, status } = await resolveAllowedProjectPath(projectPath);
+    if (!requestedPath) {
+      return null;
+    }
+    if (!targetPath) {
+      setStatus(`"${projectPathBasename(requestedPath)}" is outside the current workspace root · choose a replacement folder`);
+      const replacement = await promptForProjectFolder();
+      return replacement || null;
+    }
+    if (!status) {
+      return targetPath;
+    }
+    if (status.exists && status.isDirectory) {
+      return normalizeWorkspacePath(status.resolvedPath || targetPath) || targetPath;
+    }
+
+    setStatus(`"${projectPathBasename(targetPath)}" is no longer available · choose a replacement folder`);
+    const replacement = await promptForProjectFolder();
+    return replacement || null;
+  };
+
+  const openDraftChat = async (projectPath: string, telegramBotConfigId?: string | null) => {
+    const resolvedProjectPath = await resolveProjectPathForNewChat(projectPath);
+    if (!resolvedProjectPath) {
+      return;
+    }
+    const resolvedBotConfigId = strOrNull(telegramBotConfigId) || defaultTelegramBotConfigId;
+    if (!resolvedBotConfigId && telegramBotConfigs.length > 1) {
+      setPendingDraftBotProjectPath(resolvedProjectPath);
+      setSidebarExpanded(true);
+      return;
+    }
+    discardDraftChat({ clearInput: true });
+    const nextDraft = buildDraftChatState(resolvedProjectPath, resolvedBotConfigId);
+    setSidebarExpanded(true);
+    setPendingDraftBotProjectPath(null);
+    resetConversationForDraft(resolvedProjectPath);
+    setDraftChat(nextDraft);
+    setStatus(`new chat in ${projectPathBasename(resolvedProjectPath)}`);
+  };
+
+  const confirmDraftBotSelection = async (telegramBotConfigId: string | null) => {
+    const pendingProjectPath = pendingDraftBotProjectPath;
+    setPendingDraftBotProjectPath(null);
+    if (!pendingProjectPath) {
+      return;
+    }
+    await openDraftChat(pendingProjectPath, telegramBotConfigId);
+  };
+
+  const chooseDraftProjectFolder = async () => {
+    if (!draftChatRef.current) {
+      return;
+    }
+    const pickedProject = await promptForProjectFolder();
+    if (!pickedProject) {
+      return;
+    }
+    resetConversationForDraft(pickedProject);
+    setDraftChat((current) => (
+      current
+        ? {
+            ...current,
+            projectPath: pickedProject,
+            selectedBranch: null,
+          }
+        : current
+    ));
+    setActiveCommandPanel((current) => (
+      current?.kind === 'draftBranch' || current?.kind === 'draftProject'
+        ? null
+        : current
+    ));
+    setStatus(`draft folder ${projectPathBasename(pickedProject)}`);
+  };
+
+  const chooseDraftProject = (projectPath: string) => {
+    const normalized = normalizeWorkspacePath(projectPath);
+    const currentDraft = draftChatRef.current;
+    if (!currentDraft || !normalized) {
+      return;
+    }
+    if (normalizeWorkspacePath(currentDraft.projectPath) === normalized) {
+      selectProjectPath(normalized);
+      setActiveCommandPanel((current) => current?.kind === 'draftProject' ? null : current);
+      return;
+    }
+    resetConversationForDraft(normalized);
+    setDraftChat((current) => (
+      current
+        ? {
+            ...current,
+            projectPath: normalized,
+            selectedBranch: null,
+          }
+        : current
+    ));
+    setDraftGitRepoState(null);
+    setActiveCommandPanel((current) => (
+      current?.kind === 'draftBranch' || current?.kind === 'draftProject'
+        ? null
+        : current
+    ));
+    setStatus(`draft folder ${projectPathBasename(normalized)}`);
+  };
+
+  const chooseDraftBranch = (branchName: string) => {
+    if (!draftChatRef.current) {
+      return;
+    }
+    setDraftChat((current) => (
+      current
+        ? {
+            ...current,
+            selectedBranch: branchName,
+          }
+        : current
+    ));
+    setActiveCommandPanel((current) => current?.kind === 'draftBranch' ? null : current);
+    setStatus(`draft branch ${branchName}`);
+  };
+
   const beginNewChat = async () => {
-    let targetProject = selectedProjectPath;
+    let targetProject = preferredProjectPath;
     if (!targetProject) {
       targetProject = await promptForProjectFolder() || '';
     }
@@ -3164,15 +5037,83 @@ export function DesktopConversationView({
       setStatus('choose a folder to start a new chat');
       return;
     }
-    openDraftChat(targetProject);
+    await openDraftChat(targetProject);
   };
 
   const materializeDraftSession = async (projectPath: string) => {
+    const { requestedPath, targetPath, status } = await resolveAllowedProjectPath(projectPath);
+    if (!requestedPath || !targetPath) {
+      throw new Error(
+        allowedWorkspaceRoot
+          ? `Choose a folder inside ${allowedWorkspaceRoot}`
+          : 'Choose a folder to start a new chat',
+      );
+    }
+    const targetProjectPath = targetPath;
+    const pathStatus = status || await getDesktopPathStatus(targetProjectPath).catch(() => null);
+    if (pathStatus && (!pathStatus.exists || !pathStatus.isDirectory)) {
+      throw new Error(`"${projectPathBasename(targetProjectPath)}" is no longer available. Choose another folder for the new chat.`);
+    }
     setStatus('creating chat');
-    const created = await createSession(apiBaseUrl, token, { workspace: projectPath });
+    const draftSnapshot = draftChatRef.current;
+    const selectedDraftBranch = strOrNull(draftSnapshot?.selectedBranch);
+    if (selectedDraftBranch) {
+      setStatus(`switching to ${selectedDraftBranch}`);
+      const switchedBranch = await checkoutDesktopGitBranch(targetProjectPath, selectedDraftBranch).catch(() => null);
+      if (switchedBranch?.error) {
+        throw new Error(String(switchedBranch.error));
+      }
+    }
+    setStatus('creating chat');
+    const created = await createSession(apiBaseUrl, token, {
+      workspace: targetProjectPath,
+      telegram_bot_config_id: draftSnapshot?.telegramBotConfigId || defaultTelegramBotConfigId,
+      enabled_tool_packs: draftSnapshot?.enabledToolPacks ?? [...DEFAULT_TOOL_PACK_IDS],
+    });
+    const draftModel = strOrNull(draftSnapshot?.model);
+    const draftVariant = strOrNull(draftSnapshot?.variant);
+    const draftPlannerModel = draftSnapshot?.plannerModel === undefined
+      ? undefined
+      : draftSnapshot?.plannerModel;
+    const nextConfigPayload: Record<string, unknown> = {};
+    if (draftModel && draftModel !== created.session.model) {
+      nextConfigPayload.model = draftModel;
+    }
+    if (draftVariant && draftVariant !== created.session.variant) {
+      nextConfigPayload.variant = draftVariant;
+    }
+    if (draftPlannerModel !== undefined && draftPlannerModel !== created.session.planner_model) {
+      nextConfigPayload.planner_model = draftPlannerModel;
+    }
+    if (Object.keys(nextConfigPayload).length > 0) {
+      await configureAgent(apiBaseUrl, token, nextConfigPayload, created.session.id);
+    }
     applySessionDetail(created.session);
-    await refreshSidebarState(created.session.id, true);
+    await Promise.all([
+      refreshSidebarCollections(created.session.id, true),
+      refreshOverviewState(created.session.id, { quiet: true }),
+    ]);
     return created.session.id;
+  };
+
+  const ensureSessionForOutgoingMessage = async () => {
+    if (sessionIdRef.current) {
+      return sessionIdRef.current;
+    }
+
+    if (draftChatRef.current) {
+      return materializeDraftSession(draftChatRef.current.projectPath);
+    }
+
+    let targetProject = preferredProjectPath;
+    if (!targetProject) {
+      targetProject = await promptForProjectFolder() || '';
+    }
+    if (!targetProject) {
+      return null;
+    }
+
+    return materializeDraftSession(targetProject);
   };
 
   const openSession = async (
@@ -3197,6 +5138,7 @@ export function DesktopConversationView({
     }
 
     discardDraftChat({ clearInput: true });
+    setOpenSessionMenuId(null);
     if (options?.projectPath) {
       revealProjectInSidebar(options.projectPath);
     }
@@ -3204,9 +5146,12 @@ export function DesktopConversationView({
     setAssistantDraft('');
     setThinking('');
     try {
-      const detail = await activateSession(apiBaseUrl, token, nextSessionId);
+      const detail = await activateSessionWithRecovery(nextSessionId);
       applySessionDetail(detail);
-      await refreshSidebarState(nextSessionId, true);
+      await Promise.all([
+        refreshSidebarCollections(nextSessionId, true),
+        refreshOverviewState(nextSessionId, { quiet: true }),
+      ]);
       if (typeof options?.jumpMessageIndex === 'number') {
         setPendingSearchJump({
           sessionId: nextSessionId,
@@ -3261,6 +5206,8 @@ export function DesktopConversationView({
           timestamp: new Date().toISOString(),
           displayLabel: nextAction.sourceFormat === 'app_voice_transcript' ? 'Voice' : 'You',
           channel: 'app',
+          sourceFormat: nextAction.sourceFormat,
+          messageKey: `pending:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
           pending: true,
         },
       ]);
@@ -3276,7 +5223,7 @@ export function DesktopConversationView({
       return;
     }
     if (pendingSessionSwitch.mode === 'draft_send') {
-      setInput(pendingSessionSwitch.text);
+      setComposerInputValue(pendingSessionSwitch.text);
       setStatus('kept the draft message unsent');
     } else {
       setStatus('chat switch cancelled');
@@ -3403,6 +5350,36 @@ export function DesktopConversationView({
     setOpenProjectMenuPath(null);
   };
 
+  const deleteSidebarSession = async (session: SessionSummary) => {
+    if (!session?.id) {
+      return;
+    }
+    const confirmed = globalThis.confirm
+      ? globalThis.confirm(`Delete "${session.name}"? This will permanently remove the chat history for this conversation.`)
+      : true;
+    if (!confirmed) {
+      return;
+    }
+
+    setOpenSessionMenuId(null);
+    setStatus(`deleting ${session.name}`);
+
+    try {
+      const result = await deleteSession(apiBaseUrl, token, session.id);
+      const nextCurrentSessionId = result.current_session_id || null;
+      if (sessionIdRef.current === session.id && !nextCurrentSessionId) {
+        clearConversationSelection(normalizeWorkspacePath(session.workspace) || selectedProjectPath);
+      }
+      await refreshSidebarState(nextCurrentSessionId, true);
+      setStatus(nextCurrentSessionId ? 'ready' : 'chat deleted');
+      pushActivity(`Deleted chat: ${session.name}`, 'accent');
+    } catch (error) {
+      const message = describeError(error);
+      setStatus(message);
+      pushActivity(`Delete chat failed: ${message}`, 'error');
+    }
+  };
+
   const moveProjectOrder = (draggedProjectPath: string, targetProjectPath: string) => {
     const dragged = normalizeWorkspacePath(draggedProjectPath);
     const target = normalizeWorkspacePath(targetProjectPath);
@@ -3432,19 +5409,7 @@ export function DesktopConversationView({
     const normalizedProjectPath = normalizeWorkspacePath(projectPath);
     const projectSessions = sessions
       .filter((item) => normalizeWorkspacePath(item.workspace) === normalizedProjectPath)
-      .sort((left, right) => {
-        const leftPinned = Boolean(sidebarState.sessionMeta[left.id]?.pinned);
-        const rightPinned = Boolean(sidebarState.sessionMeta[right.id]?.pinned);
-        if (leftPinned !== rightPinned) {
-          return leftPinned ? -1 : 1;
-        }
-        const leftOrder = sessionUiOrder(sidebarState.sessionMeta, left.id);
-        const rightOrder = sessionUiOrder(sidebarState.sessionMeta, right.id);
-        if (leftOrder !== rightOrder) {
-          return leftOrder - rightOrder;
-        }
-        return left.updated_at < right.updated_at ? 1 : -1;
-      });
+      .sort((left, right) => sessionSidebarSortComparator(left, right, sidebarState.sessionMeta));
     const order = projectSessions.map((item) => item.id).filter((sessionEntryId) => sessionEntryId !== draggedSessionId);
     const targetIndex = order.indexOf(targetSessionId);
     if (targetIndex < 0) {
@@ -3472,11 +5437,59 @@ export function DesktopConversationView({
       await controlAgentRun(apiBaseUrl, token, action, sessionIdRef.current);
       if (action === 'stop') {
         setChatRunActive(false);
+        setRuntimeRunState('idle');
+        setAssistantDraft('');
+        setThinking('');
+        setTaskBoard(null);
+        setOverview((previous) => (
+          previous
+            ? {
+                ...previous,
+                run_state: 'idle',
+                task_board: null,
+              }
+            : previous
+        ));
       }
       pushActivity(`Run control: ${action}`, action === 'stop' ? 'warn' : 'accent');
       await refreshSidebarState(sessionIdRef.current, true);
     } catch (error) {
       setStatus(describeError(error));
+    }
+  };
+
+  const toggleTaskBoardArmNextTurn = async () => {
+    const activeSessionId = sessionIdRef.current;
+    if (!activeSessionId) {
+      setStatus('select a shared chat before arming long task mode');
+      return;
+    }
+
+    const nextArmed = !taskBoardArmedNextTurn;
+    setStatus(nextArmed ? 'arming long task mode for the next message' : 'disarming long task mode');
+    try {
+      const result = await setTaskBoardArmedNextTurn(apiBaseUrl, token, nextArmed, activeSessionId);
+      const armed = Boolean(result.task_board_armed_next_turn);
+      setTaskBoardArmedNextTurnState(armed);
+      setOverview((previous) => (
+        previous
+          ? {
+              ...previous,
+              task_board_armed_next_turn: armed,
+            }
+          : previous
+      ));
+      setStatus(armed ? 'long task mode armed for the next message' : 'long task mode cleared');
+      pushActivity(
+        armed
+          ? 'Long task mode armed. The next message will open a managed task board.'
+          : 'Long task mode cleared. The next message will stay conversational unless it asks for real work.',
+        armed ? 'accent' : 'neutral',
+      );
+    } catch (error) {
+      const message = describeError(error);
+      setStatus(message);
+      pushActivity(`Long task mode update failed: ${message}`, 'error');
     }
   };
 
@@ -3519,41 +5532,98 @@ export function DesktopConversationView({
     : 'unknown';
   const runtimeLabel = summarizeRuntimeStatus(runtimeStatus);
   const activeSession = sessions.find((item) => item.id === sessionId);
+  const draftModelGroups = overview?.model_groups?.length ? overview.model_groups : cachedModelGroups;
+  const draftPlannerModels = overview?.available_planner_models?.length ? overview.available_planner_models : cachedPlannerModels;
+  const defaultTelegramBotConfigId = telegramBotConfigs.find((item) => item.is_default)?.id || telegramBotConfigs[0]?.id || null;
+  const draftEnabledToolPacks = draftChat?.enabledToolPacks ?? [...DEFAULT_TOOL_PACK_IDS];
+  const fallbackCatalogModel = draftModelGroups[0]?.models?.[0] || null;
+  const currentEnabledToolPacks = draftChat
+    ? draftEnabledToolPacks
+    : Array.isArray(activeSession?.enabled_tool_packs) && activeSession.enabled_tool_packs.length > 0
+      ? activeSession.enabled_tool_packs
+      : Array.isArray(overview?.enabled_tool_packs) && overview.enabled_tool_packs.length > 0
+        ? overview.enabled_tool_packs
+        : [...DEFAULT_TOOL_PACK_IDS];
+  const currentAvailableToolPacks = draftChat
+    ? [...DEFAULT_TOOL_PACK_IDS]
+    : Array.isArray(activeSession?.available_tool_packs) && activeSession.available_tool_packs.length > 0
+      ? activeSession.available_tool_packs
+      : Array.isArray(overview?.available_tool_packs) && overview.available_tool_packs.length > 0
+        ? overview.available_tool_packs
+        : [...DEFAULT_TOOL_PACK_IDS];
+  const currentLockStatus = (draftChat ? {} : activeSession?.lock_status || overview?.lock_status || {}) as Record<string, any>;
+  const currentDisabledPackReasons = (currentLockStatus.disabled_pack_reasons || {}) as Record<string, string>;
+  const activeToolPackInfoId = toolPackInfoPopup?.packId || pinnedToolPackInfoId || hoveredToolPackInfoId;
+  const activeToolPackInfo = activeToolPackInfoId
+    ? TOOL_PACK_DEFINITIONS.find((item) => item.id === activeToolPackInfoId) || null
+    : null;
+  const activeToolPackInfoDisabledReason = activeToolPackInfoId
+    ? currentDisabledPackReasons[activeToolPackInfoId] || null
+    : null;
+  const activeToolPackInfoAvailable = activeToolPackInfoId
+    ? currentAvailableToolPacks.includes(activeToolPackInfoId)
+    : false;
+  const activeToolPackInfoEnabled = activeToolPackInfoId
+    ? currentEnabledToolPacks.includes(activeToolPackInfoId)
+    : false;
+  const currentHeadlessBlockReason = typeof currentDisabledPackReasons.__headless__ === 'string'
+    ? currentDisabledPackReasons.__headless__
+    : null;
+  const currentSessionTelegramBotConfigId = activeSession?.telegram_bot_config_id || defaultTelegramBotConfigId;
+  const currentSessionTelegramBot = telegramBotConfigs.find((item) => item.id === currentSessionTelegramBotConfigId) || null;
+  const telegramBotLabelForSession = (targetSession: SessionSummary | null | undefined) => {
+    const targetBotId = targetSession?.telegram_bot_config_id || defaultTelegramBotConfigId;
+    const bot = telegramBotConfigs.find((item) => item.id === targetBotId) || null;
+    return bot?.label || 'No Telegram bot';
+  };
+  const currentSessionSleepBotConfigId = currentSessionTelegramBotConfigId || defaultTelegramBotConfigId;
+  const currentSleepSessionIdForBot = currentSessionSleepBotConfigId
+    ? orchestratorStatus?.default_sleep_session_by_bot?.[currentSessionSleepBotConfigId] || null
+    : null;
+  const currentSessionIsSleepChat = Boolean(sessionId && currentSleepSessionIdForBot === sessionId);
+  const chatSettingsSessionId = activeCommandPanel?.kind === 'session' ? activeCommandPanel.sessionId : null;
+  const chatSettingsSession = chatSettingsSessionId
+    ? sessions.find((item) => item.id === chatSettingsSessionId) || (chatSettingsSessionId === sessionId ? activeSession || null : null)
+    : null;
+  const chatSettingsBotConfigId = chatSettingsSession?.telegram_bot_config_id || defaultTelegramBotConfigId;
+  const chatSettingsSleepSessionId = chatSettingsBotConfigId
+    ? orchestratorStatus?.default_sleep_session_by_bot?.[chatSettingsBotConfigId] || null
+    : null;
   const pendingSwitchTargetLabel = pendingSessionSwitch?.mode === 'session'
     ? sessions.find((item) => item.id === pendingSessionSwitch.sessionId)?.name || 'selected chat'
     : pendingSessionSwitch
       ? `new chat in ${projectPathBasename(pendingSessionSwitch.projectPath)}`
       : null;
+  const sessionProjectPaths = new Set(
+    sessions
+      .map((item) => normalizeWorkspacePath(item.workspace))
+      .filter(Boolean),
+  );
   const projectPaths = Array.from(new Set([
     ...sidebarState.projectOrder.map((item) => normalizeWorkspacePath(item)),
     ...Object.keys(sidebarState.projects).map((item) => normalizeWorkspacePath(item)),
     ...sessions.map((item) => normalizeWorkspacePath(item.workspace)),
     ...(draftChat ? [draftChat.projectPath] : []),
-  ].filter(Boolean)));
+  ].filter(Boolean))).filter((projectPath) => shouldKeepSidebarProjectPath(projectPath, {
+    allowedRoot: allowedWorkspaceRoot,
+    sessionProjectPaths,
+    draftProjectPath: draftChat?.projectPath,
+  }));
   const projectGroups: SidebarProjectGroup[] = projectPaths
     .map((projectPath) => {
       const projectSessions = sessions
         .filter((item) => normalizeWorkspacePath(item.workspace) === projectPath)
-        .sort((left, right) => {
-          const leftPinned = Boolean(sidebarState.sessionMeta[left.id]?.pinned);
-          const rightPinned = Boolean(sidebarState.sessionMeta[right.id]?.pinned);
-          if (leftPinned !== rightPinned) {
-            return leftPinned ? -1 : 1;
-          }
-          const leftOrder = sessionUiOrder(sidebarState.sessionMeta, left.id);
-          const rightOrder = sessionUiOrder(sidebarState.sessionMeta, right.id);
-          if (leftOrder !== rightOrder) {
-            return leftOrder - rightOrder;
-          }
-          return left.updated_at < right.updated_at ? 1 : -1;
-        });
+        .sort((left, right) => sessionSidebarSortComparator(left, right, sidebarState.sessionMeta));
       const projectState = sidebarState.projects[projectPath] || {};
+      const projectPathStatus = projectPathStatuses[projectPath];
+      const folderAvailable = projectPathStatus ? Boolean(projectPathStatus.exists && projectPathStatus.isDirectory) : true;
       return {
         path: projectPath,
         label: projectDisplayName(projectPath, projectState),
-        hint: projectPathHint(projectPath),
+        hint: folderAvailable ? projectPathHint(projectPath) : `Folder unavailable · ${projectPathHint(projectPath)}`,
         pinned: Boolean(projectState.pinned),
         collapsed: Boolean(projectState.collapsed),
+        folderAvailable,
         activity: Array.isArray(projectState.recentActivity) ? projectState.recentActivity : [],
         sessions: projectSessions,
         matchesSearch: true,
@@ -3568,6 +5638,9 @@ export function DesktopConversationView({
       const rightOrder = workspaceSortOrder(sidebarState.projectOrder, right.path);
       if (leftOrder !== rightOrder) {
         return leftOrder - rightOrder;
+      }
+      if (left.folderAvailable !== right.folderAvailable) {
+        return left.folderAvailable ? -1 : 1;
       }
       return left.label.localeCompare(right.label);
     });
@@ -3590,27 +5663,78 @@ export function DesktopConversationView({
     ? `${formatStatusNumber(contextUsage.estimated_tokens)} / ${formatStatusNumber(contextUsage.max_tokens)}`
     : 'loading';
   const contextStateLabel = contextUsage
-    ? contextUsage.compaction_state === 'needs_compaction'
-      ? 'Needs Compact'
-      : contextUsage.compaction_state === 'compacted'
-        ? 'Compacted'
-        : 'OK'
+    ? [
+        contextUsage.compaction_state === 'needs_compaction'
+          ? 'Needs Compact'
+          : contextUsage.compaction_state === 'compacted'
+            ? 'Compacted'
+            : 'OK',
+        contextUsage.token_strategy ? contextUsage.token_strategy : null,
+        typeof contextUsage.tool_schema_count === 'number' && contextUsage.tool_schema_count > 0
+          ? `${formatStatusNumber(contextUsage.tool_schema_count)} tools`
+          : null,
+      ].filter(Boolean).join(' · ')
     : 'loading';
-  const currentModelLabel = overview?.current_model || activeSession?.model || 'loading';
-  const currentVariantLabel = overview?.current_variant ? ` · ${overview.current_variant}` : '';
-  const currentPlannerLabel = overview?.planner_model || 'auto';
+  const currentModelLabel = draftChat
+    ? draftChat.model || fallbackCatalogModel || 'Choose model'
+    : overview?.current_model || activeSession?.model || fallbackCatalogModel || 'Choose model';
+  const currentVariantLabel = draftChat?.variant
+    ? ` · ${draftChat.variant}`
+    : overview?.current_variant
+      ? ` · ${overview.current_variant}`
+      : '';
+  const currentPlannerLabel = draftChat
+    ? draftChat.plannerModel || 'auto'
+    : overview?.planner_model || 'auto';
+  const draftFolderLabel = projectPathBasename(draftChat?.projectPath || '') || 'Choose folder';
+  const draftBranchChoices = Array.isArray(draftGitRepoState?.branches) ? draftGitRepoState.branches : [];
+  const normalizedDraftProjectSearch = draftProjectSearch.trim().toLowerCase();
+  const normalizedDraftBranchSearch = draftBranchSearch.trim().toLowerCase();
+  const filteredDraftProjects = projectGroups.filter((group) => (
+    !normalizedDraftProjectSearch
+    || group.label.toLowerCase().includes(normalizedDraftProjectSearch)
+    || group.path.toLowerCase().includes(normalizedDraftProjectSearch)
+    || group.hint.toLowerCase().includes(normalizedDraftProjectSearch)
+  ));
+  const filteredDraftBranchChoices = draftBranchChoices.filter((branchName) => (
+    !normalizedDraftBranchSearch || branchName.toLowerCase().includes(normalizedDraftBranchSearch)
+  ));
+  const draftBranchLabel = draftGitRepoLoading
+    ? 'Loading branch'
+    : draftChat?.selectedBranch
+      ? draftChat.selectedBranch
+      : draftGitRepoState?.isGitRepo
+        ? draftGitRepoState.currentBranch || 'Choose branch'
+        : 'No git repo';
   const contextUsageRatio = Math.max(0, Math.min(1, contextPercent / 100));
+  const contextBreakdownLabel = contextUsage
+    ? [
+        typeof contextUsage.system_prompt_tokens === 'number' && contextUsage.system_prompt_tokens > 0
+          ? `sys ${formatStatusNumber(contextUsage.system_prompt_tokens)}`
+          : null,
+        typeof contextUsage.injected_context_tokens === 'number' && contextUsage.injected_context_tokens > 0
+          ? `ctx ${formatStatusNumber(contextUsage.injected_context_tokens)}`
+          : null,
+        typeof contextUsage.tool_schema_tokens === 'number' && contextUsage.tool_schema_tokens > 0
+          ? `tools ${formatStatusNumber(contextUsage.tool_schema_tokens)}`
+          : null,
+        typeof contextUsage.chat_history_tokens === 'number' && contextUsage.chat_history_tokens > 0
+          ? `chat ${formatStatusNumber(contextUsage.chat_history_tokens)}`
+          : null,
+      ].filter(Boolean).join(' · ')
+    : '';
   const contextUsageHoverLabel = contextUsage
-    ? `${contextTokenLabel} · ${contextPercentLabel}`
+    ? `Live prompt ${contextTokenLabel} · ${contextPercentLabel}${contextBreakdownLabel ? ` · ${contextBreakdownLabel}` : ''}`
     : 'Context loading';
-  const taskBoardStatusText = taskBoardStatusLabel(taskBoard?.status);
-  const taskBoardUpdatedLabel = taskBoard?.updated_at ? formatRelativeTime(taskBoard.updated_at) : null;
-  const taskBoardSummary = taskBoard?.status === 'completed'
-    ? taskBoard?.completion_summary || taskBoard?.progress_summary || taskBoard?.latest_summary || null
-    : taskBoard?.progress_summary || taskBoard?.latest_summary || null;
-  const taskBoardTone = taskBoard?.status === 'completed'
+  const activeTaskBoard = runtimeRunState === 'running' && taskBoard?.status === 'active' ? taskBoard : null;
+  const taskBoardStatusText = taskBoardStatusLabel(activeTaskBoard?.status);
+  const taskBoardUpdatedLabel = activeTaskBoard?.updated_at ? formatRelativeTime(activeTaskBoard.updated_at) : null;
+  const taskBoardSummary = activeTaskBoard?.status === 'completed'
+    ? activeTaskBoard?.completion_summary || activeTaskBoard?.progress_summary || activeTaskBoard?.latest_summary || null
+    : activeTaskBoard?.progress_summary || activeTaskBoard?.latest_summary || null;
+  const taskBoardTone = activeTaskBoard?.status === 'completed'
     ? 'complete'
-    : taskBoard?.status === 'blocked' || taskBoard?.pending_reassessment_reason
+    : activeTaskBoard?.status === 'blocked' || activeTaskBoard?.pending_reassessment_reason
       ? 'warn'
       : 'active';
   const hasCompletedTaskBoards = completedTaskBoards.length > 0;
@@ -3625,20 +5749,48 @@ export function DesktopConversationView({
       : voiceRunning
         ? `${voiceState} · processing`
         : voiceState;
+  const extendedVoiceStatus = liveVoiceStatus as (DesktopVoiceRuntimeStatus & {
+    english_pack_manifest?: Record<string, unknown> | null;
+    english_pack_manifest_verified?: boolean;
+    hebrew_pack_manifest?: Record<string, unknown> | null;
+    hebrew_pack_manifest_verified?: boolean;
+  }) | null;
   const voicePacks = voicePackState?.packs ?? [];
   const englishVoicePack = voicePacks.find((pack) => pack.id === VOICE_ENGINE_ENGLISH) ?? null;
   const hebrewVoicePack = voicePacks.find((pack) => pack.id === VOICE_ENGINE_HEBREW) ?? null;
   const selectedVoicePack = voicePacks.find((pack) => pack.id === selectedVoiceEngine) ?? null;
-  const selectedVoicePackModel = voiceStatus?.stt_model || selectedVoicePack?.path || null;
+  const selectedVoiceEngineState = String(extendedVoiceStatus?.selected_engine_state || '').trim().toLowerCase();
+  const selectedVoiceManifest = selectedVoiceEngine === VOICE_ENGINE_ENGLISH
+    ? (extendedVoiceStatus?.english_pack_manifest ?? null)
+    : selectedVoiceEngine === VOICE_ENGINE_HEBREW
+      ? (extendedVoiceStatus?.hebrew_pack_manifest ?? null)
+      : null;
+  const selectedVoiceManifestVerified = selectedVoiceEngine === VOICE_ENGINE_ENGLISH
+    ? Boolean(extendedVoiceStatus?.english_pack_manifest_verified)
+    : selectedVoiceEngine === VOICE_ENGINE_HEBREW
+      ? Boolean(extendedVoiceStatus?.hebrew_pack_manifest_verified)
+      : false;
+  const selectedVoicePackProvenance = selectedVoiceManifestVerified
+    ? String(
+        selectedVoiceManifest?.['asset_name']
+        || selectedVoiceManifest?.['pack_id']
+        || selectedVoiceManifest?.['tuning_preset']
+        || selectedVoiceManifest?.['repo_id']
+        || 'verified pack',
+      )
+    : null;
+  const selectedVoicePackModel = extendedVoiceStatus?.stt_model || selectedVoicePack?.path || null;
   const selectedVoicePackPath = selectedVoicePack?.path || null;
   const selectedVoicePackSummary = selectedVoiceEngine === VOICE_ENGINE_NONE
     ? 'Voice input is off. Open setup to re-enable a local path.'
+    : selectedVoiceEngineState === 'warming'
+      ? `Warming ${selectedVoicePack?.title || 'selected voice path'} so it is fully ready before capture starts.`
     : selectedVoicePack?.available
-      ? `${selectedVoicePack.title} ready${selectedVoicePackModel ? ` · ${selectedVoicePackModel}` : ''}`
+      ? `${selectedVoicePack.title} ready${selectedVoicePackModel ? ` · ${selectedVoicePackModel}` : ''}${selectedVoicePackProvenance ? ` · ${selectedVoicePackProvenance}` : ''}`
       : `${selectedVoicePack?.title || 'Selected voice path'} is not installed yet. Open setup to install it.`;
   const voicePackDiagnostics = selectedVoicePack?.available && selectedVoicePackPath
-    ? `Installed pack path: ${selectedVoicePackPath}`
-    : voiceStatus?.issues?.[0] || null;
+    ? `Installed pack path: ${selectedVoicePackPath}${selectedVoiceManifestVerified ? ' · verified pack' : ''}`
+    : extendedVoiceStatus?.issues?.[0] || null;
   const activitySummary = activity.length ? `${activity.length} recent events` : 'No recent runtime events';
   const referenceEntries = messages.reduce<ReferenceEntry[]>((items, message, index) => {
     if (!isReferenceSidebarMessage(message, sessionName)) {
@@ -3662,7 +5814,17 @@ export function DesktopConversationView({
     }
     return items;
   }, []);
-  const timelineEntries = mergeTimelineEntries(messages, timelineEvents);
+  const transcriptTimelineEvents = timelineEvents.filter((event) => (
+    event.kind === 'tool'
+    || event.kind === 'command'
+    || (event.kind === 'runtime' && (event.tone === 'warn' || event.tone === 'error'))
+  ));
+  const verboseModeOn = Boolean(overview?.verbose_mode);
+  const timelineEntries = mergeTimelineEntries(
+    messages.map((message, index) => ({ fullIndex: index, message })),
+    timelineEvents,
+  );
+  const transcriptTimelineEntries = mergeTimelineEntries(transcriptEntries, transcriptTimelineEvents);
   const historySummary = timelineEntries.length === 1
     ? '1 timeline item'
     : `${timelineEntries.length} timeline items`;
@@ -3675,7 +5837,8 @@ export function DesktopConversationView({
     || alwaysOnEnabled
     || voiceRecording
     || voiceRunning
-    || ['connecting', 'reconnecting', 'error'].includes(voiceState);
+    || ['connecting', 'reconnecting', 'error', 'warming'].includes(voiceState)
+    || selectedVoiceEngineState === 'warming';
   const voicePanelActive = !voicePanelHidden && (
     showVoicePanel
     || Boolean(voiceDraft)
@@ -3684,7 +5847,25 @@ export function DesktopConversationView({
     || voiceRecording
     || voiceRunning
   );
-  const agentRunActive = chatRunActive || Boolean(assistantDraft) || Boolean(thinking) || taskBoard?.status === 'active';
+  const isCenteredDraftComposerStage = Boolean(
+    draftChat
+    && transcriptTimelineEntries.length === 0
+    && referenceEntries.length === 0
+    && !assistantDraft
+    && !showVoiceBanner
+    && !activeTaskBoard
+    && !hasCompletedTaskBoards
+  );
+  const agentRunActive = runtimeRunState === 'running' || chatRunActive || Boolean(assistantDraft) || Boolean(thinking);
+  const shouldShowThinkingIndicator = agentRunActive && (lastAssistantOutputAt === null || Date.now() - lastAssistantOutputAt > 1200);
+  const thinkingShineTranslate = thinkingShineProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-64, 100],
+  });
+  const thinkingTextCounterTranslate = thinkingShineProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [64, -100],
+  });
   const hasComposerText = input.trim().length > 0;
   const currentSessionQueuedMessages = queuedComposerMessages.filter((item) => item.sessionId === sessionId);
   const queuedComposerMessagesDisplay = [...currentSessionQueuedMessages].reverse();
@@ -3700,6 +5881,8 @@ export function DesktopConversationView({
     ? voiceError
       : voiceDraft
       ? voiceDraft
+      : selectedVoiceEngineState === 'warming' || voiceState === 'warming'
+        ? 'Warming the Hebrew voice path so the local pass-3 model is fully ready before capture starts.'
       : alwaysOnEnabled && voiceRecording
         ? ALWAYS_ON_VOICE_AUTO_SEND
           ? 'Always-on voice detected speech. Local Whisper is drafting the transcript and will send when the gate closes.'
@@ -3744,20 +5927,47 @@ export function DesktopConversationView({
 
     setVoiceEngineChanging(true);
     setVoiceError(null);
+    alwaysOnEnabledRef.current = false;
+    setAlwaysOnEnabled(false);
+    stopVoiceTracks();
+    resetVoiceCaptureBuffers({ clearProgrammaticComposerInput: true });
+    voiceRunningRef.current = false;
+    voiceRecordingRef.current = false;
+    setVoiceRunning(false);
+    setVoiceRecording(false);
+    lastVoiceWarmRequestEngineRef.current = null;
+    if (engine === VOICE_ENGINE_HEBREW) {
+      setVoiceState('warming');
+      setStatus('warming Hebrew voice path');
+    }
     try {
       const switched = await onSelectVoiceEngine?.(engine);
       if (switched === false) {
         setVoiceError(`Could not switch to the ${engine === VOICE_ENGINE_HEBREW ? 'Hebrew' : 'English'} voice path.`);
+        setVoiceState('error');
+      } else if (engine === VOICE_ENGINE_HEBREW) {
+        await warmSelectedVoicePath(engine);
+      } else {
+        setVoiceState('ready');
+        setStatus('voice ready');
+        await refreshVoiceRuntimeState();
       }
     } catch (error) {
       const message = describeError(error);
       setVoiceError(message);
+      setVoiceState('error');
       pushActivity(`Voice path switch failed: ${message}`, 'error');
     } finally {
       setVoiceEngineChanging(false);
     }
   };
   const historyAvailable = Boolean(timelineEntries.length || referenceEntries.length);
+  const activeSessionArtifactCount = Number(
+    sessions.find((item) => item.id === sessionId)?.artifact_count
+    || sessions.find((item) => item.id === sessionIdRef.current)?.artifact_count
+    || 0,
+  );
+  const selectedArtifactSummary = artifacts.find((item) => item.artifact_id === selectedArtifactId) || artifacts[0] || null;
   const commandSuggestionQuery = getCommandSuggestionQuery(input);
   const commandSuggestions = commandSuggestionQuery == null || dismissedCommandSuggestionInput === input
     ? []
@@ -3768,7 +5978,261 @@ export function DesktopConversationView({
     )).slice(0, MAX_COMMAND_SUGGESTIONS);
   const floatingPanelKind = activeCommandPanel?.kind === 'model'
     ? 'model'
-    : null;
+    : activeCommandPanel?.kind === 'tools'
+      ? 'tools'
+      : activeCommandPanel?.kind === 'draftProject'
+        ? 'draftProject'
+      : activeCommandPanel?.kind === 'draftBranch'
+        ? 'draftBranch'
+      : activeCommandPanel?.kind === 'session'
+        ? 'session'
+        : null;
+  const floatingMenuKinds: Array<NonNullable<ActiveCommandPanel>['kind']> = ['model', 'tools', 'draftProject', 'draftBranch', 'session'];
+  const hasDismissibleFloatingPanel = floatingPanelKind != null && floatingMenuKinds.includes(floatingPanelKind);
+  const floatingPanelPrefersBelow = floatingPanelKind === 'draftProject' || floatingPanelKind === 'draftBranch';
+  const shouldRenderGlobalFloatingPanel = floatingPanelKind != null && !floatingPanelPrefersBelow;
+  const draftProjectCommandPanel = (
+    <View
+      ref={activeCommandPanel?.kind === 'draftProject' ? floatingPanelRef : null}
+      style={[styles.commandPanel, styles.commandPanelFloating, styles.draftChoiceCommandPanel, styles.draftComposerInlineDropdown]}
+    >
+      <View style={styles.draftChoiceSearchShell}>
+        <MonoIcon name="search" style={styles.draftChoiceSearchGlyph} />
+        <TextInput
+          style={styles.draftChoiceSearchInput}
+          value={draftProjectSearch}
+          onChangeText={setDraftProjectSearch}
+          placeholder="Search folders"
+          placeholderTextColor="#7d889d"
+        />
+      </View>
+      <Text style={styles.draftChoiceSectionLabel}>Folders</Text>
+      {filteredDraftProjects.length ? (
+        <ScrollView style={styles.draftChoiceScroll} contentContainerStyle={styles.draftChoiceList}>
+          {filteredDraftProjects.map((project) => {
+            const selected = normalizeWorkspacePath(draftChat?.projectPath) === project.path;
+            return (
+              <Pressable
+                key={`draft-project-${project.path}`}
+                style={({ hovered }) => [
+                  styles.draftChoiceRow,
+                  hovered ? styles.draftChoiceRowHovered : null,
+                  selected ? styles.draftChoiceRowSelected : null,
+                ]}
+                onPress={() => chooseDraftProject(project.path)}
+              >
+                <MonoIcon
+                  name={selected ? 'folder_open' : 'folder_closed'}
+                  style={[styles.draftChoiceRowIcon, selected ? styles.draftChoiceRowIconSelected : null]}
+                />
+                <Text
+                  style={[styles.draftChoiceRowTitle, selected ? styles.draftChoiceRowTitleSelected : null]}
+                  numberOfLines={1}
+                >
+                  {project.label}
+                </Text>
+                {selected ? <MonoIcon name="check" style={styles.draftChoiceRowCheck} /> : null}
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      ) : (
+        <View style={styles.commandPanelEmpty}>
+          <Text style={styles.commandPanelEmptyTitle}>No folders found</Text>
+          <Text style={styles.commandPanelEmptyText}>
+            Try a different search or add another folder for draft chats.
+          </Text>
+        </View>
+      )}
+      <View style={styles.draftChoiceFooter}>
+        <Pressable
+          style={({ hovered }) => [
+            styles.draftChoiceFooterAction,
+            hovered ? styles.draftChoiceFooterActionHovered : null,
+          ]}
+          onPress={() => void chooseDraftProjectFolder()}
+        >
+          <MonoIcon name="plus" style={styles.draftChoiceFooterActionIcon} />
+          <Text style={styles.draftChoiceFooterActionText}>Add folder…</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+  const draftBranchCommandPanel = (
+    <View
+      ref={activeCommandPanel?.kind === 'draftBranch' ? floatingPanelRef : null}
+      style={[styles.commandPanel, styles.commandPanelFloating, styles.draftChoiceCommandPanel, styles.draftComposerInlineDropdown]}
+    >
+      <View style={styles.draftChoiceSearchShell}>
+        <MonoIcon name="search" style={styles.draftChoiceSearchGlyph} />
+        <TextInput
+          style={styles.draftChoiceSearchInput}
+          value={draftBranchSearch}
+          onChangeText={setDraftBranchSearch}
+          placeholder="Search branches"
+          placeholderTextColor="#7d889d"
+        />
+      </View>
+      <Text style={styles.draftChoiceSectionLabel}>Branches</Text>
+      {draftGitRepoLoading ? (
+        <View style={styles.commandPanelEmpty}>
+          <Text style={styles.commandPanelEmptyTitle}>Loading branches</Text>
+          <Text style={styles.commandPanelEmptyText}>
+            Checking the selected folder for Git branches.
+          </Text>
+        </View>
+      ) : draftGitRepoState?.isGitRepo && filteredDraftBranchChoices.length ? (
+        <ScrollView style={styles.draftChoiceScroll} contentContainerStyle={styles.draftChoiceList}>
+          {filteredDraftBranchChoices.map((branchName) => {
+            const selected = branchName === (draftChat?.selectedBranch || draftGitRepoState.currentBranch);
+            return (
+              <Pressable
+                key={`draft-branch-${branchName}`}
+                style={({ hovered }) => [
+                  styles.draftChoiceRow,
+                  hovered ? styles.draftChoiceRowHovered : null,
+                  selected ? styles.draftChoiceRowSelected : null,
+                ]}
+                onPress={() => chooseDraftBranch(branchName)}
+              >
+                <MonoIcon
+                  name="branch"
+                  style={[styles.draftChoiceRowIcon, selected ? styles.draftChoiceRowIconSelected : null]}
+                />
+                <Text
+                  style={[styles.draftChoiceRowTitle, selected ? styles.draftChoiceRowTitleSelected : null]}
+                  numberOfLines={1}
+                >
+                  {branchName}
+                </Text>
+                {selected ? <MonoIcon name="check" style={styles.draftChoiceRowCheck} /> : null}
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      ) : draftGitRepoState?.isGitRepo ? (
+        <View style={styles.commandPanelEmpty}>
+          <Text style={styles.commandPanelEmptyTitle}>No branches found</Text>
+          <Text style={styles.commandPanelEmptyText}>
+            This repository did not report any selectable local branches.
+          </Text>
+        </View>
+      ) : (
+        <View style={styles.commandPanelEmpty}>
+          <Text style={styles.commandPanelEmptyTitle}>No Git repo here</Text>
+          <Text style={styles.commandPanelEmptyText}>
+            Choose a repository folder if you want this chat to start from a specific branch.
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') {
+      return;
+    }
+    const hasDismissibleSurface = Boolean(
+      openProjectMenuPath
+      || openSessionMenuId
+      || sidebarSearchModalOpen
+      || hasDismissibleFloatingPanel
+      || commandSuggestions.length,
+    );
+    if (!hasDismissibleSurface || typeof document === 'undefined') {
+      return;
+    }
+
+    const containsTarget = (node: any, target: EventTarget | null) => {
+      if (!node || !target || typeof node.contains !== 'function') {
+        return false;
+      }
+      return node.contains(target);
+    };
+
+    const handlePointerAway = (event: MouseEvent) => {
+      const target = event.target;
+      const boundaries = [
+        openProjectMenuPath ? projectMenuRefs.current[openProjectMenuPath] : null,
+        openProjectMenuPath ? projectMenuTriggerRefs.current[openProjectMenuPath] : null,
+        openSessionMenuId ? sessionMenuRefs.current[openSessionMenuId] : null,
+        openSessionMenuId ? sessionMenuTriggerRefs.current[openSessionMenuId] : null,
+        hasDismissibleFloatingPanel ? floatingPanelRef.current : null,
+        activeCommandPanel?.kind === 'model' ? modelTriggerRef.current : null,
+        activeCommandPanel?.kind === 'tools' ? toolsTriggerRef.current : null,
+        activeCommandPanel?.kind === 'draftProject' ? draftProjectTriggerRef.current : null,
+        activeCommandPanel?.kind === 'draftBranch' ? draftBranchTriggerRef.current : null,
+        sidebarSearchModalOpen ? sidebarSearchModalRef.current : null,
+        sidebarSearchModalOpen ? sidebarSearchLauncherRef.current : null,
+        commandSuggestions.length ? commandSuggestionMenuRef.current : null,
+        commandSuggestions.length ? composerTextRegionRef.current : null,
+      ];
+
+      if (boundaries.some((node) => containsTarget(node, target))) {
+        return;
+      }
+
+      setOpenProjectMenuPath(null);
+      setOpenSessionMenuId(null);
+      if (sidebarSearchModalOpen) {
+        setSidebarSearchModalOpen(false);
+      }
+      if (hasDismissibleFloatingPanel) {
+        setActiveCommandPanel((current) => (
+          current && floatingMenuKinds.includes(current.kind) ? null : current
+        ));
+      }
+      if (commandSuggestions.length) {
+        setDismissedCommandSuggestionInput(input);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerAway, true);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerAway, true);
+    };
+  }, [
+    activeCommandPanel,
+    commandSuggestions.length,
+    hasDismissibleFloatingPanel,
+    input,
+    openProjectMenuPath,
+    openSessionMenuId,
+    sidebarSearchModalOpen,
+  ]);
+
+  useEffect(() => {
+    if (activeCommandPanel?.kind === 'tools') {
+      return;
+    }
+    setHoveredToolPackInfoId(null);
+    setPinnedToolPackInfoId(null);
+  }, [activeCommandPanel]);
+
+  useEffect(() => {
+    thinkingShineProgress.stopAnimation();
+    thinkingShineProgress.setValue(0);
+    if (!shouldShowThinkingIndicator) {
+      return;
+    }
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(thinkingShineProgress, {
+          toValue: 1,
+          duration: 1320,
+          easing: Easing.inOut(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.delay(120),
+      ]),
+    );
+    animation.start();
+    return () => {
+      animation.stop();
+      thinkingShineProgress.stopAnimation();
+      thinkingShineProgress.setValue(0);
+    };
+  }, [shouldShowThinkingIndicator, thinkingShineProgress]);
 
   useEffect(() => {
     if (agentRunActive || !sessionId) {
@@ -3813,6 +6277,96 @@ export function DesktopConversationView({
     setShowReferenceRail(false);
   };
 
+  const refreshArtifacts = async (targetSessionId?: string | null) => {
+    const effectiveSessionId = String(targetSessionId || sessionIdRef.current || '').trim();
+    if (!effectiveSessionId) {
+      setArtifacts([]);
+      setSelectedArtifactId(null);
+      setSelectedArtifactDetail(null);
+      return;
+    }
+    setArtifactsLoading(true);
+    setArtifactError(null);
+    try {
+      const nextArtifacts = await fetchSessionArtifacts(apiBaseUrl, token, effectiveSessionId);
+      setArtifacts(Array.isArray(nextArtifacts) ? nextArtifacts : []);
+      setSelectedArtifactId((current) => {
+        if (current && nextArtifacts.some((item) => item.artifact_id === current)) {
+          return current;
+        }
+        return nextArtifacts[0]?.artifact_id || null;
+      });
+    } catch (error) {
+      setArtifactError(describeError(error));
+    } finally {
+      setArtifactsLoading(false);
+    }
+  };
+
+  const openArtifactRail = () => {
+    setSidebarExpanded(true);
+    setShowArtifactRail(true);
+    void refreshArtifacts(sessionIdRef.current);
+  };
+
+  const closeArtifactRail = () => {
+    setShowArtifactRail(false);
+  };
+
+  const openArtifactPreview = async (artifactId: string) => {
+    const effectiveSessionId = String(sessionIdRef.current || '').trim();
+    if (!effectiveSessionId || !artifactId) {
+      return;
+    }
+    setSelectedArtifactId(artifactId);
+    setArtifactDetailLoading(true);
+    setArtifactError(null);
+    try {
+      const detail = await fetchSessionArtifactDetail(apiBaseUrl, token, effectiveSessionId, artifactId);
+      setSelectedArtifactDetail(detail);
+    } catch (error) {
+      setArtifactError(describeError(error));
+    } finally {
+      setArtifactDetailLoading(false);
+    }
+  };
+
+  const openArtifactExternally = async (artifactId: string) => {
+    const effectiveSessionId = String(sessionIdRef.current || '').trim();
+    if (!effectiveSessionId || !artifactId || Platform.OS !== 'web') {
+      return;
+    }
+    try {
+      const payload = await fetchSessionArtifactBlob(apiBaseUrl, token, effectiveSessionId, artifactId);
+      const objectUrl = window.URL.createObjectURL(payload.blob);
+      window.open(objectUrl, '_blank', 'noopener,noreferrer');
+      window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 60_000);
+    } catch (error) {
+      setArtifactError(describeError(error));
+    }
+  };
+
+  const downloadArtifact = async (artifactId: string) => {
+    const effectiveSessionId = String(sessionIdRef.current || '').trim();
+    if (!effectiveSessionId || !artifactId || Platform.OS !== 'web') {
+      return;
+    }
+    try {
+      const payload = await fetchSessionArtifactBlob(apiBaseUrl, token, effectiveSessionId, artifactId);
+      const objectUrl = window.URL.createObjectURL(payload.blob);
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = payload.filename || `${artifactId}.bin`;
+      anchor.rel = 'noopener noreferrer';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 60_000);
+    } catch (error) {
+      setArtifactError(describeError(error));
+    }
+  };
+
   const openSearchResult = async (target: SearchResultTarget) => {
     if (target.kind === 'project') {
       revealProjectInSidebar(target.projectPath);
@@ -3830,6 +6384,21 @@ export function DesktopConversationView({
   const closeSidebar = () => {
     setSidebarExpanded(false);
   };
+
+  useEffect(() => {
+    if (!showArtifactRail) {
+      return;
+    }
+    void refreshArtifacts(sessionId);
+  }, [showArtifactRail, sessionId, lastAssistantOutputAt]);
+
+  useEffect(() => {
+    if (!showArtifactRail || !selectedArtifactId) {
+      setSelectedArtifactDetail(null);
+      return;
+    }
+    void openArtifactPreview(selectedArtifactId);
+  }, [showArtifactRail, selectedArtifactId, sessionId]);
 
   const toggleSidebar = () => {
     if (sidebarExpanded) {
@@ -3878,12 +6447,19 @@ export function DesktopConversationView({
   };
 
   return (
-    <View style={styles.shell}>
-      <View style={styles.conversationColumn}>
+    <View ref={shellRef} style={styles.shell}>
+      <View style={[styles.conversationColumn, isCenteredDraftComposerStage ? styles.conversationColumnDraftStage : null]}>
         <ScrollView
           ref={scrollRef}
-          style={[styles.transcriptScroll, styles.centeredConversationBlock]}
-          contentContainerStyle={styles.transcriptContent}
+          style={[
+            styles.transcriptScroll,
+            styles.centeredConversationBlock,
+            isCenteredDraftComposerStage ? styles.transcriptScrollDraftStage : null,
+          ]}
+          contentContainerStyle={[
+            styles.transcriptContent,
+            isCenteredDraftComposerStage ? styles.transcriptContentDraftStage : null,
+          ]}
           onScroll={handleTranscriptScroll}
           scrollEventThrottle={16}
         >
@@ -3901,39 +6477,113 @@ export function DesktopConversationView({
             </View>
           ) : null}
 
-          {transcriptEntries.length === 0 && referenceEntries.length === 0 ? (
-            <View style={styles.emptyConversationCard}>
-              <Text style={styles.emptyTitle}>No conversation turns yet</Text>
-              <Text style={styles.emptyText}>Start typing below or use voice. Live voice status appears above the composer.</Text>
+          {transcriptTimelineEntries.length === 0 && referenceEntries.length === 0 ? (
+            <View style={[
+              styles.emptyConversationCard,
+              emptyConversationProjectName ? styles.emptyConversationDraftCard : null,
+            ]}>
+              {emptyConversationProjectName ? (
+                <>
+                  <Text style={styles.emptyDraftPrompt}>
+                    What should we work on in {emptyConversationProjectName}?
+                  </Text>
+                  <View style={styles.emptyDraftFolderRow}>
+                    <Text style={styles.emptyDraftFolderIcon}>⌂</Text>
+                    <Text style={styles.emptyDraftFolderText}>{emptyConversationProjectName}</Text>
+                  </View>
+                  <Text style={[styles.emptyText, styles.emptyDraftSupportingText]}>
+                    Start typing below or use voice. This new chat will stay in the folder shown here.
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.emptyTitle}>No conversation turns yet</Text>
+                  <Text style={styles.emptyText}>Start typing below or use voice. Live voice status appears above the composer.</Text>
+                </>
+              )}
             </View>
           ) : null}
 
-          {transcriptEntries.map(({ fullIndex, message }, index) => (
+          {transcriptTimelineEntries.map((entry, index) => {
+            if (entry.kind === 'message') {
+              const message = messages[entry.sourceMessageIndex];
+              if (!message) {
+                return null;
+              }
+              const fullIndex = entry.sourceMessageIndex;
+              return (
+                <View
+                  key={message.messageKey || `${message.timestamp || 'ts'}-${fullIndex}-${index}`}
+                  onLayout={(event) => {
+                    transcriptMessageLayoutRef.current[fullIndex] = event.nativeEvent.layout.y;
+                  }}
+                  style={[
+                    styles.messageBubble,
+                    message.role === 'assistant'
+                      ? styles.messageBubbleAssistant
+                      : message.role === 'system'
+                        ? styles.messageBubbleSystem
+                        : styles.messageBubbleUser,
+                    highlightedMessageIndex === fullIndex ? styles.searchJumpHighlight : null,
+                    message.pending ? styles.messageBubblePending : null,
+                  ]}
+                >
+                  <View style={styles.messageHeader}>
+                    <Text style={styles.messageLabel}>{labelForMessage(message)}</Text>
+                    <Text style={styles.messageTime}>
+                      {message.timestamp ? formatAbsoluteTime(message.timestamp) : 'pending'}
+                    </Text>
+                  </View>
+                  <Text style={styles.messageText}>{message.content}</Text>
+                </View>
+              );
+            }
+
+            const entryKind = entry.eyebrow.toLowerCase();
+            const isToolEntry = entryKind === 'tool';
+            const isCommandEntry = entryKind === 'command';
+            const toolSections = isToolEntry ? entry.body.split(/\n(?:->|→)\s*/) : [];
+            const commandText = isToolEntry
+              ? (toolSections[0] || entry.body)
+              : isCommandEntry
+                ? entry.label.replace(/^command\s*·\s*/i, '').trim() || entry.label
+                : entry.body;
+            const resultText = isToolEntry
+              ? (toolSections.length > 1 ? toolSections.slice(1).join('\n-> ') : '')
+              : isCommandEntry
+                ? entry.body
+                : '';
+            const eyebrowLabel = isToolEntry || isCommandEntry ? 'Command' : entry.label;
+            return (
               <View
-                key={`${message.timestamp || 'ts'}-${fullIndex}-${index}`}
-                onLayout={(event) => {
-                  transcriptMessageLayoutRef.current[fullIndex] = event.nativeEvent.layout.y;
-                }}
+                key={`${entry.id}-${index}`}
                 style={[
-                  styles.messageBubble,
-                  message.role === 'assistant'
-                    ? styles.messageBubbleAssistant
-                    : message.role === 'system'
-                      ? styles.messageBubbleSystem
-                      : styles.messageBubbleUser,
-                  highlightedMessageIndex === fullIndex ? styles.searchJumpHighlight : null,
-                  message.pending ? styles.messageBubblePending : null,
+                  styles.timelineTranscriptCard,
+                  entry.tone === 'accent'
+                    ? styles.timelineTranscriptCardAccent
+                    : entry.tone === 'warn'
+                      ? styles.timelineTranscriptCardWarn
+                      : entry.tone === 'error'
+                        ? styles.timelineTranscriptCardError
+                        : null,
                 ]}
               >
-              <View style={styles.messageHeader}>
-                <Text style={styles.messageLabel}>{labelForMessage(message)}</Text>
-                <Text style={styles.messageTime}>
-                  {message.timestamp ? formatAbsoluteTime(message.timestamp) : 'pending'}
-                </Text>
+                <View style={styles.timelineTranscriptHeader}>
+                  <Text style={styles.timelineTranscriptEyebrow}>{eyebrowLabel}</Text>
+                  <Text style={styles.timelineTranscriptTime}>
+                    {entry.timestamp ? formatAbsoluteTime(entry.timestamp) : 'event'}
+                  </Text>
+                </View>
+                <Text style={styles.timelineTranscriptBody}>{commandText}</Text>
+                {resultText ? (
+                  <View style={styles.timelineTranscriptResultBlock}>
+                    <Text style={styles.timelineTranscriptResultEyebrow}>Command Result</Text>
+                    <Text style={styles.timelineTranscriptResultText}>{resultText}</Text>
+                  </View>
+                ) : null}
               </View>
-              <Text style={styles.messageText}>{message.content}</Text>
-            </View>
-          ))}
+            );
+          })}
 
           {assistantDraft ? (
             <View style={[styles.messageBubble, styles.messageBubbleAssistant, styles.messageBubbleDraft]}>
@@ -3942,6 +6592,33 @@ export function DesktopConversationView({
                 <Text style={styles.messageTime}>streaming</Text>
               </View>
               <Text style={styles.messageText}>{assistantDraft}</Text>
+            </View>
+          ) : null}
+
+          {shouldShowThinkingIndicator ? (
+            <View style={styles.syntheticThinkingRow}>
+              <View style={styles.syntheticThinkingTextWrap}>
+                <Text style={styles.syntheticThinkingText}>Thinking</Text>
+                <Animated.View
+                  pointerEvents="none"
+                  style={[
+                    styles.syntheticThinkingHighlightMask,
+                    {
+                      transform: [{ translateX: thinkingShineTranslate }],
+                    },
+                  ]}
+                >
+                  <Animated.Text
+                    style={[
+                      styles.syntheticThinkingText,
+                      styles.syntheticThinkingTextHighlight,
+                      { transform: [{ translateX: thinkingTextCounterTranslate }] },
+                    ]}
+                  >
+                    Thinking
+                  </Animated.Text>
+                </Animated.View>
+              </View>
             </View>
           ) : null}
         </ScrollView>
@@ -3953,7 +6630,7 @@ export function DesktopConversationView({
           </View>
         ) : null}
 
-        {taskBoard ? (
+        {activeTaskBoard ? (
           <View
             style={[
               styles.centeredConversationBlock,
@@ -3968,9 +6645,9 @@ export function DesktopConversationView({
             <View style={styles.taskBoardHeader}>
               <View style={styles.taskBoardHeaderCopy}>
                 <Text style={styles.taskBoardEyebrow}>Managed Task</Text>
-                <Text style={styles.taskBoardGoal}>{taskBoard.main_goal}</Text>
+                <Text style={styles.taskBoardGoal}>{activeTaskBoard.main_goal}</Text>
                 <Text style={styles.taskBoardMeta}>
-                  {taskBoardSummary || `${taskBoard.completed_sub_goals}/${taskBoard.total_sub_goals} sub-goals complete`}
+                  {taskBoardSummary || `${activeTaskBoard.completed_sub_goals}/${activeTaskBoard.total_sub_goals} sub-goals complete`}
                   {taskBoardUpdatedLabel ? ` · updated ${taskBoardUpdatedLabel}` : ''}
                 </Text>
               </View>
@@ -3998,10 +6675,10 @@ export function DesktopConversationView({
 
             {!taskBoardCollapsed ? (
               <>
-                {taskBoard.pending_reassessment_reason ? (
+                {activeTaskBoard.pending_reassessment_reason ? (
                   <View style={styles.taskBoardAlert}>
                     <Text style={styles.taskBoardAlertLabel}>Reassessing</Text>
-                    <Text style={styles.taskBoardAlertText}>{taskBoard.pending_reassessment_reason}</Text>
+                    <Text style={styles.taskBoardAlertText}>{activeTaskBoard.pending_reassessment_reason}</Text>
                   </View>
                 ) : null}
 
@@ -4009,23 +6686,23 @@ export function DesktopConversationView({
                   <View style={styles.taskBoardInfoChip}>
                     <Text style={styles.taskBoardInfoLabel}>Current Focus</Text>
                     <Text style={styles.taskBoardInfoValue}>
-                      {taskBoard.status === 'completed'
+                      {activeTaskBoard.status === 'completed'
                         ? 'Task complete'
-                        : taskBoard.current_focus || 'Choose next sub-goal'}
+                        : activeTaskBoard.current_focus || 'Choose next sub-goal'}
                     </Text>
                   </View>
                   <View style={styles.taskBoardInfoChip}>
                     <Text style={styles.taskBoardInfoLabel}>Next Method</Text>
                     <Text style={styles.taskBoardInfoValue}>
-                      {taskBoard.status === 'completed'
-                        ? taskBoard.completion_summary || 'Task complete. No next method is needed.'
-                        : taskBoard.next_method || 'Not set yet'}
+                      {activeTaskBoard.status === 'completed'
+                        ? activeTaskBoard.completion_summary || 'Task complete. No next method is needed.'
+                        : activeTaskBoard.next_method || 'Not set yet'}
                     </Text>
                   </View>
                 </View>
 
                 <View style={styles.taskBoardSteps}>
-                  {taskBoard.sub_goals.map((subGoal) => (
+                  {activeTaskBoard.sub_goals.map((subGoal) => (
                     <View key={subGoal.id} style={styles.taskBoardStepRow}>
                       <Text style={styles.taskBoardStepPrefix}>{taskBoardStepPrefix(subGoal.status)}</Text>
                       <View style={styles.taskBoardStepCopy}>
@@ -4039,14 +6716,14 @@ export function DesktopConversationView({
                     </View>
                   ))}
                   <View style={styles.taskBoardStepRow}>
-                    <Text style={styles.taskBoardStepPrefix}>{taskBoard.verification_status === 'done' ? '[x]' : '[ ]'}</Text>
+                    <Text style={styles.taskBoardStepPrefix}>{activeTaskBoard.verification_status === 'done' ? '[x]' : '[ ]'}</Text>
                     <View style={styles.taskBoardStepCopy}>
                       <Text style={styles.taskBoardStepTitle}>Verify the requested result and close the task</Text>
-                      {taskBoard.verification_summary ? (
-                        <Text style={styles.taskBoardStepMeta}>{taskBoard.verification_summary}</Text>
+                      {activeTaskBoard.verification_summary ? (
+                        <Text style={styles.taskBoardStepMeta}>{activeTaskBoard.verification_summary}</Text>
                       ) : (
                         <Text style={styles.taskBoardStepMeta}>
-                          {taskBoard.status === 'completed'
+                          {activeTaskBoard.status === 'completed'
                             ? 'Waiting for verification summary.'
                             : 'This final check closes only after the requested result is verified.'}
                         </Text>
@@ -4064,7 +6741,7 @@ export function DesktopConversationView({
             <View style={styles.completedTaskBoardsHeader}>
               <View style={styles.completedTaskBoardsHeaderCopy}>
                 <Text style={styles.completedTaskBoardsEyebrow}>Task History</Text>
-                <Text style={styles.completedTaskBoardsTitle}>Completed Managed Tasks</Text>
+                <Text style={styles.completedTaskBoardsTitle}>Managed Task History</Text>
               </View>
               <Text style={styles.completedTaskBoardsSummary}>{completedTaskBoards.length} kept</Text>
             </View>
@@ -4088,10 +6765,24 @@ export function DesktopConversationView({
                       <View style={styles.completedTaskCardCopy}>
                         <Text style={styles.completedTaskCardTitle}>{board.collapsed_title || `[x] ${board.main_goal}`}</Text>
                         <Text style={styles.completedTaskCardMeta}>
-                          {completedAtLabel ? `${formatRelativeTime(completedAtLabel)} · ` : ''}{summaryText}
+                          {completedAtLabel ? `${formatRelativeTime(completedAtLabel)} · ` : ''}{taskBoardStatusLabel(board.status)} · {summaryText}
                         </Text>
                       </View>
-                      <Text style={styles.completedTaskCardToggle}>{expanded ? 'Collapse' : 'Expand'}</Text>
+                      <View style={styles.taskBoardHeaderActions}>
+                        <View
+                          style={[
+                            styles.taskBoardBadge,
+                            board.status === 'completed'
+                              ? styles.taskBoardBadgeComplete
+                              : board.status === 'blocked'
+                                ? styles.taskBoardBadgeWarn
+                                : null,
+                          ]}
+                        >
+                          <Text style={styles.taskBoardBadgeText}>{taskBoardStatusLabel(board.status)}</Text>
+                        </View>
+                        <Text style={styles.completedTaskCardToggle}>{expanded ? 'Collapse' : 'Expand'}</Text>
+                      </View>
                     </Pressable>
 
                     {expanded ? (
@@ -4124,15 +6815,8 @@ export function DesktopConversationView({
           </View>
         ) : null}
 
-        <View style={styles.composerDock}>
-        <View style={styles.composerShell}>
-          {thinking ? (
-            <View style={styles.thinkingCard}>
-              <Text style={styles.thinkingLabel}>Thinking</Text>
-              <Text style={styles.thinkingText}>{thinking}</Text>
-            </View>
-          ) : null}
-
+        <View style={[styles.composerDock, isCenteredDraftComposerStage ? styles.composerDockDraftStage : null]}>
+        <View style={[styles.composerShell, isCenteredDraftComposerStage ? styles.composerShellDraftStage : null]}>
           {pendingSessionSwitch ? (
             <View style={styles.pendingSwitchCard}>
               <View style={styles.pendingSwitchCopy}>
@@ -4178,6 +6862,44 @@ export function DesktopConversationView({
             </View>
           ) : null}
 
+          {activeCommandPanel?.kind === 'verbose' ? (
+            <View style={styles.commandPanel}>
+              <View style={styles.commandPanelHeader}>
+                <View style={styles.commandPanelHeaderCopy}>
+                  <Text style={styles.commandPanelEyebrow}>Verbose</Text>
+                  <Text style={styles.commandPanelTitle}>Tool Logging</Text>
+                  <Text style={styles.commandPanelText}>
+                    Verbose mode is currently {overview?.verbose_mode ? 'ON' : 'OFF'}. Choose how tool activity should appear in the shared chat.
+                  </Text>
+                </View>
+                <Pressable style={styles.commandPanelCloseButton} onPress={() => setActiveCommandPanel(null)}>
+                  <Text style={styles.commandPanelCloseText}>Close</Text>
+                </Pressable>
+              </View>
+              <View style={styles.commandPanelActionRow}>
+                <Pressable
+                  style={verboseModeOn ? styles.commandPanelPrimaryAction : styles.commandPanelSecondaryAction}
+                  onPress={() => { void runVerboseCommand('on'); }}
+                >
+                  <Text style={verboseModeOn ? styles.commandPanelPrimaryActionText : styles.commandPanelSecondaryActionText}>
+                    Turn Verbose On
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={!verboseModeOn ? styles.commandPanelPrimaryAction : styles.commandPanelSecondaryAction}
+                  onPress={() => { void runVerboseCommand('off'); }}
+                >
+                  <Text style={!verboseModeOn ? styles.commandPanelPrimaryActionText : styles.commandPanelSecondaryActionText}>
+                    Turn Verbose Off
+                  </Text>
+                </Pressable>
+                <Pressable style={styles.commandPanelSecondaryAction} onPress={() => { void runVerboseCommand('status'); }}>
+                  <Text style={styles.commandPanelSecondaryActionText}>Show Status</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
+
           {activeCommandPanel?.kind === 'command' ? (
             <View style={styles.commandPanel}>
               <View style={styles.commandPanelHeader}>
@@ -4206,11 +6928,14 @@ export function DesktopConversationView({
           ) : null}
 
           <View style={styles.composerUtilityAnchor}>
-            {floatingPanelKind ? (
+            {shouldRenderGlobalFloatingPanel ? (
               <View
+                ref={floatingPanelRef}
                 style={[
                   styles.commandPanelFloatingLayer,
-                  styles.commandPanelFloatingRight,
+                  floatingPanelPrefersBelow
+                    ? styles.commandPanelFloatingBelowRight
+                    : styles.commandPanelFloatingRight,
                 ]}
               >
                 {floatingPanelKind === 'model' ? (
@@ -4227,18 +6952,22 @@ export function DesktopConversationView({
                         <Text style={styles.commandPanelCloseText}>Close</Text>
                       </Pressable>
                     </View>
-                    {overview?.model_groups?.length || overview?.available_planner_models?.length ? (
+                    {draftModelGroups.length || draftPlannerModels.length ? (
                       <ScrollView style={styles.modelPickerScroll} contentContainerStyle={styles.modelPickerContent}>
-                        {overview.model_groups.map((group) => (
+                        {draftModelGroups.map((group) => (
                           <View key={group.provider} style={styles.modelProviderBlock}>
                             <Text style={styles.modelProviderTitle}>{group.provider}</Text>
                             <View style={styles.modelList}>
                               {group.models.map((model) => {
-                                const selected = model === overview.current_model;
+                                const selected = model === currentModelLabel;
                                 return (
                                   <Pressable
                                     key={`${group.provider}-${model}`}
-                                    style={[styles.modelListItem, selected ? styles.modelListItemActive : null]}
+                                    style={({ hovered }) => [
+                                      styles.modelListItem,
+                                      hovered ? styles.modelListItemHovered : null,
+                                      selected ? styles.modelListItemActive : null,
+                                    ]}
                                     onPress={() => void chooseModel(model)}
                                   >
                                     <View style={styles.modelListItemCopy}>
@@ -4262,24 +6991,32 @@ export function DesktopConversationView({
                           </Text>
                           <View style={styles.modelList}>
                             <Pressable
-                              style={[styles.modelListItem, !overview?.planner_model ? styles.modelListItemActive : null]}
+                              style={({ hovered }) => [
+                                styles.modelListItem,
+                                hovered ? styles.modelListItemHovered : null,
+                                currentPlannerLabel === 'auto' ? styles.modelListItemActive : null,
+                              ]}
                               onPress={() => void choosePlannerModel(null)}
                             >
                               <View style={styles.modelListItemCopy}>
-                                <Text style={[styles.modelListItemTitle, !overview?.planner_model ? styles.modelListItemTitleActive : null]}>
+                                <Text style={[styles.modelListItemTitle, currentPlannerLabel === 'auto' ? styles.modelListItemTitleActive : null]}>
                                   Automatic
                                 </Text>
                               </View>
-                              <Text style={[styles.modelListItemMeta, !overview?.planner_model ? styles.modelListItemMetaActive : null]}>
-                                {!overview?.planner_model ? 'Current' : 'Select'}
+                              <Text style={[styles.modelListItemMeta, currentPlannerLabel === 'auto' ? styles.modelListItemMetaActive : null]}>
+                                {currentPlannerLabel === 'auto' ? 'Current' : 'Select'}
                               </Text>
                             </Pressable>
-                            {overview?.available_planner_models?.map((model) => {
-                              const selected = model === overview?.planner_model;
+                            {draftPlannerModels.map((model) => {
+                              const selected = model === currentPlannerLabel;
                               return (
                                 <Pressable
                                   key={`planner-inline-${model}`}
-                                  style={[styles.modelListItem, selected ? styles.modelListItemActive : null]}
+                                  style={({ hovered }) => [
+                                    styles.modelListItem,
+                                    hovered ? styles.modelListItemHovered : null,
+                                    selected ? styles.modelListItemActive : null,
+                                  ]}
                                   onPress={() => void choosePlannerModel(model)}
                                 >
                                   <View style={styles.modelListItemCopy}>
@@ -4306,13 +7043,270 @@ export function DesktopConversationView({
                     )}
                   </View>
                 ) : null}
+                {floatingPanelKind === 'tools' ? (
+                  <View style={[styles.commandPanel, styles.commandPanelSlim, styles.commandPanelFloating, styles.toolPackCommandPanel]}>
+                    <View style={styles.commandPanelHeader}>
+                      <View style={styles.commandPanelHeaderCopy}>
+                        <Text style={styles.commandPanelTitle}>Tool Packs</Text>
+                        <Text style={styles.commandPanelText}>
+                          Toggle the packs this chat can use. Conflicting packs stay dim until the current owner finishes.
+                        </Text>
+                        {currentHeadlessBlockReason ? (
+                          <Text style={styles.commandPanelWarningText}>{currentHeadlessBlockReason}</Text>
+                        ) : null}
+                      </View>
+                      <Pressable style={styles.commandPanelCloseButton} onPress={() => setActiveCommandPanel(null)}>
+                        <Text style={styles.commandPanelCloseText}>Close</Text>
+                      </Pressable>
+                    </View>
+                    <ScrollView style={styles.modelPickerScroll} contentContainerStyle={styles.modelPickerContent}>
+                      <View style={styles.toolPackCompactList}>
+                          {TOOL_PACK_DEFINITIONS.map((pack) => {
+                            const enabled = currentEnabledToolPacks.includes(pack.id);
+                            const available = currentAvailableToolPacks.includes(pack.id);
+                            const disabledReason = currentDisabledPackReasons[pack.id] || null;
+                            const blockedEnable = !enabled && Boolean(disabledReason);
+                            const infoVisible = activeToolPackInfoId === pack.id;
+                            return (
+                              <View key={`tool-pack-${pack.id}`} style={styles.toolPackCompactGroup}>
+                                <View
+                                  style={[
+                                    styles.toolPackCompactRow,
+                                    enabled ? styles.toolPackCompactRowEnabled : null,
+                                    !available ? styles.toolPackCompactRowUnavailable : null,
+                                  ]}
+                                >
+                                  <Text
+                                    style={[
+                                      styles.toolPackCompactLabel,
+                                      enabled ? styles.toolPackCompactLabelEnabled : null,
+                                      !available ? styles.toolPackCompactLabelUnavailable : null,
+                                    ]}
+                                    numberOfLines={1}
+                                  >
+                                    {pack.label}
+                                  </Text>
+                                  <View style={styles.toolPackCompactActions}>
+                                    <Pressable
+                                      ref={setToolPackInfoButtonRef(pack.id)}
+                                      onHoverIn={() => showToolPackInfoPopup(pack.id)}
+                                      onHoverOut={() => scheduleHideToolPackInfoPopup(pack.id)}
+                                      onPress={() => {
+                                        if (pinnedToolPackInfoId === pack.id) {
+                                          hideToolPackInfoPopup(pack.id);
+                                          return;
+                                        }
+                                        showToolPackInfoPopup(pack.id, { pinned: true });
+                                      }}
+                                      style={({ hovered }) => [
+                                        styles.toolPackInfoButton,
+                                        hovered ? styles.toolPackInfoButtonHovered : null,
+                                        infoVisible ? styles.toolPackInfoButtonActive : null,
+                                      ]}
+                                    >
+                                      <MonoIcon
+                                        name="info"
+                                        style={[
+                                          styles.toolPackInfoIcon,
+                                          infoVisible ? styles.toolPackInfoIconActive : null,
+                                        ]}
+                                      />
+                                    </Pressable>
+                                    <Pressable
+                                      style={[
+                                        styles.toolPackSwitch,
+                                        enabled ? styles.toolPackSwitchActive : null,
+                                        toolPackMutationInFlight === pack.id ? styles.toolPackSwitchSaving : null,
+                                        blockedEnable ? styles.toolPackSwitchDisabled : null,
+                                      ]}
+                                      onPress={() => void toggleCurrentSessionToolPack(pack.id)}
+                                      disabled={toolPackMutationInFlight === pack.id}
+                                    >
+                                      <View
+                                        style={[
+                                          styles.toolPackSwitchKnob,
+                                          enabled ? styles.toolPackSwitchKnobActive : null,
+                                        ]}
+                                      />
+                                    </Pressable>
+                                  </View>
+                                </View>
+                              </View>
+                            );
+                          })}
+                      </View>
+                    </ScrollView>
+                  </View>
+                ) : null}
+                {floatingPanelKind === 'tools' && toolPackInfoPopup && activeToolPackInfo ? (
+                  <Pressable
+                    style={[
+                      styles.toolPackInfoFloatingBubble,
+                      {
+                        top: toolPackInfoPopup.top,
+                        left: toolPackInfoPopup.left,
+                      },
+                    ]}
+                    onHoverIn={() => {
+                      clearToolPackInfoHideTimer();
+                      if (!pinnedToolPackInfoId) {
+                        setHoveredToolPackInfoId(activeToolPackInfo.id);
+                      }
+                    }}
+                    onHoverOut={() => {
+                      if (pinnedToolPackInfoId === activeToolPackInfo.id) {
+                        return;
+                      }
+                      scheduleHideToolPackInfoPopup(activeToolPackInfo.id);
+                    }}
+                  >
+                    <Text style={styles.toolPackInfoTitle}>{activeToolPackInfo.label}</Text>
+                    <Text style={styles.toolPackInfoText}>{activeToolPackInfo.description}</Text>
+                    {activeToolPackInfoDisabledReason ? (
+                      <Text style={styles.toolPackInfoWarning}>{activeToolPackInfoDisabledReason}</Text>
+                    ) : !activeToolPackInfoAvailable && activeToolPackInfoEnabled ? (
+                      <Text style={styles.toolPackInfoWarning}>
+                        Enabled for this chat, but temporarily unavailable while another running chat owns it.
+                      </Text>
+                    ) : null}
+                  </Pressable>
+                ) : null}
+                {floatingPanelKind === 'session' ? (
+                  <View style={[styles.commandPanel, styles.commandPanelSlim, styles.commandPanelFloating]}>
+                    <View style={styles.commandPanelHeader}>
+                      <View style={styles.commandPanelHeaderCopy}>
+                        <Text style={styles.commandPanelEyebrow}>Chat Settings</Text>
+                        <Text style={styles.commandPanelTitle}>{chatSettingsSession?.name || 'Chat'}</Text>
+                        <Text style={styles.commandPanelText}>
+                          Assign this chat to a Telegram bot and choose whether it can be used as a sleep chat.
+                        </Text>
+                      </View>
+                      <Pressable style={styles.commandPanelCloseButton} onPress={() => setActiveCommandPanel(null)}>
+                        <Text style={styles.commandPanelCloseText}>Close</Text>
+                      </Pressable>
+                    </View>
+                    {chatSettingsSession ? (
+                      <ScrollView style={styles.modelPickerScroll} contentContainerStyle={styles.modelPickerContent}>
+                        <View style={styles.modelProviderBlock}>
+                          <Text style={styles.modelProviderTitle}>Telegram Bot</Text>
+                          <Text style={styles.modelProviderCaption}>
+                            App messages from this chat are mirrored only to the selected bot.
+                          </Text>
+                          <View style={styles.modelList}>
+                            {telegramBotConfigs.length ? telegramBotConfigs.map((bot) => {
+                              const selected = bot.id === chatSettingsBotConfigId;
+                              return (
+                                <Pressable
+                                  key={`chat-bot-${bot.id}`}
+                                  style={({ hovered }) => [
+                                    styles.modelListItem,
+                                    hovered ? styles.modelListItemHovered : null,
+                                    selected ? styles.modelListItemActive : null,
+                                  ]}
+                                  disabled={sessionSettingsMutationInFlight}
+                                  onPress={() => void updateChatTelegramBotAssignment(chatSettingsSession.id, bot.id)}
+                                >
+                                  <View style={styles.modelListItemCopy}>
+                                    <Text style={[styles.modelListItemTitle, selected ? styles.modelListItemTitleActive : null]}>
+                                      {bot.label}
+                                    </Text>
+                                    <Text style={styles.modelProviderCaption}>{bot.bot_token}{bot.is_default ? ' · default' : ''}</Text>
+                                  </View>
+                                  <Text style={[styles.modelListItemMeta, selected ? styles.modelListItemMetaActive : null]}>
+                                    {selected ? 'Assigned' : 'Use'}
+                                  </Text>
+                                </Pressable>
+                              );
+                            }) : (
+                              <View style={styles.commandPanelEmpty}>
+                                <Text style={styles.commandPanelEmptyTitle}>No Telegram bots yet</Text>
+                                <Text style={styles.commandPanelEmptyText}>
+                                  Add more bot configs in setup/settings to route chats separately.
+                                </Text>
+                              </View>
+                            )}
+                          </View>
+                        </View>
+
+                        <View style={styles.modelProviderBlock}>
+                          <Text style={styles.modelProviderTitle}>Sleep Mode</Text>
+                          <Text style={styles.modelProviderCaption}>
+                            Only designated sleep chats can keep running while the desktop UI is asleep.
+                          </Text>
+                          <View style={styles.modelList}>
+                            <Pressable
+                              style={({ hovered }) => [
+                                styles.modelListItem,
+                                hovered ? styles.modelListItemHovered : null,
+                                chatSettingsSession.headless_eligible ? styles.modelListItemActive : null,
+                              ]}
+                              disabled={sessionSettingsMutationInFlight}
+                              onPress={() => void updateChatHeadlessEligibility(chatSettingsSession.id, !chatSettingsSession.headless_eligible)}
+                            >
+                              <View style={styles.modelListItemCopy}>
+                                <Text style={[styles.modelListItemTitle, chatSettingsSession.headless_eligible ? styles.modelListItemTitleActive : null]}>
+                                  {chatSettingsSession.headless_eligible ? 'Sleep eligible' : 'Not sleep eligible'}
+                                </Text>
+                                <Text style={styles.modelProviderCaption}>
+                                  {chatSettingsSession.headless_eligible
+                                    ? 'This chat can be chosen as the sleep chat for its bot.'
+                                    : 'Turn this on before assigning the chat as a sleep target.'}
+                                </Text>
+                              </View>
+                              <Text style={[styles.modelListItemMeta, chatSettingsSession.headless_eligible ? styles.modelListItemMetaActive : null]}>
+                                {chatSettingsSession.headless_eligible ? 'On' : 'Off'}
+                              </Text>
+                            </Pressable>
+                            <Pressable
+                              style={({ hovered }) => [
+                                styles.modelListItem,
+                                hovered ? styles.modelListItemHovered : null,
+                                chatSettingsSleepSessionId === chatSettingsSession.id ? styles.modelListItemActive : null,
+                                !chatSettingsSession.headless_eligible ? styles.modelListItemDisabled : null,
+                              ]}
+                              disabled={sessionSettingsMutationInFlight || !chatSettingsSession.headless_eligible || !chatSettingsBotConfigId}
+                              onPress={() => {
+                                if (!chatSettingsBotConfigId) {
+                                  return;
+                                }
+                                const nextSessionId = chatSettingsSleepSessionId === chatSettingsSession.id ? null : chatSettingsSession.id;
+                                void setSleepChatForBot(chatSettingsBotConfigId, nextSessionId);
+                              }}
+                            >
+                              <View style={styles.modelListItemCopy}>
+                                <Text style={[styles.modelListItemTitle, chatSettingsSleepSessionId === chatSettingsSession.id ? styles.modelListItemTitleActive : null]}>
+                                  {chatSettingsSleepSessionId === chatSettingsSession.id ? 'Designated sleep chat' : 'Make this the sleep chat'}
+                                </Text>
+                                <Text style={styles.modelProviderCaption}>
+                                  {chatSettingsSleepSessionId === chatSettingsSession.id
+                                    ? 'Telegram and cron can keep using this chat while the UI is asleep.'
+                                    : 'Assign this chat as the active sleep target for its Telegram bot.'}
+                                </Text>
+                              </View>
+                              <Text style={[styles.modelListItemMeta, chatSettingsSleepSessionId === chatSettingsSession.id ? styles.modelListItemMetaActive : null]}>
+                                {chatSettingsSleepSessionId === chatSettingsSession.id ? 'Assigned' : 'Choose'}
+                              </Text>
+                            </Pressable>
+                          </View>
+                        </View>
+                      </ScrollView>
+                    ) : (
+                      <View style={styles.commandPanelEmpty}>
+                        <Text style={styles.commandPanelEmptyTitle}>Chat not available</Text>
+                        <Text style={styles.commandPanelEmptyText}>
+                          Reopen the panel after the chat list refreshes.
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                ) : null}
 
               </View>
             ) : null}
           </View>
 
           {commandSuggestions.length ? (
-            <View style={styles.commandSuggestionMenu}>
+            <View ref={commandSuggestionMenuRef} style={styles.commandSuggestionMenu}>
               <View style={styles.commandSuggestionHeader}>
                 <Text style={styles.commandSuggestionTitle}>Commands</Text>
                 <Pressable
@@ -4339,21 +7333,34 @@ export function DesktopConversationView({
             </View>
           ) : null}
 
-          <View style={styles.composerTextRegion}>
+          <View ref={composerTextRegionRef} style={styles.composerTextRegion}>
+            {Platform.OS === 'web' ? (
+              <View pointerEvents="none" style={styles.composerInputMeasureShell}>
+                <Text
+                  style={styles.composerInputMeasureText}
+                  onLayout={handleComposerMeasureLayout}
+                >
+                  {(input || ' ') + '\u200b'}
+                </Text>
+              </View>
+            ) : null}
             <TextInput
               nativeID="desktop-composer-input"
-              style={styles.composerInput}
+              style={[styles.composerInput, { height: composerInputHeight }]}
               value={input}
-              onChangeText={setInput}
+              onChangeText={handleComposerInputChange}
+              onContentSizeChange={handleComposerContentSizeChange}
               onKeyPress={handleComposerKeyPress}
               placeholder={DESKTOP_COMMAND_PLACEHOLDER}
               placeholderTextColor="#8f9ebb"
               multiline
+              scrollEnabled={composerInputHeight >= COMPOSER_MAX_HEIGHT}
             />
 
             <View style={styles.composerFooterRow}>
               <View style={styles.composerFooterControls}>
                 <Pressable
+                  ref={modelTriggerRef}
                   style={({ hovered }) => [
                     styles.composerStatusPill,
                     styles.composerStatusPillWide,
@@ -4364,6 +7371,33 @@ export function DesktopConversationView({
                 >
                   <Text style={styles.composerStatusPillValue} numberOfLines={1}>
                     {currentModelLabel}{currentVariantLabel}
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  ref={toolsTriggerRef}
+                  style={({ hovered }) => [
+                    styles.composerStatusPill,
+                    hovered ? styles.statusSurfaceHovered : null,
+                    activeCommandPanel?.kind === 'tools' ? styles.composerStatusPillInteractiveActive : null,
+                  ]}
+                  onPress={() => setActiveCommandPanel((current) => current?.kind === 'tools' ? null : { kind: 'tools' })}
+                >
+                  <Text style={styles.composerStatusPillValue} numberOfLines={1}>
+                    Tools · {currentEnabledToolPacks.length}
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  style={({ hovered }) => [
+                    styles.composerStatusPill,
+                    hovered ? styles.statusSurfaceHovered : null,
+                    taskBoardArmedNextTurn ? styles.composerStatusPillInteractiveActive : null,
+                  ]}
+                  onPress={() => void toggleTaskBoardArmNextTurn()}
+                >
+                  <Text style={styles.composerStatusPillValue} numberOfLines={1}>
+                    {taskBoardArmedNextTurn ? 'Long Task: Armed' : 'Long Task: Off'}
                   </Text>
                 </Pressable>
 
@@ -4393,8 +7427,8 @@ export function DesktopConversationView({
                   {contextUsageHovered ? (
                     <View style={styles.contextMeterDetail}>
                       <Text style={styles.contextMeterDetailTitle}>Context</Text>
-                      <Text style={styles.contextMeterDetailText}>{contextUsageHoverLabel}</Text>
-                      <Text style={styles.contextMeterDetailMeta}>{contextStateLabel}</Text>
+                      <Text style={styles.contextMeterDetailText} numberOfLines={1}>{contextUsageHoverLabel}</Text>
+                      <Text style={styles.contextMeterDetailMeta} numberOfLines={1}>{contextStateLabel}</Text>
                     </View>
                   ) : null}
                 </Pressable>
@@ -4426,6 +7460,53 @@ export function DesktopConversationView({
                 </Pressable>
               </View>
             </View>
+
+            {draftChat ? (
+              <View style={styles.draftComposerMetaTray}>
+                <View style={styles.draftComposerMetaRow}>
+                  <View style={styles.draftComposerMetaControl}>
+                    <Pressable
+                      ref={draftProjectTriggerRef}
+                      style={({ hovered }) => [
+                        styles.draftComposerMetaChip,
+                        hovered ? styles.draftComposerMetaChipHovered : null,
+                        activeCommandPanel?.kind === 'draftProject' ? styles.draftComposerMetaChipActive : null,
+                      ]}
+                      onPress={() => setActiveCommandPanel((current) => current?.kind === 'draftProject' ? null : { kind: 'draftProject' })}
+                    >
+                      <MonoIcon name="folder_closed" style={styles.draftComposerMetaIcon} />
+                      <Text style={styles.draftComposerMetaLabel} numberOfLines={1}>{draftFolderLabel}</Text>
+                      <MonoIcon
+                        name={activeCommandPanel?.kind === 'draftProject' ? 'chevron_up' : 'chevron_down'}
+                        style={styles.draftComposerMetaChevronIcon}
+                      />
+                    </Pressable>
+                    {activeCommandPanel?.kind === 'draftProject' ? draftProjectCommandPanel : null}
+                  </View>
+                  <View style={styles.draftComposerMetaControl}>
+                    <Pressable
+                      ref={draftBranchTriggerRef}
+                      style={({ hovered }) => [
+                        styles.draftComposerMetaChip,
+                        hovered ? styles.draftComposerMetaChipHovered : null,
+                        activeCommandPanel?.kind === 'draftBranch' ? styles.draftComposerMetaChipActive : null,
+                        !draftGitRepoState?.isGitRepo && !draftGitRepoLoading ? styles.draftComposerMetaChipDisabled : null,
+                      ]}
+                      disabled={!draftGitRepoState?.isGitRepo && !draftGitRepoLoading}
+                      onPress={() => setActiveCommandPanel((current) => current?.kind === 'draftBranch' ? null : { kind: 'draftBranch' })}
+                    >
+                      <MonoIcon name="branch" style={styles.draftComposerMetaIcon} />
+                      <Text style={styles.draftComposerMetaLabel} numberOfLines={1}>{draftBranchLabel}</Text>
+                      <MonoIcon
+                        name={activeCommandPanel?.kind === 'draftBranch' ? 'chevron_up' : 'chevron_down'}
+                        style={styles.draftComposerMetaChevronIcon}
+                      />
+                    </Pressable>
+                    {activeCommandPanel?.kind === 'draftBranch' ? draftBranchCommandPanel : null}
+                  </View>
+                </View>
+              </View>
+            ) : null}
           </View>
         </View>
         </View>
@@ -4461,7 +7542,15 @@ export function DesktopConversationView({
         </View>
 
         {sidebarExpanded ? (
-          <ScrollView style={styles.sidebarContentScroll} contentContainerStyle={styles.sidebarContentStack}>
+          <ScrollView
+            style={styles.sidebarContentScroll}
+            contentContainerStyle={styles.sidebarContentStack}
+            onScroll={() => {
+              clearSidebarChatTooltipTimer();
+              hideSidebarChatTooltip();
+            }}
+            scrollEventThrottle={16}
+          >
             <View style={styles.sidebarNavStack}>
               <Pressable style={styles.sidebarListRow} onPress={() => void beginNewChat()}>
                 <MonoIcon name="compose" style={styles.sidebarListRowIcon} />
@@ -4471,10 +7560,9 @@ export function DesktopConversationView({
                     {selectedProjectPath ? `Start in ${projectPathBasename(selectedProjectPath)}` : 'Choose a folder and start a chat'}
                   </Text>
                 </View>
-                {draftChat ? <Text style={styles.sidebarListRowMeta}>Draft</Text> : null}
               </Pressable>
 
-              <Pressable style={styles.sidebarSearchShell} onPress={openSidebarSearchModal}>
+              <Pressable ref={sidebarSearchLauncherRef} style={styles.sidebarSearchShell} onPress={openSidebarSearchModal}>
                 <MonoIcon name="search" style={styles.sidebarSearchGlyph} />
                 <Text style={styles.sidebarSearchButtonText}>Search</Text>
               </Pressable>
@@ -4527,6 +7615,26 @@ export function DesktopConversationView({
                 </Pressable>
 
                 <Pressable
+                  style={[
+                    styles.sidebarMenuRowMinimal,
+                    showArtifactRail ? styles.sidebarMenuRowMinimalActive : null,
+                  ]}
+                  onPress={() => {
+                    if (showArtifactRail) {
+                      closeArtifactRail();
+                    } else {
+                      openArtifactRail();
+                    }
+                  }}
+                >
+                  <MonoIcon name="history" style={styles.sidebarMenuRowGlyph} />
+                  <Text style={styles.sidebarMenuRowLabelMinimal}>Artifacts</Text>
+                  <Text style={styles.sidebarMenuRowValueMinimal}>
+                    {activeSessionArtifactCount ? `${activeSessionArtifactCount} items` : 'Empty'}
+                  </Text>
+                </Pressable>
+
+                <Pressable
                   style={[styles.sidebarMenuRowMinimal, showControls ? styles.sidebarMenuRowMinimalActive : null]}
                   onPress={() => setShowControls((current) => !current)}
                 >
@@ -4553,9 +7661,12 @@ export function DesktopConversationView({
                       onPress={() => void openSession(session.id)}
                     >
                       <View style={styles.sidebarSimpleRowCopy}>
-                        <Text style={styles.sidebarSimpleRowTitle} numberOfLines={1}>{session.name}</Text>
+                        <View style={styles.sidebarRunningRow}>
+                          {session.is_running ? <View style={styles.sidebarRunningDot} /> : null}
+                          <Text style={styles.sidebarSimpleRowTitle} numberOfLines={1}>{session.name}</Text>
+                        </View>
                       </View>
-                      <Text style={styles.sidebarSimpleRowMeta}>{formatRelativeTime(session.updated_at)}</Text>
+                      <Text style={styles.sidebarSimpleRowMeta}>{session.is_running ? 'Running' : formatRelativeTime(session.updated_at)}</Text>
                     </Pressable>
                   ))}
                   {pinnedProjects.map((project) => (
@@ -4614,6 +7725,7 @@ export function DesktopConversationView({
                             style={styles.projectHeaderMain}
                             onPress={() => {
                               setOpenProjectMenuPath(null);
+                              setOpenSessionMenuId(null);
                               selectProjectPath(project.path);
                             }}
                           >
@@ -4634,12 +7746,13 @@ export function DesktopConversationView({
                                 style={styles.projectHeaderActionButton}
                                 onPress={() => {
                                   setOpenProjectMenuPath(null);
-                                  openDraftChat(project.path);
+                                  void openDraftChat(project.path);
                                 }}
                               >
                                 <MonoIcon name="plus" style={styles.projectHeaderActionText} />
                               </Pressable>
                               <Pressable
+                                ref={setProjectMenuTriggerRef(project.path)}
                                 style={styles.projectHeaderActionButton}
                                 onPress={() => setOpenProjectMenuPath((current) => (
                                   current === project.path ? null : project.path
@@ -4651,50 +7764,129 @@ export function DesktopConversationView({
                           ) : null}
                         </View>
 
-                        {openProjectMenuPath === project.path ? (
-                          <View style={styles.projectMenu}>
-                            <Pressable
-                              style={styles.projectMenuItem}
-                              onPress={() => renameProject(project.path)}
-                            >
-                              <Text style={styles.projectMenuItemText}>Rename folder</Text>
+	                        {openProjectMenuPath === project.path ? (
+	                          <View ref={setProjectMenuRef(project.path)} style={styles.projectMenu}>
+	                            <Pressable
+	                              style={styles.projectMenuItem}
+	                              onPress={() => {
+	                                toggleProjectPin(project.path);
+	                                setOpenProjectMenuPath(null);
+	                              }}
+	                            >
+	                              <Text style={styles.projectMenuItemText}>{project.pinned ? 'Unpin folder' : 'Pin folder'}</Text>
+	                            </Pressable>
+	                            <Pressable
+	                              style={styles.projectMenuItem}
+	                              onPress={() => renameProject(project.path)}
+	                            >
+	                              <Text style={styles.projectMenuItemText}>Rename folder</Text>
                             </Pressable>
-                            <Pressable
-                              style={styles.projectMenuItem}
-                              onPress={() => removeProjectFromSidebar(project.path)}
-                            >
-                              <Text style={[styles.projectMenuItemText, styles.projectMenuItemTextWarn]}>Delete folder</Text>
-                            </Pressable>
-                          </View>
-                        ) : null}
+	                            <Pressable
+	                              style={styles.projectMenuItem}
+	                              onPress={() => removeProjectFromSidebar(project.path)}
+	                            >
+	                              <Text style={[styles.projectMenuItemText, styles.projectMenuItemTextWarn]}>Remove folder</Text>
+	                            </Pressable>
+	                          </View>
+	                        ) : null}
 
                         {!project.collapsed ? (
                           <View style={styles.projectContent}>
-                            {projectHasDraft ? (
-                              <View style={[styles.projectChatRow, styles.projectChatRowDraft]}>
-                                <View style={styles.projectChatPrimary}>
-                                  <View style={styles.projectChatTitleRow}>
-                                    <Text style={styles.projectChatTitle}>New chat</Text>
-                                    <Text style={styles.projectChatAge}>Draft</Text>
-                                  </View>
-                                </View>
-                              </View>
-                            ) : null}
-
                             {project.sessions.map((item) => {
                               const selected = item.id === sessionId;
+                              const sessionActionsVisible = hoveredSessionId === item.id || openSessionMenuId === item.id;
                               return (
                                 <View
                                   key={item.id}
-                                  style={[styles.projectChatRow, selected ? styles.projectChatRowActive : null]}
-                                  {...sessionDragProps(project.path, item.id)}
+                                  {...(Platform.OS === 'web'
+                                    ? {
+                                        onMouseEnter: () => {
+                                          setHoveredSessionId(item.id);
+                                          scheduleSidebarChatTooltip(item, project.path);
+                                        },
+                                        onMouseLeave: () => {
+                                          setHoveredSessionId((current) => (
+                                            current === item.id ? null : current
+                                          ));
+                                          clearSidebarChatTooltipTimer();
+                                          hideSidebarChatTooltip(item.id);
+                                        },
+                                      } as any
+                                    : {})}
                                 >
-                                  <Pressable style={styles.projectChatPrimary} onPress={() => void openSession(item.id)}>
-                                    <View style={styles.projectChatTitleRow}>
-                                      <Text style={styles.projectChatTitle} numberOfLines={1}>{item.name}</Text>
-                                      <Text style={styles.projectChatAge}>{formatRelativeTime(item.updated_at)}</Text>
+                                  <View
+                                    ref={setSessionRowRef(item.id)}
+                                    style={[styles.projectChatRow, selected ? styles.projectChatRowActive : null]}
+                                    {...sessionDragProps(project.path, item.id)}
+                                  >
+                                    <Pressable
+                                      style={styles.projectChatPrimary}
+                                      onPress={() => {
+                                        setOpenSessionMenuId(null);
+                                        clearSidebarChatTooltipTimer();
+                                        hideSidebarChatTooltip(item.id);
+                                        void openSession(item.id);
+                                      }}
+                                    >
+                                      <View style={styles.projectChatTitleRow}>
+                                        <View style={styles.sidebarRunningRow}>
+                                          {item.is_running ? <View style={styles.sidebarRunningDot} /> : null}
+                                          <Text style={styles.projectChatTitle} numberOfLines={1}>{item.name}</Text>
+                                        </View>
+                                        <Text style={styles.projectChatAge}>{item.is_running ? 'Running' : formatRelativeTime(item.updated_at)}</Text>
+                                      </View>
+                                    </Pressable>
+                                    {sessionActionsVisible ? (
+                                      <View style={styles.projectChatActions}>
+                                        <Pressable
+                                          ref={setSessionMenuTriggerRef(item.id)}
+                                          style={styles.projectChatActionButton}
+                                          onPress={() => {
+                                            clearSidebarChatTooltipTimer();
+                                            hideSidebarChatTooltip(item.id);
+                                            setOpenSessionMenuId((current) => (
+                                              current === item.id ? null : item.id
+                                            ));
+                                          }}
+                                        >
+                                          <MonoIcon name="more" style={styles.projectChatActionText} />
+                                        </Pressable>
+                                      </View>
+                                    ) : null}
+                                  </View>
+	                                  {openSessionMenuId === item.id ? (
+	                                    <View ref={setSessionMenuRef(item.id)} style={styles.projectChatMenu}>
+                                          <View style={styles.projectMenuLabelRow}>
+                                            <Text style={styles.projectMenuLabelText}>Bot: {telegramBotLabelForSession(item)}</Text>
+                                          </View>
+	                                      <Pressable
+	                                        style={styles.projectMenuItem}
+	                                        onPress={() => {
+	                                          toggleSessionPin(item);
+	                                          setOpenSessionMenuId(null);
+	                                        }}
+	                                      >
+	                                        <Text style={styles.projectMenuItemText}>
+	                                          {sidebarState.sessionMeta[item.id]?.pinned ? 'Unpin chat' : 'Pin chat'}
+	                                        </Text>
+	                                      </Pressable>
+                                        <Pressable
+                                          style={styles.projectMenuItem}
+                                          onPress={() => {
+                                            setOpenSessionMenuId(null);
+                                            setActiveCommandPanel({ kind: 'session', sessionId: item.id });
+                                          }}
+                                        >
+                                          <Text style={styles.projectMenuItemText}>Chat settings</Text>
+                                        </Pressable>
+	                                      <Pressable
+	                                        style={styles.projectMenuItem}
+	                                        onPress={() => void deleteSidebarSession(item)}
+	                                      >
+                                        <Text style={[styles.projectMenuItemText, styles.projectMenuItemTextWarn]}>Delete chat</Text>
+                                      </Pressable>
                                     </View>
-                                  </Pressable>
+                                  ) : null}
                                 </View>
                               );
                             })}
@@ -4963,6 +8155,107 @@ export function DesktopConversationView({
               </View>
             ) : null}
 
+            {showArtifactRail ? (
+              <View style={styles.referencePanel}>
+                <View style={styles.referencePanelHeader}>
+                  <View style={styles.referencePanelHeaderCopy}>
+                    <Text style={styles.referencePanelTitle}>Artifacts</Text>
+                    <Text style={styles.referencePanelSummary}>
+                      {activeSessionArtifactCount ? `${activeSessionArtifactCount} saved artifacts` : 'No saved artifacts yet'}
+                    </Text>
+                  </View>
+                  <Pressable style={styles.referencePanelCloseButton} onPress={closeArtifactRail}>
+                    <Text style={styles.referencePanelCloseText}>Close</Text>
+                  </Pressable>
+                </View>
+                {artifactsLoading ? (
+                  <View style={styles.emptyCard}>
+                    <Text style={styles.emptyTitle}>Loading artifacts…</Text>
+                    <Text style={styles.emptyText}>Pulling saved files, screenshots, and command outputs for this chat.</Text>
+                  </View>
+                ) : artifactError ? (
+                  <View style={styles.emptyCard}>
+                    <Text style={styles.emptyTitle}>Artifact view unavailable</Text>
+                    <Text style={styles.emptyText}>{artifactError}</Text>
+                  </View>
+                ) : artifacts.length === 0 ? (
+                  <View style={styles.emptyCard}>
+                    <Text style={styles.emptyTitle}>No artifacts yet</Text>
+                    <Text style={styles.emptyText}>Files, screenshots, OCR, browser captures, uploads, and command outputs for this chat will land here.</Text>
+                  </View>
+                ) : (
+                  <View style={styles.artifactPanelStack}>
+                    <ScrollView style={styles.artifactListScroll} contentContainerStyle={styles.artifactList}>
+                      {artifacts.map((artifact) => {
+                        const selected = artifact.artifact_id === (selectedArtifactId || selectedArtifactSummary?.artifact_id);
+                        return (
+                          <Pressable
+                            key={artifact.artifact_id}
+                            style={[styles.artifactRow, selected ? styles.artifactRowActive : null]}
+                            onPress={() => {
+                              setSelectedArtifactId(artifact.artifact_id);
+                              void openArtifactPreview(artifact.artifact_id);
+                            }}
+                          >
+                            <Text style={styles.artifactRowTitle} numberOfLines={1}>{artifact.title}</Text>
+                            <Text style={styles.artifactRowMeta} numberOfLines={1}>
+                              {artifact.artifact_kind} · {formatRelativeTime(artifact.created_at)}
+                            </Text>
+                            <Text style={styles.artifactRowPreview} numberOfLines={2}>
+                              {artifact.preview_text || artifact.summary_text || 'Saved artifact'}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </ScrollView>
+                    <View style={styles.artifactPreviewCard}>
+                      <View style={styles.artifactPreviewHeader}>
+                        <View style={styles.artifactPreviewHeaderCopy}>
+                          <Text style={styles.artifactPreviewTitle} numberOfLines={1}>
+                            {selectedArtifactDetail?.title || selectedArtifactSummary?.title || 'Artifact preview'}
+                          </Text>
+                          <Text style={styles.artifactPreviewMeta} numberOfLines={1}>
+                            {selectedArtifactDetail?.artifact_kind || selectedArtifactSummary?.artifact_kind || 'artifact'}
+                            {selectedArtifactDetail?.payload_file_name ? ` · ${selectedArtifactDetail.payload_file_name}` : ''}
+                          </Text>
+                        </View>
+                        <View style={styles.artifactPreviewActions}>
+                          {selectedArtifactSummary ? (
+                            <>
+                              <Pressable style={styles.referencePanelCloseButton} onPress={() => void openArtifactExternally(selectedArtifactSummary.artifact_id)}>
+                                <Text style={styles.referencePanelCloseText}>Open</Text>
+                              </Pressable>
+                              <Pressable style={styles.referencePanelCloseButton} onPress={() => void downloadArtifact(selectedArtifactSummary.artifact_id)}>
+                                <Text style={styles.referencePanelCloseText}>Download</Text>
+                              </Pressable>
+                            </>
+                          ) : null}
+                        </View>
+                      </View>
+                      {artifactDetailLoading ? (
+                        <Text style={styles.emptyText}>Loading preview…</Text>
+                      ) : selectedArtifactDetail?.image_base64 ? (
+                        <Image
+                          source={{ uri: `data:${selectedArtifactDetail.mime_type};base64,${selectedArtifactDetail.image_base64}` }}
+                          style={styles.artifactPreviewImage}
+                          resizeMode="contain"
+                        />
+                      ) : (
+                        <ScrollView style={styles.artifactPreviewScroll}>
+                          <Text style={styles.artifactPreviewText}>
+                            {selectedArtifactDetail?.inline_text
+                              || selectedArtifactDetail?.preview_text
+                              || selectedArtifactSummary?.preview_text
+                              || 'No inline preview available.'}
+                          </Text>
+                        </ScrollView>
+                      )}
+                    </View>
+                  </View>
+                )}
+              </View>
+            ) : null}
+
             {showControls ? (
               <>
                 <View style={styles.controlColumnHeader}>
@@ -5017,6 +8310,27 @@ export function DesktopConversationView({
                           : keepRuntimeOnAppClose
                             ? 'Keep Agent Alive: On'
                             : 'Keep Agent Alive: Off'}
+                      </Text>
+                    </Pressable>
+                  </View>
+                  <View style={styles.shutdownPreferenceCard}>
+                    <View style={styles.shutdownPreferenceCopy}>
+                      <Text style={styles.shutdownPreferenceTitle}>Long Task: next message</Text>
+                      <Text style={styles.shutdownPreferenceText}>
+                        {taskBoardArmedNextTurn
+                          ? 'Armed. The next message in this shared chat, from desktop or Telegram, will start a managed task board.'
+                          : 'Off. Casual messages stay conversational, and simple work requests will not open a managed task board unless you arm this first.'}
+                      </Text>
+                    </View>
+                    <Pressable
+                      style={[
+                        styles.actionButton,
+                        taskBoardArmedNextTurn ? styles.actionButtonNeutral : null,
+                      ]}
+                      onPress={() => void toggleTaskBoardArmNextTurn()}
+                    >
+                      <Text style={styles.actionButtonText}>
+                        {taskBoardArmedNextTurn ? 'Long Task Armed' : 'Arm Next Message'}
                       </Text>
                     </Pressable>
                   </View>
@@ -5147,9 +8461,34 @@ export function DesktopConversationView({
         ) : null}
       </View>
 
+      {Platform.OS === 'web' && sidebarChatTooltip ? (
+        <View pointerEvents="none" style={styles.sidebarChatTooltipLayer}>
+          <View
+            style={[
+              styles.sidebarChatTooltipCard,
+              {
+                top: sidebarChatTooltip.top,
+                left: sidebarChatTooltip.left,
+              },
+            ]}
+          >
+            <Text style={styles.sidebarChatTooltipTitle} numberOfLines={1}>
+              {sidebarChatTooltip.title}
+            </Text>
+            <Text style={styles.sidebarChatTooltipMeta} numberOfLines={1}>
+              {sidebarChatTooltip.projectPath}
+            </Text>
+            <Text style={styles.sidebarChatTooltipMetaSecondary} numberOfLines={1}>
+              {sidebarChatTooltip.botLabel}
+            </Text>
+          </View>
+        </View>
+      ) : null}
+
       {sidebarSearchOpen ? (
         <Pressable style={styles.sidebarSearchModalOverlay} onPress={closeSidebarSearchModal}>
           <Pressable
+            ref={sidebarSearchModalRef}
             style={styles.sidebarSearchModalCard}
             onPress={(event: any) => event?.stopPropagation?.()}
           >
@@ -5247,6 +8586,44 @@ export function DesktopConversationView({
           </Pressable>
         </Pressable>
       ) : null}
+
+      {pendingDraftBotProjectPath ? (
+        <Pressable style={styles.sidebarSearchModalOverlay} onPress={() => setPendingDraftBotProjectPath(null)}>
+          <Pressable
+            style={styles.sidebarSearchModalCard}
+            onPress={(event: any) => event?.stopPropagation?.()}
+          >
+            <Text style={styles.sidebarSearchSectionLabel}>Choose a Telegram bot for the new chat</Text>
+            <Text style={styles.sidebarSearchEmptyText}>
+              Messages from this chat will mirror to the selected bot. You can reassign it later in chat settings.
+            </Text>
+            <ScrollView style={styles.sidebarSearchResultsScroll} contentContainerStyle={styles.sidebarSearchResultsList}>
+              {telegramBotConfigs.map((bot) => (
+                <Pressable
+                  key={`draft-bot-${bot.id}`}
+                  style={styles.sidebarSearchResultRow}
+                  onPress={() => void confirmDraftBotSelection(bot.id)}
+                >
+                  <View style={styles.sidebarSearchResultLine}>
+                    <Text style={styles.sidebarSearchResultPrimary} numberOfLines={1}>{bot.label}</Text>
+                    <Text style={styles.sidebarSearchResultSecondary} numberOfLines={1}>
+                      {bot.bot_token}{bot.is_default ? ' · default' : ''}
+                    </Text>
+                  </View>
+                </Pressable>
+              ))}
+            </ScrollView>
+            <View style={styles.commandPanelActionRow}>
+              <Pressable
+                style={styles.commandPanelSecondaryAction}
+                onPress={() => setPendingDraftBotProjectPath(null)}
+              >
+                <Text style={styles.commandPanelSecondaryActionText}>Cancel</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -5263,6 +8640,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 14,
     alignItems: 'stretch',
+    position: 'relative',
   },
   sidebarDock: {
     flexShrink: 0,
@@ -5299,7 +8677,7 @@ const styles = StyleSheet.create({
   utilityRailButton: {
     width: 52,
     height: 52,
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: 'transparent',
     borderWidth: 1,
     borderColor: 'transparent',
@@ -5339,7 +8717,7 @@ const styles = StyleSheet.create({
   },
   utilityRailTab: {
     width: '100%',
-    borderRadius: 16,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#101b32',
     borderWidth: 1,
     borderColor: '#1d2946',
@@ -5426,7 +8804,7 @@ const styles = StyleSheet.create({
     lineHeight: 19,
   },
   primaryRailButton: {
-    borderRadius: 16,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#d4ff65',
     paddingVertical: 12,
     paddingHorizontal: 14,
@@ -5437,7 +8815,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   secondaryRailButton: {
-    borderRadius: 16,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#17253f',
     paddingVertical: 12,
     paddingHorizontal: 14,
@@ -5481,7 +8859,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    borderRadius: 14,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     paddingHorizontal: 10,
     paddingVertical: 8,
   },
@@ -5514,7 +8892,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    borderRadius: 16,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#2a2a2a',
     paddingHorizontal: 12,
     paddingVertical: 10,
@@ -5534,7 +8912,7 @@ const styles = StyleSheet.create({
   },
   sidebarComputerTab: {
     flex: 1,
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#242424',
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -5561,7 +8939,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     paddingHorizontal: 10,
     paddingVertical: 9,
   },
@@ -5611,16 +8989,29 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     paddingHorizontal: 10,
     paddingVertical: 8,
   },
   sidebarSimpleRowActive: {
     backgroundColor: '#363636',
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
   },
   sidebarSimpleRowCopy: {
     flex: 1,
     gap: 2,
+  },
+  sidebarRunningRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    flex: 1,
+  },
+  sidebarRunningDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: '#d4ff65',
   },
   sidebarSimpleRowTitle: {
     color: '#efefef',
@@ -5666,7 +9057,7 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   sidebarChatsCloseButton: {
-    borderRadius: 999,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#17253f',
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -5715,18 +9106,50 @@ const styles = StyleSheet.create({
     maxHeight: '72%',
     backgroundColor: '#262626',
     borderRadius: 22,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    gap: 8,
+  },
+  sidebarChatTooltipLayer: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 40,
+  },
+  sidebarChatTooltipCard: {
+    position: 'absolute',
+    width: 296,
+    borderRadius: 18,
+    backgroundColor: '#2c2c2c',
     paddingHorizontal: 14,
-    paddingVertical: 14,
-    gap: 10,
+    paddingVertical: 11,
+    gap: 4,
+  },
+  sidebarChatTooltipTitle: {
+    color: '#f5f5f5',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  sidebarChatTooltipMeta: {
+    color: '#c8c8c8',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  sidebarChatTooltipMetaSecondary: {
+    color: '#979797',
+    fontSize: 12,
+    lineHeight: 16,
   },
   sidebarSearchModalInputShell: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
     borderRadius: 16,
     backgroundColor: '#333333',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   sidebarSearchModalInputGlyph: {
     color: '#9a9a9a',
@@ -5763,14 +9186,14 @@ const styles = StyleSheet.create({
     flexGrow: 0,
   },
   sidebarSearchResultsList: {
-    gap: 6,
-    paddingBottom: 8,
+    gap: 4,
+    paddingBottom: 6,
   },
   sidebarSearchResultRow: {
     backgroundColor: '#383838',
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
   },
   sidebarSearchResultLine: {
     flexDirection: 'row',
@@ -5885,7 +9308,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   projectHeaderActionButton: {
-    borderRadius: 12,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: 'transparent',
     minWidth: 26,
     minHeight: 26,
@@ -5907,12 +9330,13 @@ const styles = StyleSheet.create({
     minWidth: 144,
     backgroundColor: '#2d2d2d',
     borderRadius: 12,
-    paddingVertical: 6,
+    paddingVertical: 4,
     marginBottom: 4,
   },
   projectMenuItem: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
   },
   projectMenuItemText: {
     color: '#f0f0f0',
@@ -5932,7 +9356,7 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   projectChatRow: {
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: 'transparent',
     paddingLeft: 8,
     paddingRight: 4,
@@ -5948,6 +9372,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#162033',
     borderWidth: 1,
     borderColor: '#415b84',
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
   },
   searchJumpHighlight: {
     backgroundColor: '#213254',
@@ -5991,6 +9416,25 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     gap: 6,
   },
+  projectChatMenu: {
+    alignSelf: 'flex-end',
+    minWidth: 136,
+    backgroundColor: '#2d2d2d',
+    borderRadius: 12,
+    paddingVertical: 6,
+    marginRight: 4,
+    marginBottom: 4,
+  },
+  projectMenuLabelRow: {
+    paddingHorizontal: 12,
+    paddingTop: 4,
+    paddingBottom: 8,
+  },
+  projectMenuLabelText: {
+    color: '#9f9f9f',
+    fontSize: 11,
+    fontWeight: '700',
+  },
   projectChatBadge: {
     borderRadius: 0,
     backgroundColor: '#3f3f3f',
@@ -6005,7 +9449,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.7,
   },
   projectChatActionButton: {
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: 'transparent',
     minWidth: 20,
     paddingHorizontal: 4,
@@ -6052,7 +9496,7 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   sidebarSecondaryToggle: {
-    borderRadius: 14,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#16243d',
     borderWidth: 1,
     borderColor: '#22385f',
@@ -6127,6 +9571,10 @@ const styles = StyleSheet.create({
   conversationColumn: {
     flex: 1,
     gap: 14,
+  },
+  conversationColumnDraftStage: {
+    justifyContent: 'center',
+    gap: 18,
   },
   compactHeader: {
     borderRadius: 22,
@@ -6315,7 +9763,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   taskBoardToggleButton: {
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#13233f',
     borderWidth: 1,
     borderColor: '#28446e',
@@ -6437,7 +9885,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   completedTaskCard: {
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#0d162b',
     borderWidth: 1,
     borderColor: '#1f3559',
@@ -6626,12 +10074,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   voicePanel: {
-    borderRadius: 0,
-    backgroundColor: 'transparent',
-    borderWidth: 0,
-    borderColor: 'transparent',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+    borderRadius: 24,
+    backgroundColor: '#0f172b',
+    borderWidth: 1,
+    borderColor: '#223652',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
     gap: 14,
   },
   sidebarInsetDivider: {
@@ -6653,7 +10101,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   voicePanelHeaderAction: {
-    borderRadius: 999,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#183b49',
     paddingHorizontal: 12,
     paddingVertical: 9,
@@ -6691,7 +10139,7 @@ const styles = StyleSheet.create({
   },
   voiceLanguageChip: {
     flex: 1,
-    borderRadius: 999,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#10252e',
     paddingHorizontal: 14,
     paddingVertical: 9,
@@ -6711,7 +10159,7 @@ const styles = StyleSheet.create({
   },
   voiceModeChip: {
     flex: 1,
-    borderRadius: 999,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     borderWidth: 1,
     borderColor: '#25566c',
     backgroundColor: '#0d2530',
@@ -6752,7 +10200,7 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   voiceCollapsedCard: {
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#102536',
     borderWidth: 1,
     borderColor: '#23465c',
@@ -6783,7 +10231,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   ribbonButton: {
-    borderRadius: 999,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#1f5266',
     paddingHorizontal: 14,
     paddingVertical: 10,
@@ -6824,13 +10272,14 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   voiceBanner: {
-    borderRadius: 0,
+    borderRadius: 24,
     backgroundColor: '#0f2a34',
     borderWidth: 1,
     borderColor: '#24526a',
     paddingHorizontal: 16,
     paddingVertical: 14,
     gap: 6,
+    marginBottom: 2,
   },
   voiceBannerError: {
     backgroundColor: '#35161d',
@@ -6875,9 +10324,21 @@ const styles = StyleSheet.create({
     borderWidth: 0,
     borderColor: 'transparent',
   },
+  transcriptScrollDraftStage: {
+    flexGrow: 0,
+    flexShrink: 0,
+    flexBasis: 'auto',
+    backgroundColor: 'transparent',
+    borderRadius: 0,
+  },
   transcriptContent: {
     padding: 18,
     gap: 12,
+  },
+  transcriptContentDraftStage: {
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    gap: 0,
   },
   messageBubble: {
     borderRadius: 0,
@@ -6934,8 +10395,12 @@ const styles = StyleSheet.create({
     width: '100%',
     alignItems: 'center',
     paddingHorizontal: 28,
-    paddingTop: 8,
+    paddingTop: 2,
     paddingBottom: 6,
+  },
+  composerDockDraftStage: {
+    paddingTop: 0,
+    paddingBottom: 0,
   },
   composerShell: {
     position: 'relative',
@@ -6957,14 +10422,44 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 14 },
     elevation: 14,
   },
+  composerShellDraftStage: {
+    paddingBottom: 0,
+    gap: 8,
+  },
   composerUtilityAnchor: {
     position: 'relative',
     zIndex: 20,
   },
   composerTextRegion: {
     position: 'relative',
-    minHeight: 84,
+    minHeight: 0,
     justifyContent: 'flex-start',
+    gap: 10,
+    width: '100%',
+  },
+  composerInputMeasureShell: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    opacity: 0,
+    pointerEvents: 'none',
+    zIndex: -1,
+  },
+  composerInputMeasureText: {
+    width: '100%',
+    minHeight: COMPOSER_MIN_HEIGHT,
+    color: 'transparent',
+    fontSize: 15,
+    lineHeight: COMPOSER_LINE_HEIGHT,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    ...(Platform.OS === 'web'
+      ? ({
+          whiteSpace: 'pre-wrap',
+          overflowWrap: 'anywhere',
+        } as any)
+      : null),
   },
   composerHeader: {
     flexDirection: 'row',
@@ -6989,22 +10484,40 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     textAlign: 'right',
   },
-  thinkingCard: {
-    borderRadius: 18,
-    backgroundColor: '#172440',
-    padding: 14,
-    gap: 5,
+  syntheticThinkingRow: {
+    alignSelf: 'stretch',
+    paddingVertical: 6,
   },
-  thinkingLabel: {
-    color: '#97b4ff',
-    fontSize: 12,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
+  syntheticThinkingTextWrap: {
+    alignSelf: 'flex-start',
+    overflow: 'hidden',
+    position: 'relative',
+    minWidth: 78,
+    minHeight: 20,
+    justifyContent: 'center',
   },
-  thinkingText: {
-    color: '#dce7ff',
-    lineHeight: 20,
+  syntheticThinkingHighlightMask: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 68,
+    overflow: 'hidden',
+    justifyContent: 'center',
+  },
+  syntheticThinkingText: {
+    color: '#98b0d9',
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '900',
+    letterSpacing: 0.2,
+  },
+  syntheticThinkingTextHighlight: {
+    color: '#d4ff65',
+    opacity: 0.92,
+    textShadowColor: 'rgba(212, 255, 101, 0.34)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 12,
   },
   pendingSwitchCard: {
     borderRadius: 0,
@@ -7040,7 +10553,7 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   pendingSwitchPrimaryAction: {
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#d4ff65',
     paddingHorizontal: 14,
     paddingVertical: 10,
@@ -7050,7 +10563,7 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   pendingSwitchSecondaryAction: {
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#1a2a47',
     paddingHorizontal: 14,
     paddingVertical: 10,
@@ -7078,6 +10591,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   queuedComposerAction: {
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     paddingHorizontal: 10,
     paddingVertical: 6,
     backgroundColor: '#17253f',
@@ -7090,12 +10604,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
   },
   commandPanel: {
-    borderRadius: 0,
+    borderRadius: 14,
     backgroundColor: '#091225',
     borderWidth: 1,
     borderColor: '#2a3f68',
-    padding: 14,
-    gap: 14,
+    padding: 12,
+    gap: 12,
   },
   commandPanelSlim: {
     width: '100%',
@@ -7114,6 +10628,13 @@ const styles = StyleSheet.create({
   commandPanelFloatingRight: {
     right: 0,
   },
+  commandPanelFloatingBelowRight: {
+    top: '100%',
+    right: 0,
+    bottom: 'auto',
+    marginTop: 12,
+    marginBottom: 0,
+  },
   commandPanelFloating: {
     shadowColor: '#02060f',
     shadowOpacity: 0.42,
@@ -7121,11 +10642,113 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 16 },
     elevation: 18,
   },
+  toolPackCommandPanel: {
+    maxWidth: 460,
+    gap: 10,
+  },
+  draftChoiceCommandPanel: {
+    width: 348,
+    maxWidth: 348,
+    gap: 8,
+  },
+  draftChoiceSearchShell: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 12,
+    backgroundColor: '#2f2f2f',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  draftChoiceSearchGlyph: {
+    color: '#9b9b9b',
+    fontSize: 13,
+  },
+  draftChoiceSearchInput: {
+    flex: 1,
+    color: '#f5f5f5',
+    fontSize: 14,
+    paddingVertical: 0,
+  },
+  draftChoiceSectionLabel: {
+    color: '#8f8f8f',
+    fontSize: 11,
+    fontWeight: '700',
+    paddingHorizontal: 4,
+  },
+  draftChoiceScroll: {
+    maxHeight: 152,
+  },
+  draftChoiceList: {
+    gap: 2,
+  },
+  draftChoiceRow: {
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: 'transparent',
+  },
+  draftChoiceRowHovered: {
+    backgroundColor: '#3a3a3a',
+  },
+  draftChoiceRowSelected: {
+    backgroundColor: '#474747',
+  },
+  draftChoiceRowIcon: {
+    color: '#b4bccb',
+    fontSize: 14,
+  },
+  draftChoiceRowIconSelected: {
+    color: '#eef4ff',
+  },
+  draftChoiceRowTitle: {
+    flex: 1,
+    color: '#e8ebf2',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  draftChoiceRowTitleSelected: {
+    color: '#ffffff',
+  },
+  draftChoiceRowCheck: {
+    color: '#eef4ff',
+    fontSize: 13,
+  },
+  draftChoiceFooter: {
+    borderTopWidth: 1,
+    borderTopColor: '#252525',
+    paddingTop: 8,
+  },
+  draftChoiceFooterAction: {
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  draftChoiceFooterActionHovered: {
+    backgroundColor: '#323232',
+  },
+  draftChoiceFooterActionIcon: {
+    color: '#d9e5fb',
+    fontSize: 14,
+  },
+  draftChoiceFooterActionText: {
+    color: '#f4f8ff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
   commandPanelHeader: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
-    gap: 12,
+    gap: 10,
   },
   commandPanelHeaderCopy: {
     flex: 1,
@@ -7140,7 +10763,7 @@ const styles = StyleSheet.create({
   },
   commandPanelTitle: {
     color: '#f7fbff',
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '900',
   },
   commandPanelText: {
@@ -7148,11 +10771,16 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
   },
+  commandPanelWarningText: {
+    color: '#d4ff65',
+    fontSize: 12,
+    lineHeight: 17,
+  },
   commandPanelCloseButton: {
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#17253f',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
   },
   commandPanelCloseText: {
     color: '#dbe7fb',
@@ -7163,10 +10791,10 @@ const styles = StyleSheet.create({
     maxHeight: 220,
   },
   modelPickerContent: {
-    gap: 12,
+    gap: 10,
   },
   modelProviderBlock: {
-    gap: 8,
+    gap: 6,
   },
   modelProviderTitle: {
     color: '#7aa4ff',
@@ -7180,24 +10808,158 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 17,
   },
-  modelList: {
+  toolPackCompactList: {
+    gap: 6,
+  },
+  toolPackCompactGroup: {
+    gap: 6,
+  },
+  toolPackCompactRow: {
+    minHeight: 38,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    backgroundColor: '#0f182d',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  toolPackCompactRowEnabled: {
+    backgroundColor: '#10182c',
+  },
+  toolPackCompactRowUnavailable: {
+    opacity: 0.64,
+  },
+  toolPackCompactLabel: {
+    flex: 1,
+    color: '#d9e5fb',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  toolPackCompactLabelEnabled: {
+    color: '#d4ff65',
+  },
+  toolPackCompactLabelUnavailable: {
+    color: '#93a5c6',
+  },
+  toolPackCompactActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
+  },
+  toolPackInfoButton: {
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+  },
+  toolPackInfoButtonHovered: {
+    backgroundColor: '#13223e',
+  },
+  toolPackInfoButtonActive: {
+    backgroundColor: '#162844',
+  },
+  toolPackInfoIcon: {
+    color: '#7f97bd',
+    fontSize: 13,
+  },
+  toolPackInfoIconActive: {
+    color: '#d4ff65',
+  },
+  toolPackInfoBubble: {
+    backgroundColor: '#111c33',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 4,
+  },
+  toolPackInfoFloatingBubble: {
+    position: 'absolute',
+    width: 292,
+    backgroundColor: '#111c33',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 4,
+    shadowColor: '#02060f',
+    shadowOpacity: 0.36,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 18,
+    zIndex: 40,
+  },
+  toolPackInfoTitle: {
+    color: '#f4f8ff',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  toolPackInfoText: {
+    color: '#9cb1d4',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  toolPackInfoWarning: {
+    color: '#d4ff65',
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  toolPackSwitch: {
+    width: 42,
+    height: 24,
+    borderRadius: 999,
+    backgroundColor: '#202b43',
+    padding: 3,
+    justifyContent: 'center',
+  },
+  toolPackSwitchActive: {
+    backgroundColor: '#d4ff65',
+  },
+  toolPackSwitchSaving: {
+    opacity: 0.72,
+  },
+  toolPackSwitchDisabled: {
+    backgroundColor: '#1a2235',
+  },
+  toolPackSwitchKnob: {
+    width: 18,
+    height: 18,
+    borderRadius: 999,
+    backgroundColor: '#f4f8ff',
+  },
+  toolPackSwitchKnobActive: {
+    alignSelf: 'flex-end',
+    backgroundColor: '#0b1325',
+  },
+  modelList: {
+    gap: 6,
   },
   modelListItem: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
-    borderRadius: 0,
-    backgroundColor: '#101b32',
+    gap: 10,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
+    backgroundColor: 'transparent',
     borderWidth: 1,
-    borderColor: '#213655',
-    paddingHorizontal: 12,
-    paddingVertical: 9,
+    borderColor: 'transparent',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  modelListItemHovered: {
+    backgroundColor: '#13223e',
+    borderColor: '#27466f',
   },
   modelListItemActive: {
     backgroundColor: '#d4ff65',
     borderColor: '#d4ff65',
+  },
+  toolPackListItemActive: {
+    backgroundColor: '#101b32',
+    borderColor: '#2f567e',
+  },
+  modelListItemDisabled: {
+    opacity: 0.52,
   },
   modelListItemCopy: {
     flex: 1,
@@ -7210,6 +10972,9 @@ const styles = StyleSheet.create({
   modelListItemTitleActive: {
     color: '#0b1325',
   },
+  toolPackListItemTitleActive: {
+    color: '#d4ff65',
+  },
   modelListItemMeta: {
     color: '#7aa4ff',
     fontSize: 10,
@@ -7220,11 +10985,82 @@ const styles = StyleSheet.create({
   modelListItemMetaActive: {
     color: '#193214',
   },
+  toolPackListItemMetaActive: {
+    color: '#d4ff65',
+  },
+  modelListItemMetaDisabled: {
+    color: '#8b99b5',
+  },
+  toolPackListItemCaptionActive: {
+    color: '#b7d88f',
+  },
+  timelineTranscriptCard: {
+    alignSelf: 'stretch',
+    borderRadius: 18,
+    backgroundColor: '#101a30',
+    borderWidth: 1,
+    borderColor: '#203657',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 8,
+  },
+  timelineTranscriptCardAccent: {
+    borderColor: '#2f567e',
+    backgroundColor: '#10203b',
+  },
+  timelineTranscriptCardWarn: {
+    borderColor: '#78561d',
+    backgroundColor: '#231808',
+  },
+  timelineTranscriptCardError: {
+    borderColor: '#78445a',
+    backgroundColor: '#27131a',
+  },
+  timelineTranscriptHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  timelineTranscriptEyebrow: {
+    color: '#9fc7ff',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  timelineTranscriptTime: {
+    color: '#7d94bf',
+    fontSize: 11,
+  },
+  timelineTranscriptBody: {
+    color: '#eef4ff',
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  timelineTranscriptResultBlock: {
+    gap: 4,
+    borderTopWidth: 1,
+    borderTopColor: '#203657',
+    paddingTop: 8,
+  },
+  timelineTranscriptResultEyebrow: {
+    color: '#8fe0ff',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  timelineTranscriptResultText: {
+    color: '#d4e3ff',
+    fontSize: 13,
+    lineHeight: 19,
+  },
   commandPanelEmpty: {
-    borderRadius: 0,
+    borderRadius: 12,
     backgroundColor: '#101b32',
-    padding: 14,
-    gap: 5,
+    padding: 12,
+    gap: 4,
   },
   commandPanelEmptyTitle: {
     color: '#f7fbff',
@@ -7240,7 +11076,7 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   commandPanelPrimaryAction: {
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#d4ff65',
     paddingHorizontal: 14,
     paddingVertical: 10,
@@ -7252,6 +11088,18 @@ const styles = StyleSheet.create({
     color: '#0b1325',
     fontWeight: '900',
   },
+  commandPanelSecondaryAction: {
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
+    borderWidth: 1,
+    borderColor: '#355178',
+    backgroundColor: 'rgba(16, 27, 50, 0.86)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  commandPanelSecondaryActionText: {
+    color: '#d9e7ff',
+    fontWeight: '800',
+  },
   interruptOptionList: {
     gap: 8,
   },
@@ -7260,7 +11108,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#101b32',
     borderWidth: 1,
     borderColor: '#213655',
@@ -7302,15 +11150,15 @@ const styles = StyleSheet.create({
     maxHeight: 320,
   },
   sessionCommandList: {
-    gap: 10,
+    gap: 8,
   },
   sessionCommandCard: {
     borderRadius: 0,
     backgroundColor: '#101b32',
     borderWidth: 1,
     borderColor: '#213659',
-    padding: 14,
-    gap: 6,
+    padding: 12,
+    gap: 5,
   },
   sessionCommandCardActive: {
     borderColor: '#d4ff65',
@@ -7338,8 +11186,8 @@ const styles = StyleSheet.create({
   sessionCommandBadge: {
     borderRadius: 0,
     backgroundColor: '#d4ff65',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
   sessionCommandBadgeText: {
     color: '#0b1325',
@@ -7368,7 +11216,7 @@ const styles = StyleSheet.create({
     minWidth: 250,
   },
   composerStatusPill: {
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: 'transparent',
     borderWidth: 1,
     borderColor: 'transparent',
@@ -7488,18 +11336,14 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   composerFooterRow: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 2,
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
   },
   composerFooterControls: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'center',
     gap: 8,
     flex: 1,
     minWidth: 0,
@@ -7511,6 +11355,73 @@ const styles = StyleSheet.create({
     gap: 10,
     flexShrink: 0,
   },
+  draftComposerMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+    marginTop: 0,
+    overflow: 'visible',
+  },
+  draftComposerMetaTray: {
+    marginTop: 4,
+    marginHorizontal: -18,
+    marginBottom: -12,
+    paddingTop: 6,
+    paddingBottom: 10,
+    paddingHorizontal: 18,
+    borderTopWidth: 1,
+    borderTopColor: '#11192b',
+    borderBottomLeftRadius: 30,
+    borderBottomRightRadius: 30,
+    backgroundColor: '#0a1020',
+    overflow: 'visible',
+  },
+  draftComposerMetaControl: {
+    position: 'relative',
+    overflow: 'visible',
+  },
+  draftComposerMetaChip: {
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 30,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    backgroundColor: '#111823',
+    borderRadius: 12,
+  },
+  draftComposerMetaChipHovered: {
+    backgroundColor: '#1a2230',
+  },
+  draftComposerMetaChipActive: {
+    backgroundColor: '#1c2535',
+  },
+  draftComposerMetaChipDisabled: {
+    opacity: 0.6,
+  },
+  draftComposerMetaIcon: {
+    color: '#b4bccb',
+    fontSize: 14,
+  },
+  draftComposerMetaLabel: {
+    maxWidth: 220,
+    color: '#edf3ff',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  draftComposerMetaChevronIcon: {
+    color: '#aebed8',
+    fontSize: 13,
+  },
+  draftComposerInlineDropdown: {
+    position: 'absolute',
+    top: '100%',
+    left: 0,
+    marginTop: 8,
+    zIndex: 40,
+  },
   composerStatusInline: {
     color: '#8da2c4',
     fontSize: 12,
@@ -7519,7 +11430,7 @@ const styles = StyleSheet.create({
   },
   interruptChooserButton: {
     minWidth: 132,
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: 'transparent',
     borderWidth: 1,
     borderColor: 'transparent',
@@ -7549,12 +11460,12 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   commandSuggestionMenu: {
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#091225',
     borderWidth: 1,
     borderColor: '#2a3f68',
-    padding: 10,
-    gap: 8,
+    padding: 8,
+    gap: 6,
   },
   commandSuggestionTitle: {
     color: '#7aa4ff',
@@ -7570,10 +11481,10 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   commandSuggestionCloseButton: {
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#17253f',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
   },
   commandSuggestionCloseText: {
     color: '#dbe7fb',
@@ -7581,16 +11492,16 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   commandSuggestionList: {
-    gap: 6,
+    gap: 4,
   },
   commandSuggestionItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    borderRadius: 0,
+    gap: 8,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#101b32',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
   },
   commandSuggestionCommand: {
     color: '#d4ff65',
@@ -7608,9 +11519,9 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
   },
   composerInput: {
-    flex: 1,
-    minHeight: 72,
-    maxHeight: 220,
+    width: '100%',
+    minHeight: COMPOSER_MIN_HEIGHT,
+    maxHeight: COMPOSER_MAX_HEIGHT,
     borderRadius: 0,
     backgroundColor: 'transparent',
     borderWidth: 0,
@@ -7618,11 +11529,12 @@ const styles = StyleSheet.create({
     color: '#f6fbff',
     paddingHorizontal: 0,
     paddingVertical: 0,
-    paddingTop: 2,
-    paddingBottom: 36,
+    paddingTop: 0,
+    paddingBottom: 0,
     textAlignVertical: 'top',
     fontSize: 15,
-    lineHeight: 22,
+    lineHeight: COMPOSER_LINE_HEIGHT,
+    overflow: 'hidden',
   },
   sendButton: {
     borderRadius: 999,
@@ -7681,7 +11593,7 @@ const styles = StyleSheet.create({
   },
   referenceMovedButton: {
     alignSelf: 'flex-start',
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#d9ff72',
     paddingHorizontal: 14,
     paddingVertical: 10,
@@ -7731,7 +11643,7 @@ const styles = StyleSheet.create({
     lineHeight: 17,
   },
   controlColumnCloseButton: {
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#17253f',
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -7770,7 +11682,7 @@ const styles = StyleSheet.create({
     lineHeight: 19,
   },
   foldSectionToggle: {
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#17253f',
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -7812,7 +11724,7 @@ const styles = StyleSheet.create({
     lineHeight: 17,
   },
   referencePanelCloseButton: {
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#17253f',
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -7867,6 +11779,92 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 20,
   },
+  artifactPanelStack: {
+    gap: 12,
+  },
+  artifactListScroll: {
+    maxHeight: 260,
+  },
+  artifactList: {
+    gap: 8,
+  },
+  artifactRow: {
+    borderRadius: 14,
+    backgroundColor: '#121d35',
+    borderWidth: 1,
+    borderColor: '#223453',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 4,
+  },
+  artifactRowActive: {
+    borderColor: '#7aa4ff',
+    backgroundColor: '#162440',
+  },
+  artifactRowTitle: {
+    color: '#eef4ff',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  artifactRowMeta: {
+    color: '#89a2c7',
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  artifactRowPreview: {
+    color: '#c6d5ed',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  artifactPreviewCard: {
+    borderRadius: 18,
+    backgroundColor: '#0f182d',
+    borderWidth: 1,
+    borderColor: '#223453',
+    padding: 14,
+    gap: 12,
+    minHeight: 220,
+  },
+  artifactPreviewHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  artifactPreviewHeaderCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  artifactPreviewTitle: {
+    color: '#f7fbff',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  artifactPreviewMeta: {
+    color: '#8fa5c7',
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  artifactPreviewActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  artifactPreviewImage: {
+    width: '100%',
+    minHeight: 240,
+    maxHeight: 420,
+    borderRadius: 14,
+    backgroundColor: '#081121',
+  },
+  artifactPreviewScroll: {
+    maxHeight: 420,
+  },
+  artifactPreviewText: {
+    color: '#dbe7fb',
+    fontSize: 12,
+    lineHeight: 19,
+  },
   controlMetricRow: {
     flexDirection: 'row',
     gap: 10,
@@ -7914,7 +11912,7 @@ const styles = StyleSheet.create({
   },
   actionButton: {
     flex: 1,
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#1f3c62',
     paddingVertical: 11,
     alignItems: 'center',
@@ -7936,7 +11934,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   deepLinkButton: {
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#f4f8ff',
     paddingVertical: 12,
     paddingHorizontal: 14,
@@ -8031,6 +12029,46 @@ const styles = StyleSheet.create({
     backgroundColor: '#131f37',
     padding: 16,
     gap: 6,
+    alignItems: 'flex-start',
+  },
+  emptyConversationDraftCard: {
+    minHeight: 180,
+    justifyContent: 'center',
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    gap: 14,
+    backgroundColor: 'transparent',
+  },
+  emptyDraftPrompt: {
+    color: '#f7fbff',
+    fontSize: 22,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  emptyDraftFolderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
+    backgroundColor: '#111b31',
+    borderWidth: 1,
+    borderColor: '#223659',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  emptyDraftFolderIcon: {
+    color: '#8ea8d2',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  emptyDraftFolderText: {
+    color: '#dce9ff',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+  emptyDraftSupportingText: {
+    textAlign: 'center',
   },
   emptyTitle: {
     color: '#f7fbff',

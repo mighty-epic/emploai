@@ -67,6 +67,17 @@ class _FakeImageModule:
         return object()
 
 
+class _FakeSavableImage:
+    def save(self, path):
+        Path(path).write_bytes(b"fake-image")
+
+
+class _FakeSavableImageModule:
+    @staticmethod
+    def frombytes(*_args, **_kwargs):
+        return _FakeSavableImage()
+
+
 def _make_missing_pytesseract():
     missing_error = type("TesseractNotFoundError", (Exception,), {})
 
@@ -102,6 +113,18 @@ def test_single_agent_ocr_returns_clean_missing_tesseract_message(monkeypatch):
     assert result == {"error": TESSERACT_MISSING_MESSAGE}
 
 
+def test_single_agent_describe_screen_does_not_require_ocr(monkeypatch):
+    monkeypatch.setattr(single_agent_module, "SCREEN_CAPTURE_AVAILABLE", True)
+    monkeypatch.setattr(single_agent_module, "OCR_AVAILABLE", False)
+    monkeypatch.setattr(single_agent_module, "mss", _FakeMssModule())
+    monkeypatch.setattr(single_agent_module, "Image", _FakeSavableImageModule)
+
+    result = single_agent_module.SingleAgent()._describe_screen()
+
+    assert result["image_captured"] is True
+    assert result["description"]
+
+
 def test_telegram_ocr_returns_clean_missing_tesseract_message(monkeypatch):
     fake_pytesseract = _make_missing_pytesseract()
     monkeypatch.setattr(telegram_module, "TESSERACT_AVAILABLE", True)
@@ -112,3 +135,15 @@ def test_telegram_ocr_returns_clean_missing_tesseract_message(monkeypatch):
     result = telegram_module._execute_ocr_screen(None, {})
 
     assert result == f"Error performing OCR: {TESSERACT_MISSING_MESSAGE}"
+
+
+def test_telegram_describe_screen_does_not_require_ocr(monkeypatch):
+    monkeypatch.setattr(telegram_module, "SCREEN_CAPTURE_AVAILABLE", True)
+    monkeypatch.setattr(telegram_module, "OCR_AVAILABLE", False)
+    monkeypatch.setattr(telegram_module, "mss", _FakeMssModule())
+    monkeypatch.setattr(telegram_module, "Image", _FakeSavableImageModule)
+
+    result = telegram_module._execute_describe_screen(None, {})
+
+    assert result["image_captured"] is True
+    assert "looking at the screen" in result["description"].lower()

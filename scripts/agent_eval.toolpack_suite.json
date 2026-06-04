@@ -1,0 +1,209 @@
+{
+  "name": "toolpack-behavior-suite",
+  "profile": "toolpack-suite",
+  "workspace": "test_outputs/agent_eval/workspaces/toolpack_suite",
+  "model": "gpt-5.4-mini",
+  "variant": "standard",
+  "enabled_tool_packs": [
+    "interactive_desktop",
+    "browser_isolated",
+    "workspace_write",
+    "workspace_read",
+    "web_research",
+    "scheduler",
+    "app_runtime"
+  ],
+  "repeat": 1,
+  "fresh_runtime": true,
+  "fresh_session_per_case": true,
+  "capture_prompt_snapshot": true,
+  "cases": [
+    {
+      "name": "app-runtime-pack-awareness",
+      "prompt": "Before doing anything else, list the enabled tool packs in this chat and identify which one controls live desktop interaction.",
+      "notes": "App Runtime is reasoning-only, so this case checks pack awareness without requiring a tool call.",
+      "expectations": {
+        "required_phrases": [
+          "interactive desktop",
+          "workspace read",
+          "workspace write",
+          "web research",
+          "scheduler"
+        ],
+        "forbidden_tools": [
+          "read_file",
+          "list_dir",
+          "write_file",
+          "web_search",
+          "browser_navigate",
+          "describe_screen",
+          "schedule_job"
+        ]
+      }
+    },
+    {
+      "name": "interactive-desktop-screen-check",
+      "prompt": "Use the live desktop tools to tell me the main app or window currently visible on screen. Do not use workspace, web, or isolated browser tools for this.",
+      "expectations": {
+        "required_tools_any": [
+          "describe_screen",
+          "observe_desktop",
+          "ocr_screen"
+        ],
+        "forbidden_tools": [
+          "read_file",
+          "list_dir",
+          "web_search",
+          "browser_navigate"
+        ]
+      }
+    },
+    {
+      "name": "browser-isolated-example-heading",
+      "prompt": "Using the isolated browser, open https://example.com and tell me the main heading text. Do not use live desktop tools for this.",
+      "expectations": {
+        "required_tools_all": [
+          "browser_navigate"
+        ],
+        "required_tools_any": [
+          "browser_snapshot",
+          "open_browser",
+          "observe_browser"
+        ],
+        "forbidden_tools": [
+          "describe_screen",
+          "click",
+          "web_search"
+        ]
+      }
+    },
+    {
+      "name": "workspace-read-list-current-dir",
+      "prompt": "Inspect the current workspace and list the top-level files and folders. Do not change anything.",
+      "expectations": {
+        "required_tools_any": [
+          "list_dir",
+          "list_files",
+          "find_files"
+        ],
+        "forbidden_tools": [
+          "write_file",
+          "web_search",
+          "browser_navigate",
+          "describe_screen"
+        ]
+      }
+    },
+    {
+      "name": "workspace-write-create-and-run",
+      "prompt": "In the current workspace, create hello_eval.py that prints 'hello from eval', run it, and tell me the output.",
+      "expectations": {
+        "required_tools_all": [
+          "write_file"
+        ],
+        "required_tools_any": [
+          "run_command",
+          "execute_command"
+        ],
+        "forbidden_tools": [
+          "web_search",
+          "browser_navigate",
+          "describe_screen"
+        ]
+      }
+    },
+    {
+      "name": "web-research-current-fact",
+      "prompt": "Search the web for the current capital of Belgium and return the answer with one source URL.",
+      "expectations": {
+        "required_tools_any": [
+          "web_search",
+          "fetch_url"
+        ],
+        "forbidden_tools": [
+          "read_file",
+          "write_file",
+          "browser_navigate",
+          "describe_screen"
+        ]
+      }
+    },
+    {
+      "name": "scheduler-create-disabled-job",
+      "prompt": "Create a disabled hourly scheduled job named eval_ping that echoes ping, then confirm it exists by listing scheduled jobs.",
+      "expectations": {
+        "required_tools_all": [
+          "schedule_job",
+          "list_scheduled_jobs"
+        ],
+        "forbidden_tools": [
+          "read_file",
+          "browser_navigate",
+          "describe_screen"
+        ]
+      }
+    },
+    {
+      "name": "multi-pack-read-then-write",
+      "prompt": "Read README.md in the current workspace, create eval_summary.txt with a one-sentence summary of it, then verify the new file contents.",
+      "expectations": {
+        "required_tools_all": [
+          "read_file",
+          "write_file"
+        ]
+      }
+    },
+    {
+      "name": "multi-pack-browser-then-write",
+      "prompt": "Using the isolated browser, open https://example.com, capture the main heading, write it to example_heading.txt in the current workspace, and verify the saved file.",
+      "expectations": {
+        "required_tools_all": [
+          "browser_navigate",
+          "write_file"
+        ],
+        "required_tools_any": [
+          "browser_snapshot",
+          "read_file"
+        ]
+      }
+    },
+    {
+      "name": "multi-pack-research-then-write",
+      "prompt": "Search the web for the current capital of Belgium, write the answer and one source URL to belgium_capital.txt in the current workspace, then verify the saved file.",
+      "expectations": {
+        "required_tools_all": [
+          "write_file"
+        ],
+        "required_tools_any": [
+          "web_search",
+          "fetch_url"
+        ]
+      }
+    },
+    {
+      "name": "multi-pack-screen-then-write",
+      "prompt": "Use the live desktop tools to identify the main visible app or window title, write it to screen_observation.txt in the current workspace, and verify the saved file.",
+      "expectations": {
+        "required_tools_all": [
+          "write_file"
+        ],
+        "required_tools_any": [
+          "describe_screen",
+          "observe_desktop",
+          "ocr_screen"
+        ]
+      }
+    },
+    {
+      "name": "multi-pack-scheduler-then-write",
+      "prompt": "Create a disabled hourly scheduled job named eval_note_job that echoes note, confirm it exists by listing scheduled jobs, then write scheduler_note.txt in the current workspace containing the job name and verify the saved file.",
+      "expectations": {
+        "required_tools_all": [
+          "schedule_job",
+          "list_scheduled_jobs",
+          "write_file"
+        ]
+      }
+    }
+  ]
+}

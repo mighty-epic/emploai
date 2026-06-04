@@ -147,6 +147,20 @@ class BrowserTool:
             return False
         return True
 
+    def _configure_mode(self, headless: Optional[bool]) -> None:
+        if headless is None:
+            return
+        desired = bool(headless)
+        if desired == self.headless:
+            return
+        if self.driver:
+            try:
+                self.driver.quit()
+            except Exception:
+                pass
+            self.driver = None
+        self.headless = desired
+
     def start(self) -> Dict[str, Any]:
         """Start the browser driver."""
         if not SELENIUM_AVAILABLE:
@@ -187,7 +201,8 @@ class BrowserTool:
             self.driver = None
         return {"status": "stopped", "backend": "selenium"}
 
-    def _ensure_driver(self) -> Optional[Dict[str, Any]]:
+    def _ensure_driver(self, *, headless: Optional[bool] = None) -> Optional[Dict[str, Any]]:
+        self._configure_mode(headless)
         if self.driver:
             return None
         result = self.start()
@@ -292,6 +307,7 @@ class BrowserTool:
             "window_id": current_handle,
             "url": url,
             "title": title,
+            "mode": self.get_current_mode(),
             "snapshot_hash": snapshot_hash,
             "interactive_count": len(elements),
             "focused_ref": self._get_focused_ref(),
@@ -370,7 +386,13 @@ class BrowserTool:
         except Exception:
             return None
 
-    def _get_page_text(self, tab_id: Optional[str] = None) -> Dict[str, Any]:
+    def _get_page_text(
+        self,
+        tab_id: Optional[str] = None,
+        *,
+        selector: Optional[str] = None,
+        max_chars: int = 50000,
+    ) -> Dict[str, Any]:
         setup_error = self._ensure_driver()
         if setup_error:
             return setup_error
@@ -380,15 +402,51 @@ class BrowserTool:
             return switch_error
 
         try:
-            page_text = self.driver.execute_script(
-                "return document.body ? (document.body.innerText || '') : '';"
-            ) or ""
-            return {"page_text": str(page_text)}
+            payload = self.driver.execute_script(
+                """
+                const selector = arguments[0];
+                const maxChars = Number(arguments[1]) || 50000;
+
+                function extractText(node) {
+                    if (!node) return "";
+                    if (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement || node instanceof HTMLSelectElement) {
+                        return node.value || "";
+                    }
+                    return node.innerText || node.textContent || "";
+                }
+
+                let target = document.body;
+                let matched = true;
+                if (selector) {
+                    target = document.querySelector(selector);
+                    matched = Boolean(target);
+                }
+
+                const rawText = extractText(target);
+                const text = String(rawText || "").slice(0, maxChars);
+                return {
+                    text,
+                    selector: selector || null,
+                    matched,
+                    truncated: String(rawText || "").length > text.length,
+                    full_length: String(rawText || "").length,
+                };
+                """,
+                selector,
+                max_chars,
+            ) or {}
+            return {
+                "page_text": str(payload.get("text") or ""),
+                "selector": payload.get("selector"),
+                "matched": bool(payload.get("matched", True)),
+                "truncated": bool(payload.get("truncated", False)),
+                "full_length": int(payload.get("full_length") or 0),
+            }
         except Exception as exc:
             return browser_error("selenium", str(exc), error_type="command")
 
-    def navigate(self, url: str, tab_id: Optional[str] = None) -> Dict[str, Any]:
-        setup_error = self._ensure_driver()
+    def navigate(self, url: str, tab_id: Optional[str] = None, headless: Optional[bool] = None) -> Dict[str, Any]:
+        setup_error = self._ensure_driver(headless=headless)
         if setup_error:
             return setup_error
 
@@ -436,6 +494,7 @@ class BrowserTool:
                 "elements": state.get("elements", []),
                 "formatted": state.get("formatted", "No interactive elements found"),
                 "count": state.get("interactive_count", 0),
+                "mode": self.get_current_mode(),
             },
         )
 
@@ -458,10 +517,60 @@ class BrowserTool:
                     "image_captured": True,
                     "image_base64": image_base64,
                     "description": "Browser screenshot captured successfully.",
+                    "mode": self.get_current_mode(),
                 },
             )
         except Exception as exc:
             return browser_error("selenium", str(exc), error_type="command")
+
+    def read_text(
+        self,
+        *,
+        selector: Optional[str] = None,
+        max_chars: int = 4000,
+        tab_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        state = self._get_state(tab_id)
+        if "error" in state:
+            return state
+
+        text_result = self._get_page_text(
+            state.get("tab_id"),
+            selector=selector,
+            max_chars=max_chars,
+        )
+        if "error" in text_result:
+            return text_result
+        if selector and not text_result.get("matched", True):
+            return browser_error(
+                "selenium",
+                f"No element matched selector: {selector}",
+                error_type="command",
+                tab_id=state.get("tab_id"),
+                window_id=state.get("window_id"),
+                url=state.get("url"),
+                title=state.get("title"),
+                extras={"selector": selector, "mode": self.get_current_mode()},
+            )
+
+        return browser_success(
+            "selenium",
+            tab_id=state.get("tab_id"),
+            window_id=state.get("window_id"),
+            url=state.get("url"),
+            title=state.get("title", ""),
+            wait_reason="text_read",
+            snapshot_hash=state.get("snapshot_hash"),
+            interactive_count=state.get("interactive_count"),
+            focused_ref=state.get("focused_ref"),
+            extras={
+                "mode": self.get_current_mode(),
+                "text": text_result.get("page_text", ""),
+                "selector": text_result.get("selector"),
+                "truncated": bool(text_result.get("truncated", False)),
+                "full_length": int(text_result.get("full_length") or 0),
+            },
+        )
 
     def click_by_ref(self, ref: int, tab_id: Optional[str] = None) -> Dict[str, Any]:
         before = self._get_state(tab_id)
@@ -1125,11 +1234,15 @@ BROWSER_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "browser_navigate",
-            "description": "Navigate browser to a URL. Auto-starts browser if not running.",
+            "description": "Navigate browser to a URL. Auto-starts browser if not running. Optionally choose headless or headed Selenium mode on navigation.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "URL to navigate to"}
+                    "url": {"type": "string", "description": "URL to navigate to"},
+                    "headless": {
+                        "type": "boolean",
+                        "description": "When provided, explicitly choose Selenium mode for this browser task. Use true for isolated/headless browser work, false only when you intentionally need the Selenium window visible on the live desktop.",
+                    },
                 },
                 "required": ["url"]
             }
@@ -1139,9 +1252,30 @@ BROWSER_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "browser_snapshot",
-            "description": "Get ARIA snapshot of interactive elements on the page. Returns clean list of buttons, links, inputs with [ref=N] IDs.",
+            "description": "Get an ARIA snapshot of interactive elements on the page. Best for clickable refs and interactive structure, not full page text extraction.",
             "parameters": {"type": "object", "properties": {}}
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_read_text",
+            "description": "Read visible page text from the current browser page. Use this for static text, headings, rendered values, and exact text extraction on isolated browser pages.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "Optional CSS selector for a specific element to read text from. Omit to read visible page text from the whole page body.",
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "description": "Maximum characters of text to return.",
+                        "default": 4000,
+                    },
+                },
+            },
+        },
     },
     {
         "type": "function",
@@ -1224,8 +1358,16 @@ BROWSER_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "browser_screenshot",
-            "description": "Capture a screenshot of the current browser page.",
-            "parameters": {"type": "object", "properties": {}}
+            "description": "Capture a screenshot of the current browser page for proof and artifacts. When you need visual interpretation, ask a precise question about what should be visible. Do not rely on this alone for exact text extraction inside the same turn.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "Optional precise visual question about the current browser page, file, dialog, or error state."
+                    }
+                }
+            }
         }
     },
     {

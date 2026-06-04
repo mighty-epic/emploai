@@ -67,6 +67,7 @@ _TOOL_FAMILY_MAP: Dict[str, str] = {
     "hotkey": "desktop_gui",
     "scroll": "desktop_gui",
     "drag_and_drop": "desktop_gui",
+    "open_file": "system_app_or_terminal",
     # Workspace / code
     "read_file": "workspace_code",
     "write_file": "workspace_code",

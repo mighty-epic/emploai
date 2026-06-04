@@ -10,6 +10,7 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from cli.agent_tools.adapters import normalize_provider, to_anthropic_format, to_google_format, to_openai_format
+from shared.openai_api import create_openai_completion
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ class ModelConfig:
     supports_thinking: bool = False
     supports_tools: bool = True
     max_context: int = 128000
+    api_type: str = "chat"
     
 
 class UnifiedToolRegistry:
@@ -202,11 +204,12 @@ class UnifiedToolRegistry:
         
         self.tools['browser_screenshot'] = {
             'name': 'browser_screenshot',
-            'description': 'Take a screenshot of the current browser page',
+            'description': 'Take a screenshot of the current browser page. When you need visual interpretation, ask a precise question about what should be visible.',
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'full_page': {'type': 'boolean', 'description': 'Capture full page'}
+                    'full_page': {'type': 'boolean', 'description': 'Capture full page'},
+                    'question': {'type': 'string', 'description': 'Optional precise visual question about the current browser page, file, dialog, or error state.'}
                 }
             }
         }
@@ -336,11 +339,11 @@ class UnifiedToolRegistry:
         # vision & basic desktop
         self.tools['describe_screen'] = {
             'name': 'describe_screen',
-            'description': 'Take a screenshot and get an AI vision description of the current screen',
+            'description': 'Take a screenshot and get an AI vision description of the current screen. Ask a precise question about what you need verified whenever possible.',
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'question': {'type': 'string', 'description': 'Optional specific question about the screen'}
+                    'question': {'type': 'string', 'description': 'Optional precise question about the screen, such as whether an app opened, an error dialog appeared, or which control should be used next.'}
                 }
             }
         }
@@ -801,11 +804,14 @@ class UnifiedAgent:
     
     def _call_openai_compatible(self, tools: List[Dict]) -> Any:
         """Call OpenAI-compatible API (OpenAI, XAI, DeepSeek, OpenRouter)."""
-        response = self.client.chat.completions.create(
-            model=self.model_config.model_id,
+        response = create_openai_completion(
+            self.client,
+            model_name=getattr(self.model_config, "name", None),
+            model_id=self.model_config.model_id,
             messages=self.conversation_history,
             tools=tools if tools else None,
-            tool_choice='auto' if tools else None
+            tool_choice='auto' if tools else None,
+            explicit_api_type=getattr(self.model_config, "api_type", None),
         )
         
         message = response.choices[0].message
@@ -1041,11 +1047,11 @@ def create_unified_agent(
         "gpt-5": ModelConfig(name="gpt-5", provider="openai", model_id="gpt-5", max_context=400000),
         "gpt-5.1": ModelConfig(name="gpt-5.1", provider="openai", model_id="gpt-5.1-2025-11-13", max_context=400000),
         "gpt-5.2": ModelConfig(name="gpt-5.2", provider="openai", model_id="gpt-5.2-2025-12-11", max_context=400000),
-        "gpt-5.5": ModelConfig(name="gpt-5.5", provider="openai", model_id="gpt-5.5", max_context=1000000),
-        "gpt-5.4": ModelConfig(name="gpt-5.4", provider="openai", model_id="gpt-5.4-2026-03-05", max_context=1050000),
-        "gpt-5.4-mini": ModelConfig(name="gpt-5.4-mini", provider="openai", model_id="gpt-5.4-mini", max_context=400000),
-        "gpt-5.1-codex-max": ModelConfig(name="gpt-5.1-codex-max", provider="openai", model_id="gpt-5.1-codex-max", max_context=400000),
-        "gpt-5.2-codex": ModelConfig(name="gpt-5.2-codex", provider="openai", model_id="gpt-5.2-codex", max_context=400000),
+        "gpt-5.5": ModelConfig(name="gpt-5.5", provider="openai", model_id="gpt-5.5", max_context=1000000, api_type="responses"),
+        "gpt-5.4": ModelConfig(name="gpt-5.4", provider="openai", model_id="gpt-5.4-2026-03-05", max_context=1050000, api_type="responses"),
+        "gpt-5.4-mini": ModelConfig(name="gpt-5.4-mini", provider="openai", model_id="gpt-5.4-mini", max_context=400000, api_type="responses"),
+        "gpt-5.1-codex-max": ModelConfig(name="gpt-5.1-codex-max", provider="openai", model_id="gpt-5.1-codex-max", max_context=400000, api_type="responses"),
+        "gpt-5.2-codex": ModelConfig(name="gpt-5.2-codex", provider="openai", model_id="gpt-5.2-codex", max_context=400000, api_type="responses"),
         "gpt-4.1": ModelConfig(name="gpt-4.1", provider="openai", model_id="gpt-4.1", max_context=1047576),
         "gpt-4o": ModelConfig(name="gpt-4o", provider="openai", model_id="gpt-4o", max_context=128000),
         "gpt-4o-mini": ModelConfig(name="gpt-4o-mini", provider="openai", model_id="gpt-4o-mini", max_context=128000),

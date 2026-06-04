@@ -1,6 +1,7 @@
 import json
 from typing import List, Dict, Any
 from .base import BaseUnifiedAgent
+from shared.openai_api import create_openai_completion
 
 class OpenAIsAgent(BaseUnifiedAgent):
     """Unified Agent for OpenAI and compatible providers."""
@@ -9,11 +10,14 @@ class OpenAIsAgent(BaseUnifiedAgent):
         return self.tool_registry.get_tools_for_provider('openai')
 
     def _call_model(self, tools: List[Dict]) -> Any:
-        response = self.client.chat.completions.create(
-            model=self.model_config.model_id,
+        response = create_openai_completion(
+            self.client,
+            model_name=getattr(self.model_config, "name", None),
+            model_id=self.model_config.model_id,
             messages=self.conversation_history,
             tools=tools if tools else None,
-            tool_choice='auto' if tools else None
+            tool_choice='auto' if tools else None,
+            explicit_api_type=getattr(self.model_config, "api_type", None),
         )
         msg = response.choices[0].message
         self.conversation_history.append({

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from fastapi import FastAPI, File, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.websockets import WebSocketState
 
 from bot_core.ui_helpers import ThinkingModeVisualizer
 from cli.tui_constants import AVAILABLE_MODELS, MODEL_CONFIGS, MODEL_CONTEXT_SIZES
@@ -147,6 +148,7 @@ _SESSION_SEARCH_CACHE_LOCK = threading.Lock()
 _SESSION_SEARCH_CACHE: Dict[int, Dict[str, Dict[str, Any]]] = {}
 _SEARCH_NORMALIZE_RE = re.compile(r"[\W_]+", re.UNICODE)
 _SESSION_SEARCH_LIMIT_MAX = 100
+DEFAULT_APP_USER_ID = 0
 
 
 def _capture_runtime_status() -> Dict[str, Any]:
@@ -208,6 +210,35 @@ def _record_runtime_error(message: str, detail: Optional[str] = None) -> None:
     _APP_RUNTIME_STATUS["last_runtime_error"] = message
     _APP_RUNTIME_STATUS["last_runtime_error_detail"] = detail
     _APP_RUNTIME_STATUS["last_runtime_error_at"] = time.time()
+
+
+def _is_expected_websocket_close_error(exc: BaseException) -> bool:
+    if not isinstance(exc, RuntimeError):
+        return False
+    message = str(exc or "").strip().lower()
+    return (
+        "close message has been sent" in message
+        or "websocket is not connected" in message
+    )
+
+
+async def _send_realtime_event(
+    websocket: WebSocket,
+    send_lock: asyncio.Lock,
+    event: "RealtimeServerEvent",
+) -> None:
+    async with send_lock:
+        if (
+            websocket.client_state is WebSocketState.DISCONNECTED
+            or websocket.application_state is WebSocketState.DISCONNECTED
+        ):
+            raise WebSocketDisconnect(code=1000)
+        try:
+            await websocket.send_json(event.model_dump())
+        except Exception as exc:
+            if _is_expected_websocket_close_error(exc):
+                raise WebSocketDisconnect(code=1000) from exc
+            raise
 
 
 def _dependency_status() -> Dict[str, Any]:
@@ -709,8 +740,7 @@ async def _handle_remote_chat_ws(websocket: WebSocket, auth: Dict[str, Any]) -> 
     last_sync_version = -1
 
     async def send_model(event: RealtimeServerEvent) -> None:
-        async with send_lock:
-            await websocket.send_json(event.model_dump())
+        await _send_realtime_event(websocket, send_lock, event)
 
     async def send_session_sync(reason: str) -> None:
         nonlocal effective_session_id, last_sync_version
@@ -1086,15 +1116,7 @@ def _workspace_root() -> Path:
 
 
 def _default_user_id() -> int:
-    allowed = os.getenv("ALLOWED_USER_IDS", "").split(",")
-    for item in allowed:
-        item = item.strip()
-        if item:
-            try:
-                return int(item)
-            except ValueError:
-                continue
-    return 0
+    return DEFAULT_APP_USER_ID
 
 
 def _get_security_manager() -> Optional[SecurityManager]:
@@ -1150,17 +1172,207 @@ def _estimate_message_tokens(message: Dict[str, Any]) -> int:
     return len(str(content)) // 4
 
 
-def _context_usage(runtime) -> dict[str, Any]:
-    context_manager = getattr(runtime, "context_manager", None)
-    if context_manager:
-        return context_manager.get_usage_snapshot(
-            runtime.chat_history,
-            runtime.current_model,
-            last_compaction=getattr(runtime, "last_context_compaction", None),
+def _rough_message_tokens(messages: list[dict[str, Any]]) -> int:
+    return sum(max(0, _estimate_message_tokens(message)) for message in messages)
+
+
+def _active_tool_packs_for_context_usage(runtime) -> list[str]:
+    return list(
+        getattr(runtime, "_active_tool_packs_for_current_run", None)
+        or getattr(runtime, "enabled_tool_packs", [])
+        or []
+    )
+
+
+def _tool_definition_name_for_usage(tool: dict[str, Any]) -> str:
+    if not isinstance(tool, dict):
+        return ""
+    if isinstance(tool.get("function"), dict):
+        return str(tool["function"].get("name") or "").strip()
+    return str(tool.get("name") or "").strip()
+
+
+def _merge_tool_definitions_for_usage(*tool_groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for group in tool_groups:
+        for tool in group or []:
+            name = _tool_definition_name_for_usage(tool)
+            if not name or name in seen:
+                continue
+            merged.append(tool)
+            seen.add(name)
+    return merged
+
+
+def _context_usage_tool_schema_tokens(runtime, active_tool_packs: list[str]) -> tuple[int, int]:
+    try:
+        from cli.agent_tools.definitions import CLI_AGENT_TOOLS
+        from shared import merge_openai_tools
+        from shared.task_board import TASK_BOARD_FAILURE_REPORT_TOOL, get_active_task_board
+        from shared.tool_packs import filter_openai_tools_by_enabled_packs, filter_tools_by_enabled_packs
+        from single_agent.tool_manifest import AGENT_TOOLS
+        from telegram_bot.telegram_unified_agent import get_auto_mode_extra_tools
+
+        base_tools = filter_tools_by_enabled_packs(CLI_AGENT_TOOLS, active_tool_packs)
+        extra_tools = filter_openai_tools_by_enabled_packs(
+            merge_openai_tools(get_auto_mode_extra_tools(), AGENT_TOOLS),
+            active_tool_packs,
+        )
+        all_tools = _merge_tool_definitions_for_usage(base_tools, extra_tools)
+        if get_active_task_board(runtime):
+            all_tools = _merge_tool_definitions_for_usage(all_tools, [TASK_BOARD_FAILURE_REPORT_TOOL])
+        serialized = json.dumps(all_tools, ensure_ascii=False, default=str)
+        return max(0, len(serialized) // 4), len(all_tools)
+    except Exception:
+        return 0, 0
+
+
+def _context_usage_prompt_messages(runtime) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    active_tool_packs = _active_tool_packs_for_context_usage(runtime)
+    system_messages: list[dict[str, Any]] = []
+    injected_messages: list[dict[str, Any]] = []
+    prelude_messages: list[dict[str, Any]] = []
+
+    try:
+        from shared.channel_runtime import _build_file_context, _memory_context
+        from telegram_bot.telegram_unified_agent import build_unified_system_prompt
+
+        skills_index = ""
+        active_skills_context = ""
+        if getattr(runtime, "skill_registry", None):
+            skills_index = f"\n\n{runtime.skill_registry.get_skills_index()}"
+            if getattr(runtime, "active_skills", None):
+                active_skills_context = (
+                    "\n\n# LOADED SPECIALIZED SKILLS\n"
+                    f"{runtime.skill_registry.get_active_skills_context(runtime.active_skills)}"
+                )
+
+        system_messages.append(
+            {
+                "role": "system",
+                "content": build_unified_system_prompt(
+                    runtime,
+                    memory_context=_memory_context(runtime),
+                    skills_index=skills_index,
+                    active_skills_context=active_skills_context,
+                ),
+            }
         )
 
+        file_context = _build_file_context(list(getattr(runtime, "pending_files", []) or []))
+        if file_context:
+            injected_messages.append(
+                {
+                    "role": "system",
+                    "content": f"USER ATTACHMENTS (structured data):\n{file_context}",
+                }
+            )
+    except Exception:
+        pass
+
+    user_message = str(getattr(runtime, "last_user_message", "") or "")
+    try:
+        from mobile_app.backend.runtime import (
+            _conversational_turn_guard,
+            _kickstart_prelude,
+            _screen_observation_contract,
+            _task_execution_contract,
+        )
+        from shared.task_intent import is_screen_observation_message, is_task_like_message
+
+        screen_observation_turn = is_screen_observation_message(user_message)
+        task_like_turn = screen_observation_turn or is_task_like_message(user_message)
+        if screen_observation_turn:
+            injected_messages.append(_screen_observation_contract(active_tool_packs))
+        injected_messages.append(_task_execution_contract(runtime, active_tool_packs))
+        if not task_like_turn:
+            injected_messages.append(_conversational_turn_guard())
+        if task_like_turn and len(getattr(runtime, "chat_history", []) or []) <= 3:
+            prelude_messages.extend(_kickstart_prelude(active_tool_packs))
+    except Exception:
+        pass
+
+    try:
+        from shared.channel_runtime import _desktop_window_context_message, _task_contract_context_message
+        from shared.task_board import before_model_turn_messages
+
+        injected_messages.extend(before_model_turn_messages(runtime))
+        task_contract = _task_contract_context_message(runtime)
+        if task_contract:
+            injected_messages.append(task_contract)
+        desktop_context = _desktop_window_context_message(runtime)
+        if desktop_context:
+            injected_messages.append(desktop_context)
+    except Exception:
+        pass
+
+    try:
+        from shared.artifact_store import ChatArtifactStore
+
+        user_id = getattr(runtime, "user_id", None)
+        session_id = runtime.session_manager.get_current_session_id() if getattr(runtime, "session_manager", None) else None
+        if user_id is not None and session_id:
+            board = get_display_task_board(runtime)
+            task_focus = None
+            if isinstance(board, dict):
+                task_focus = str(board.get("current_focus") or board.get("main_goal") or "").strip() or None
+            injected_messages.extend(
+                ChatArtifactStore(user_id=int(user_id), session_id=str(session_id)).build_prompt_messages(
+                    user_message=user_message,
+                    task_focus=task_focus,
+                )
+            )
+    except Exception:
+        pass
+
+    history_messages = [
+        {"role": item.get("role", "user"), "content": item.get("content", "")}
+        for item in list(getattr(runtime, "chat_history", []) or [])
+    ]
+    messages = [*system_messages, *injected_messages, *prelude_messages, *history_messages]
+    breakdown = {
+        "system_prompt_tokens": _rough_message_tokens(system_messages),
+        "injected_context_tokens": _rough_message_tokens([*injected_messages, *prelude_messages]),
+        "chat_history_tokens": _rough_message_tokens(history_messages),
+        "prompt_message_count": len(messages),
+    }
+    return messages, breakdown
+
+
+def _context_usage(runtime) -> dict[str, Any]:
+    active_tool_packs = _active_tool_packs_for_context_usage(runtime)
+    prompt_messages, breakdown = _context_usage_prompt_messages(runtime)
+    tool_schema_tokens, tool_count = _context_usage_tool_schema_tokens(runtime, active_tool_packs)
+    context_manager = getattr(runtime, "context_manager", None)
+    if context_manager:
+        max_tokens = context_manager.get_context_size(runtime.current_model)
+        message_tokens, token_strategy = context_manager.count_tokens_with_strategy(prompt_messages, runtime.current_model)
+        estimated_tokens = message_tokens + tool_schema_tokens
+        usage_percent = (estimated_tokens / max_tokens) * 100 if max_tokens else 0.0
+        threshold_percent = context_manager.COMPRESSION_THRESHOLD * 100
+        last_compaction = getattr(runtime, "last_context_compaction", None)
+        needs_compaction = usage_percent >= threshold_percent
+        compaction_state = "needs_compaction" if needs_compaction else "compacted" if last_compaction and last_compaction.get("applied") else "ok"
+        return {
+            "model": runtime.current_model,
+            "max_tokens": max_tokens,
+            "estimated_tokens": estimated_tokens,
+            "usage_percent": round(usage_percent, 2),
+            "message_count": len(prompt_messages),
+            "threshold_percent": threshold_percent,
+            "needs_compaction": needs_compaction,
+            "compaction_state": compaction_state,
+            "token_strategy": token_strategy,
+            "last_compaction": last_compaction,
+            **breakdown,
+            "tool_schema_tokens": tool_schema_tokens,
+            "tool_schema_count": tool_count,
+        }
+
     max_tokens = int(MODEL_CONTEXT_SIZES.get(runtime.current_model, 128000))
-    estimated_tokens = sum(_estimate_message_tokens(message) for message in runtime.chat_history)
+    message_tokens = _rough_message_tokens(prompt_messages)
+    estimated_tokens = message_tokens + tool_schema_tokens
     usage_percent = (estimated_tokens / max_tokens) * 100 if max_tokens else 0.0
     threshold_percent = 40.0
     return {
@@ -1168,12 +1380,15 @@ def _context_usage(runtime) -> dict[str, Any]:
         "max_tokens": max_tokens,
         "estimated_tokens": estimated_tokens,
         "usage_percent": round(usage_percent, 2),
-        "message_count": len(runtime.chat_history),
+        "message_count": len(prompt_messages),
         "threshold_percent": threshold_percent,
         "needs_compaction": usage_percent >= threshold_percent,
         "compaction_state": "needs_compaction" if usage_percent >= threshold_percent else "ok",
         "token_strategy": "rough",
         "last_compaction": getattr(runtime, "last_context_compaction", None),
+        **breakdown,
+        "tool_schema_tokens": tool_schema_tokens,
+        "tool_schema_count": tool_count,
     }
 
 
@@ -2829,8 +3044,7 @@ def create_app() -> FastAPI:
         send_lock = asyncio.Lock()
 
         async def send_model(event: RealtimeServerEvent) -> None:
-            async with send_lock:
-                await websocket.send_json(event.model_dump())
+            await _send_realtime_event(websocket, send_lock, event)
 
         try:
             token = websocket.query_params.get("token")
@@ -2963,8 +3177,7 @@ def create_app() -> FastAPI:
         effective_session_id: Optional[str] = None
 
         async def send_model(event: RealtimeServerEvent) -> None:
-            async with send_lock:
-                await websocket.send_json(event.model_dump())
+            await _send_realtime_event(websocket, send_lock, event)
 
         try:
             token = websocket.query_params.get("token")
@@ -3287,8 +3500,7 @@ def create_app() -> FastAPI:
         send_lock = asyncio.Lock()
 
         async def send_model(event: RealtimeServerEvent) -> None:
-            async with send_lock:
-                await websocket.send_json(event.model_dump())
+            await _send_realtime_event(websocket, send_lock, event)
 
         try:
             token = websocket.query_params.get("token")

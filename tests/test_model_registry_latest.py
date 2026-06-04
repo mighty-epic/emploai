@@ -24,3 +24,4 @@ def test_shared_unified_agent_maps_gpt_5_4_to_openai_snapshot():
     assert agent.model_config.name == "gpt-5.4"
     assert agent.model_config.provider == "openai"
     assert agent.model_config.model_id == "gpt-5.4-2026-03-05"
+    assert agent.model_config.api_type == "responses"

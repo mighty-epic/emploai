@@ -3,8 +3,25 @@ import { Animated, Easing, Platform, Pressable, ScrollView, StyleSheet, Text, Vi
 import { useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import {
+  configureAgent,
+  configureHeadlessRuntime,
+  createTelegramBotConfig,
+  fetchAgentOverview,
+  fetchRuntimeOrchestratorStatus,
+  fetchSessions,
+  fetchTelegramBotConfigs,
+  updateTelegramBotConfig,
+  deleteTelegramBotConfig,
+  warmVoiceRuntime,
+  type RuntimeOrchestratorStatus,
+  type SessionSummary,
+  type TelegramBotConfig,
+} from '@/lib/appApi';
+import { describeError } from '../../lib/diagnostics';
 import { DesktopConversationView } from './DesktopConversationView';
 import { DesktopSetupPanel } from './DesktopSetupPanel';
+import { DESKTOP_RECT_BUTTON_RADIUS } from './desktopUiTokens';
 import type { DesktopMode, RemoteRuntimeSummary } from './models';
 import {
   checkDesktopUpdates,
@@ -27,8 +44,10 @@ import {
   type DesktopBootstrap,
   type DesktopMemoryState,
   type DesktopRuntimeStatus,
+  type DesktopTelegramStatus,
   type DesktopSetupValues,
   type DesktopUpdateStatus,
+  type DesktopVoicePackInstallProgress,
 } from '@/lib/desktopBridge';
 
 function normalizeParam(value: string | string[] | undefined) {
@@ -43,6 +62,26 @@ function runtimeLabel(runtimeStatus: DesktopRuntimeStatus | null, fallback: stri
     return fallback;
   }
   return runtimeStatus.degraded ? `${runtimeStatus.state} · degraded` : runtimeStatus.state;
+}
+
+function telegramStatusLabel(status: DesktopTelegramStatus | null | undefined) {
+  if (!status) {
+    return 'Telegram unknown';
+  }
+  switch (status.state) {
+    case 'running':
+      return 'Telegram ready';
+    case 'starting':
+      return 'Telegram starting';
+    case 'degraded':
+      return 'Telegram degraded';
+    case 'not_configured':
+      return 'Telegram setup needed';
+    case 'disabled':
+      return 'Telegram off';
+    default:
+      return 'Telegram offline';
+  }
 }
 
 function normalizeSetupValue(value: string | undefined) {
@@ -66,8 +105,36 @@ function delay(ms: number) {
   });
 }
 
-const STARTUP_WATCHDOG_MS = 120_000;
-const DESKTOP_RUNTIME_RESTART_WAIT_MS = 95_000;
+async function fetchDesktopApiJson<T>(url: string, token: string, timeoutMs = 5000): Promise<T> {
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeoutId = controller
+    ? globalThis.setTimeout(() => controller.abort(), timeoutMs)
+    : null;
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      signal: controller?.signal,
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`${response.status} ${response.statusText}${detail ? `: ${detail}` : ''}`);
+    }
+    return (await response.json()) as T;
+  } finally {
+    if (timeoutId != null) {
+      globalThis.clearTimeout(timeoutId);
+    }
+  }
+}
+
+const DESKTOP_RUNTIME_RESTART_WAIT_MS = 40_000;
+const STARTUP_INITIAL_TIMEOUT_SECONDS = 20;
+const STARTUP_FIRST_AUTO_RETRY_TIMEOUT_SECONDS = 60;
+const STARTUP_RETRY_INCREMENT_SECONDS = 10;
+const STARTUP_RETRY_MAX_TIMEOUT_SECONDS = 120;
+const STARTUP_WATCHDOG_GRACE_MS = 20_000;
 
 type StartupPhase =
   | 'bootstrapping'
@@ -81,6 +148,17 @@ type StartupReadinessState = 'warming' | 'chat_ready' | 'fatal_error';
 
 function isStartupPending(phase: StartupPhase) {
   return phase === 'bootstrapping' || phase === 'starting_runtime' || phase === 'warming_ui';
+}
+
+function clampStartupTimeoutSeconds(timeoutSeconds: number) {
+  return Math.min(
+    Math.max(STARTUP_INITIAL_TIMEOUT_SECONDS, Math.trunc(timeoutSeconds)),
+    STARTUP_RETRY_MAX_TIMEOUT_SECONDS
+  );
+}
+
+function nextStartupRetryTimeoutSeconds(currentTimeoutSeconds: number) {
+  return clampStartupTimeoutSeconds(currentTimeoutSeconds + STARTUP_RETRY_INCREMENT_SECONDS);
 }
 
 function startupStatusLabel(phase: StartupPhase, detail: string | null) {
@@ -99,9 +177,97 @@ function startupStatusLabel(phase: StartupPhase, detail: string | null) {
   }
 }
 
+function runtimeFailureDetail(status: DesktopRuntimeStatus | null | undefined) {
+  if (!status || status.ok) {
+    return null;
+  }
+  const detail = String(status.detail || '').trim();
+  if (!detail) {
+    return null;
+  }
+  return detail;
+}
+
+function isLaunchableRuntimePrestartDetail(detail: string | null | undefined, canLaunchLocalRuntime: boolean | null | undefined) {
+  if (!canLaunchLocalRuntime) {
+    return false;
+  }
+  const normalized = String(detail || '').trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.includes('desktop runtime is offline and auto-start is disabled') ||
+    normalized.includes('no compatible local runtime responded on the configured desktop host/port')
+  );
+}
+
+function isRuntimeConnectivityMessage(message: string | null | undefined) {
+  const normalized = String(message || '').trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.includes('no compatible local runtime responded on the configured desktop host/port') ||
+    normalized.includes('local runtime did not become ready') ||
+    normalized.includes('desktop runtime did not become ready') ||
+    normalized.includes('runtime did not become ready within') ||
+    normalized.includes('the local runtime stopped before the desktop app became ready')
+  );
+}
+
+function isStartupTimeoutMessage(message: string | null | undefined) {
+  const normalized = String(message || '').trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.includes('no compatible local runtime responded on the configured desktop host/port') ||
+    normalized.includes('local runtime did not become ready') ||
+    normalized.includes('desktop runtime did not become ready') ||
+    normalized.includes('runtime did not become ready within') ||
+    normalized.includes('startup is taking longer than expected')
+  );
+}
+
+async function waitForDesktopApiReady(
+  apiBaseUrl: string,
+  token: string,
+  timeoutMs: number,
+) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: string | null = null;
+
+  while (Date.now() < deadline) {
+    try {
+      const profile = await fetchDesktopApiJson<{ current_session_id?: string | null }>(
+        `${apiBaseUrl}/api/app/me`,
+        token,
+        5000,
+      );
+      await fetchDesktopApiJson<unknown[]>(
+        `${apiBaseUrl}/api/app/sessions`,
+        token,
+        5000,
+      );
+      return profile;
+    } catch (error) {
+      lastError = describeError(error);
+      await delay(600);
+    }
+  }
+
+  throw new Error(
+    lastError
+      ? `Local API did not finish becoming responsive: ${lastError}`
+      : 'Local API did not finish becoming responsive.',
+  );
+}
+
 function StartupGlyph() {
   const spin = useRef(new Animated.Value(0)).current;
   const pulse = useRef(new Animated.Value(0)).current;
+  const useNativeDriver = Platform.OS !== 'web';
 
   useEffect(() => {
     const spinLoop = Animated.loop(
@@ -109,7 +275,7 @@ function StartupGlyph() {
         toValue: 1,
         duration: 1800,
         easing: Easing.linear,
-        useNativeDriver: true,
+        useNativeDriver,
       })
     );
     const pulseLoop = Animated.loop(
@@ -118,13 +284,13 @@ function StartupGlyph() {
           toValue: 1,
           duration: 900,
           easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
+          useNativeDriver,
         }),
         Animated.timing(pulse, {
           toValue: 0,
           duration: 900,
           easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
+          useNativeDriver,
         }),
       ])
     );
@@ -136,7 +302,7 @@ function StartupGlyph() {
       spinLoop.stop();
       pulseLoop.stop();
     };
-  }, [pulse, spin]);
+  }, [pulse, spin, useNativeDriver]);
 
   const orbitRotation = spin.interpolate({
     inputRange: [0, 1],
@@ -195,19 +361,28 @@ export function DesktopAppShell() {
   const [notice, setNotice] = useState<string | null>(null);
   const [startupPhase, setStartupPhase] = useState<StartupPhase>('bootstrapping');
   const [startupErrorDetail, setStartupErrorDetail] = useState<string | null>(null);
+  const [startupCurrentTimeoutSeconds, setStartupCurrentTimeoutSeconds] = useState(STARTUP_INITIAL_TIMEOUT_SECONDS);
   const [showSetup, setShowSetup] = useState(false);
   const [startingRuntime, setStartingRuntime] = useState(false);
   const [stoppingRuntime, setStoppingRuntime] = useState(false);
   const [savingSetup, setSavingSetup] = useState(false);
   const [voicePackBusyId, setVoicePackBusyId] = useState<string | null>(null);
+  const [voicePackProgress, setVoicePackProgress] = useState<DesktopVoicePackInstallProgress | null>(null);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [installingUpdate, setInstallingUpdate] = useState(false);
   const [memoryState, setMemoryState] = useState<DesktopMemoryState | null>(null);
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [memorySaving, setMemorySaving] = useState(false);
+  const [telegramBotConfigs, setTelegramBotConfigs] = useState<TelegramBotConfig[]>([]);
+  const [orchestratorStatus, setOrchestratorStatus] = useState<RuntimeOrchestratorStatus | null>(null);
+  const [setupSessions, setSetupSessions] = useState<SessionSummary[]>([]);
+  const [setupMaxTurns, setSetupMaxTurns] = useState<number | null>(null);
   const startupPhaseRef = useRef<StartupPhase>('bootstrapping');
   const startupWatchdogTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const startupAutoRetryAttemptedRef = useRef(false);
+  const startupAutoRetryInFlightRef = useRef(false);
   const postStartupSetupNoticeSentRef = useRef(false);
+  const previousTelegramStateRef = useRef<string | null>(null);
 
   useEffect(() => {
     setActiveTab('local');
@@ -217,9 +392,12 @@ export function DesktopAppShell() {
     startupPhaseRef.current = startupPhase;
   }, [startupPhase]);
 
+  const currentStartupWatchdogMs = startupCurrentTimeoutSeconds * 1000 + STARTUP_WATCHDOG_GRACE_MS;
+  const nextStartupRetryWindowSeconds = nextStartupRetryTimeoutSeconds(startupCurrentTimeoutSeconds);
+
   const applyBootstrap = (
     payload: DesktopBootstrap,
-    options: { keepSetupClosed?: boolean } = {}
+    options: { keepSetupClosed?: boolean; preserveLoadingState?: boolean } = {}
   ) => {
     setBootstrap((current) => ({
       ...current,
@@ -231,8 +409,15 @@ export function DesktopAppShell() {
     if (payload.runtimeStatus) {
       setRuntimeStatus(payload.runtimeStatus);
     }
+    if (payload.runtimeStatus?.ok && payload.accessToken) {
+      setError((current) => (isRuntimeConnectivityMessage(current) ? null : current));
+      setStartupErrorDetail((current) => (isRuntimeConnectivityMessage(current) ? null : current));
+    }
     if (options.keepSetupClosed) {
       setShowSetup(false);
+    }
+    if (options.preserveLoadingState || startupPhaseRef.current === 'ready') {
+      return;
     }
     if (payload.accessToken && (payload.runtimeStatus?.ok ?? false)) {
       setLoadingState('Loading shared session');
@@ -240,6 +425,10 @@ export function DesktopAppShell() {
     }
     if (payload.setupState?.required) {
       setLoadingState('Setup required');
+      return;
+    }
+    if (isLaunchableRuntimePrestartDetail(payload.runtimeStatus?.detail, payload.canLaunchLocalRuntime)) {
+      setLoadingState('Preparing desktop runtime');
       return;
     }
     setLoadingState(payload.runtimeStatus?.detail || 'Preparing desktop runtime');
@@ -251,7 +440,38 @@ export function DesktopAppShell() {
     setStartupPhase('startup_error');
   };
 
-  const beginStartup = async (options?: { forceBootstrap?: boolean }) => {
+  const retryStartupSilently = async (timeoutSeconds: number) => {
+    startupAutoRetryAttemptedRef.current = true;
+    startupAutoRetryInFlightRef.current = true;
+    setStartingRuntime(true);
+    setStartupCurrentTimeoutSeconds(timeoutSeconds);
+    setError(null);
+    setStartupErrorDetail(null);
+    const retryPromise = beginStartup({ forceBootstrap: true, attachTimeoutSeconds: timeoutSeconds });
+    setNotice(`Startup is taking longer than expected. Retrying automatically with a ${timeoutSeconds}-second runtime window.`);
+    try {
+      await retryPromise;
+    } finally {
+      startupAutoRetryInFlightRef.current = false;
+      setStartingRuntime(false);
+    }
+  };
+
+  const handleStartupFailure = (message: string) => {
+    const detail = String(message || '').trim() || 'The desktop app could not finish becoming ready.';
+    if (
+      isStartupPending(startupPhaseRef.current) &&
+      !startupAutoRetryAttemptedRef.current &&
+      !startupAutoRetryInFlightRef.current &&
+      isStartupTimeoutMessage(detail)
+    ) {
+      void retryStartupSilently(STARTUP_FIRST_AUTO_RETRY_TIMEOUT_SECONDS);
+      return;
+    }
+    failStartup(detail);
+  };
+
+  const beginStartup = async (options?: { forceBootstrap?: boolean; attachTimeoutSeconds?: number }) => {
     if (!isDesktopEnvironment()) {
       failStartup('Desktop preload bridge is unavailable. Launch this route inside the Electron shell.');
       return;
@@ -283,7 +503,9 @@ export function DesktopAppShell() {
       if (!(payload.accessToken && payload.runtimeStatus?.ok)) {
         setStartupPhase('starting_runtime');
         setLoadingState('Starting local backend');
-        const started = await startDesktopRuntime();
+        const started = await startDesktopRuntime({
+          attachTimeoutSeconds: options?.attachTimeoutSeconds,
+        });
         if (!started) {
           throw new Error('Desktop runtime controls are unavailable in this shell.');
         }
@@ -304,9 +526,24 @@ export function DesktopAppShell() {
       }
 
       setStartupPhase('warming_ui');
-      setLoadingState('Loading shared session');
+      setLoadingState('Waiting for local API');
+      const apiProfile = await waitForDesktopApiReady(
+        readyPayload.apiBaseUrl,
+        readyPayload.accessToken,
+        Math.max(20_000, (options?.attachTimeoutSeconds ?? STARTUP_INITIAL_TIMEOUT_SECONDS) * 1000),
+      );
+      setBootstrap((current) => (
+        current
+          ? {
+              ...current,
+              currentSessionId: apiProfile.current_session_id ?? current.currentSessionId ?? null,
+            }
+          : current
+      ));
+      setStartupPhase('ready');
+      setLoadingState('Ready');
     } catch (startupError) {
-      failStartup(String(startupError));
+      handleStartupFailure(String(startupError));
     }
   };
 
@@ -343,7 +580,10 @@ export function DesktopAppShell() {
 
     let disposed = false;
 
-    void beginStartup();
+    startupAutoRetryAttemptedRef.current = false;
+    startupAutoRetryInFlightRef.current = false;
+    setStartupCurrentTimeoutSeconds(STARTUP_INITIAL_TIMEOUT_SECONDS);
+    void beginStartup({ attachTimeoutSeconds: STARTUP_INITIAL_TIMEOUT_SECONDS });
 
     loadDesktopRuntimeStatus()
       .then((status) => {
@@ -362,8 +602,36 @@ export function DesktopAppShell() {
       }
 
       const payload = event.payload as DesktopBootstrap | DesktopRuntimeStatus | undefined;
+      if (event.type === 'voice_pack_progress' && event.payload) {
+        const progress = event.payload as DesktopVoicePackInstallProgress;
+        setVoicePackProgress(progress);
+        if (progress.packId) {
+          if (progress.state === 'error' || progress.state === 'ready') {
+            setVoicePackBusyId(null);
+          } else {
+            setVoicePackBusyId(progress.packId);
+          }
+        }
+        if (progress.message) {
+          setNotice(progress.message);
+        }
+        if (progress.state === 'error') {
+          setError(progress.message || 'Voice pack installation failed.');
+        }
+        return;
+      }
+
       if (event.type === 'runtime_status' && payload) {
-        setRuntimeStatus(payload as DesktopRuntimeStatus);
+        const nextStatus = payload as DesktopRuntimeStatus;
+        setRuntimeStatus(nextStatus);
+        const failureDetail = runtimeFailureDetail(nextStatus);
+        if (
+          failureDetail &&
+          isStartupPending(startupPhaseRef.current) &&
+          !isLaunchableRuntimePrestartDetail(failureDetail, bootstrap?.canLaunchLocalRuntime)
+        ) {
+          handleStartupFailure(failureDetail);
+        }
         return;
       }
 
@@ -376,12 +644,21 @@ export function DesktopAppShell() {
         const bootstrapPayload = payload as DesktopBootstrap | undefined;
         if (bootstrapPayload?.apiBaseUrl) {
           applyBootstrap(bootstrapPayload);
+          const failureDetail = runtimeFailureDetail(bootstrapPayload.runtimeStatus);
+          if (
+            failureDetail &&
+            isStartupPending(startupPhaseRef.current) &&
+            !isLaunchableRuntimePrestartDetail(failureDetail, bootstrapPayload.canLaunchLocalRuntime)
+          ) {
+            handleStartupFailure(failureDetail);
+            return;
+          }
           if (
             event.type === 'runtime_stopped' &&
             isStartupPending(startupPhaseRef.current) &&
             !bootstrapPayload.runtimeStatus?.ok
           ) {
-            failStartup(
+            handleStartupFailure(
               bootstrapPayload.runtimeStatus?.detail ||
               'The local runtime stopped before the desktop app became ready.'
             );
@@ -410,9 +687,11 @@ export function DesktopAppShell() {
     }
     startupWatchdogTimerRef.current = setTimeout(() => {
       if (isStartupPending(startupPhaseRef.current)) {
-        failStartup('Startup is taking longer than expected. The desktop app did not become ready within 60 seconds.');
+        handleStartupFailure(
+          `Startup is taking longer than expected. The desktop app did not become ready within the current startup window (${startupCurrentTimeoutSeconds}s runtime budget).`
+        );
       }
-    }, STARTUP_WATCHDOG_MS);
+    }, currentStartupWatchdogMs);
 
     return () => {
       if (startupWatchdogTimerRef.current) {
@@ -420,7 +699,7 @@ export function DesktopAppShell() {
         startupWatchdogTimerRef.current = null;
       }
     };
-  }, [startupPhase]);
+  }, [startupCurrentTimeoutSeconds, currentStartupWatchdogMs, startupPhase]);
 
   const remoteRuntimes = useMemo<RemoteRuntimeSummary[]>(
     () => [
@@ -466,9 +745,22 @@ export function DesktopAppShell() {
   const startupOverlayVisible = isStartupPending(startupPhase);
   const startupStatusText = startupStatusLabel(startupPhase, loadingState);
 
+  useEffect(() => {
+    if (!localRuntimeReady) {
+      return;
+    }
+    setError((current) => (isRuntimeConnectivityMessage(current) ? null : current));
+    setStartupErrorDetail((current) => (isRuntimeConnectivityMessage(current) ? null : current));
+    setNotice((current) => (current && isStartupTimeoutMessage(current) ? null : current));
+  }, [localRuntimeReady]);
+
   const handleConversationStartupState = (state: StartupReadinessState, detail?: string) => {
+    if (startupPhaseRef.current === 'ready') {
+      return;
+    }
+
     if (state === 'warming') {
-      if (startupPhaseRef.current !== 'ready' && detail) {
+      if (detail) {
         setLoadingState(detail);
       }
       if (startupPhaseRef.current === 'starting_runtime' || startupPhaseRef.current === 'bootstrapping') {
@@ -486,8 +778,68 @@ export function DesktopAppShell() {
     setLoadingState('Ready');
   };
 
+  useEffect(() => {
+    if (startupPhase !== 'startup_error') {
+      return;
+    }
+    if (setupBlocksRuntime || !bootstrap?.accessToken || !localRuntimeReady) {
+      return;
+    }
+
+    setError((current) => (isRuntimeConnectivityMessage(current) ? null : current));
+    setStartupErrorDetail((current) => (isRuntimeConnectivityMessage(current) ? null : current));
+    setLoadingState('Recovered local runtime');
+    setStartupPhase('ready');
+  }, [bootstrap?.accessToken, localRuntimeReady, setupBlocksRuntime, startupPhase]);
+
+  const refreshSetupRuntimeControls = async () => {
+    if (!bootstrap?.apiBaseUrl || !bootstrap?.accessToken || !(runtimeStatus?.ok ?? bootstrap?.runtimeStatus?.ok)) {
+      setTelegramBotConfigs([]);
+      setOrchestratorStatus(null);
+      setSetupSessions([]);
+      setSetupMaxTurns(null);
+      return;
+    }
+    try {
+      const currentSessionId = typeof bootstrap.currentSessionId === 'string' && bootstrap.currentSessionId.trim()
+        ? bootstrap.currentSessionId.trim()
+        : null;
+      const [botConfigs, runtimeOrchestrator, sessions, overview] = await Promise.all([
+        fetchTelegramBotConfigs(bootstrap.apiBaseUrl, bootstrap.accessToken).catch(() => []),
+        fetchRuntimeOrchestratorStatus(bootstrap.apiBaseUrl, bootstrap.accessToken).catch(() => null),
+        fetchSessions(bootstrap.apiBaseUrl, bootstrap.accessToken).catch(() => []),
+        currentSessionId
+          ? fetchAgentOverview(
+              bootstrap.apiBaseUrl,
+              bootstrap.accessToken,
+              { sessionId: currentSessionId },
+            ).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+      setTelegramBotConfigs(Array.isArray(botConfigs) ? botConfigs : []);
+      setOrchestratorStatus(runtimeOrchestrator);
+      setSetupSessions(Array.isArray(sessions) ? sessions : []);
+      setSetupMaxTurns(typeof overview?.max_turns === 'number' ? overview.max_turns : null);
+    } catch {
+      setTelegramBotConfigs([]);
+      setOrchestratorStatus(null);
+      setSetupSessions([]);
+      setSetupMaxTurns(null);
+    }
+  };
+
   const retryStartup = async () => {
-    await beginStartup({ forceBootstrap: true });
+    const nextTimeoutSeconds = nextStartupRetryWindowSeconds;
+    startupAutoRetryAttemptedRef.current = false;
+    startupAutoRetryInFlightRef.current = false;
+    setStartupCurrentTimeoutSeconds(nextTimeoutSeconds);
+    setStartingRuntime(true);
+    setNotice(`Retrying startup with a ${nextTimeoutSeconds}-second runtime window.`);
+    try {
+      await beginStartup({ forceBootstrap: true, attachTimeoutSeconds: nextTimeoutSeconds });
+    } finally {
+      setStartingRuntime(false);
+    }
   };
 
   useEffect(() => {
@@ -665,18 +1017,71 @@ export function DesktopAppShell() {
 
   const installVoicePack = async (packId: string) => {
     setVoicePackBusyId(packId);
+    setVoicePackProgress({
+      packId,
+      state: 'starting',
+      phase: 'prepare',
+      message: `Preparing ${packId === 'hebrew_local' ? 'Hebrew' : 'English'} voice pack install...`,
+      percent: 0,
+    });
     setError(null);
-    setNotice(`Installing ${packId === 'hebrew_local' ? 'Hebrew' : 'English'} voice pack...`);
+    setNotice(`Preparing ${packId === 'hebrew_local' ? 'Hebrew' : 'English'} voice pack install...`);
     try {
-      const payload = await installDesktopVoicePack(packId);
+      let payload = await installDesktopVoicePack(packId);
       if (!payload) {
         setError('Voice pack controls are unavailable in this shell.');
         return;
       }
+      if (
+        packId === 'hebrew_local'
+        && payload.apiBaseUrl
+        && payload.accessToken
+        && payload.setupState?.voicePacks?.defaultEngine === 'hebrew_local'
+      ) {
+        setVoicePackProgress({
+          packId,
+          state: 'warming',
+          phase: 'warmup',
+          message: 'Warming Hebrew voice path so first capture is ready immediately...',
+          percent: 96,
+        });
+        setNotice('Warming Hebrew voice path so first capture is ready immediately...');
+        const warmedVoiceStatus = await warmVoiceRuntime(payload.apiBaseUrl, payload.accessToken);
+        const warmupError = String(
+          warmedVoiceStatus?.warmup?.['error']
+          || warmedVoiceStatus?.issues?.[0]
+          || '',
+        ).trim();
+        payload = {
+          ...payload,
+          setupState: payload.setupState
+            ? {
+                ...payload.setupState,
+                voiceStatus: warmedVoiceStatus as any,
+              }
+            : payload.setupState,
+        };
+        if (warmupError) {
+          throw new Error(warmupError);
+        }
+      }
       applyBootstrap(payload, { keepSetupClosed: false });
-      setNotice(`${packId === 'hebrew_local' ? 'Hebrew' : 'English'} voice pack installed.`);
+      setVoicePackProgress({
+        packId,
+        state: 'ready',
+        phase: 'complete',
+        message: `${packId === 'hebrew_local' ? 'Hebrew' : 'English'} voice pack is ready.`,
+        percent: 100,
+      });
+      setNotice(`${packId === 'hebrew_local' ? 'Hebrew' : 'English'} voice pack is ready.`);
     } catch (installError) {
       setError(installError instanceof Error ? installError.message : String(installError));
+      setVoicePackProgress({
+        packId,
+        state: 'error',
+        phase: 'error',
+        message: installError instanceof Error ? installError.message : String(installError),
+      });
     } finally {
       setVoicePackBusyId(null);
     }
@@ -684,6 +1089,7 @@ export function DesktopAppShell() {
 
   const removeVoicePack = async (packId: string) => {
     setVoicePackBusyId(packId);
+    setVoicePackProgress(null);
     setError(null);
     setNotice(`Removing ${packId === 'hebrew_local' ? 'Hebrew' : 'English'} voice pack...`);
     try {
@@ -740,7 +1146,108 @@ export function DesktopAppShell() {
     }
   };
 
+  const createSetupTelegramBot = async (payload: { label: string; bot_token: string }) => {
+    if (!bootstrap?.apiBaseUrl || !bootstrap?.accessToken) {
+      setError('Runtime API is not ready yet.');
+      return;
+    }
+    try {
+      await createTelegramBotConfig(bootstrap.apiBaseUrl, bootstrap.accessToken, payload);
+      await refreshSetupRuntimeControls();
+      setNotice(`Telegram bot "${payload.label}" added.`);
+    } catch (createError) {
+      setError(describeError(createError));
+    }
+  };
+
+  const updateSetupTelegramBot = async (
+    botConfigId: string,
+    payload: { label?: string; bot_token?: string; is_default?: boolean },
+  ) => {
+    if (!bootstrap?.apiBaseUrl || !bootstrap?.accessToken) {
+      setError('Runtime API is not ready yet.');
+      return;
+    }
+    try {
+      await updateTelegramBotConfig(bootstrap.apiBaseUrl, bootstrap.accessToken, botConfigId, payload);
+      await refreshSetupRuntimeControls();
+      setNotice('Telegram bot settings updated.');
+    } catch (updateError) {
+      setError(describeError(updateError));
+    }
+  };
+
+  const deleteSetupTelegramBot = async (botConfigId: string) => {
+    if (!bootstrap?.apiBaseUrl || !bootstrap?.accessToken) {
+      setError('Runtime API is not ready yet.');
+      return;
+    }
+    try {
+      await deleteTelegramBotConfig(bootstrap.apiBaseUrl, bootstrap.accessToken, botConfigId);
+      await refreshSetupRuntimeControls();
+      setNotice('Telegram bot removed.');
+    } catch (deleteError) {
+      setError(describeError(deleteError));
+    }
+  };
+
+  const configureRuntimeOrchestratorFromSetup = async (
+    payload: { enabled?: boolean; default_max_concurrent_chats?: number | null },
+  ) => {
+    if (!bootstrap?.apiBaseUrl || !bootstrap?.accessToken) {
+      setError('Runtime API is not ready yet.');
+      return;
+    }
+    try {
+      const next = await configureHeadlessRuntime(bootstrap.apiBaseUrl, bootstrap.accessToken, {
+        enabled: payload.enabled,
+        default_max_concurrent_chats: payload.default_max_concurrent_chats ?? undefined,
+      });
+      setOrchestratorStatus(next);
+      setNotice('Runtime concurrency settings updated.');
+    } catch (runtimeError) {
+      setError(describeError(runtimeError));
+    }
+  };
+
+  const updateSetupGeneralAgentConfig = async (
+    payload: { max_turns?: number },
+  ) => {
+    if (!bootstrap?.apiBaseUrl || !bootstrap?.accessToken) {
+      setError('Runtime API is not ready yet.');
+      return;
+    }
+    try {
+      await configureAgent(
+        bootstrap.apiBaseUrl,
+        bootstrap.accessToken,
+        { max_turns: payload.max_turns },
+        bootstrap.currentSessionId || undefined,
+      );
+      if (typeof payload.max_turns === 'number') {
+        setSetupMaxTurns(payload.max_turns);
+        setNotice(`Max turns updated to ${payload.max_turns}.`);
+      }
+    } catch (agentConfigError) {
+      setError(describeError(agentConfigError));
+    }
+  };
+
   const runtimeSummary = runtimeLabel(runtimeStatus || bootstrap?.runtimeStatus || null, loadingState);
+  const telegramStatus = bootstrap?.telegramStatus || null;
+  const telegramSummary = telegramStatusLabel(telegramStatus);
+  const telegramStatusTone =
+    telegramStatus?.state === 'running'
+      ? 'ready'
+      : telegramStatus?.state === 'starting'
+        ? 'starting'
+        : telegramStatus?.state === 'disabled'
+          ? 'muted'
+          : telegramStatus?.state === 'not_configured'
+            ? 'warning'
+            : telegramStatus?.state === 'degraded'
+              ? 'warning'
+              : 'offline';
 
   useEffect(() => {
     if (!showSetup || memoryLoading || memoryState || !isDesktopEnvironment()) {
@@ -748,6 +1255,57 @@ export function DesktopAppShell() {
     }
     void refreshMemory();
   }, [showSetup, memoryLoading, memoryState]);
+
+  useEffect(() => {
+    if (!showSetup) {
+      return;
+    }
+    void refreshSetupRuntimeControls();
+  }, [showSetup, bootstrap?.apiBaseUrl, bootstrap?.accessToken, runtimeStatus?.ok, bootstrap?.runtimeStatus?.ok]);
+
+  useEffect(() => {
+    const nextState = telegramStatus?.state || null;
+    const previousState = previousTelegramStateRef.current;
+    previousTelegramStateRef.current = nextState;
+    if (nextState === 'running' && previousState && previousState !== 'running') {
+      setNotice('Telegram backend is ready. You can use EmploAI from Telegram now.');
+    }
+  }, [telegramStatus?.state]);
+
+  useEffect(() => {
+    if (!isDesktopEnvironment()) {
+      return;
+    }
+    if (!localRuntimeReady || !telegramStatus?.enabled || !telegramStatus.configured) {
+      return;
+    }
+    if (telegramStatus.state === 'running' || telegramStatus.state === 'disabled' || telegramStatus.state === 'not_configured') {
+      return;
+    }
+
+    let disposed = false;
+    const poll = async () => {
+      try {
+        const payload = await loadDesktopBootstrap({ force: true });
+        if (disposed || !payload) {
+          return;
+        }
+        applyBootstrap(payload, { preserveLoadingState: true });
+      } catch {
+        // Keep the last known Telegram status visible until the next successful poll.
+      }
+    };
+
+    void poll();
+    const intervalId = globalThis.setInterval(() => {
+      void poll();
+    }, 3000);
+
+    return () => {
+      disposed = true;
+      globalThis.clearInterval(intervalId);
+    };
+  }, [localRuntimeReady, telegramStatus?.configured, telegramStatus?.enabled, telegramStatus?.state]);
 
   if (startupPhase === 'setup_required') {
     return (
@@ -758,6 +1316,7 @@ export function DesktopAppShell() {
               setupState={bootstrap.setupState}
               saving={savingSetup}
               voicePackBusyId={voicePackBusyId}
+              voicePackProgress={voicePackProgress}
               onSave={(values) => void saveSetup(values)}
               onInstallVoicePack={(packId) => void installVoicePack(packId)}
               onRemoveVoicePack={(packId) => void removeVoicePack(packId)}
@@ -775,6 +1334,15 @@ export function DesktopAppShell() {
               installingUpdate={installingUpdate}
               onCheckUpdates={() => void refreshUpdateStatus(true)}
               onInstallUpdate={() => void installUpdateNow()}
+              telegramBotConfigs={telegramBotConfigs}
+              sessions={setupSessions}
+              runtimeOrchestratorStatus={orchestratorStatus}
+              currentMaxTurns={setupMaxTurns}
+              onCreateTelegramBotConfig={(payload) => void createSetupTelegramBot(payload)}
+              onUpdateTelegramBotConfig={(botConfigId, payload) => void updateSetupTelegramBot(botConfigId, payload)}
+              onDeleteTelegramBotConfig={(botConfigId) => void deleteSetupTelegramBot(botConfigId)}
+              onConfigureRuntimeOrchestrator={(payload) => void configureRuntimeOrchestratorFromSetup(payload)}
+              onUpdateGeneralAgentConfig={(payload) => void updateSetupGeneralAgentConfig(payload)}
             />
           </View>
         ) : (
@@ -802,6 +1370,7 @@ export function DesktopAppShell() {
               setupState={bootstrap.setupState}
               saving={savingSetup}
               voicePackBusyId={voicePackBusyId}
+              voicePackProgress={voicePackProgress}
               onSave={(values) => void saveSetup(values)}
               onInstallVoicePack={(packId) => void installVoicePack(packId)}
               onRemoveVoicePack={(packId) => void removeVoicePack(packId)}
@@ -819,6 +1388,15 @@ export function DesktopAppShell() {
               installingUpdate={installingUpdate}
               onCheckUpdates={() => void refreshUpdateStatus(true)}
               onInstallUpdate={() => void installUpdateNow()}
+              telegramBotConfigs={telegramBotConfigs}
+              sessions={setupSessions}
+              runtimeOrchestratorStatus={orchestratorStatus}
+              currentMaxTurns={setupMaxTurns}
+              onCreateTelegramBotConfig={(payload) => void createSetupTelegramBot(payload)}
+              onUpdateTelegramBotConfig={(botConfigId, payload) => void updateSetupTelegramBot(botConfigId, payload)}
+              onDeleteTelegramBotConfig={(botConfigId) => void deleteSetupTelegramBot(botConfigId)}
+              onConfigureRuntimeOrchestrator={(payload) => void configureRuntimeOrchestratorFromSetup(payload)}
+              onUpdateGeneralAgentConfig={(payload) => void updateSetupGeneralAgentConfig(payload)}
             />
           </View>
         ) : (
@@ -827,6 +1405,9 @@ export function DesktopAppShell() {
             <Text style={styles.startupGateTitle}>Startup needs attention</Text>
             <Text style={styles.startupGateText}>
               {startupErrorDetail || error || 'The desktop app could not finish becoming ready.'}
+            </Text>
+            <Text style={styles.startupHintText}>
+              Retry will use a {nextStartupRetryWindowSeconds}-second runtime window.
             </Text>
             <View style={styles.startupActionRow}>
               <Pressable
@@ -856,6 +1437,24 @@ export function DesktopAppShell() {
           <View style={[styles.statusDot, localRuntimeReady ? styles.statusDotOnline : styles.statusDotOffline]} />
           <Text style={styles.headerTitle}>EmploAI</Text>
           <Text style={styles.headerMeta}>{runtimeSummary}</Text>
+          {telegramStatus ? (
+            <View
+              style={[
+                styles.telegramBadge,
+                telegramStatusTone === 'ready'
+                  ? styles.telegramBadgeReady
+                  : telegramStatusTone === 'starting'
+                    ? styles.telegramBadgeStarting
+                    : telegramStatusTone === 'warning'
+                      ? styles.telegramBadgeWarning
+                      : telegramStatusTone === 'muted'
+                        ? styles.telegramBadgeMuted
+                        : styles.telegramBadgeOffline,
+              ]}
+            >
+              <Text style={styles.telegramBadgeText}>{telegramSummary}</Text>
+            </View>
+          ) : null}
           {bootstrap?.currentSessionId ? (
             <Text style={styles.headerSession}>· {bootstrap.currentSessionId.slice(0, 8)}</Text>
           ) : null}
@@ -908,27 +1507,36 @@ export function DesktopAppShell() {
         </View>
       ) : activeTab === 'local' ? (
         <View style={styles.tabBody}>
-          {bootstrap && localRuntimeReady ? (
-            <DesktopConversationView
-              apiBaseUrl={bootstrap.apiBaseUrl}
-              token={bootstrap.accessToken}
-              initialSessionId={requestedSessionId || bootstrap.currentSessionId || undefined}
-              runtimeMode={bootstrap.runtimeMode}
-              runtimeStatus={runtimeStatus || bootstrap.runtimeStatus || null}
-              envFilePath={bootstrap.envFilePath || undefined}
-              defaultInterruptPolicy={bootstrap.setupState?.values.INTERRUPT_POLICY_DEFAULT || 'none'}
-              voicePackState={bootstrap.setupState?.voicePacks || null}
-              voiceStatus={bootstrap.setupState?.voiceStatus || null}
-              onSelectVoiceEngine={(engine) => selectVoiceEngine(engine)}
-              onStartupStateChange={handleConversationStartupState}
-              onOpenSetup={() => setShowSetup(true)}
-              setupOpen={showSetup}
-            />
+          {bootstrap && localRuntimeReady && startupPhase === 'ready' ? (
+            <View style={styles.conversationBootShell}>
+              <DesktopConversationView
+                apiBaseUrl={bootstrap.apiBaseUrl}
+                token={bootstrap.accessToken}
+                initialSessionId={requestedSessionId || bootstrap.currentSessionId || undefined}
+                runtimeMode={bootstrap.runtimeMode}
+                runtimeStatus={runtimeStatus || bootstrap.runtimeStatus || null}
+                envFilePath={bootstrap.envFilePath || undefined}
+                defaultWorkspace={bootstrap.setupState?.values.DEFAULT_WORKSPACE || bootstrap.workspaceRoot || undefined}
+                defaultInterruptPolicy={bootstrap.setupState?.values.INTERRUPT_POLICY_DEFAULT || 'none'}
+                configuredModelGroups={bootstrap.setupState?.modelGroups || []}
+                configuredPlannerModels={bootstrap.setupState?.plannerModels || []}
+                voicePackState={bootstrap.setupState?.voicePacks || null}
+                voiceStatus={bootstrap.setupState?.voiceStatus || null}
+                onSelectVoiceEngine={(engine) => selectVoiceEngine(engine)}
+                onStartupStateChange={handleConversationStartupState}
+                onOpenSetup={() => setShowSetup(true)}
+                setupOpen={showSetup}
+              />
+            </View>
           ) : (
             <View style={styles.loadingCard}>
-              <Text style={styles.loadingTitle}>Desktop shell is running</Text>
+              <Text style={styles.loadingTitle}>
+                {startupOverlayVisible ? 'Preparing local chat' : 'Desktop shell is running'}
+              </Text>
               <Text style={styles.loadingText}>
-                Start the runtime to host the agent on this computer, or open setup to configure keys, updates, and local tools.
+                {startupOverlayVisible
+                  ? startupStatusText
+                  : 'Start the runtime to host the agent on this computer, or open setup to configure keys, updates, and local tools.'}
               </Text>
               <View style={styles.offlineMetaCard}>
                 <Text style={styles.offlineMetaLabel}>Local runtime</Text>
@@ -1000,6 +1608,7 @@ export function DesktopAppShell() {
                 setupState={bootstrap.setupState}
                 saving={savingSetup}
                 voicePackBusyId={voicePackBusyId}
+                voicePackProgress={voicePackProgress}
                 onSave={(values) => void saveSetup(values)}
                 onInstallVoicePack={(packId) => void installVoicePack(packId)}
                 onRemoveVoicePack={(packId) => void removeVoicePack(packId)}
@@ -1017,6 +1626,15 @@ export function DesktopAppShell() {
                 installingUpdate={installingUpdate}
                 onCheckUpdates={() => void refreshUpdateStatus(true)}
                 onInstallUpdate={() => void installUpdateNow()}
+                telegramBotConfigs={telegramBotConfigs}
+                sessions={setupSessions}
+                runtimeOrchestratorStatus={orchestratorStatus}
+                currentMaxTurns={setupMaxTurns}
+                onCreateTelegramBotConfig={(payload) => void createSetupTelegramBot(payload)}
+                onUpdateTelegramBotConfig={(botConfigId, payload) => void updateSetupTelegramBot(botConfigId, payload)}
+                onDeleteTelegramBotConfig={(botConfigId) => void deleteSetupTelegramBot(botConfigId)}
+                onConfigureRuntimeOrchestrator={(payload) => void configureRuntimeOrchestratorFromSetup(payload)}
+                onUpdateGeneralAgentConfig={(payload) => void updateSetupGeneralAgentConfig(payload)}
               />
             </View>
           </View>
@@ -1069,6 +1687,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     maxWidth: 420,
   },
+  startupHintText: {
+    color: '#6f86ab',
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: 'center',
+    maxWidth: 420,
+  },
   startupActionRow: {
     flexDirection: 'row',
     gap: 12,
@@ -1078,7 +1703,7 @@ const styles = StyleSheet.create({
   },
   startupPrimaryButton: {
     minWidth: 160,
-    borderRadius: 999,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     paddingHorizontal: 18,
     paddingVertical: 12,
     backgroundColor: '#d4ff65',
@@ -1094,7 +1719,7 @@ const styles = StyleSheet.create({
   },
   startupSecondaryButton: {
     minWidth: 140,
-    borderRadius: 999,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     paddingHorizontal: 18,
     paddingVertical: 12,
     borderWidth: 1,
@@ -1109,10 +1734,13 @@ const styles = StyleSheet.create({
   },
   startupOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(7, 17, 31, 0.96)',
+    backgroundColor: '#07111f',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 50,
+  },
+  conversationBootShell: {
+    flex: 1,
   },
   startupOverlayCard: {
     alignItems: 'center',
@@ -1229,6 +1857,37 @@ const styles = StyleSheet.create({
     color: '#7f97bc',
     fontSize: 13,
   },
+  telegramBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: 1,
+  },
+  telegramBadgeReady: {
+    backgroundColor: '#102c24',
+    borderColor: '#235545',
+  },
+  telegramBadgeStarting: {
+    backgroundColor: '#13203a',
+    borderColor: '#33507d',
+  },
+  telegramBadgeWarning: {
+    backgroundColor: '#382812',
+    borderColor: '#735123',
+  },
+  telegramBadgeMuted: {
+    backgroundColor: '#111827',
+    borderColor: '#374151',
+  },
+  telegramBadgeOffline: {
+    backgroundColor: '#2c1620',
+    borderColor: '#5c2a3d',
+  },
+  telegramBadgeText: {
+    color: '#dce8ff',
+    fontSize: 11,
+    fontWeight: '700',
+  },
   headerSession: {
     color: '#5472a4',
     fontSize: 12,
@@ -1243,7 +1902,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   headerActionButton: {
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     paddingHorizontal: 14,
     paddingVertical: 6,
     backgroundColor: '#d4ff65',
@@ -1268,7 +1927,7 @@ const styles = StyleSheet.create({
   headerGearButton: {
     width: 36,
     height: 36,
-    borderRadius: 0,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#13203a',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1323,7 +1982,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   controlsPanelCloseButton: {
-    borderRadius: 999,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#1a2a48',
     paddingHorizontal: 12,
     paddingVertical: 7,
@@ -1356,7 +2015,7 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   controlsButton: {
-    borderRadius: 999,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#1a2a48',
     paddingHorizontal: 14,
     paddingVertical: 8,
@@ -1385,7 +2044,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   controlsUpdateButton: {
-    borderRadius: 12,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#d4ff65',
     paddingHorizontal: 14,
     paddingVertical: 8,
@@ -1451,7 +2110,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   runtimeButton: {
-    borderRadius: 999,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#d4ff65',
     paddingHorizontal: 18,
     paddingVertical: 12,
@@ -1464,7 +2123,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   secondaryRuntimeButton: {
-    borderRadius: 999,
+    borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#17253f',
     paddingHorizontal: 18,
     paddingVertical: 12,

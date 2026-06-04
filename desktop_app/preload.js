@@ -14,7 +14,7 @@ contextBridge.exposeInMainWorld('emploaiDesktop', {
   bootstrap: () => ipcRenderer.invoke('emploai:bootstrap'),
   getRuntimeStatus: () => ipcRenderer.invoke('emploai:get-runtime-status'),
   runtime: {
-    start: () => ipcRenderer.invoke('emploai:runtime:start'),
+    start: (payload) => ipcRenderer.invoke('emploai:runtime:start', payload),
     stop: () => ipcRenderer.invoke('emploai:runtime:stop'),
   },
   setup: {
@@ -45,6 +45,9 @@ contextBridge.exposeInMainWorld('emploaiDesktop', {
     readState: () => ipcRenderer.invoke('emploai:sidebar:read-state'),
     writeState: (payload) => ipcRenderer.invoke('emploai:sidebar:write-state', payload),
     pickFolder: (payload) => ipcRenderer.invoke('emploai:sidebar:pick-folder', payload),
+    pathStatus: (payload) => ipcRenderer.invoke('emploai:sidebar:path-status', payload),
+    gitRepoInfo: (payload) => ipcRenderer.invoke('emploai:sidebar:git-repo-info', payload),
+    checkoutBranch: (payload) => ipcRenderer.invoke('emploai:sidebar:checkout-branch', payload),
   },
   onRuntimeEvent: (callback) => subscribe('emploai:runtime-event', callback),
 });

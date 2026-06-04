@@ -10,10 +10,16 @@ import asyncio
 from datetime import datetime
 from typing import Callable, Optional
 
+from cli.agent_tools.definitions import CLI_AGENT_TOOLS
 from cli.agent_tools.loop import run_tool_loop
 from cli.tui_constants import MODEL_CONFIGS
 from single_agent.agent import AGENT_TOOLS
 from shared import current_session_id
+from shared.tool_packs import (
+    filter_openai_tools_by_enabled_packs,
+    filter_tools_by_enabled_packs,
+    tools_for_enabled_packs,
+)
 from telegram_bot.telegram_unified_agent import (
     build_unified_system_prompt,
     get_auto_mode_extra_tools,
@@ -59,7 +65,12 @@ async def run_cron_job_via_unified_flow(
     if session.tool_executor:
         session.tool_executor.custom_tool_handlers = get_auto_mode_tool_handlers(session)
 
-    extra_tools = _get_provider_tools(provider)
+    active_tool_packs = list(
+        getattr(session, "_active_tool_packs_for_current_run", None)
+        or getattr(session, "enabled_tool_packs", [])
+        or []
+    )
+    extra_tools = filter_openai_tools_by_enabled_packs(_get_provider_tools(provider), active_tool_packs)
 
     skills_index = ""
     active_skills_context = ""
@@ -134,21 +145,28 @@ async def run_cron_job_via_unified_flow(
     }
 
     loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(
-        None,
-        lambda: run_tool_loop(
-            provider=provider,
-            model_id=model_id,
-            client=client,
-            messages=messages,
-            tool_executor=session.tool_executor,
-            callbacks=callbacks,
-            variant=session.current_variant,
-            extra_tools=extra_tools,
-            custom_system_prompt=custom_system_prompt,
-            api_type=api_type,
-        ),
-    )
+    session.current_turn_allowed_tool_names = tools_for_enabled_packs(active_tool_packs)
+    session.current_turn_allowed_tool_definitions = filter_tools_by_enabled_packs(CLI_AGENT_TOOLS, active_tool_packs)
+    try:
+        result = await loop.run_in_executor(
+            None,
+            lambda: run_tool_loop(
+                provider=provider,
+                model_id=model_id,
+                client=client,
+                messages=messages,
+                tool_executor=session.tool_executor,
+                callbacks=callbacks,
+                variant=session.current_variant,
+                extra_tools=extra_tools,
+                base_tools=session.current_turn_allowed_tool_definitions,
+                custom_system_prompt=custom_system_prompt,
+                api_type=api_type,
+            ),
+        )
+    finally:
+        session.current_turn_allowed_tool_names = None
+        session.current_turn_allowed_tool_definitions = []
 
     final_response = result.content or "".join(response_buffer)
     clean_response = final_response.strip() or "Done (no text response)"
@@ -166,19 +184,5 @@ async def run_cron_job_via_unified_flow(
             )
         except Exception:
             pass
-
-    session.chat_history.append(
-        {
-            "role": "assistant",
-            "content": clean_response,
-            "timestamp": datetime.now().isoformat(),
-            "scheduled_job": True,
-            "scheduled_job_id": scheduled_job_id,
-            "channel": "system",
-            "source_format": "scheduled_job_result",
-            "display_label": "Scheduled Job",
-        }
-    )
-    session.save_session()
 
     return clean_response

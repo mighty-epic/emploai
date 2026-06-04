@@ -2,6 +2,7 @@ from telegram_bot.telegram_session_state import BrowserTaskContext
 from telegram_bot.telegram_unified_agent import (
     _execute_browser_activate_tab,
     _execute_browser_navigate,
+    _execute_browser_read_text,
     _execute_observe_browser,
     _execute_browser_snapshot,
     build_unified_system_prompt,
@@ -77,6 +78,7 @@ class FakeExtensionBrowser:
         self.navigate_calls = []
         self.activate_calls = []
         self.snapshot_calls = []
+        self.read_text_calls = []
         self.started = 0
 
     def start_server(self):
@@ -132,19 +134,44 @@ class FakeExtensionBrowser:
             },
         )
 
+    def read_text(self, selector=None, max_chars=4000, tab_id=None):
+        self.read_text_calls.append({"selector": selector, "max_chars": max_chars, "tab_id": tab_id})
+        return browser_success(
+            "extension",
+            tab_id=tab_id or 101,
+            window_id=1,
+            url="https://snapshot.example",
+            title="Snapshot",
+            extras={
+                "mode": "headed",
+                "text": "Example Domain",
+                "selector": selector,
+                "truncated": False,
+                "full_length": len("Example Domain"),
+            },
+        )
+
 
 class FakeSeleniumBrowser:
     def __init__(self):
         self.navigate_calls = []
+        self.read_text_calls = []
+        self.current_mode = "headed"
 
-    def navigate(self, url, tab_id=None):
-        self.navigate_calls.append(tab_id)
+    def get_current_mode(self):
+        return self.current_mode
+
+    def navigate(self, url, tab_id=None, headless=None):
+        self.navigate_calls.append({"tab_id": tab_id, "headless": headless})
+        if headless is not None:
+            self.current_mode = "headless" if headless else "headed"
         return browser_success(
             "selenium",
             tab_id=tab_id or "selenium-1",
             window_id="selenium-1",
             url=url,
             title="Selenium Page",
+            extras={"mode": self.current_mode},
         )
 
     def activate_tab(self, index=None, title_contains=None, url_contains=None, tab_id=None):
@@ -166,7 +193,24 @@ class FakeSeleniumBrowser:
             title="Selenium Snapshot",
             snapshot_hash="beadfeed",
             interactive_count=1,
-            extras={"formatted": "No interactive elements found", "elements": [], "count": 0},
+            extras={"formatted": "No interactive elements found", "elements": [], "count": 0, "mode": self.current_mode},
+        )
+
+    def read_text(self, selector=None, max_chars=4000, tab_id=None):
+        self.read_text_calls.append({"selector": selector, "max_chars": max_chars, "tab_id": tab_id})
+        return browser_success(
+            "selenium",
+            tab_id=tab_id or "selenium-1",
+            window_id="selenium-1",
+            url="https://selenium-snapshot.example",
+            title="Selenium Snapshot",
+            extras={
+                "mode": self.current_mode,
+                "text": "Example Domain",
+                "selector": selector,
+                "truncated": False,
+                "full_length": len("Example Domain"),
+            },
         )
 
 
@@ -256,7 +300,10 @@ def test_extension_timeout_falls_back_to_selenium_and_sticks_for_task():
     assert "second.example" in second
     assert context.backend == "selenium"
     assert session.extension_tool.navigate_calls == [None]
-    assert session.browser_tool.navigate_calls == [None, "selenium-1"]
+    assert session.browser_tool.navigate_calls == [
+        {"tab_id": None, "headless": None},
+        {"tab_id": "selenium-1", "headless": None},
+    ]
 
 
 def test_offline_extension_preflights_directly_to_selenium():
@@ -270,7 +317,34 @@ def test_offline_extension_preflights_directly_to_selenium():
     assert "offline.example" in message
     assert "Bridge fallback" in message
     assert context.backend == "selenium"
-    assert session.browser_tool.navigate_calls == [None]
+    assert session.browser_tool.navigate_calls == [{"tab_id": None, "headless": None}]
+
+
+def test_headless_navigation_forces_selenium_even_when_extension_is_available():
+    session = DummySession()
+    session.extension_tool = FakeExtensionBrowser()
+    session.browser_tool = FakeSeleniumBrowser()
+
+    message = _execute_browser_navigate(session, {"url": "https://headless.example", "headless": True})
+
+    assert "headless.example" in message
+    assert session.extension_tool.navigate_calls == []
+    assert session.browser_tool.navigate_calls == [{"tab_id": None, "headless": True}]
+    assert session.get_browser_task_context().backend == "selenium"
+
+
+def test_browser_read_text_reports_mode_and_text():
+    session = DummySession()
+    session.browser_tool = FakeSeleniumBrowser()
+    session.browser_task_context.backend = "selenium"
+    session.browser_task_context.primary_tab_id = "selenium-1"
+
+    result = _execute_browser_read_text(session, {"selector": "h1", "max_chars": 128})
+
+    assert "Visible page text:" in result
+    assert "Example Domain" in result
+    assert "Mode: headed" in result
+    assert session.browser_tool.read_text_calls == [{"selector": "h1", "max_chars": 200, "tab_id": "selenium-1"}]
 
 
 def test_user_chrome_task_with_disabled_bridge_blocks_browser_tools_instead_of_falling_back():
@@ -303,6 +377,10 @@ def test_user_chrome_task_with_offline_bridge_blocks_browser_tools_instead_of_fa
 def test_system_prompt_starts_with_live_browser_runtime_status():
     session = DummySession()
     session.extension_tool = FakeOfflineExtensionBrowser()
+    session.browser_tool = FakeSeleniumBrowser()
+    session.browser_tool.current_mode = "headless"
+    session.enabled_tool_packs = ["interactive_desktop"]
+    session._active_tool_packs_for_current_run = []
 
     prompt = build_unified_system_prompt(session)
 
@@ -311,5 +389,7 @@ def test_system_prompt_starts_with_live_browser_runtime_status():
     assert "- Active Windows: none" in prompt
     assert "Task depends on user's Chrome: NO" in prompt
     assert "Real Chrome available now: NO" in prompt
+    assert "Isolated Selenium mode configured now: headless" in prompt
+    assert "If isolated Selenium is headless, describe_screen and ocr_screen cannot inspect that browser page." in prompt
     assert "Do NOT assume browser_* tools can use the extension" in prompt
     assert "Do NOT spend a turn on observe_desktop or focus_window" in prompt

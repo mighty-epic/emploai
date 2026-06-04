@@ -342,6 +342,10 @@ def test_build_setup_state_marks_versioned_setup_and_provider_labels(tmp_path: P
     assert state["versioned"] is True
     assert state["telegramRebindRequired"] is True
     assert state["configuredProviders"] == ["OpenAI"]
+    assert state["modelGroups"]
+    assert any(group["provider"] == "openai" for group in state["modelGroups"])
+    assert state["plannerModels"]
+    assert "gpt-5" in state["plannerModels"]
     assert state["validationIssues"][0].startswith("Review Telegram bot access")
     assert "voiceAvailable" in state
     assert "voiceStatus" in state

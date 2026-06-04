@@ -131,6 +131,8 @@ export type DesktopSetupState = {
   values: DesktopSetupValues;
   validationIssues: string[];
   configuredProviders: string[];
+  modelGroups?: Array<{ provider: string; models: string[] }>;
+  plannerModels?: string[];
   telegramConfigured: boolean;
   telegramPartiallyConfigured: boolean;
   remoteControlConfigured?: boolean;

@@ -7,6 +7,7 @@ import logging
 import time
 
 from telegram.constants import ChatAction
+from cli.agent_tools.definitions import CLI_AGENT_TOOLS
 
 try:
     from telegram_bot.telegram_unified_agent import (
@@ -25,13 +26,42 @@ except ImportError:
 from bot_core.ui_helpers import InlineKeyboardHelper, ThinkingModeVisualizer
 from single_agent.agent import AGENT_TOOLS
 from shared import begin_chat_turn, merge_openai_tools, run_reserved_chat_turn
-from shared.task_board import TASK_BOARD_INTERNAL_TOOL_NAME
+from shared.task_board import TASK_BOARD_INTERNAL_TOOL_NAME, get_active_task_board
+from shared.task_intent import is_screen_observation_message, is_task_like_message
+from shared.tool_pack_prompts import (
+    build_pack_aware_kickstart_prelude,
+    build_pack_aware_screen_observation_contract,
+    build_pack_aware_task_execution_contract,
+)
+from shared.tool_packs import (
+    filter_openai_tools_by_enabled_packs,
+    filter_tools_by_enabled_packs,
+    tools_for_enabled_packs,
+)
 
 
 logger = logging.getLogger(__name__)
 
 # --- Base64 field names to always strip from verbose output ---
 _BASE64_KEYS = frozenset({"image_base64", "base64", "image_data", "data", "screenshot"})
+
+
+def _conversational_turn_guard() -> dict[str, str]:
+    return {
+        "role": "system",
+        "content": (
+            "CONVERSATIONAL STYLE NOTE:\n"
+            "- All enabled tools remain available on this turn.\n"
+            "- For greetings, acknowledgements, thanks, or light conversation, reply directly without forcing unnecessary tool use.\n"
+            "- If the user asks about the current workspace, files, browser, desktop, or any other state that requires observation, use the relevant enabled tools instead of claiming they are unavailable.\n"
+            "- AGENTS.md, SOUL.md, USER.md, TOOLS.md, and MEMORY.md are already injected when available. If asked about them, answer from injected context instead of calling file tools for those filenames.\n"
+            "- Keep simple conversation concise, but do not hide enabled capabilities from the model."
+        ),
+    }
+
+
+def _screen_observation_contract(enabled_tool_packs) -> dict[str, str]:
+    return build_pack_aware_screen_observation_contract(enabled_tool_packs)
 
 
 def _format_verbose_tool_msg(name: str, args: dict, result, duration_ms: float) -> str:
@@ -90,6 +120,12 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
     message_id = update.effective_message.message_id if update.effective_message else None
     session._app = context.application
     session._loop = asyncio.get_running_loop()
+    refresh_session = getattr(session, "refresh_session_from_disk", None)
+    if callable(refresh_session):
+        try:
+            refresh_session()
+        except Exception:
+            logger.debug("Unable to refresh shared session state before Telegram turn", exc_info=True)
 
     reservation = await begin_chat_turn(
         session,
@@ -139,66 +175,37 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
     await context.bot.send_chat_action(chat_id=session.user_id, action=ChatAction.TYPING)
     await context.bot.send_chat_action(chat_id=session.user_id, action=ChatAction.TYPING)
 
-    # --- Kickstart priming: inject a hidden exchange that primes the model to act ---
-    # This is invisible to the user but teaches the model its expected behavior pattern.
-    # Only inject on first few messages to avoid bloating long conversations.
-    prelude_messages = []
-    if len(session.chat_history) <= 3:
-        kickstart = [
-            {
-                "role": "user",
-                "content": (
-                    "IMPORTANT REMINDER: You are an autonomous agent with full computer control. "
-                    "When I ask you to do something, DO IT immediately using your tools. "
-                    "Do not explain what you would do — just do it. "
-                    "Do not list what you can't do — find a way. "
-                    "If you need to install something, install it. "
-                    "Use browser DOM tools only when they are actually available for the current browser context. "
-                    "If the task is in the user's real Chrome and the extension bridge is unavailable, do NOT use browser_* tools for that page — "
-                    "switch to describe_screen plus atomic desktop actions, and use ocr_screen only when you need exact text coordinates or a fallback click. "
-                    "Use the cheapest verification tool that fits the environment. "
-                    "Never chain multiple browser or desktop edits without verifying the resulting state. "
-                    "If a method fails and the state has not changed, do not repeat it — choose a different method. "
-                    "Only declare done after the requested result is verified. "
-                    "Before you finish, quickly assess what worked, what failed, and save only durable reusable lessons to memory. "
-                    "Act first. Report results after."
-                ),
-            },
-            {
-                "role": "assistant",
-                "content": (
-                    "Understood. I will act immediately, verify each step, and use only the tools that match the current environment. "
-                    "If the task is in the user's Chrome without the extension bridge, I will not pretend Selenium or browser_* tools control that page; "
-                    "I will switch to visual observation and atomic desktop actions instead. "
-                    "I will avoid retrying failed methods unless state changed, and before finishing I will preserve only durable lessons worth remembering. "
-                    "Ready for your task."
-                ),
-            },
-        ]
-        prelude_messages.extend(kickstart)
+    screen_observation_turn = is_screen_observation_message(user_message)
+    task_like_turn = screen_observation_turn or is_task_like_message(user_message)
+    active_tool_packs = list(
+        getattr(session, "_active_tool_packs_for_current_run", None)
+        or getattr(session, "enabled_tool_packs", [])
+        or []
+    )
 
-    system_messages = [
-        {
-            "role": "system",
-            "content": (
-            "TASK EXECUTION CONTRACT:\n"
-            "- For complex tasks, keep a short internal checklist and complete one verified step at a time.\n"
-            "- The managed task board is runtime-owned. Do not try to create, rewrite, or complete it yourself.\n"
-            f"- Use {TASK_BOARD_INTERNAL_TOOL_NAME} only after the same concrete method has genuinely failed three times, or when the task truly requires credentials, 2FA, or account choice from the user.\n"
-            "- The runtime will create, reassess, and complete the board. Your job is to execute the task and report proof.\n"
-            "- Do not repeat a step once the requested state is already verified, and do not retry a failed method unless the page or app state changed.\n"
-            "- For webpage DOM actions, rely on browser tool results and browser_snapshot only when the current browser context actually supports them.\n"
-            "- If the task is in the user's real Chrome and the extension bridge is unavailable, browser_* tools do NOT control that page; use describe_screen first, then ocr_screen only for exact text coordinates or fallback clicks.\n"
-                "- Prefer describe_screen for visual discovery, button finding, and layout understanding. Use ocr_screen mainly for exact text extraction and coordinate fallback.\n"
-                "- Prefer ref-based browser tools over focus-dependent typing or synthetic keypresses.\n"
-                "- Use browser_wait_for instead of blind delays when waiting for navigation or confirmation text.\n"
-                "- Ask the user only for true user-dependent blockers such as credentials, 2FA, or account choice. All other failures should continue autonomously.\n"
-                "- Before final completion, assess what worked vs failed. Save only durable reusable lessons to memory.\n"
-                "- A task is done only when the requested file, page state, or deliverable is verified.\n"
-                "- End with a short completion report that states what is done, the proof, and any remaining blocker."
-            ),
-        }
-    ]
+    # --- Kickstart priming: inject a hidden exchange that primes the model to act ---
+    # This is invisible to the user but only applies when the user actually asked for action.
+    prelude_messages = []
+    if task_like_turn and len(session.chat_history) <= 3:
+        prelude_messages.extend(build_pack_aware_kickstart_prelude(active_tool_packs))
+
+    system_messages = []
+    if screen_observation_turn:
+        system_messages.append(_screen_observation_contract(active_tool_packs))
+    system_messages.extend(
+        [
+            build_pack_aware_task_execution_contract(
+                active_tool_packs,
+                task_board_internal_tool_name=TASK_BOARD_INTERNAL_TOOL_NAME,
+                task_board_enabled=bool(get_active_task_board(session)),
+                workspace_path=str(getattr(session, "workspace", "") or ""),
+            )
+        ]
+    )
+    if not task_like_turn:
+        system_messages.append(_conversational_turn_guard())
+    session.current_turn_allowed_tool_names = tools_for_enabled_packs(active_tool_packs)
+    session.current_turn_allowed_tool_definitions = filter_tools_by_enabled_packs(CLI_AGENT_TOOLS, active_tool_packs)
 
     progress_message = None
     controls = InlineKeyboardHelper.create_action_buttons([
@@ -247,9 +254,13 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
             reservation,
             prompt_builder=build_unified_system_prompt,
             tool_handlers_builder=get_auto_mode_tool_handlers,
-            extra_tools_builder=lambda runtime_session: merge_openai_tools(
-                get_auto_mode_extra_tools(),
-                AGENT_TOOLS,
+            extra_tools_builder=(
+                lambda runtime_session: filter_openai_tools_by_enabled_packs(
+                    merge_openai_tools(get_auto_mode_extra_tools(), AGENT_TOOLS),
+                    getattr(runtime_session, "_active_tool_packs_for_current_run", None)
+                    or getattr(runtime_session, "enabled_tool_packs", [])
+                    or [],
+                )
             ),
             system_messages=system_messages,
             prelude_messages=prelude_messages,
@@ -343,6 +354,8 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
             reply_markup = InlineKeyboardHelper.retry_buttons("message")
             await safe_reply(update, message, reply_markup=reply_markup)
     finally:
+        session.current_turn_allowed_tool_names = None
+        session.current_turn_allowed_tool_definitions = []
         if progress_message:
             status_text = "✅ *Completed*" if success else "⚠️ *Failed*"
             await safe_edit_message(progress_message, status_text, reply_markup=None)

@@ -355,6 +355,15 @@ async function getRuntimeStatus() {
   return status;
 }
 
+async function getFreshRuntimeStatus() {
+  try {
+    return await getRuntimeStatus();
+  } catch (_error) {
+    runtimeStatusCache = null;
+    return null;
+  }
+}
+
 async function saveSetup(payload) {
   const next = await runBackendJson(['save-setup'], { input: payload });
   updateBootstrapCaches(next);
@@ -1029,18 +1038,24 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle('emploai:bootstrap', async () => {
-    if (bootstrapCache) {
-      return bootstrapCache;
+    const status = await getFreshRuntimeStatus();
+    if (
+      bootstrapCache &&
+      bootstrapCache.accessToken &&
+      status?.ok
+    ) {
+      const nextPayload = {
+        ...bootstrapCache,
+        runtimeStatus: status,
+      };
+      updateBootstrapCaches(nextPayload);
+      return nextPayload;
     }
+    bootstrapCache = null;
     return bootstrapRuntime();
   });
 
-  ipcMain.handle('emploai:get-runtime-status', async () => {
-    if (runtimeStatusCache) {
-      return runtimeStatusCache;
-    }
-    return getRuntimeStatus();
-  });
+  ipcMain.handle('emploai:get-runtime-status', async () => getRuntimeStatus());
 
   ipcMain.handle('emploai:runtime:start', async (_event, payload) => startLocalRuntime(payload || {}));
   ipcMain.handle('emploai:runtime:stop', async () => stopLocalRuntime());

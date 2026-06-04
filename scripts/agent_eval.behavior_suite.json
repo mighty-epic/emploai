@@ -1,0 +1,338 @@
+{
+  "name": "agent-behavior-suite",
+  "profile": "behavior-suite",
+  "workspace": "tests/fixtures/agent_eval/behavior_suite",
+  "model": "gpt-5.4-mini",
+  "variant": "standard",
+  "enabled_tool_packs": [
+    "interactive_desktop",
+    "browser_isolated",
+    "workspace_write",
+    "workspace_read",
+    "web_research",
+    "scheduler",
+    "app_runtime"
+  ],
+  "repeat": 1,
+  "fresh_runtime": true,
+  "fresh_session_per_case": true,
+  "capture_prompt_snapshot": true,
+  "cases": [
+    {
+      "name": "capability-awareness",
+      "prompt": "Before doing anything else, tell me what kinds of work you can do in this chat and which capability would let you inspect the live screen if needed.",
+      "expectations": {
+        "required_phrases": [
+          "screen"
+        ],
+        "forbidden_tools": [
+          "read_file",
+          "write_file",
+          "web_search",
+          "browser_navigate",
+          "describe_screen",
+          "schedule_job"
+        ],
+        "final_answer_forbidden_phrases": [
+          "error in model generation",
+          "context window"
+        ]
+      }
+    },
+    {
+      "name": "screen-observation-current-window",
+      "prompt": "Tell me the main app or window currently visible on screen.",
+      "expectations": {
+        "required_tools_any": [
+          "describe_screen",
+          "observe_desktop",
+          "ocr_screen"
+        ],
+        "forbidden_tools": [
+          "read_file",
+          "write_file",
+          "web_search",
+          "browser_navigate"
+        ]
+      }
+    },
+    {
+      "name": "browser-example-heading",
+      "prompt": "Open https://example.com and tell me the main heading text.",
+      "expectations": {
+        "required_tools_any": [
+          "browser_navigate",
+          "browser_snapshot"
+        ],
+        "accepted_tool_names_any": [
+          "open_browser",
+          "observe_browser"
+        ],
+        "forbidden_tools": [
+          "describe_screen",
+          "click",
+          "web_search"
+        ],
+        "required_phrases": [
+          "example domain"
+        ]
+      }
+    },
+    {
+      "name": "workspace-list-current-dir",
+      "prompt": "Inspect the current workspace and list the top-level files and folders. Do not change anything.",
+      "expectations": {
+        "required_tools_any": [
+          "list_dir",
+          "list_files",
+          "find_files"
+        ],
+        "forbidden_tools": [
+          "write_file",
+          "web_search",
+          "browser_navigate",
+          "describe_screen"
+        ]
+      }
+    },
+    {
+      "name": "python-random-report",
+      "prompt": "Create a Python script named random_report.py that generates a random integer between 1000 and 9999, writes it to random_report.txt, also prints the same number, runs it, and then tells me the exact number it generated. If it failed, tell me what failed.",
+      "expectations": {
+        "required_tools_all": [
+          "write_file"
+        ],
+        "required_tools_any": [
+          "run_command",
+          "execute_command"
+        ],
+        "artifact_checks": [
+          {
+            "path": "random_report.py",
+            "contains_all": [
+              "random",
+              "random_report.txt"
+            ]
+          },
+          {
+            "path": "random_report.txt",
+            "must_exist": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "python-summary-with-rng",
+      "prompt": "Read README.md, then create a Python script named summary_rng.py that reads README.md, generates a random integer between 1000 and 9999, writes summary_with_rng.txt containing a one-sentence summary plus the number, runs it, and then tells me the exact number it generated. If it failed, tell me what failed.",
+      "expectations": {
+        "required_tools_all": [
+          "read_file",
+          "write_file"
+        ],
+        "required_tools_any": [
+          "run_command",
+          "execute_command"
+        ],
+        "artifact_checks": [
+          {
+            "path": "summary_rng.py",
+            "contains_all": [
+              "random",
+              "summary_with_rng.txt"
+            ]
+          },
+          {
+            "path": "summary_with_rng.txt",
+            "must_exist": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "reserved-domains-research",
+      "prompt": "Research the official documentation around example domains. Find the three reserved example domains, the RFC number that reserves them, and the title of the IANA page that documents them. Use multiple web searches, write the results to reserved_domains.txt in the current workspace, and verify the saved file.",
+      "expectations": {
+        "required_tools_all": [
+          "write_file"
+        ],
+        "required_tools_any": [
+          "web_search",
+          "fetch_url"
+        ],
+        "artifact_checks": [
+          {
+            "path": "reserved_domains.txt",
+            "contains_all": [
+              "example.com",
+              "example.net",
+              "example.org",
+              "RFC 2606",
+              "Example Domains"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "scheduler-create-disabled-job",
+      "prompt": "Create a disabled hourly scheduled job named eval_ping that echoes ping, then confirm it exists by listing scheduled jobs.",
+      "expectations": {
+        "required_tools_all": [
+          "schedule_job",
+          "disable_job",
+          "list_scheduled_jobs"
+        ],
+        "forbidden_tools": [
+          "read_file",
+          "browser_navigate",
+          "describe_screen"
+        ]
+      }
+    },
+    {
+      "name": "readme-summary-file",
+      "prompt": "Read README.md in the current workspace, create eval_summary.txt with a one-sentence summary of it, and then verify the saved file.",
+      "expectations": {
+        "required_tools_all": [
+          "read_file",
+          "write_file"
+        ],
+        "artifact_checks": [
+          {
+            "path": "eval_summary.txt",
+            "must_exist": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "html-rng-browser-verification",
+      "prompt": "Create a local HTML file named eval_rng_page.html that shows a heading and a JavaScript-generated random integer between 1000 and 9999 on page load, open the file in the browser, verify what heading is visible, and tell me the exact number displayed. If it failed, tell me what failed.",
+      "expectations": {
+        "required_tools_all": [
+          "write_file"
+        ],
+        "required_tools_any": [
+          "browser_navigate",
+          "browser_snapshot"
+        ],
+        "accepted_tool_names_any": [
+          "open_browser",
+          "observe_browser"
+        ],
+        "artifact_checks": [
+          {
+            "path": "eval_rng_page.html",
+            "contains_all": [
+              "<h1",
+              "Math.floor",
+              "1000",
+              "9999"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "iana-example-domains-file",
+      "prompt": "Open the IANA example domains page, identify the three example domains listed there, write them to iana_example_domains.txt in the current workspace, and verify the saved file.",
+      "expectations": {
+        "required_tools_any": [
+          "browser_navigate",
+          "browser_snapshot"
+        ],
+        "accepted_tool_names_any": [
+          "open_browser",
+          "observe_browser"
+        ],
+        "required_tools_all": [
+          "write_file"
+        ],
+        "artifact_checks": [
+          {
+            "path": "iana_example_domains.txt",
+            "contains_all": [
+              "example.com",
+              "example.net",
+              "example.org"
+            ],
+            "not_contains": [
+              "localhost",
+              "invalid",
+              "test",
+              "example.edu",
+              "example.gov",
+              "example.mil"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "browser-heading-to-file",
+      "prompt": "Open https://example.com, capture the main heading, write it to example_heading.txt in the current workspace, and verify the saved file.",
+      "expectations": {
+        "required_tools_all": [
+          "write_file"
+        ],
+        "required_tools_any": [
+          "browser_navigate",
+          "browser_snapshot"
+        ],
+        "accepted_tool_names_any": [
+          "open_browser",
+          "observe_browser"
+        ],
+        "artifact_checks": [
+          {
+            "path": "example_heading.txt",
+            "contains_all": [
+              "Example Domain"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "screen-title-to-file",
+      "prompt": "Identify the main visible app or window title on the screen, write it to screen_observation.txt in the current workspace, and verify the saved file.",
+      "expectations": {
+        "required_tools_all": [
+          "write_file"
+        ],
+        "required_tools_any": [
+          "describe_screen",
+          "observe_desktop",
+          "ocr_screen"
+        ],
+        "artifact_checks": [
+          {
+            "path": "screen_observation.txt",
+            "must_exist": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "scheduler-note-file",
+      "prompt": "Create a disabled hourly scheduled job named eval_note_job that echoes note, confirm it exists by listing scheduled jobs, then write scheduler_note.txt in the current workspace containing the job name and the fact that it is disabled, and verify the saved file.",
+      "expectations": {
+        "required_tools_all": [
+          "schedule_job",
+          "disable_job",
+          "list_scheduled_jobs",
+          "write_file"
+        ],
+        "artifact_checks": [
+          {
+            "path": "scheduler_note.txt",
+            "contains_all": [
+              "eval_note_job",
+              "disabled"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

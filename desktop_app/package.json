@@ -7,6 +7,7 @@
     "start": "electron .",
     "dev": "electron .",
     "build:renderer": "npm --prefix ../mobile_app/client run export:web",
+    "smoke:chat": "py -3.13 ..\\scripts\\smoke_desktop_chat.py",
     "package:win": "powershell -ExecutionPolicy Bypass -File ../deploy/windows/build_beta_release.ps1"
   },
   "devDependencies": {

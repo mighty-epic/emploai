@@ -291,7 +291,7 @@ async function handleCommand(command) {
         case "press_key":
             return await executeOnResolvedTab(params, pressKey, [params.key]);
         case "get_text_content":
-            return await executeOnResolvedTab(params, getPageTextContent);
+            return await executeOnResolvedTab(params, getPageTextContent, [params.selector ?? null, params.maxChars ?? 50000]);
         case "get_info":
             return await getTabInfo(params);
         case "get_state":
@@ -1001,10 +1001,29 @@ function selectOptionByRef(ref, text, value, index) {
     };
 }
 
-function getPageTextContent() {
-    const text = document.body ? (document.body.innerText || '') : '';
+function getPageTextContent(selector = null, maxChars = 50000) {
+    function extractText(node) {
+        if (!node) return '';
+        if (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement || node instanceof HTMLSelectElement) {
+            return node.value || '';
+        }
+        return node.innerText || node.textContent || '';
+    }
+
+    let target = document.body;
+    let matched = true;
+    if (selector) {
+        target = document.querySelector(selector);
+        matched = Boolean(target);
+    }
+
+    const rawText = String(extractText(target) || '');
     return {
-        text: text.slice(0, 50000),
+        text: rawText.slice(0, maxChars),
+        selector: selector || null,
+        matched,
+        truncated: rawText.length > Math.min(maxChars, rawText.length),
+        fullLength: rawText.length,
         url: window.location.href,
         title: document.title,
         focusedRef: getFocusedRef()
