@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import List, Dict, Any, Iterable, Optional, Tuple
 from .definitions import CLI_AGENT_TOOLS
 
-OPENAI_COMPATIBLE_PROVIDERS = {"openai", "xai", "deepseek", "openrouter"}
+OPENAI_COMPATIBLE_PROVIDERS = {"openai", "xai", "deepseek", "openrouter", "nvidia"}
 GOOGLE_UNSUPPORTED_SCHEMA_KEYS = {
     "additionalProperties",
     "default",
@@ -132,7 +132,7 @@ def validate_provider_tool_names(
 
 
 def _sanitize_google_schema(value: Any) -> Any:
-    """Trim JSON Schema down to fields accepted by google-generativeai."""
+    """Trim JSON Schema down to fields accepted by Gemini SDK tool declarations."""
     if isinstance(value, list):
         return [_sanitize_google_schema(item) for item in value]
     if not isinstance(value, dict):
@@ -151,7 +151,7 @@ def _sanitize_google_schema(value: Any) -> Any:
 def to_openai_format(tools: List[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """
     Convert canonical tools to OpenAI function calling format.
-    Used by: OpenAI, xAI, DeepSeek, OpenRouter.
+    Used by: OpenAI, xAI, DeepSeek, OpenRouter, NVIDIA.
     """
     if tools is None:
         tools = CLI_AGENT_TOOLS
@@ -219,11 +219,6 @@ def to_google_format(tools: List[Dict[str, Any]] = None) -> List[Any]:
     if tools is None:
         tools = CLI_AGENT_TOOLS
         
-    try:
-        import google.generativeai as genai
-    except ImportError:
-        return []
-
     functions = []
     for tool in tools:
         parts = _extract_tool_parts(tool)
@@ -239,14 +234,38 @@ def to_google_format(tools: List[Dict[str, Any]] = None) -> List[Any]:
         if "required" in parameters:
             google_params["required"] = _sanitize_google_schema(parameters["required"])
         
-        # Only add if we have a valid function name
         if name:
-            functions.append(genai.types.FunctionDeclaration(
-                name=name,
-                description=description,
-                parameters=google_params if google_params else None
-            ))
-    return [genai.types.Tool(function_declarations=functions)] if functions else []
+            functions.append(
+                {
+                    "name": name,
+                    "description": description,
+                    "parameters": google_params if google_params else None,
+                }
+            )
+    if not functions:
+        return []
+
+    try:
+        from google.genai import types as genai_types
+
+        return [genai_types.Tool(function_declarations=functions)]
+    except ImportError:
+        pass
+
+    try:
+        import google.generativeai as genai
+    except ImportError:
+        return []
+
+    legacy_functions = [
+        genai.types.FunctionDeclaration(
+            name=function["name"],
+            description=function["description"],
+            parameters=function["parameters"],
+        )
+        for function in functions
+    ]
+    return [genai.types.Tool(function_declarations=legacy_functions)]
 
 def get_tools_for_provider(provider: str, base_tools: List[Dict[str, Any]] = None) -> List[Any]:
     """Get tools in the correct format for the given provider."""
@@ -303,7 +322,13 @@ def get_tool_names(tools: List[Any]) -> List[str]:
 
         declarations = getattr(tool, "function_declarations", None)
         if declarations:
-            names.extend(str(getattr(decl, "name", "")) for decl in declarations if getattr(decl, "name", ""))
+            for decl in declarations:
+                if isinstance(decl, dict):
+                    name = str(decl.get("name", "") or "")
+                else:
+                    name = str(getattr(decl, "name", "") or "")
+                if name:
+                    names.append(name)
             continue
 
         proto = getattr(tool, "_proto", None)

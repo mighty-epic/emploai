@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import mimetypes
 import os
-import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -16,9 +14,14 @@ from anthropic import Anthropic
 from bot_core.hooks import HookEvent, HookType
 from cli.agent_tools.loop import LoopResult, run_tool_loop
 from cli.tui_constants import MODEL_CONFIGS
-from shared.artifact_store import ChatArtifactStore
 from shared.channel_sync import get_channel_sync_hub
-from shared.openai_api import create_openai_completion
+from shared.proactive_planner_contract import (
+    build_pending_planner_contract,
+    contract_system_message,
+    record_planner_contract,
+)
+from shared.proactive_runtime import install_background_process_hooks
+from shared.security_policy import redact_json, redact_text
 from shared.session_timeline import (
     append_timeline_event,
     build_log_timeline_event,
@@ -39,7 +42,7 @@ from shared.task_board import (
     note_user_turn,
     task_board_view,
 )
-from shared.task_intent import is_screen_observation_message, is_task_like_message
+from shared.workspace_recovery import ensure_session_workspace_ready_for_task
 
 
 EventSink = Callable[[Dict[str, Any]], Any]
@@ -48,13 +51,130 @@ ToolHandlersBuilder = Callable[[Any], Dict[str, Callable[[Dict[str, Any]], Any]]
 ExtraToolsBuilder = Callable[[Any], List[Dict[str, Any]]]
 SingleAgentInitializer = Callable[[asyncio.AbstractEventLoop], None]
 AssistantContentTransform = Callable[[str], str]
-FILE_SNAPSHOT_TOOL_NAMES = {"write_file", "edit_file", "append_file"}
-COMMAND_OUTPUT_TOOL_NAMES = {"run_command", "execute_command", "run_background_command", "command_status"}
-BROWSER_OBSERVATION_TOOL_NAMES = {"browser_snapshot", "observe_browser", "browser_read_text"}
-VISUAL_SCREEN_TOOL_NAMES = {"describe_screen", "browser_screenshot"}
-_NON_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
-TEXT_PREVIEW_HEAD_CHARS = 900
-TEXT_PREVIEW_TAIL_CHARS = 900
+
+try:
+    from shared import channel_artifacts as _channel_artifacts
+    from shared import channel_planner as _channel_planner
+    from shared import channel_runtime_events as _channel_events
+except ImportError:
+    import channel_artifacts as _channel_artifacts
+    import channel_planner as _channel_planner
+    import channel_runtime_events as _channel_events
+
+_CHANNEL_PLANNER_NAMES = (
+    "_collapse_for_verifier",
+    "_extract_json_object",
+    "_desktop_window_context_message",
+    "_task_contract_context_message",
+    "_planner_verifier_system_prompt",
+    "_planner_verifier_payload",
+    "_coding_task_requires_strict_retry",
+    "_preserved_task_objective",
+    "_planner_model_for_final_verifier",
+    "_planner_final_completion",
+    "_planner_contract_completion",
+    "_run_parallel_planner_contract",
+    "_planner_final_verdict",
+)
+for _channel_name in _CHANNEL_PLANNER_NAMES:
+    globals()[_channel_name] = getattr(_channel_planner, _channel_name)
+_channel_planner._planner_final_completion = lambda *args, **kwargs: _planner_final_completion(*args, **kwargs)
+
+_CHANNEL_EVENT_NAMES = (
+    "merge_openai_tools",
+    "current_session_id",
+    "compact_session_history",
+    "_publish_compaction_status",
+    "_compaction_metadata",
+    "_emit_event",
+    "_publish_sync_event",
+    "_message_sync_event",
+    "_turn_sync_event",
+    "_task_board_sync_event",
+    "_timeline_sync_event",
+    "_append_and_publish_timeline_event",
+    "_memory_context",
+    "_build_file_context",
+)
+for _channel_name in _CHANNEL_EVENT_NAMES:
+    globals()[_channel_name] = getattr(_channel_events, _channel_name)
+_channel_events.get_channel_sync_hub = lambda: get_channel_sync_hub()
+
+_CHANNEL_ARTIFACT_NAMES = (
+    "_artifact_store_for_session",
+    "_sanitize_artifact_metadata",
+    "_sanitize_runtime_event_value",
+    "_artifact_summary_payload",
+    "_publish_artifact_created",
+    "_workspace_relative_text",
+    "_resolve_workspace_path",
+    "_track_mutated_file_path",
+    "_track_used_file_if_already_mirrored",
+    "_command_output_text",
+    "_artifact_preview_for_command",
+    "_safe_slug",
+    "_preview_text",
+    "_serialize_search_text",
+    "_artifact_text_for_browser_observation",
+    "_artifact_text_for_ocr",
+    "_capture_tool_artifact_ids",
+    "_safe_command_filename",
+    "_snapshot_touched_file_artifact_ids",
+)
+for _channel_name in _CHANNEL_ARTIFACT_NAMES:
+    globals()[_channel_name] = getattr(_channel_artifacts, _channel_name)
+
+
+def _stringify_tool_result_for_fallback(tool_result: Any, *, limit: int = 700) -> str:
+    if isinstance(tool_result, dict):
+        for key in (
+            "description",
+            "vision_summary",
+            "summary",
+            "plain_text",
+            "text",
+            "stdout",
+            "output",
+            "message",
+            "error",
+        ):
+            value = str(tool_result.get(key) or "").strip()
+            if value:
+                return value[:limit]
+        items = tool_result.get("items")
+        if isinstance(items, list):
+            if not items:
+                return "No items were returned."
+            labels: List[str] = []
+            for item in items[:12]:
+                if isinstance(item, dict):
+                    labels.append(str(item.get("name") or item.get("path") or item.get("id") or item).strip())
+                else:
+                    labels.append(str(item).strip())
+            labels = [item for item in labels if item]
+            suffix = "" if len(items) <= len(labels) else f" and {len(items) - len(labels)} more"
+            return f"Items: {', '.join(labels)}{suffix}."[:limit]
+        try:
+            return json.dumps(tool_result, ensure_ascii=False, default=str)[:limit]
+        except Exception:
+            return str(tool_result)[:limit]
+    return str(tool_result or "").strip()[:limit]
+
+
+def _fallback_final_from_tool_events(tool_events: List[Dict[str, Any]]) -> str:
+    visible_events = [
+        event
+        for event in tool_events
+        if str(event.get("tool_name") or "").strip()
+    ]
+    if not visible_events:
+        return ""
+    last = visible_events[-1]
+    tool_name = str(last.get("tool_name") or "tool").strip()
+    result_text = _stringify_tool_result_for_fallback(last.get("tool_result")).strip()
+    if result_text:
+        return f"I ran `{tool_name}`. {result_text}"
+    return f"I ran `{tool_name}`, but it did not return any displayable output."
 
 
 @dataclass
@@ -84,908 +204,7 @@ class SharedTurnResult:
     context_compaction: Optional[Dict[str, Any]] = None
 
 
-def _collapse_for_verifier(value: Any, *, limit: int = 1800) -> str:
-    text = str(value or "").replace("\r", " ").replace("\n", " ")
-    text = " ".join(text.split())
-    if len(text) <= limit:
-        return text
-    return text[: limit - 3] + "..."
 
-
-def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
-    cleaned = str(text or "").strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-    try:
-        parsed = json.loads(cleaned)
-        return parsed if isinstance(parsed, dict) else None
-    except Exception:
-        pass
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start >= 0 and end > start:
-        try:
-            parsed = json.loads(cleaned[start : end + 1])
-            return parsed if isinstance(parsed, dict) else None
-        except Exception:
-            return None
-    return None
-
-
-def _desktop_window_context_message(session: Any) -> Optional[Dict[str, str]]:
-    allowed_tools = set(getattr(session, "current_turn_allowed_tool_names", None) or [])
-    enabled_packs = set(getattr(session, "enabled_tool_packs", None) or [])
-    if "observe_desktop" not in allowed_tools and "interactive_desktop" not in enabled_packs:
-        return None
-    try:
-        from bot_core.system_info import format_active_windows_snapshot
-
-        snapshot = format_active_windows_snapshot(limit=30)
-    except Exception:
-        snapshot = "Unavailable"
-    if not str(snapshot or "").strip() or str(snapshot).strip() == "Unavailable":
-        return None
-    return {
-        "role": "system",
-        "content": (
-            "LIVE DESKTOP WINDOW SNAPSHOT (fresh before this model turn):\n"
-            f"{snapshot}\n"
-            "- Use exact visible window titles from this snapshot with focus_window when a target is already open.\n"
-            "- Before typing, clicking, or sending a hotkey, make sure the intended target window is active or explicitly focus it.\n"
-            "- If the active window is a system power/shutdown, lock, sign-out, or unrelated user window, do not continue the task through that window; first dismiss or avoid it safely and re-observe.\n"
-            "- Do not use broad close shortcuts such as Alt+F4 for ambiguous cleanup. Prefer close_window with an exact target title, Escape/Cancel for a visible modal, or another targeted route."
-        ),
-    }
-
-
-def _task_contract_context_message(session: Any) -> Optional[Dict[str, str]]:
-    user_request = _collapse_for_verifier(getattr(session, "last_user_message", ""), limit=900)
-    if not user_request:
-        return None
-    if not (is_screen_observation_message(user_request) or is_task_like_message(user_request)):
-        return None
-
-    allowed_tools = set(getattr(session, "current_turn_allowed_tool_names", None) or [])
-    enabled_packs = set(getattr(session, "enabled_tool_packs", None) or [])
-    if not allowed_tools and not enabled_packs:
-        return None
-
-    return {
-        "role": "system",
-        "content": (
-            "CURRENT TASK CONTRACT (fresh before this model turn):\n"
-            f"User request: {user_request}\n"
-            "- Treat the request above as the active completion contract for this turn.\n"
-            "- Finish only when the requested observable end state is true and verified in the relevant surface. "
-            "Artifacts, intentions, typed paths, file reads, or host-app launches are not enough for visible UI/open/send tasks.\n"
-            "- For local file open/show tasks, prefer open_file or a direct OS/app file-open command with the exact resolved path; "
-            "use GUI Open dialogs only as a fallback and abandon them if they do not change visible state.\n"
-            "- If the last route failed or produced no useful state change, re-observe or inspect state, classify what failed, "
-            "then switch method family/tool surface unless new evidence makes retrying materially different.\n"
-            "- User-directed work in communication/account apps is allowed, including WhatsApp, Gmail, Microsoft apps, email, messaging, "
-            "calendar, and collaboration platforms. Proceed after verifying recipient/account/target identity and intended content/action; "
-            "personal-account or communication context by itself is not a blocker."
-        ),
-    }
-
-
-def _planner_verifier_system_prompt() -> str:
-    return (
-        "You are a final-answer verifier for an autonomous desktop agent. "
-        "Your job is to decide whether the assistant's candidate final answer can be shown to the user. "
-        "Infer the task-specific success obligations from the original user request. "
-        "Use tool evidence as proof; do not treat the assistant final answer as proof by itself. "
-        "If an obligation required visible UI state, message sending, file opening, browser navigation, or a running app, "
-        "require concrete tool evidence for that state. "
-        "If safe useful tool actions remain, choose retry. "
-        "Choose true_blocker only when the evidence shows the task cannot safely proceed without user action, login, identity choice, "
-        "missing app/account state, or external state not available to the agent. "
-        "Do not classify a user-directed task inside the user's personal apps/accounts as blocked solely because the app/account is personal. "
-        "This includes WhatsApp, Gmail, Microsoft apps, email, messaging, calendar, and collaboration platforms. "
-        "The safety obligation is verified recipient/account/target identity and intended content/action. "
-        "Return only strict JSON with keys: action, reason, failed_obligation, evidence_gap, retry_instruction, must_use_tool. "
-        "action must be one of allow, retry, true_blocker. must_use_tool must be boolean."
-    )
-
-
-def _planner_verifier_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    trace = []
-    for item in list(payload.get("tool_trace") or [])[-28:]:
-        if not isinstance(item, dict):
-            continue
-        trace.append(
-            {
-                "tool": _collapse_for_verifier(item.get("tool"), limit=80),
-                "args": _collapse_for_verifier(item.get("args"), limit=450),
-                "result": _collapse_for_verifier(item.get("result"), limit=1200),
-            }
-        )
-    return {
-        "original_user_request": _collapse_for_verifier(payload.get("user_request"), limit=1600),
-        "candidate_final_answer": _collapse_for_verifier(payload.get("assistant_final"), limit=1800),
-        "tool_trace": trace,
-        "decision_instructions": {
-            "allow": "All material obligations are supported by evidence, or a true blocker is explicitly classified separately.",
-            "retry": "A material obligation lacks evidence and at least one safe useful tool action remains.",
-            "true_blocker": "The evidence shows the agent cannot proceed safely without user/external action.",
-        },
-    }
-
-
-def _planner_model_for_final_verifier(session: Any) -> str:
-    configured = str(getattr(session, "planner_model", "") or "").strip()
-    default = str(getattr(session, "default_planner_model", "") or "").strip()
-    current = str(getattr(session, "current_model", "") or "").strip()
-    return configured or default or current
-
-
-def _planner_final_completion(session: Any, *, prompt_payload: Dict[str, Any]) -> Optional[str]:
-    model_name = _planner_model_for_final_verifier(session)
-    if not model_name:
-        return None
-    try:
-        client, provider = session.get_client_for_specific_model(model_name)
-    except Exception:
-        return None
-    if client is None:
-        return None
-
-    model_id = MODEL_CONFIGS.get(model_name, {}).get("id", model_name)
-    system_prompt = _planner_verifier_system_prompt()
-    user_prompt = json.dumps(prompt_payload, ensure_ascii=True, indent=2)
-
-    try:
-        if provider in {"openai", "xai", "deepseek", "openrouter", "google"}:
-            response = create_openai_completion(
-                client,
-                model_name=model_name,
-                model_id=model_id,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                max_tokens=700,
-            )
-            return str(response.choices[0].message.content or "") if response.choices else None
-
-        if provider == "anthropic":
-            response = client.messages.create(
-                model=model_id,
-                max_tokens=700,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
-            )
-            parts = getattr(response, "content", None) or []
-            text_parts = [getattr(part, "text", "") for part in parts if getattr(part, "text", "")]
-            return "\n".join(text_parts).strip() or None
-    except Exception:
-        return None
-    return None
-
-
-def _planner_final_verdict(session: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
-    prompt_payload = _planner_verifier_payload(payload)
-    raw = _planner_final_completion(session, prompt_payload=prompt_payload)
-    parsed = _extract_json_object(raw or "") or {}
-    action = str(parsed.get("action") or "allow").strip().lower()
-    if action not in {"allow", "retry", "true_blocker"}:
-        action = "allow"
-
-    failed_obligation = _collapse_for_verifier(parsed.get("failed_obligation"), limit=240)
-    evidence_gap = _collapse_for_verifier(parsed.get("evidence_gap"), limit=400)
-    reason = _collapse_for_verifier(parsed.get("reason") or failed_obligation or "planner_final_verifier", limit=400)
-    retry_instruction = _collapse_for_verifier(parsed.get("retry_instruction"), limit=900)
-    must_use_tool = bool(parsed.get("must_use_tool", action == "retry"))
-
-    if action == "retry":
-        original_request = _collapse_for_verifier(prompt_payload.get("original_user_request"), limit=900)
-        instruction_parts = [
-            "[Hidden runtime continuation: your previous answer was not shown to the user.]",
-            "A planner verifier found the user's task is not sufficiently evidenced yet.",
-        ]
-        if original_request:
-            instruction_parts.append(f"Original user request still active: {original_request}")
-        if failed_obligation:
-            instruction_parts.append(f"Failed obligation: {failed_obligation}.")
-        if evidence_gap:
-            instruction_parts.append(f"Evidence gap: {evidence_gap}.")
-        if retry_instruction:
-            instruction_parts.append(f"Next action: {retry_instruction}")
-        instruction_parts.append(
-            "Continue the original task from the current state. Do not ask whether to continue. "
-            "Use a safe, materially useful tool action before final-answering, then verify the result. "
-            "Treat the user's requested observable end state as the success criterion. "
-            "Do not repeat the same failed method loop; switch method family/tool surface unless new evidence makes the retry materially different."
-        )
-        continuation_instruction = " ".join(instruction_parts)
-    else:
-        continuation_instruction = ""
-
-    return {
-        "action": "continue" if action == "retry" else "allow",
-        "reason": f"planner_{action}:{reason}",
-        "failed_obligation": failed_obligation,
-        "evidence_gap": evidence_gap,
-        "retry_instruction": continuation_instruction,
-        "continuation_instruction": continuation_instruction,
-        "must_use_tool": must_use_tool,
-    }
-
-
-def merge_openai_tools(*tool_groups: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-    merged: List[Dict[str, Any]] = []
-    seen = set()
-    for group in tool_groups:
-        for tool in group or []:
-            func = tool.get("function", {})
-            name = func.get("name")
-            if not name or name in seen:
-                continue
-            merged.append(tool)
-            seen.add(name)
-    return merged
-
-
-def current_session_id(session: Any) -> Optional[str]:
-    if not getattr(session, "session_manager", None):
-        return None
-    return session.session_manager.get_current_session_id()
-
-
-def compact_session_history(
-    session: Any,
-    *,
-    reason: str = "manual",
-    announce: bool = False,
-    event_meta: Optional[Dict[str, Any]] = None,
-):
-    context_manager = getattr(session, "context_manager", None)
-    if not context_manager:
-        return None
-
-    model_id = session.current_model or "claude-sonnet-4-5"
-    result = context_manager.compact(
-        session.chat_history,
-        model_id,
-        reason=reason,
-    )
-    if result.applied:
-        session.chat_history = result.messages
-        if hasattr(session, "message_id_map"):
-            rebuilt_map: Dict[int, int] = {}
-            for index, message in enumerate(session.chat_history):
-                message_id = message.get("message_id")
-                if message_id is not None:
-                    rebuilt_map[message_id] = index
-            session.message_id_map = rebuilt_map
-        session.last_context_compaction = _compaction_metadata(result)
-        if announce:
-            _publish_compaction_status(session, result, event_meta=event_meta)
-    return result
-
-
-def _publish_compaction_status(session: Any, result: Any, *, event_meta: Optional[Dict[str, Any]] = None) -> None:
-    if not result:
-        return
-
-    _append_and_publish_timeline_event(
-        session,
-        event=create_timeline_event(
-            kind="compaction",
-            title="Context Compaction",
-            content=result.message,
-            tone="accent",
-            channel=(event_meta or {}).get("channel"),
-            source_format=(event_meta or {}).get("source_format"),
-            metadata=_compaction_metadata(result),
-        ),
-        event_meta=event_meta,
-    )
-    _publish_sync_event(
-        session,
-        _turn_sync_event(
-            event_type="status",
-            session_id=current_session_id(session),
-            payload={"message": result.message},
-            event_meta=event_meta or {},
-        ),
-    )
-
-
-def _compaction_metadata(result: Any) -> Dict[str, Any]:
-    payload = dict(result.to_dict())
-    payload.pop("messages", None)
-    return payload
-
-
-async def _emit_event(event_sink: Optional[EventSink], event: Dict[str, Any]) -> None:
-    if not event_sink:
-        return
-    maybe = event_sink(event)
-    if asyncio.iscoroutine(maybe):
-        await maybe
-
-
-def _publish_sync_event(session: Any, event: Dict[str, Any]) -> None:
-    user_id = getattr(session, "user_id", None)
-    if user_id is None:
-        return
-    get_channel_sync_hub().publish(user_id=user_id, event=event)
-
-
-def _message_sync_event(
-    *,
-    event_type: str,
-    session_id: Optional[str],
-    message: Dict[str, Any],
-) -> Dict[str, Any]:
-    return {
-        "type": event_type,
-        "session_id": session_id,
-        "origin_channel": message.get("channel"),
-        "source_client_id": message.get("source_client_id"),
-        "payload": {
-            "message": message,
-            "text": message.get("content", ""),
-        },
-    }
-
-
-def _turn_sync_event(
-    *,
-    event_type: str,
-    session_id: Optional[str],
-    payload: Optional[Dict[str, Any]] = None,
-    event_meta: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    meta = dict(event_meta or {})
-    return {
-        "type": event_type,
-        "session_id": session_id,
-        "origin_channel": meta.get("channel"),
-        "source_client_id": meta.get("source_client_id"),
-        "payload": payload or {},
-    }
-
-
-def _task_board_sync_event(
-    *,
-    session_id: Optional[str],
-    board: Optional[Dict[str, Any]],
-    completed_boards: Optional[List[Dict[str, Any]]] = None,
-    summary: Optional[str],
-    event_meta: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    return _turn_sync_event(
-        event_type="task_board",
-        session_id=session_id,
-        payload={
-            "board": task_board_view(board),
-            "completed_task_boards": list(completed_boards or []),
-            "summary": summary or (board or {}).get("latest_summary"),
-        },
-        event_meta=event_meta,
-    )
-
-
-def _timeline_sync_event(
-    *,
-    session_id: Optional[str],
-    event: Dict[str, Any],
-    event_meta: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    return _turn_sync_event(
-        event_type="timeline_event",
-        session_id=session_id,
-        payload={"event": event},
-        event_meta=event_meta,
-    )
-
-
-def _append_and_publish_timeline_event(
-    session: Any,
-    *,
-    event: Dict[str, Any],
-    event_meta: Optional[Dict[str, Any]] = None,
-    save_session: bool = False,
-) -> Dict[str, Any]:
-    stored = append_timeline_event(session, event=event)
-    if save_session:
-        session.save_session()
-    _publish_sync_event(
-        session,
-        _timeline_sync_event(
-            session_id=current_session_id(session),
-            event=stored,
-            event_meta=event_meta,
-        ),
-    )
-    return stored
-
-
-def _memory_context(session: Any) -> str:
-    if not getattr(session, "session_context", None):
-        return ""
-    if not getattr(session.session_context, "can_access_memory", False):
-        return ""
-    memory_manager = getattr(session, "memory_manager", None)
-    if not memory_manager:
-        return ""
-
-    session_id = current_session_id(session)
-    build_prompt_context = getattr(memory_manager, "build_prompt_context", None)
-    if callable(build_prompt_context):
-        return build_prompt_context(
-            session_id=session_id,
-            recent_days=7,
-            recent_chars=3000,
-            long_term_chars=4000,
-        )
-
-    get_long_term_context = getattr(memory_manager, "get_long_term_context", None)
-    if callable(get_long_term_context):
-        return get_long_term_context()
-    return ""
-
-
-def _build_file_context(pending_files: List[Dict[str, Any]]) -> str:
-    if not pending_files:
-        return ""
-
-    safe_files: List[Dict[str, Any]] = []
-    for item in pending_files:
-        safe_item = dict(item)
-        if "image_base64" in safe_item:
-            safe_item["image_base64"] = "[omitted - stored]"
-        safe_files.append(safe_item)
-
-    file_context = json.dumps(safe_files, indent=2)
-    if len(file_context) > 8000:
-        file_context = file_context[:7800] + "\n... [truncated]"
-    return file_context
-
-
-def _artifact_store_for_session(session: Any, *, session_id: Optional[str] = None) -> Optional[ChatArtifactStore]:
-    user_id = getattr(session, "user_id", None)
-    resolved_session_id = str(session_id or current_session_id(session) or "").strip()
-    if user_id is None or not resolved_session_id:
-        return None
-    return ChatArtifactStore(user_id=int(user_id), session_id=resolved_session_id)
-
-
-def _sanitize_artifact_metadata(value: Any) -> Any:
-    if isinstance(value, dict):
-        cleaned: Dict[str, Any] = {}
-        for key, item in value.items():
-            if key in {"image_base64", "base64", "image_data", "data"} and isinstance(item, str):
-                cleaned[key] = f"[omitted image data: {len(item)} chars]"
-            else:
-                cleaned[str(key)] = _sanitize_artifact_metadata(item)
-        return cleaned
-    if isinstance(value, list):
-        return [_sanitize_artifact_metadata(item) for item in value[:80]]
-    return value
-
-
-def _artifact_summary_payload(store: ChatArtifactStore, artifact_id: str) -> Optional[Dict[str, Any]]:
-    record = store.get_record(artifact_id)
-    if not record:
-        return None
-    return store.build_summary_view(record)
-
-
-def _publish_artifact_created(
-    session: Any,
-    *,
-    reservation: TurnReservation,
-    store: Optional[ChatArtifactStore],
-    artifact_ids: List[str],
-    schedule_emit: Optional[Callable[[Dict[str, Any]], None]] = None,
-) -> None:
-    if not store or not artifact_ids:
-        return
-    artifacts = [
-        summary
-        for artifact_id in artifact_ids
-        for summary in [_artifact_summary_payload(store, artifact_id)]
-        if summary is not None
-    ]
-    if not artifacts:
-        return
-    _publish_sync_event(
-        session,
-        _turn_sync_event(
-            event_type="artifact_created",
-            session_id=reservation.session_id,
-            payload={"artifacts": artifacts},
-            event_meta=reservation.event_meta,
-        ),
-    )
-    if schedule_emit:
-        schedule_emit({"type": "artifact_created", "artifacts": artifacts})
-
-
-def _workspace_relative_text(session: Any, path: Path) -> str:
-    workspace = str(getattr(session, "workspace", "") or "").strip()
-    if not workspace:
-        return path.name
-    try:
-        return str(path.resolve().relative_to(Path(workspace).expanduser().resolve())).replace("\\", "/")
-    except Exception:
-        return str(path)
-
-
-def _resolve_workspace_path(session: Any, path_value: Optional[str]) -> Optional[Path]:
-    text = str(path_value or "").strip()
-    if not text:
-        return None
-    workspace = str(getattr(session, "workspace", "") or "").strip()
-    try:
-        candidate = Path(text).expanduser()
-        if candidate.is_absolute():
-            return candidate.resolve()
-        if workspace:
-            return (Path(workspace).expanduser().resolve() / candidate).resolve()
-        return candidate.resolve()
-    except Exception:
-        return None
-
-
-def _track_mutated_file_path(
-    touched_file_paths: set[Path],
-    session: Any,
-    *,
-    tool_name: str,
-    tool_args: Dict[str, Any],
-    tool_result: Any,
-) -> None:
-    if tool_name not in FILE_SNAPSHOT_TOOL_NAMES:
-        return
-    candidate = None
-    if isinstance(tool_result, dict):
-        candidate = tool_result.get("path")
-    if not candidate:
-        candidate = tool_args.get("path")
-    resolved = _resolve_workspace_path(session, str(candidate or ""))
-    if resolved is not None:
-        touched_file_paths.add(resolved)
-
-
-def _command_output_text(command: str, tool_result: Any, *, cwd: Optional[str] = None) -> str:
-    if isinstance(tool_result, dict):
-        stdout = str(tool_result.get("stdout") or "")
-        stderr = str(tool_result.get("stderr") or "")
-        exit_code = tool_result.get("exit_code")
-        error = str(tool_result.get("error") or "")
-        lines = [f"$ {command or '[command omitted]'}"]
-        if cwd:
-            lines.append(f"[cwd] {cwd}")
-        if exit_code is not None:
-            lines.append(f"[exit_code] {exit_code}")
-        if error:
-            lines.append(f"[error]\n{error}")
-        if stdout:
-            lines.append(f"[stdout]\n{stdout}")
-        if stderr:
-            lines.append(f"[stderr]\n{stderr}")
-        return "\n\n".join(lines)
-    return f"$ {command or '[command omitted]'}\n\n{str(tool_result or '')}"
-
-
-def _artifact_preview_for_command(command: str, tool_result: Any) -> str:
-    if isinstance(tool_result, dict):
-        stdout = str(tool_result.get("stdout") or "")
-        stderr = str(tool_result.get("stderr") or "")
-        tail = "\n".join(part for part in [stdout[-700:], stderr[-500:]] if part)
-        return f"$ {command or '[command omitted]'}\n\n{tail}".strip()
-    return f"$ {command or '[command omitted]'}\n\n{str(tool_result or '')}".strip()
-
-
-def _safe_slug(value: str, *, fallback: str = "artifact") -> str:
-    slug = _NON_FILENAME_RE.sub("-", str(value or "").strip()).strip("-.")
-    return slug[:80] or fallback
-
-
-def _preview_text(
-    value: str,
-    *,
-    head_chars: int = TEXT_PREVIEW_HEAD_CHARS,
-    tail_chars: int = TEXT_PREVIEW_TAIL_CHARS,
-) -> str:
-    text = str(value or "")
-    if len(text) <= head_chars + tail_chars + 64:
-        return text
-    omitted = len(text) - head_chars - tail_chars
-    return f"{text[:head_chars]}\n\n...[middle truncated: {omitted} chars]...\n\n{text[-tail_chars:]}"
-
-
-def _serialize_search_text(*parts: Any) -> str:
-    text_parts: List[str] = []
-    for part in parts:
-        if not part:
-            continue
-        if isinstance(part, dict):
-            text_parts.append(json.dumps(part, ensure_ascii=False, default=str))
-        elif isinstance(part, (list, tuple)):
-            text_parts.append(json.dumps(list(part), ensure_ascii=False, default=str))
-        else:
-            text_parts.append(str(part))
-    return "\n".join(item for item in text_parts if item)
-
-
-def _artifact_text_for_browser_observation(tool_name: str, tool_result: Any) -> str:
-    if isinstance(tool_result, dict):
-        if tool_name == "browser_read_text":
-            page_text = str(tool_result.get("text") or "").strip()
-            title = str(tool_result.get("title") or "").strip()
-            url = str(tool_result.get("url") or "").strip()
-            selector = str(tool_result.get("selector") or "").strip()
-            mode = str(tool_result.get("mode") or tool_result.get("backend") or "").strip()
-            prefix_lines = [
-                item
-                for item in [
-                    f"Title: {title}" if title else "",
-                    f"URL: {url}" if url else "",
-                    f"Selector: {selector or '<page body>'}",
-                    f"Mode: {mode}" if mode else "",
-                ]
-                if item
-            ]
-            if page_text:
-                prefix_lines.append("")
-                prefix_lines.append(page_text)
-                return "\n".join(prefix_lines).strip()
-        formatted = str(tool_result.get("formatted") or "").strip()
-        if formatted:
-            return formatted
-        return json.dumps(_sanitize_artifact_metadata(tool_result), ensure_ascii=False, indent=2, default=str)
-    return str(tool_result or "")
-
-
-def _artifact_text_for_ocr(tool_result: Any) -> str:
-    if isinstance(tool_result, dict):
-        plain = str(tool_result.get("plain_text") or tool_result.get("unfiltered_text") or "").strip()
-        if plain:
-            return plain
-        elements = list(tool_result.get("elements", []) or [])
-        sample = []
-        for item in elements[:120]:
-            if isinstance(item, dict):
-                text = str(item.get("text") or "").strip()
-                if text:
-                    sample.append(text)
-        return "\n".join(sample)
-    return str(tool_result or "")
-
-
-def _capture_tool_artifact_ids(
-    session: Any,
-    *,
-    store: Optional[ChatArtifactStore],
-    tool_name: str,
-    tool_args: Dict[str, Any],
-    tool_result: Any,
-    task_id: Optional[int],
-) -> List[str]:
-    if not store:
-        return []
-
-    metadata = {
-        "tool_args": _sanitize_artifact_metadata(tool_args),
-        "tool_result": _sanitize_artifact_metadata(tool_result),
-    }
-    artifact_ids: List[str] = []
-    workspace = str(getattr(session, "workspace", "") or "").strip() or None
-    task_id_text = str(task_id) if task_id is not None else None
-
-    if tool_name in COMMAND_OUTPUT_TOOL_NAMES:
-        command = str(tool_args.get("command") or tool_args.get("cmd") or "").strip()
-        cwd = str(tool_args.get("cwd") or "").strip() or None
-        text = _command_output_text(command, tool_result, cwd=cwd)
-        created = store.create_text_artifact(
-            artifact_kind="command_output",
-            title=f"Command output: {command or tool_name}",
-            text=text,
-            source_kind="agent",
-            payload_file_name=f"{tool_name}-{_safe_command_filename(command)}.txt",
-            summary_text=text,
-            preview_text=_artifact_preview_for_command(command, tool_result),
-            search_text=json.dumps({"command": command, "cwd": cwd, "result": _sanitize_artifact_metadata(tool_result)}, ensure_ascii=False, default=str),
-            source_tool=tool_name,
-            source_command=command or None,
-            workspace=workspace,
-            task_id=task_id_text,
-            metadata=metadata,
-        )
-        artifact_ids.append(created.artifact_id)
-        return artifact_ids
-
-    if tool_name == "describe_screen" and isinstance(tool_result, dict):
-        description = str(tool_result.get("description") or "").strip()
-        question = str(tool_result.get("question") or "").strip()
-        summary_text = "\n".join(item for item in [description, f"Question: {question}" if question else ""] if item).strip()
-        image_base64 = str(tool_result.get("image_base64") or "").strip()
-        if image_base64:
-            created = store.create_base64_image_artifact(
-                artifact_kind="screenshot",
-                title="Screen capture",
-                image_base64=image_base64,
-                source_kind="agent",
-                payload_file_name="screen-capture.png",
-                summary_text=summary_text or "Screen capture artifact",
-                preview_text=summary_text or "Screen capture artifact",
-                search_text=_serialize_search_text(summary_text, metadata),
-                source_tool=tool_name,
-                workspace=workspace,
-                task_id=task_id_text,
-                metadata=metadata,
-            )
-        else:
-            created = store.create_text_artifact(
-                artifact_kind="screen_description",
-                title="Screen description",
-                text=summary_text or json.dumps(metadata, ensure_ascii=False, indent=2, default=str),
-                source_kind="agent",
-                source_tool=tool_name,
-                workspace=workspace,
-                task_id=task_id_text,
-                metadata=metadata,
-            )
-        artifact_ids.append(created.artifact_id)
-        return artifact_ids
-
-    if tool_name == "ocr_screen":
-        text = _artifact_text_for_ocr(tool_result)
-        if text.strip():
-            created = store.create_text_artifact(
-                artifact_kind="ocr_text",
-                title="OCR screen text",
-                text=text,
-                source_kind="agent",
-                summary_text=text,
-                preview_text=_preview_text(text, head_chars=700, tail_chars=450),
-                search_text=_serialize_search_text(text, metadata),
-                source_tool=tool_name,
-                workspace=workspace,
-                task_id=task_id_text,
-                metadata=metadata,
-            )
-            artifact_ids.append(created.artifact_id)
-        return artifact_ids
-
-    if tool_name == "observe_desktop":
-        text = str(tool_result or "").strip()
-        if text:
-            created = store.create_text_artifact(
-                artifact_kind="screen_description",
-                title="Desktop observation",
-                text=text,
-                source_kind="agent",
-                source_tool=tool_name,
-                workspace=workspace,
-                task_id=task_id_text,
-                metadata=metadata,
-            )
-            artifact_ids.append(created.artifact_id)
-        return artifact_ids
-
-    if tool_name in BROWSER_OBSERVATION_TOOL_NAMES:
-        text = _artifact_text_for_browser_observation(tool_name, tool_result)
-        if text.strip():
-            title = "Browser observation"
-            if isinstance(tool_result, dict):
-                page_title = str(tool_result.get("title") or "").strip()
-                if tool_name == "browser_read_text":
-                    title = f"Browser text: {page_title}" if page_title else "Browser text extract"
-                elif page_title:
-                    title = f"Browser observation: {page_title}"
-            created = store.create_text_artifact(
-                artifact_kind="browser_observation",
-                title=title,
-                text=text,
-                source_kind="agent",
-                source_tool=tool_name,
-                workspace=workspace,
-                task_id=task_id_text,
-                metadata=metadata,
-            )
-            artifact_ids.append(created.artifact_id)
-        return artifact_ids
-
-    if tool_name == "browser_screenshot" and isinstance(tool_result, dict):
-        image_base64 = str(tool_result.get("image_base64") or "").strip()
-        title = str(tool_result.get("title") or "").strip() or "Browser screenshot"
-        url = str(tool_result.get("url") or "").strip()
-        summary_text = "\n".join(item for item in [title, url] if item).strip() or "Browser screenshot"
-        if image_base64:
-            created = store.create_base64_image_artifact(
-                artifact_kind="browser_screenshot",
-                title=title if title.startswith("Browser") else f"Browser screenshot: {title}",
-                image_base64=image_base64,
-                source_kind="agent",
-                payload_file_name="browser-screenshot.png",
-                summary_text=summary_text,
-                preview_text=summary_text,
-                search_text=_serialize_search_text(summary_text, metadata),
-                source_tool=tool_name,
-                workspace=workspace,
-                task_id=task_id_text,
-                metadata=metadata,
-            )
-            artifact_ids.append(created.artifact_id)
-        return artifact_ids
-
-    return artifact_ids
-
-
-def _safe_command_filename(command: str) -> str:
-    return _safe_slug(command[:80] if command else "command-output", fallback="command-output")
-
-
-def _snapshot_touched_file_artifact_ids(
-    session: Any,
-    *,
-    store: Optional[ChatArtifactStore],
-    touched_file_paths: set[Path],
-    task_id: Optional[int],
-) -> List[str]:
-    if not store or not touched_file_paths:
-        return []
-    artifact_ids: List[str] = []
-    workspace = str(getattr(session, "workspace", "") or "").strip() or None
-    task_id_text = str(task_id) if task_id is not None else None
-    for path in sorted(touched_file_paths, key=lambda item: str(item)):
-        try:
-            resolved = path.resolve()
-        except Exception:
-            continue
-        if not resolved.exists() or not resolved.is_file():
-            continue
-        file_path = _workspace_relative_text(session, resolved)
-        mime_type, _ = mimetypes.guess_type(str(resolved))
-        try:
-            raw = resolved.read_bytes()
-        except Exception:
-            continue
-        try:
-            text = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            text = None
-        if text is not None:
-            created = store.create_text_artifact(
-                artifact_kind="file_snapshot",
-                title=f"File snapshot: {file_path}",
-                text=text,
-                mime_type=(mime_type or "text/plain; charset=utf-8"),
-                source_kind="agent",
-                payload_file_name=resolved.name,
-                summary_text=text,
-                preview_text=_preview_text(text),
-                search_text=text,
-                file_path=file_path,
-                workspace=workspace,
-                task_id=task_id_text,
-                metadata={"final_per_turn": True, "path": file_path},
-            )
-        else:
-            created = store.create_bytes_artifact(
-                artifact_kind="file_snapshot",
-                title=f"File snapshot: {file_path}",
-                data=raw,
-                mime_type=(mime_type or "application/octet-stream"),
-                source_kind="agent",
-                payload_file_name=resolved.name,
-                summary_text=file_path,
-                preview_text=file_path,
-                search_text=file_path,
-                file_path=file_path,
-                workspace=workspace,
-                task_id=task_id_text,
-                metadata={"final_per_turn": True, "path": file_path},
-            )
-        artifact_ids.append(created.artifact_id)
-    return artifact_ids
 
 
 async def begin_chat_turn(
@@ -999,6 +218,54 @@ async def begin_chat_turn(
     async with session.lock:
         if session.is_processing:
             return TurnReservation(busy=True, session_id=current_session_id(session))
+
+        user_id = int(getattr(session, "sync_user_id", None) or getattr(session, "user_id", 0) or 0)
+        if user_id:
+            workspace_preflight = ensure_session_workspace_ready_for_task(
+                session=session,
+                user_id=user_id,
+                user_message=user_message,
+                metadata={
+                    "channel": payload.get("channel"),
+                    "source_format": payload.get("source_format"),
+                    "display_label": payload.get("display_label"),
+                    "source_client_id": payload.get("source_client_id"),
+                    "requires_workspace_write": payload.get("requires_workspace_write"),
+                    "requires_workspace_access": payload.get("requires_workspace_access"),
+                },
+            )
+            if not workspace_preflight.ok:
+                append_timeline_event(
+                    session,
+                    event=create_timeline_event(
+                        kind="workspace_reconnect_required",
+                        title="Workspace Needs Reconnection",
+                        content=workspace_preflight.message,
+                        tone="warning",
+                        metadata=workspace_preflight.to_dict(),
+                    ),
+                )
+                session.save_session()
+                _publish_sync_event(
+                    session,
+                    {
+                        "type": "workspace_reconnect_required",
+                        "session_id": current_session_id(session),
+                        "payload": workspace_preflight.to_dict(),
+                    },
+                )
+                raise RuntimeError(workspace_preflight.message)
+            if workspace_preflight.action == "restored_managed_workspace":
+                append_timeline_event(
+                    session,
+                    event=create_timeline_event(
+                        kind="workspace_restored",
+                        title="Workspace Restored",
+                        content=f"Restored cloud-known workspace files to {workspace_preflight.restored_path}.",
+                        tone="info",
+                        metadata=workspace_preflight.to_dict(),
+                    ),
+                )
 
         session.current_task_id += 1
         task_id = session.current_task_id
@@ -1017,6 +284,17 @@ async def begin_chat_turn(
         session.last_user_message = user_message
         session.chat_history.append(message)
         task_board_summary = note_user_turn(session, user_message)
+        planner_contract = build_pending_planner_contract(user_message)
+        if planner_contract.get("action") in {"pending", "inject"}:
+            setattr(session, "proactive_planner_contract", planner_contract)
+            setattr(session, "proactive_planner_contract_injected", False)
+            setattr(session, "proactive_planner_contract_version", 0)
+            setattr(session, "proactive_planner_contract_user_message", user_message)
+        else:
+            setattr(session, "proactive_planner_contract", None)
+            setattr(session, "proactive_planner_contract_injected", True)
+            setattr(session, "proactive_planner_contract_version", 0)
+            setattr(session, "proactive_planner_contract_user_message", user_message)
 
         message_id = payload.get("message_id")
         if message_id is not None and hasattr(session, "message_id_map"):
@@ -1145,6 +423,7 @@ async def run_reserved_chat_turn(
         artifact_store = _artifact_store_for_session(session, session_id=reservation.session_id)
         touched_file_paths: set[Path] = set()
         turn_artifact_ids: List[str] = []
+        tool_events_this_turn: List[Dict[str, Any]] = []
         file_snapshots_flushed = False
 
         def _schedule_emit(event: Dict[str, Any]) -> None:
@@ -1154,6 +433,20 @@ async def run_reserved_chat_turn(
                 asyncio.run_coroutine_threadsafe(_emit_event(event_sink, event), running_loop)
             except RuntimeError:
                 pass
+
+        planner_contract_task: Optional[asyncio.Task[None]] = None
+        planner_user_message = str(getattr(session, "proactive_planner_contract_user_message", "") or getattr(session, "last_user_message", "") or "")
+        pending_planner_contract = getattr(session, "proactive_planner_contract", None)
+        if isinstance(pending_planner_contract, dict) and pending_planner_contract.get("action") == "pending":
+            planner_contract_task = asyncio.create_task(
+                _run_parallel_planner_contract(
+                    session,
+                    user_message=planner_user_message,
+                    session_id=reservation.session_id,
+                    turn_id=str(reservation.task_id),
+                    schedule_emit=_schedule_emit,
+                )
+            )
 
         def log_func(text: str) -> None:
             if text.strip() and getattr(session, "verbose_mode", False):
@@ -1165,6 +458,7 @@ async def run_reserved_chat_turn(
                         source_format=reservation.event_meta.get("source_format"),
                     ),
                     event_meta=reservation.event_meta,
+                    save_session=True,
                 )
             _publish_sync_event(
                 session,
@@ -1179,14 +473,15 @@ async def run_reserved_chat_turn(
 
         def log_inline_func(text: str) -> None:
             if text.strip():
-                response_buffer.append(text)
+                response_buffer.append(redact_text(text))
 
         def begin_stream_func() -> None:
             response_buffer.clear()
 
         def append_stream_func(text: str) -> None:
-            response_buffer.append(text)
-            _schedule_emit({"type": "assistant_delta", "delta": text})
+            safe_text = redact_text(text)
+            response_buffer.append(safe_text)
+            _schedule_emit({"type": "assistant_delta", "delta": safe_text})
 
         def append_reasoning_func(text: str) -> None:
             if not str(text or "").strip():
@@ -1225,6 +520,55 @@ async def run_reserved_chat_turn(
             task_messages = list(before_model_turn_messages(session))
             task_contract_context = _task_contract_context_message(session)
             desktop_context = _desktop_window_context_message(session)
+            planner_context_messages: List[Dict[str, str]] = []
+            planner_contract = getattr(session, "proactive_planner_contract", None)
+            if (
+                isinstance(planner_contract, dict)
+                and planner_contract.get("action") == "inject"
+                and not bool(getattr(session, "proactive_planner_contract_injected", False))
+            ):
+                planner_message = contract_system_message(planner_contract)
+                if planner_message:
+                    planner_context_messages.append(planner_message)
+                    setattr(session, "proactive_planner_contract_injected", True)
+                    record_planner_contract(
+                        {
+                            "user_id": int(getattr(session, "sync_user_id", None) or getattr(session, "user_id", 0) or 0),
+                            "session_id": reservation.session_id,
+                            "turn_id": str(reservation.task_id),
+                            "status": "injected",
+                            "action": "inject",
+                            "contract": planner_contract,
+                            "injected_at": time.time(),
+                        }
+                    )
+                    _schedule_emit(
+                        {
+                            "type": "model_context",
+                            "kind": "planner_contract",
+                            "content": planner_message.get("content", ""),
+                        }
+                    )
+            planner_corrections = list(getattr(session, "proactive_planner_corrections_pending", []) or [])
+            if planner_corrections:
+                setattr(session, "proactive_planner_corrections_pending", [])
+                correction_message = {
+                    "role": "system",
+                    "content": (
+                        "PROACTIVE PLANNER CORRECTION\n"
+                        "A verifier blocked a premature final answer. Continue the original user task using this corrective guidance. "
+                        "Do not tell the user about this hidden correction.\n\n"
+                        f"{json.dumps(planner_corrections[-3:], ensure_ascii=False, indent=2)}"
+                    ),
+                }
+                planner_context_messages.append(correction_message)
+                _schedule_emit(
+                    {
+                        "type": "model_context",
+                        "kind": "planner_correction",
+                        "content": correction_message["content"],
+                    }
+                )
             if task_contract_context:
                 _schedule_emit(
                     {
@@ -1249,7 +593,7 @@ async def run_reserved_chat_turn(
                 user_message=str(getattr(session, "last_user_message", "") or ""),
                 task_focus=task_focus,
             ) if artifact_store else []
-            messages = [*task_messages]
+            messages = [*task_messages, *planner_context_messages]
             if task_contract_context:
                 messages.append(task_contract_context)
             if desktop_context:
@@ -1287,6 +631,14 @@ async def run_reserved_chat_turn(
                 tool_args=tool_args,
                 tool_result=tool_result,
             )
+            _track_used_file_if_already_mirrored(
+                touched_file_paths,
+                session,
+                store=artifact_store,
+                tool_name=tool_name,
+                tool_args=tool_args,
+                tool_result=tool_result,
+            )
             if getattr(session, "verbose_mode", False):
                 _append_and_publish_timeline_event(
                     session,
@@ -1299,6 +651,7 @@ async def run_reserved_chat_turn(
                         source_format=reservation.event_meta.get("source_format"),
                     ),
                     event_meta=reservation.event_meta,
+                    save_session=True,
                 )
             artifact_ids = _capture_tool_artifact_ids(
                 session,
@@ -1311,6 +664,16 @@ async def run_reserved_chat_turn(
             turn_artifact_ids.extend(
                 artifact_id for artifact_id in artifact_ids if artifact_id not in turn_artifact_ids
             )
+            event_tool_args = _sanitize_runtime_event_value(tool_args)
+            event_tool_result = _sanitize_runtime_event_value(tool_result)
+            tool_events_this_turn.append(
+                {
+                    "tool_name": tool_name,
+                    "tool_args": event_tool_args,
+                    "tool_result": event_tool_result,
+                    "duration_ms": dur_ms,
+                }
+            )
             _publish_sync_event(
                 session,
                 _turn_sync_event(
@@ -1318,8 +681,8 @@ async def run_reserved_chat_turn(
                     session_id=reservation.session_id,
                     payload={
                         "tool_name": tool_name,
-                        "tool_args": tool_args,
-                        "tool_result": tool_result,
+                        "tool_args": event_tool_args,
+                        "tool_result": event_tool_result,
                         "duration_ms": dur_ms,
                         "artifact_ids": artifact_ids,
                     },
@@ -1330,8 +693,8 @@ async def run_reserved_chat_turn(
                 {
                     "type": "tool_use",
                     "tool_name": tool_name,
-                    "tool_args": tool_args,
-                    "tool_result": tool_result,
+                    "tool_args": event_tool_args,
+                    "tool_result": event_tool_result,
                     "duration_ms": dur_ms,
                     "artifact_ids": artifact_ids,
                 }
@@ -1362,6 +725,28 @@ async def run_reserved_chat_turn(
 
         def on_auto_continue_func(payload: Dict[str, Any]) -> None:
             safe_payload = dict(payload or {})
+            safe_payload["internal"] = True
+            safe_payload["visibility"] = "internal"
+            action = str(safe_payload.get("action") or "allow")
+            reason = str(safe_payload.get("reason") or "planner_verdict")
+            preview = str(safe_payload.get("candidate_final_preview") or "").strip()
+            event_content = f"{action}: {reason}"
+            if preview:
+                event_content = f"{event_content}\nCandidate final: {_collapse_for_verifier(preview, limit=700)}"
+            _append_and_publish_timeline_event(
+                session,
+                event=create_timeline_event(
+                    kind="runtime",
+                    title="Planner verifier",
+                    content=event_content,
+                    tone="warn" if action == "continue" else "neutral",
+                    channel=reservation.event_meta.get("channel"),
+                    source_format=reservation.event_meta.get("source_format"),
+                    metadata=safe_payload,
+                ),
+                event_meta=reservation.event_meta,
+                save_session=True,
+            )
             _publish_sync_event(
                 session,
                 _turn_sync_event(
@@ -1372,8 +757,39 @@ async def run_reserved_chat_turn(
                 ),
             )
             _schedule_emit({"type": "auto_continue", **safe_payload})
+            if action == "continue":
+                correction = {
+                    "reason": reason,
+                    "failed_obligation": safe_payload.get("failed_obligation"),
+                    "evidence_gap": safe_payload.get("evidence_gap"),
+                    "retry_instruction": safe_payload.get("retry_instruction"),
+                    "continuation_instruction": safe_payload.get("continuation_instruction"),
+                    "must_use_tool": bool(safe_payload.get("must_use_tool")),
+                }
+                pending = list(getattr(session, "proactive_planner_corrections_pending", []) or [])
+                pending.append({key: value for key, value in correction.items() if value not in (None, "")})
+                setattr(session, "proactive_planner_corrections_pending", pending[-5:])
+                all_corrections = list(getattr(session, "proactive_planner_corrections", []) or [])
+                all_corrections.append(pending[-1])
+                setattr(session, "proactive_planner_corrections", all_corrections[-20:])
+                record_planner_contract(
+                    {
+                        "user_id": int(getattr(session, "sync_user_id", None) or getattr(session, "user_id", 0) or 0),
+                        "session_id": reservation.session_id,
+                        "turn_id": str(reservation.task_id),
+                        "status": "correction_added",
+                        "action": "inject",
+                        "contract": getattr(session, "proactive_planner_contract", None) or {},
+                        "corrections": all_corrections[-20:],
+                    }
+                )
 
         def judge_final_candidate_func(payload: Dict[str, Any]) -> Dict[str, Any]:
+            payload = dict(payload or {})
+            planner_contract = getattr(session, "proactive_planner_contract", None) or {}
+            if isinstance(planner_contract, dict) and planner_contract.get("action") == "pending":
+                planner_contract = planner_contract.get("fallback_contract") or planner_contract
+            payload.setdefault("planner_contract", planner_contract)
             return _planner_final_verdict(session, payload)
 
         callbacks = {
@@ -1437,6 +853,22 @@ async def run_reserved_chat_turn(
         await _emit_event(event_sink, {"type": "status", "message": "running"})
         start_time = time.time()
         loop = asyncio.get_running_loop()
+        if getattr(session, "tool_executor", None):
+            workspace_for_security = str(getattr(session, "workspace", "") or "")
+            session.tool_executor.security_context_provider = lambda: {
+                "permission_mode": getattr(session, "security_permission_mode", "standard"),
+                "workspace_path": workspace_for_security,
+                "workspace_binding_status": getattr(session, "workspace_binding_status", None),
+                "workspace_write_enabled": (
+                    None
+                    if not workspace_for_security
+                    else Path(workspace_for_security).expanduser().exists()
+                ),
+                "surface": reservation.event_meta.get("channel") or "app",
+                "session_id": current_session_id(session),
+                "identity_id": getattr(session, "fleet_identity_id", None),
+            }
+            install_background_process_hooks(session, event_loop=loop)
         result: LoopResult = await loop.run_in_executor(
             None,
             lambda: run_tool_loop(
@@ -1463,6 +895,9 @@ async def run_reserved_chat_turn(
 
         raw_response = result.content or "".join(response_buffer)
         assistant_text = assistant_content_transform(raw_response) if assistant_content_transform else raw_response
+        assistant_text = redact_text(assistant_text)
+        if not assistant_text.strip() and tool_events_this_turn:
+            assistant_text = redact_text(_fallback_final_from_tool_events(tool_events_this_turn))
         finalized_task_board = finalize_task_board_turn(session, assistant_text or "")
         post_compaction_result = None
         _flush_file_snapshot_artifacts()
@@ -1473,6 +908,7 @@ async def run_reserved_chat_turn(
                 "timestamp": datetime.now().isoformat(),
                 "metadata": {
                     "artifact_ids": list(turn_artifact_ids),
+                    **({"generated_from_tool_result": True} if not str(raw_response or "").strip() and tool_events_this_turn else {}),
                 },
             }
             assistant_message.update(assistant_message_payload or {})
@@ -1560,7 +996,7 @@ async def run_reserved_chat_turn(
             ok=True,
             session_id=current_session_id(session),
             assistant_text=assistant_text,
-            raw_response=raw_response,
+            raw_response=redact_text(raw_response),
             duration_seconds=duration,
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,

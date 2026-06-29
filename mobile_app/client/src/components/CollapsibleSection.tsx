@@ -12,7 +12,13 @@ export function CollapsibleSection({ title, meta, defaultExpanded = false, child
 
   return (
     <View style={styles.card}>
-      <Pressable style={styles.header} onPress={() => setExpanded((prev) => !prev)}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${expanded ? 'Hide' : 'Show'} ${title}`}
+        accessibilityState={{ expanded }}
+        style={styles.header}
+        onPress={() => setExpanded((prev) => !prev)}
+      >
         <View style={styles.heading}>
           <Text style={styles.title}>{title}</Text>
           {meta ? <Text style={styles.meta}>{meta}</Text> : null}

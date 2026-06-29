@@ -1,32 +1,47 @@
+import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { loadAppConfig } from '../../lib/appConfig';
-import { describeError } from '../../lib/diagnostics';
+import { loadAppConfig, type AppConnectionMode } from '../../lib/appConfig';
+import { reconcileRemoteAccountConfig } from '../../lib/accountSession';
+import { describeError, shortStatusText, userFacingError } from '../../lib/diagnostics';
 import { AppDrawer, type DrawerTab } from '@/components/AppDrawer';
 import { CollapsibleSection } from '@/components/CollapsibleSection';
+import { InfoHint } from '@/components/InfoHint';
+import { PageHeader } from '@/components/PageHeader';
+import { useConfirmation } from '@/components/ConfirmationDialog';
+import { SectionTabs } from '@/components/ParityUI';
 import {
   appendAgentMemoryNote,
   clearAgentPendingFiles,
   configureAgent,
+  deleteSession,
   fetchAgentConfig,
   fetchAgentOverview,
   fetchJobs,
   fetchSessions,
+  fetchSidebarState,
+  fetchSubAgents,
   forgetLastAgentMessage,
   resetAgentContext,
   searchAgentMemory,
+  spawnSubAgent,
   type AgentOverview,
   type ConfigEntry,
   type MemorySearchResult,
   type ScheduledJob,
+  type SidebarState,
   type SessionSummary,
+  type SubAgentStatus,
   updateAgentConfig,
+  updateSidebarState,
 } from '@/lib/appApi';
 import { formatAbsoluteTime, formatRelativeTime } from '@/lib/time';
 
 const MAX_TURN_OPTIONS = [50, 100, 200, 500];
+const AGENT_NO_ACTIVE_SESSION_STATUS = 'Open or select a chat before starting an agent task.';
+type AgentSection = 'model' | 'runtime' | 'tasks' | 'tools' | 'memory' | 'analytics' | 'config' | 'diagnostics';
 
 function formatConfigValue(value: unknown) {
   if (typeof value === 'string') return value;
@@ -63,98 +78,260 @@ function ActionChip({
 }
 
 export default function AgentScreen() {
+  const router = useRouter();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [jobs, setJobs] = useState<ScheduledJob[]>([]);
   const [overview, setOverview] = useState<AgentOverview | null>(null);
+  const [subAgents, setSubAgents] = useState<SubAgentStatus | null>(null);
   const [configEntries, setConfigEntries] = useState<ConfigEntry[]>([]);
   const [memoryResults, setMemoryResults] = useState<MemorySearchResult[]>([]);
+  const [sidebarState, setSidebarState] = useState<SidebarState | null>(null);
   const [status, setStatus] = useState('idle');
   const [apiBaseUrl, setApiBaseUrl] = useState('');
   const [token, setToken] = useState('');
+  const [connectionMode, setConnectionMode] = useState<AppConnectionMode>('direct_backend');
+  const [pairedDesktopId, setPairedDesktopId] = useState('');
   const [configLoaded, setConfigLoaded] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<DrawerTab>('system');
   const [workspaceDraft, setWorkspaceDraft] = useState('');
   const [heartbeatDraft, setHeartbeatDraft] = useState('1800');
+  const { confirm, confirmationDialog } = useConfirmation();
   const [memoryQuery, setMemoryQuery] = useState('');
   const [memoryNote, setMemoryNote] = useState('');
   const [configKey, setConfigKey] = useState('');
   const [configValue, setConfigValue] = useState('');
+  const [subAgentPrompt, setSubAgentPrompt] = useState('');
+  const [subAgentHeadless, setSubAgentHeadless] = useState(true);
+  const [subAgentTurns, setSubAgentTurns] = useState(50);
+  const [activeSection, setActiveSection] = useState<AgentSection>('model');
 
   useEffect(() => {
     loadAppConfig()
-      .then((config) => {
+      .then(async (loadedConfig) => {
+        const { config } = await reconcileRemoteAccountConfig(loadedConfig);
         setApiBaseUrl(config.apiBaseUrl);
-        setToken(config.accessToken);
+        setToken(config.accountToken || config.accessToken);
+        setConnectionMode(config.connectionMode);
+        setPairedDesktopId(config.pairedDesktopId);
         setConfigLoaded(true);
       })
       .catch(() => {
-        setStatus('config error');
+        setStatus('Setup needs attention.');
         setConfigLoaded(true);
       });
   }, []);
 
-  const loadControlCenter = async () => {
-    if (!apiBaseUrl) {
-      setStatus('missing backend');
-      return;
+  const agentConnected = Boolean(apiBaseUrl && token && !(connectionMode === 'remote_cloud' && !pairedDesktopId));
+  const agentSetupStatus = !configLoaded
+    ? 'loading agent setup'
+    : !apiBaseUrl
+      ? 'Connect agent: add the backend URL first'
+      : !token
+        ? 'Connect agent: sign in and pair this phone first'
+        : connectionMode === 'remote_cloud' && !pairedDesktopId
+          ? 'Connect agent: pair this phone with a desktop first'
+        : 'Agent controls ready';
+  const ensureAgentConnection = () => {
+    if (!agentConnected) {
+      setStatus(agentSetupStatus);
+      return false;
     }
-    if (!token) {
-      setStatus('missing token');
+    return true;
+  };
+  const ensureAgentActiveSession = () => {
+    if (!ensureAgentConnection()) return false;
+    if (!overview?.session_id) {
+      setStatus(AGENT_NO_ACTIVE_SESSION_STATUS);
+      return false;
+    }
+    return true;
+  };
+
+  const loadControlCenter = async () => {
+    if (!agentConnected) {
+      setStatus(agentSetupStatus);
       return;
     }
 
     setStatus('loading');
     try {
-      const [sessionList, jobList, nextOverview, configList] = await Promise.all([
+      const [sessionList, jobList, nextSidebarState] = await Promise.all([
         fetchSessions(apiBaseUrl, token),
         fetchJobs(apiBaseUrl, token),
-        fetchAgentOverview(apiBaseUrl, token),
-        fetchAgentConfig(apiBaseUrl, token),
+        fetchSidebarState(apiBaseUrl, token).catch(() => null),
       ]);
+      let nextOverview: AgentOverview | null = null;
+      let overviewError: unknown = null;
+      let configList: { items: ConfigEntry[] } = { items: [] };
+      let subAgentStatus: SubAgentStatus | null = null;
+      try {
+        nextOverview = await fetchAgentOverview(apiBaseUrl, token);
+      } catch (error) {
+        overviewError = error;
+      }
+      if (nextOverview?.session_id) {
+        [configList, subAgentStatus] = await Promise.all([
+          fetchAgentConfig(apiBaseUrl, token, undefined, nextOverview.session_id).catch(() => ({ items: [] })),
+          fetchSubAgents(apiBaseUrl, token, nextOverview.session_id).catch(() => null),
+        ]);
+      }
 
       setSessions(Array.isArray(sessionList) ? sessionList : []);
       setJobs(Array.isArray(jobList) ? jobList : []);
       setOverview(nextOverview);
       setConfigEntries(Array.isArray(configList.items) ? configList.items : []);
-      setWorkspaceDraft(nextOverview.workspace || '');
-      setHeartbeatDraft(String(nextOverview.heartbeat.interval_seconds || 1800));
-      setStatus('ready');
+      setSubAgents(subAgentStatus);
+      if (nextSidebarState?.state) {
+        setSidebarState(nextSidebarState.state);
+      }
+      setWorkspaceDraft(nextOverview?.workspace || '');
+      setHeartbeatDraft(String(nextOverview?.heartbeat.interval_seconds || 1800));
+      if (nextOverview?.session_id) {
+        setStatus('ready');
+      } else if (overviewError && !describeError(overviewError).toLowerCase().includes('no current session')) {
+        setStatus(userFacingError(overviewError, 'Agent is not ready.'));
+      } else {
+        setStatus(AGENT_NO_ACTIVE_SESSION_STATUS);
+      }
     } catch (error) {
-      setStatus(describeError(error));
+      setStatus(userFacingError(error, 'Agent is not ready.'));
     }
   };
 
   useEffect(() => {
     if (!configLoaded) return;
     void loadControlCenter();
-  }, [apiBaseUrl, configLoaded, token]);
+  }, [apiBaseUrl, configLoaded, connectionMode, pairedDesktopId, token]);
 
   const applyConfig = async (payload: Parameters<typeof configureAgent>[2]) => {
-    if (!apiBaseUrl || !token) return;
+    if (!ensureAgentActiveSession()) return;
+    const activeSessionId = overview?.session_id || undefined;
+    if (!activeSessionId) {
+      setStatus(AGENT_NO_ACTIVE_SESSION_STATUS);
+      return;
+    }
     setStatus('saving changes');
     try {
-      const sessionId = overview?.session_id || undefined;
-      await configureAgent(apiBaseUrl, token, payload, sessionId);
+      await configureAgent(apiBaseUrl, token, payload, activeSessionId);
       await loadControlCenter();
     } catch (error) {
-      setStatus(describeError(error));
+      setStatus(userFacingError(error, 'Changes were not saved.'));
     }
   };
 
   const runAction = async (action: () => Promise<unknown>, successStatus: string) => {
+    if (!ensureAgentActiveSession()) return;
     setStatus(successStatus);
     try {
       await action();
       await loadControlCenter();
     } catch (error) {
-      setStatus(describeError(error));
+      setStatus(userFacingError(error, 'Action did not finish.'));
     }
+  };
+
+  const resetCurrentContext = async () => {
+    if (!ensureAgentActiveSession()) return;
+    const ok = await confirm({
+      title: 'Reset chat context?',
+      message: 'This clears the active agent context for this chat. The visible history stays, but the runtime will start fresh.',
+      confirmLabel: 'Reset',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    await runAction(
+      () => resetAgentContext(apiBaseUrl, token, overview?.session_id || undefined),
+      'resetting context'
+    );
+  };
+
+  const persistSidebarState = async (nextState: SidebarState) => {
+    setSidebarState(nextState);
+    if (!agentConnected) return;
+    try {
+      const result = await updateSidebarState(apiBaseUrl, token, nextState);
+      if (result.state) {
+        setSidebarState(result.state);
+      }
+      setStatus('sidebar updated');
+    } catch (error) {
+      setStatus(userFacingError(error, 'Sidebar was not saved.'));
+    }
+  };
+
+  const deleteConversation = async (sessionId: string) => {
+    if (!sessionId) {
+      setStatus('missing chat');
+      return;
+    }
+    if (!ensureAgentConnection()) return;
+    setStatus('deleting chat');
+    try {
+      await deleteSession(apiBaseUrl, token, sessionId);
+      setSessions((current) => current.filter((session) => session.id !== sessionId));
+      if (overview?.session_id === sessionId) {
+        setOverview(null);
+        router.push('/chat' as never);
+      } else {
+        await loadControlCenter();
+      }
+      setStatus('chat deleted');
+    } catch (error) {
+      setStatus(userFacingError(error, 'Chat was not deleted.'));
+    }
+  };
+
+  const startAgentTask = async () => {
+    const prompt = subAgentPrompt.trim();
+    if (!prompt) {
+      setStatus('enter an agent task first');
+      return;
+    }
+    const activeSessionId = overview?.session_id || '';
+    if (!activeSessionId) {
+      setStatus(AGENT_NO_ACTIVE_SESSION_STATUS);
+      return;
+    }
+    await runAction(
+      async () => {
+        await spawnSubAgent(
+          apiBaseUrl,
+          token,
+          { prompt, headless: subAgentHeadless, max_turns: subAgentTurns },
+          activeSessionId
+        );
+        setSubAgentPrompt('');
+      },
+      'starting agent task'
+    );
   };
 
   const activeSession = overview?.session_id
     ? sessions.find((session) => session.id === overview.session_id)
     : undefined;
+  const agentRestriction = !agentConnected
+    ? 'Connect this phone first.'
+    : !overview?.session_id
+      ? AGENT_NO_ACTIVE_SESSION_STATUS
+    : 'Focused agent tools are ready.';
+  const agentRestrictionDetail = !agentConnected
+    ? 'Chat, Fleet, and Agent controls need a signed-in mobile account paired to a trusted desktop.'
+    : !overview?.session_id
+      ? 'Open a chat first so the agent knows which runtime session to control.'
+      : 'Use Chat for text turns, Fleet for worker queues, and this page for focused agent tasks.';
+  const agentTaskStartDisabled = !agentConnected || !overview?.session_id || !subAgentPrompt.trim();
+  const agentTaskRefreshDisabled = !agentConnected || !overview?.session_id;
+  const agentTabs = [
+    { key: 'model' as const, label: 'Model' },
+    { key: 'runtime' as const, label: 'Runtime' },
+    { key: 'tasks' as const, label: 'Tasks', badge: subAgents?.running || null },
+    { key: 'tools' as const, label: 'Tools', badge: overview?.enabled_tool_packs?.length || null },
+    { key: 'memory' as const, label: 'Memory' },
+    { key: 'analytics' as const, label: 'Analytics' },
+    { key: 'config' as const, label: 'Config' },
+    { key: 'diagnostics' as const, label: 'Diagnostics' },
+  ];
 
   return (
     <SafeAreaView edges={['top', 'left', 'right']} style={styles.container}>
@@ -166,29 +343,64 @@ export default function AgentScreen() {
         jobs={jobs}
         activeSessionId={overview?.session_id || undefined}
         backendLabel={apiBaseUrl || 'Backend not configured'}
+        sidebarState={sidebarState}
+        onCreateSession={(workspace) => {
+          setDrawerOpen(false);
+          router.push({ pathname: '/chat', params: { newSession: '1', workspace } });
+        }}
+        onSelectSession={(sessionId) => {
+          setDrawerOpen(false);
+          router.push({ pathname: '/chat', params: { sessionId } });
+        }}
+        onDeleteSession={(sessionId) => {
+          void deleteConversation(sessionId);
+        }}
+        onSidebarStateChange={(nextState) => {
+          void persistSidebarState(nextState);
+        }}
       />
+      {confirmationDialog}
 
-      <View style={styles.topBar}>
-        <Pressable
-          style={styles.topButton}
-          onPress={() => {
-            setDrawerTab('system');
-            setDrawerOpen(true);
-          }}
-        >
-          <Text style={styles.topButtonText}>Sidebar</Text>
+      <View style={styles.modeTabs}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Open Chat" style={styles.modeTab} onPress={() => router.push('/chat' as never)}>
+          <Text style={styles.modeTabText}>Chat</Text>
         </Pressable>
-        <View style={styles.titleBlock}>
-          <Text style={styles.title}>Agent controls</Text>
-          <Text style={styles.subtitle}>Model, runtime, memory, context, and system controls migrated from Telegram.</Text>
-        </View>
-        <Pressable style={styles.topButton} onPress={() => void loadControlCenter()}>
-          <Text style={styles.topButtonText}>Refresh</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel="Open Fleet" style={styles.modeTab} onPress={() => router.push('/fleet' as never)}>
+          <Text style={styles.modeTabText}>Fleet</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Agent selected"
+          accessibilityState={{ selected: true }}
+          style={[styles.modeTab, styles.modeTabActive]}
+        >
+          <Text style={[styles.modeTabText, styles.modeTabTextActive]}>Agent</Text>
         </Pressable>
       </View>
 
+      <PageHeader
+        title="Agent controls"
+        subtitle="Model, runtime, tools, memory, analytics, config, and diagnostics."
+        right={(
+          <View style={styles.actionsRow}>
+            <Pressable
+              style={styles.topButton}
+              onPress={() => {
+                setDrawerTab('system');
+                setDrawerOpen(true);
+              }}
+            >
+              <Text style={styles.topButtonText}>Sidebar</Text>
+            </Pressable>
+            <Pressable style={styles.topButton} onPress={() => void loadControlCenter()}>
+              <Text style={styles.topButtonText}>Refresh</Text>
+            </Pressable>
+          </View>
+        )}
+      />
+
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.summaryRow}>
-        <MetricCard label="Status" value={status} />
+        <MetricCard label="Status" value={shortStatusText(status)} />
         <MetricCard label="Model" value={overview?.current_model || 'Unknown'} />
         <MetricCard label="Variant" value={overview?.current_variant || 'Unknown'} />
         <MetricCard label="Planner" value={overview?.planner_model || 'Automatic'} />
@@ -196,11 +408,13 @@ export default function AgentScreen() {
         <MetricCard label="Session" value={activeSession?.name || 'No session'} />
       </ScrollView>
 
+      <SectionTabs tabs={agentTabs} active={activeSection} onChange={setActiveSection} />
+
       <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
         <View style={styles.heroCard}>
-          <Text style={styles.heroTitle}>Advanced controls stay off the chat surface</Text>
+          <Text style={styles.heroTitle}>Advanced controls</Text>
           <Text style={styles.heroText}>
-            The chat remains clean while this page carries the Telegram-style model, runtime, memory, config, history, and inspection controls.
+            Use this page for controls that should not crowd the chat composer.
           </Text>
           {activeSession ? (
             <Text style={styles.heroMeta}>
@@ -210,6 +424,24 @@ export default function AgentScreen() {
           ) : null}
         </View>
 
+        <View style={styles.warningCard}>
+          <View style={styles.warningHeader}>
+            <Text style={styles.warningTitle}>Agent availability</Text>
+            <InfoHint text={agentRestrictionDetail} />
+          </View>
+          <Text style={styles.warningText}>{agentRestriction}</Text>
+          <View style={styles.actionsRow}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Open Chat from Agent" style={styles.secondaryButton} onPress={() => router.push('/chat' as never)}>
+              <Text style={styles.secondaryButtonText}>Open Chat</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Open Fleet from Agent" style={styles.secondaryButton} onPress={() => router.push('/fleet' as never)}>
+              <Text style={styles.secondaryButtonText}>Open Fleet</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        <View pointerEvents={agentConnected && overview?.session_id ? 'auto' : 'none'} style={(!agentConnected || !overview?.session_id) ? styles.disabledControlsGroup : null}>
+        {activeSection === 'model' ? (
         <CollapsibleSection
           title="Model and execution"
           meta={overview ? `${overview.current_model} · ${overview.current_variant} · ${overview.max_turns} turns` : 'Choose model, variant, and task limits'}
@@ -278,11 +510,13 @@ export default function AgentScreen() {
             </View>
           </View>
         </CollapsibleSection>
+        ) : null}
 
+        {activeSection === 'runtime' ? (
         <CollapsibleSection
           title="Runtime toggles"
           meta={overview ? `${overview.bridge_enabled ? 'Bridge on' : 'Bridge off'} · ${overview.headless_mode} browser · heartbeat ${overview.heartbeat.enabled ? 'on' : 'off'}` : 'Bridge, browser mode, heartbeat, workspace'}
-          defaultExpanded={false}
+          defaultExpanded
         >
           <View style={styles.toggleRow}>
             <Text style={styles.toggleLabel}>Auto-reply monitor</Text>
@@ -406,7 +640,126 @@ export default function AgentScreen() {
             </View>
           </View>
         </CollapsibleSection>
+        ) : null}
 
+        {activeSection === 'tasks' ? (
+        <CollapsibleSection
+          title="Agent tasks"
+          meta={subAgents ? `${subAgents.running} running · ${subAgents.completed} completed · ${subAgents.failed} failed` : 'Subagent task runner'}
+          defaultExpanded
+        >
+          <View style={styles.formBlock}>
+            <Text style={styles.inputLabel}>Task</Text>
+            <TextInput
+              style={[styles.input, styles.textarea]}
+              value={subAgentPrompt}
+              onChangeText={setSubAgentPrompt}
+              placeholder="Ask the agent to run a focused task"
+              placeholderTextColor="#7f8aa3"
+              multiline
+            />
+            <View style={styles.toggleRow}>
+              <Text style={styles.toggleLabel}>Browser mode</Text>
+              <View style={styles.inlineActions}>
+                <ActionChip label="Headless" active={subAgentHeadless} onPress={() => setSubAgentHeadless(true)} />
+                <ActionChip label="Headed" active={!subAgentHeadless} onPress={() => setSubAgentHeadless(false)} />
+              </View>
+            </View>
+            <View style={styles.toggleRow}>
+              <Text style={styles.toggleLabel}>Max turns</Text>
+              <View style={styles.inlineActions}>
+                {MAX_TURN_OPTIONS.map((turns) => (
+                  <ActionChip
+                    key={`subagent-turns-${turns}`}
+                    label={String(turns)}
+                    active={subAgentTurns === turns}
+                    onPress={() => setSubAgentTurns(turns)}
+                  />
+                ))}
+              </View>
+            </View>
+            <View style={styles.actionsRow}>
+              <Pressable
+                style={[styles.primaryButton, agentTaskStartDisabled ? styles.disabledButton : null]}
+                disabled={agentTaskStartDisabled}
+                accessibilityRole="button"
+                accessibilityLabel="Start Agent task"
+                accessibilityState={{ disabled: agentTaskStartDisabled }}
+                onPress={() => void startAgentTask()}
+              >
+                <Text style={styles.primaryButtonText}>Start task</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.secondaryButton, agentTaskRefreshDisabled ? styles.disabledButton : null]}
+                disabled={agentTaskRefreshDisabled}
+                accessibilityRole="button"
+                accessibilityLabel="Refresh Agent tasks"
+                accessibilityState={{ disabled: agentTaskRefreshDisabled }}
+                onPress={() =>
+                  void runAction(
+                    async () => {
+                      const next = await fetchSubAgents(apiBaseUrl, token, overview?.session_id || undefined);
+                      setSubAgents(next);
+                    },
+                    'refreshing agent tasks'
+                  )
+                }
+              >
+                <Text style={styles.secondaryButtonText}>Refresh tasks</Text>
+              </Pressable>
+            </View>
+          </View>
+
+          <View style={styles.metricsGrid}>
+            <MetricCard label="Total" value={subAgents ? String(subAgents.total_tasks) : '0'} />
+            <MetricCard label="Running" value={subAgents ? String(subAgents.running) : '0'} />
+            <MetricCard label="Failed" value={subAgents ? String(subAgents.failed) : '0'} />
+          </View>
+
+          <View style={styles.subsection}>
+            <Text style={styles.subsectionTitle}>Recent tasks</Text>
+            {subAgents?.tasks.length ? (
+              subAgents.tasks.slice(0, 8).map((task) => (
+                <View key={task.id} style={styles.resultCard}>
+                  <Text style={styles.resultMeta}>
+                    {task.status} · {task.turns_used}/{task.max_turns} turns · {task.created_at ? formatRelativeTime(task.created_at) : 'new'}
+                  </Text>
+                  <Text style={styles.resultBody}>{task.prompt}</Text>
+                  {task.result ? <Text style={styles.configValue}>{task.result}</Text> : null}
+                  {task.error ? <Text style={styles.errorText}>{userFacingError(task.error, 'Task stopped.')}</Text> : null}
+                </View>
+              ))
+            ) : (
+              <Text style={styles.empty}>No Agent tasks yet.</Text>
+            )}
+          </View>
+        </CollapsibleSection>
+        ) : null}
+
+        {activeSection === 'tools' ? (
+        <CollapsibleSection
+          title="Tool packs"
+          meta={overview ? `${overview.enabled_tool_packs.length} enabled · ${overview.available_tool_packs.length} available` : 'Enabled and available tools'}
+          defaultExpanded
+        >
+          <View style={styles.metricsGrid}>
+            <MetricCard label="Enabled" value={(overview?.enabled_tool_packs || []).join(', ') || 'None'} />
+            <MetricCard label="Available" value={(overview?.available_tool_packs || []).join(', ') || 'None'} />
+            <MetricCard label="Run state" value={overview?.run_state || 'idle'} />
+          </View>
+          {overview?.lock_status && Object.keys(overview.lock_status).length ? (
+            <View style={styles.configCard}>
+              <View style={styles.configHeader}>
+                <Text style={styles.configKey}>Runtime lock</Text>
+                <InfoHint text={formatConfigValue(overview.lock_status)} />
+              </View>
+              <Text style={styles.configValue}>Active</Text>
+            </View>
+          ) : null}
+        </CollapsibleSection>
+        ) : null}
+
+        {activeSection === 'tools' ? (
         <CollapsibleSection
           title="Context and files"
           meta={overview ? `${overview.context_usage.message_count} messages · ${overview.pending_files.length} pending files` : 'History preview, context usage, and pending uploads'}
@@ -479,22 +832,19 @@ export default function AgentScreen() {
             </Pressable>
             <Pressable
               style={styles.deleteButton}
-              onPress={() =>
-                void runAction(
-                  () => resetAgentContext(apiBaseUrl, token, overview?.session_id || undefined),
-                  'resetting context'
-                )
-              }
+              onPress={() => void resetCurrentContext()}
             >
               <Text style={styles.deleteButtonText}>Reset chat context</Text>
             </Pressable>
           </View>
         </CollapsibleSection>
+        ) : null}
 
+        {activeSection === 'memory' ? (
         <CollapsibleSection
           title="Memory"
           meta={overview ? `${overview.memory_summary.daily_log_count} daily logs` : 'Search long-term memory and append notes'}
-          defaultExpanded={false}
+          defaultExpanded
         >
           <View style={styles.metricsGrid}>
             <MetricCard label="Memory file" value={overview?.memory_summary.memory_file_exists ? 'Present' : 'Missing'} />
@@ -569,11 +919,13 @@ export default function AgentScreen() {
             </Pressable>
           </View>
         </CollapsibleSection>
+        ) : null}
 
+        {activeSection === 'analytics' || activeSection === 'config' || activeSection === 'diagnostics' ? (
         <CollapsibleSection
-          title="Config, analytics, and security"
-          meta="Equivalent to /config, /analytics, and /security"
-          defaultExpanded={false}
+          title={activeSection === 'analytics' ? 'Analytics' : activeSection === 'config' ? 'Config' : 'Diagnostics'}
+          meta="Metrics, settings, and safety state"
+          defaultExpanded
         >
           <View style={styles.metricsGrid}>
             <MetricCard label="Messages" value={overview ? String(overview.analytics.total_messages) : '0'} />
@@ -588,15 +940,15 @@ export default function AgentScreen() {
           </View>
 
           <View style={styles.subsection}>
-            <Text style={styles.subsectionTitle}>Top commands</Text>
+            <Text style={styles.subsectionTitle}>Top actions</Text>
             {overview && Object.keys(overview.analytics.top_commands).length ? (
               Object.entries(overview.analytics.top_commands).map(([command, count]) => (
                 <Text key={command} style={styles.inlineHelp}>
-                  /{command}: {count}
+                  {command}: {count}
                 </Text>
               ))
             ) : (
-              <Text style={styles.empty}>No command analytics yet.</Text>
+              <Text style={styles.empty}>No action analytics yet.</Text>
             )}
           </View>
 
@@ -670,6 +1022,8 @@ export default function AgentScreen() {
             ))}
           </View>
         </CollapsibleSection>
+        ) : null}
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -683,10 +1037,39 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     gap: 12,
   },
+  modeTabs: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  modeTab: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#15213c',
+  },
+  modeTabActive: {
+    backgroundColor: '#2dd4bf',
+  },
+  modeTabText: {
+    color: '#dce8ff',
+    fontWeight: '800',
+  },
+  modeTabTextActive: {
+    color: '#05131e',
+  },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    flexWrap: 'wrap',
+    gap: 8,
   },
   topButton: {
     backgroundColor: '#182342',
@@ -741,6 +1124,9 @@ const styles = StyleSheet.create({
     gap: 14,
     paddingBottom: 28,
   },
+  disabledControlsGroup: {
+    opacity: 0.45,
+  },
   heroCard: {
     backgroundColor: '#141c33',
     borderRadius: 20,
@@ -760,6 +1146,30 @@ const styles = StyleSheet.create({
   heroMeta: {
     color: '#8fa2c8',
     fontSize: 12,
+  },
+  warningCard: {
+    borderWidth: 1,
+    borderColor: '#7c5d1f',
+    backgroundColor: '#1c180d',
+    borderRadius: 12,
+    padding: 14,
+    gap: 10,
+  },
+  warningTitle: {
+    color: '#ffe0a3',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  warningHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  warningText: {
+    color: '#f7e8c1',
+    fontSize: 13,
+    lineHeight: 19,
   },
   groupBlock: {
     gap: 8,
@@ -907,6 +1317,12 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 6,
   },
+  configHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
   configKey: {
     color: '#dce8ff',
     fontSize: 12,
@@ -914,6 +1330,11 @@ const styles = StyleSheet.create({
   },
   configValue: {
     color: '#b8c7e4',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  errorText: {
+    color: '#ffb4c0',
     fontSize: 12,
     lineHeight: 18,
   },
@@ -936,6 +1357,9 @@ const styles = StyleSheet.create({
   primaryButtonText: {
     color: '#ffffff',
     fontWeight: '700',
+  },
+  disabledButton: {
+    opacity: 0.45,
   },
   secondaryButton: {
     alignSelf: 'flex-start',

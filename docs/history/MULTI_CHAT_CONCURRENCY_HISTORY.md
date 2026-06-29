@@ -284,9 +284,9 @@ The main implementation touched these areas:
 - `telegram_bot/telegram_app.py`
 - `telegram_bot/telegram_agent.py`
 - `single_agent/cron_scheduler.py`
-- `mobile_app/client/src/desktop/DesktopConversationView.tsx`
-- `mobile_app/client/src/desktop/DesktopSetupPanel.tsx`
-- `mobile_app/client/src/desktop/DesktopAppShell.tsx`
+- `desktop_app/renderer_client/src/desktop/DesktopConversationView.tsx`
+- `desktop_app/renderer_client/src/desktop/DesktopSetupPanel.tsx`
+- `desktop_app/renderer_client/src/desktop/DesktopAppShell.tsx`
 - `mobile_app/client/src/screens/CronScreen.tsx`
 
 ## What This Work Intentionally Did Not Do

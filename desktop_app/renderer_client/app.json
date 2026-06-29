@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "Kraitos Desktop",
+    "slug": "kraitos-desktop-renderer",
+    "scheme": [
+      "kraitos-desktop",
+      "emploai"
+    ],
+    "version": "0.1.0-beta.14.6",
+    "orientation": "landscape",
+    "plugins": [
+      "expo-router"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}

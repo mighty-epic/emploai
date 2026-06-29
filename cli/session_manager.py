@@ -1,5 +1,6 @@
 """Session Manager - handles CRUD operations for chat sessions."""
 
+import hashlib
 import json
 import uuid
 from dataclasses import asdict
@@ -9,6 +10,33 @@ from typing import Any, Dict, List, Optional
 
 from cli.models.session import Session, SessionSummary
 from shared.runtime_paths import shared_state_root
+
+
+def _stable_workspace_id(workspace: Optional[Path], explicit: Optional[str] = None) -> Optional[str]:
+    clean = str(explicit or "").strip()
+    if clean:
+        return clean[:256]
+    if not workspace:
+        return None
+    try:
+        value = str(Path(workspace).expanduser().resolve()).casefold()
+    except Exception:
+        value = str(workspace).strip().casefold()
+    if not value:
+        return None
+    return f"wsp_{hashlib.sha256(value.encode('utf-8', errors='ignore')).hexdigest()[:16]}"
+
+
+def _workspace_binding_status(workspace: Optional[Path], explicit: Optional[str] = None) -> Optional[str]:
+    clean = str(explicit or "").strip().lower()
+    if clean:
+        return clean[:80]
+    if not workspace:
+        return None
+    try:
+        return "active" if Path(workspace).expanduser().exists() else "needs_reconnect"
+    except Exception:
+        return "needs_reconnect"
 
 
 class SessionManager:
@@ -34,8 +62,11 @@ class SessionManager:
         agent_mode: str = "auto",
         planner_model: Optional[str] = None,
         enabled_tool_packs: Optional[List[str]] = None,
+        security_permission_mode: str = "standard",
         telegram_bot_config_id: Optional[str] = None,
         headless_eligible: bool = False,
+        workspace_id: Optional[str] = None,
+        workspace_binding_status: Optional[str] = None,
     ) -> Session:
         """Create a new session.
         
@@ -68,8 +99,11 @@ class SessionManager:
             agent_mode=agent_mode,
             planner_model=planner_model,
             enabled_tool_packs=list(enabled_tool_packs or []),
+            security_permission_mode=security_permission_mode,
             telegram_bot_config_id=telegram_bot_config_id,
             headless_eligible=bool(headless_eligible),
+            workspace_id=_stable_workspace_id(workspace or Path.cwd(), workspace_id),
+            workspace_binding_status=_workspace_binding_status(workspace or Path.cwd(), workspace_binding_status),
         )
         
         self._save_session(session)
@@ -168,6 +202,8 @@ class SessionManager:
                     last_item = chat_history[-1]
                     if isinstance(last_item, dict):
                         latest_preview = str(last_item.get("content", ""))[:140]
+            workspace_text = str(payload.get("workspace", "") or "")
+            workspace_path = Path(workspace_text).expanduser() if workspace_text else None
             return SessionSummary(
                 id=str(payload.get("id", "") or ""),
                 name=str(payload.get("name", "") or ""),
@@ -176,12 +212,20 @@ class SessionManager:
                 model=str(payload.get("model", "claude-haiku-4.5") or "claude-haiku-4.5"),
                 planner_model=payload.get("planner_model"),
                 message_count=len(chat_history) if isinstance(chat_history, list) else 0,
-                workspace=str(payload.get("workspace", "") or ""),
+                workspace=workspace_text,
                 latest_preview=latest_preview,
                 origin_channels=origin_channels,
                 enabled_tool_packs=list(payload.get("enabled_tool_packs", []) or []),
+                security_permission_mode=payload.get("security_permission_mode", "standard"),
                 telegram_bot_config_id=payload.get("telegram_bot_config_id"),
                 headless_eligible=bool(payload.get("headless_eligible", False)),
+                workspace_id=payload.get("workspace_id") or _stable_workspace_id(workspace_path),
+                workspace_binding_status=payload.get("workspace_binding_status") or _workspace_binding_status(workspace_path),
+                fleet_identity_id=payload.get("fleet_identity_id"),
+                fleet_identity_role=payload.get("fleet_identity_role"),
+                fleet_worker_id=payload.get("fleet_worker_id"),
+                account_user_id=payload.get("account_user_id"),
+                account_email=payload.get("account_email"),
             )
         except Exception:
             return None

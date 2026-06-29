@@ -27,6 +27,10 @@ class RunningWorkerState:
     enabled_tool_packs: List[str] = field(default_factory=list)
     active_tool_packs: List[str] = field(default_factory=list)
     telegram_bot_config_id: Optional[str] = None
+    origin_channel: Optional[str] = None
+    fleet_identity_id: Optional[str] = None
+    fleet_identity_role: Optional[str] = None
+    fleet_worker_id: Optional[str] = None
 
 
 @dataclass
@@ -86,6 +90,10 @@ class UserMultiChatOrchestrator:
     def headless_mode_enabled(self) -> bool:
         return bool(self._settings.get("headless_mode_enabled", False))
 
+    def _origin_requires_sleep_chat(self, origin_channel: Optional[str]) -> bool:
+        origin = str(origin_channel or "").strip().lower()
+        return origin in {"", "telegram"}
+
     def _session_allowed_in_headless(self, session: Session) -> bool:
         bot_config_id = self._resolved_bot_config_id_for_session(session)
         if not bot_config_id:
@@ -111,6 +119,9 @@ class UserMultiChatOrchestrator:
                 self.telegram_bots.set_sleep_session(bot_config_id=str(bot_id), session_id=str(session_id or "").strip() or None)
         if self.headless_mode_enabled:
             for session_id in list(self._running):
+                state = self._running.get(session_id)
+                if state and not self._origin_requires_sleep_chat(state.origin_channel):
+                    continue
                 worker = self._workers.get(session_id)
                 if worker is None or self._session_allowed_in_headless(worker.session):
                     continue
@@ -160,7 +171,9 @@ class UserMultiChatOrchestrator:
     def _resolved_bot_config_id_for_session(self, session: Session) -> Optional[str]:
         target_id = str(getattr(session, "telegram_bot_config_id", "") or "").strip()
         if target_id:
-            return target_id
+            config = self.telegram_bots.get_config(target_id)
+            if config:
+                return target_id
         return self._default_bot_config_id()
 
     def _session_summary_live_fields(self, session: Session) -> Dict[str, Any]:
@@ -179,13 +192,18 @@ class UserMultiChatOrchestrator:
             "headless_eligible": bool(getattr(session, "headless_eligible", False)),
         }
 
+    def _managed_fleet_identity_id(self, session: Session) -> Optional[str]:
+        role = str(getattr(session, "fleet_identity_role", "") or "").strip().lower()
+        identity_id = str(getattr(session, "fleet_identity_id", "") or "").strip()
+        worker_id = str(getattr(session, "fleet_worker_id", "") or "").strip()
+        if role == "worker" or worker_id:
+            return identity_id or worker_id
+        return None
+
     def available_tool_packs_for_session_obj(self, session: Session) -> List[str]:
         enabled = normalize_enabled_tool_packs(getattr(session, "enabled_tool_packs", []) or default_enabled_tool_packs())
         if not enabled:
             enabled = default_enabled_tool_packs()
-        bot_config_id = self._resolved_bot_config_id_for_session(session)
-        if self.headless_mode_enabled and bot_config_id and bot_config_id != self._default_bot_config_id():
-            enabled = [pack_id for pack_id in enabled if pack_id != PACK_INTERACTIVE_DESKTOP]
         if not self._running:
             return list(enabled)
         available: List[str] = []
@@ -208,16 +226,10 @@ class UserMultiChatOrchestrator:
         workspace = self._session_workspace(session)
         interactive_owner = self._interactive_owner_session_id
         workspace_write_owner = self._workspace_write_owner_by_workspace.get(workspace)
-        bot_config_id = self._resolved_bot_config_id_for_session(session)
         if PACK_INTERACTIVE_DESKTOP in enabled and interactive_owner and interactive_owner != session.id:
             disabled_reasons[PACK_INTERACTIVE_DESKTOP] = f"Interactive tools are locked by chat {interactive_owner}"
-        if self.headless_mode_enabled and PACK_INTERACTIVE_DESKTOP in enabled and bot_config_id and bot_config_id != self._default_bot_config_id():
-            disabled_reasons[PACK_INTERACTIVE_DESKTOP] = "Interactive tools stay reserved for the default bot sleep chat in headless mode"
         if PACK_WORKSPACE_WRITE in enabled and workspace_write_owner and workspace_write_owner != session.id:
             disabled_reasons[PACK_WORKSPACE_WRITE] = f"Workspace write tools are locked by chat {workspace_write_owner}"
-        if self.headless_mode_enabled:
-            if not self._session_allowed_in_headless(session):
-                disabled_reasons.setdefault("__headless__", "This chat is not the designated sleep chat for its Telegram bot")
         return {
             "interactive_owner_session_id": interactive_owner,
             "workspace_write_owner_by_workspace": dict(self._workspace_write_owner_by_workspace),
@@ -243,9 +255,31 @@ class UserMultiChatOrchestrator:
         if not target_id:
             return focused_session_id
         last_emitting = self.telegram_bots.get_last_emitting_session(target_id)
-        return last_emitting or focused_session_id
+        if last_emitting:
+            return last_emitting
 
-    async def prepare_turn(self, session_id: str) -> TurnLease:
+        focused = str(focused_session_id or "").strip()
+        if focused:
+            try:
+                focused_session = self.session_manager.load_session(focused, set_current=False)
+                if self._resolved_bot_config_id_for_session(focused_session) == target_id:
+                    return focused
+            except Exception:
+                pass
+
+        for summary in self.session_manager.list_sessions():
+            session_id = str(getattr(summary, "id", "") or "").strip()
+            if not session_id:
+                continue
+            try:
+                session = self.session_manager.load_session(session_id, set_current=False)
+            except Exception:
+                continue
+            if self._resolved_bot_config_id_for_session(session) == target_id:
+                return session_id
+        return focused_session_id
+
+    async def prepare_turn(self, session_id: str, *, origin_channel: Optional[str] = "telegram") -> TurnLease:
         async with self._lock:
             worker = self.get_worker(session_id)
             if worker.is_processing:
@@ -258,6 +292,21 @@ class UserMultiChatOrchestrator:
                     lock_status=self.lock_status_for_session_obj(worker.session),
                 )
 
+            managed_identity_id = self._managed_fleet_identity_id(worker.session)
+            if managed_identity_id:
+                for running_session_id, state in self._running.items():
+                    if running_session_id == session_id:
+                        continue
+                    if str(state.fleet_identity_id or state.fleet_worker_id or "") == managed_identity_id:
+                        return TurnLease(
+                            session_id=session_id,
+                            worker=worker,
+                            acquired=False,
+                            busy=True,
+                            error="This managed worker already has an active run. Queue the task or stop the current run first.",
+                            lock_status=self.lock_status_for_session_obj(worker.session),
+                        )
+
             if session_id not in self._running and len(self._running) >= self.max_concurrent_chats:
                 return TurnLease(
                     session_id=session_id,
@@ -269,7 +318,19 @@ class UserMultiChatOrchestrator:
                 )
 
             available_tool_packs = self.available_tool_packs_for_session_obj(worker.session)
-            if self.headless_mode_enabled:
+            lock_status = self.lock_status_for_session_obj(worker.session)
+            disabled_pack_reasons = dict(lock_status.get("disabled_pack_reasons") or {})
+            if disabled_pack_reasons:
+                return TurnLease(
+                    session_id=session_id,
+                    worker=worker,
+                    acquired=False,
+                    busy=True,
+                    error="Required tool resources are locked by another active chat. Queue this work or stop the conflicting run first.",
+                    lock_status=lock_status,
+                )
+            restrict_to_sleep_chat = self.headless_mode_enabled and self._origin_requires_sleep_chat(origin_channel)
+            if restrict_to_sleep_chat:
                 bot_config_id = self._resolved_bot_config_id_for_session(worker.session)
                 if not self._session_allowed_in_headless(worker.session):
                     return TurnLease(
@@ -277,7 +338,7 @@ class UserMultiChatOrchestrator:
                         worker=worker,
                         acquired=False,
                         busy=True,
-                        error="Headless mode only allows designated sleep chats to run.",
+                        error="Sleep mode only allows designated Telegram sleep chats to run.",
                         lock_status=self.lock_status_for_session_obj(worker.session),
                     )
                 if bot_config_id and bot_config_id != self._default_bot_config_id():
@@ -291,6 +352,10 @@ class UserMultiChatOrchestrator:
                     enabled_tool_packs=list(worker.enabled_tool_packs),
                     active_tool_packs=list(available_tool_packs),
                     telegram_bot_config_id=worker.telegram_bot_config_id,
+                    origin_channel=origin_channel,
+                    fleet_identity_id=str(getattr(worker.session, "fleet_identity_id", "") or "").strip() or None,
+                    fleet_identity_role=str(getattr(worker.session, "fleet_identity_role", "") or "").strip() or None,
+                    fleet_worker_id=str(getattr(worker.session, "fleet_worker_id", "") or "").strip() or None,
                 )
                 self._running[session_id] = state
                 if enabled_pack_requires_interactive(available_tool_packs) and not self._interactive_owner_session_id:
@@ -311,16 +376,24 @@ class UserMultiChatOrchestrator:
         if not lease.acquired:
             return
         async with self._lock:
-            session_id = lease.session_id
-            state = self._running.pop(session_id, None)
-            if state and self._interactive_owner_session_id == session_id:
-                self._interactive_owner_session_id = None
-            if state:
-                for workspace, owner_session_id in list(self._workspace_write_owner_by_workspace.items()):
-                    if owner_session_id == session_id:
-                        self._workspace_write_owner_by_workspace.pop(workspace, None)
-            if lease.worker is not None:
-                lease.worker._active_tool_packs_for_current_run = []
+            self._release_running_state(lease.session_id, worker=lease.worker)
+
+    def _release_running_state(self, session_id: str, *, worker: Any = None) -> bool:
+        state = self._running.pop(session_id, None)
+        if state and self._interactive_owner_session_id == session_id:
+            self._interactive_owner_session_id = None
+        if state:
+            for workspace, owner_session_id in list(self._workspace_write_owner_by_workspace.items()):
+                if owner_session_id == session_id:
+                    self._workspace_write_owner_by_workspace.pop(workspace, None)
+        target_worker = worker if worker is not None else self._workers.get(session_id)
+        if target_worker is not None:
+            target_worker._active_tool_packs_for_current_run = []
+        return state is not None
+
+    async def force_release_turn(self, session_id: str, *, worker: Any = None) -> bool:
+        async with self._lock:
+            return self._release_running_state(str(session_id), worker=worker)
 
     def list_running_workers(self) -> List[Dict[str, Any]]:
         rows: List[Dict[str, Any]] = []
@@ -334,6 +407,9 @@ class UserMultiChatOrchestrator:
                     "enabled_tool_packs": list(state.enabled_tool_packs),
                     "active_tool_packs": list(state.active_tool_packs),
                     "telegram_bot_config_id": state.telegram_bot_config_id,
+                    "fleet_identity_id": state.fleet_identity_id,
+                    "fleet_identity_role": state.fleet_identity_role,
+                    "fleet_worker_id": state.fleet_worker_id,
                 }
             )
         rows.sort(key=lambda item: item["session_id"])
@@ -366,6 +442,8 @@ class UserMultiChatOrchestrator:
     def update_session_bot_assignment(self, session_id: str, telegram_bot_config_id: Optional[str]) -> Session:
         session = self.session_manager.load_session(session_id, set_current=False)
         clean = str(telegram_bot_config_id or "").strip() or None
+        if clean and not self.telegram_bots.get_config(clean):
+            raise KeyError(clean)
         session.telegram_bot_config_id = clean
         self.session_manager.save_session(session)
         worker = self._workers.get(session_id)
@@ -384,6 +462,32 @@ class UserMultiChatOrchestrator:
             worker.headless_eligible = bool(headless_eligible)
             if getattr(worker, "session", None) is not None:
                 worker.session.headless_eligible = bool(headless_eligible)
+        return session
+
+    def update_session_security_permission_mode(self, session_id: str, security_permission_mode: str) -> Session:
+        from shared.security_policy import normalize_permission_mode
+
+        session = self.session_manager.load_session(session_id, set_current=False)
+        session.security_permission_mode = normalize_permission_mode(security_permission_mode)
+        self.session_manager.save_session(session)
+        worker = self._workers.get(session_id)
+        if worker and not worker.is_processing and getattr(worker, "session", None) is not None:
+            worker.session.security_permission_mode = session.security_permission_mode
+            if getattr(worker, "tool_executor", None) is not None:
+                workspace_for_security = str(getattr(worker.session, "workspace", "") or "")
+                worker.tool_executor.security_context_provider = lambda: {
+                    "permission_mode": getattr(worker.session, "security_permission_mode", "standard"),
+                    "workspace_path": workspace_for_security,
+                    "workspace_binding_status": getattr(worker.session, "workspace_binding_status", None),
+                    "workspace_write_enabled": (
+                        None
+                        if not workspace_for_security
+                        else Path(workspace_for_security).expanduser().exists()
+                    ),
+                    "surface": "app",
+                    "session_id": getattr(worker.session, "id", None),
+                    "identity_id": getattr(worker.session, "fleet_identity_id", None),
+                }
         return session
 
 

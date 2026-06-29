@@ -2,7 +2,9 @@ import json
 import os
 from pathlib import Path
 
+import deploy.windows.release_runtime as release_runtime
 from deploy.windows.release_runtime import (
+    PACKAGED_RUNTIME_HOME_NAME,
     RUNTIME_DATA_SCHEMA_STATE_KEY,
     RUNTIME_DATA_SCHEMA_VERSION,
     build_setup_state,
@@ -18,9 +20,20 @@ from deploy.windows.release_runtime import (
     load_release_state,
     render_env,
     run_first_run_setup,
+    runtime_home,
     update_voice_pack_preferences,
     validate_setup_values,
 )
+
+
+def test_packaged_runtime_home_defaults_to_isolated_beta_home(monkeypatch, tmp_path: Path):
+    monkeypatch.delenv("EMPLOAI_HOME", raising=False)
+    monkeypatch.delenv("EMPLOAI_RUNTIME_HOME_NAME", raising=False)
+    monkeypatch.delenv("EMPLOAI_PACKAGED_RUNTIME_HOME_NAME", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr(release_runtime.sys, "frozen", True, raising=False)
+
+    assert runtime_home() == (tmp_path / PACKAGED_RUNTIME_HOME_NAME).resolve()
 
 
 def test_ensure_runtime_files_creates_runtime_layout(tmp_path: Path):
@@ -43,7 +56,10 @@ def test_ensure_runtime_files_creates_runtime_layout(tmp_path: Path):
     config = (runtime_home / "config.json").read_text(encoding="utf-8")
     assert '"enabled": true' in config
     assert '"desktop"' in config
-    assert '"default_model": "gpt-4o-mini"' in config
+    assert '"default_model": "auto"' in config
+    assert '"default_planner_model": "auto"' in config
+    assert '"final_quality_guard": "planner"' in config
+    assert '"final_quality_max_auto_continues": 2' in config
     assert "# MEMORY.md - Long-Term Memory" in (runtime_home / "MEMORY.md").read_text(encoding="utf-8")
     assert (runtime_home / "agent_data" / "AGENTS.md").read_text(encoding="utf-8") == "# Runtime Agents\n"
     assert load_release_state(runtime_home)[RUNTIME_DATA_SCHEMA_STATE_KEY] == RUNTIME_DATA_SCHEMA_VERSION
@@ -167,7 +183,7 @@ def test_render_env_keeps_release_fields_first():
     assert lines[-1] == "ZZZ=tail"
 
 
-def test_validate_setup_values_requires_complete_remote_control_configuration():
+def test_validate_setup_values_allows_account_token_remote_configuration():
     issues = validate_setup_values(
         {
             "DEFAULT_WORKSPACE": "C:/Work",
@@ -176,7 +192,7 @@ def test_validate_setup_values_requires_complete_remote_control_configuration():
         }
     )
 
-    assert any("Remote control requires service URL, email, and password together." in issue for issue in issues)
+    assert not any("Remote control requires service URL, email, and password together." in issue for issue in issues)
 
 
 def test_build_setup_state_marks_remote_control_configuration(tmp_path: Path):
@@ -200,10 +216,121 @@ def test_build_setup_state_marks_remote_control_configuration(tmp_path: Path):
     assert state["remoteControlPartiallyConfigured"] is False
 
 
+def test_build_setup_state_marks_remote_account_session_configured(tmp_path: Path):
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    env_file = tmp_path / ".env"
+    (tmp_path / "remote-account-session.json").write_text(
+        json.dumps({"apiBaseUrl": "https://api.kraitos.app", "sessionToken": "session-token"}),
+        encoding="utf-8",
+    )
+
+    state = build_setup_state(
+        home=tmp_path,
+        env_file=env_file,
+        source_root=source_root,
+        existing={
+            "DEFAULT_WORKSPACE": "C:/Work",
+            "OPENAI_API_KEY": "sk-test",
+        },
+    )
+
+    assert state["remoteControlConfigured"] is True
+    assert state["remoteControlPartiallyConfigured"] is False
+
+
+def test_build_setup_state_marks_plain_json_fallback_remote_session_configured(tmp_path: Path):
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    env_file = tmp_path / ".env"
+    (tmp_path / "remote-account-session.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "storage": "plain_json_fallback",
+                "payload": {
+                    "apiBaseUrl": "https://api.kraitos.app",
+                    "sessionToken": "session-token",
+                    "user": {"user_id": 77},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = build_setup_state(
+        home=tmp_path,
+        env_file=env_file,
+        source_root=source_root,
+        existing={
+            "DEFAULT_WORKSPACE": "C:/Work",
+            "OPENAI_API_KEY": "sk-test",
+        },
+    )
+
+    assert state["remoteControlConfigured"] is True
+    assert state["remoteControlPartiallyConfigured"] is False
+    assert release_runtime.remote_account_session_payload(tmp_path)["user"]["user_id"] == 77
+
+
+def test_build_setup_state_does_not_treat_encrypted_remote_session_as_plaintext(tmp_path: Path):
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    env_file = tmp_path / ".env"
+    (tmp_path / "remote-account-session.json").write_text(
+        json.dumps({"version": 2, "storage": "electron_safe_storage", "ciphertext": "opaque"}),
+        encoding="utf-8",
+    )
+
+    state = build_setup_state(
+        home=tmp_path,
+        env_file=env_file,
+        source_root=source_root,
+        existing={
+            "DEFAULT_WORKSPACE": "C:/Work",
+            "OPENAI_API_KEY": "sk-test",
+        },
+    )
+
+    assert state["remoteControlConfigured"] is False
+    assert state["remoteControlPartiallyConfigured"] is False
+
+
+def test_build_setup_state_marks_env_remote_account_session_configured(monkeypatch, tmp_path: Path):
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    env_file = tmp_path / ".env"
+    (tmp_path / "remote-account-session.json").write_text(
+        json.dumps({"version": 2, "storage": "electron_safe_storage", "ciphertext": "opaque"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("EMPLOAI_REMOTE_CONTROL_BASE_URL", "https://api.kraitos.app")
+    monkeypatch.setenv("EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN", "session-token")
+    monkeypatch.setenv("EMPLOAI_REMOTE_CONTROL_USER_ID", "77")
+    monkeypatch.setenv("EMPLOAI_REMOTE_CONTROL_DESKTOP_ID", "desktop-abc")
+
+    state = build_setup_state(
+        home=tmp_path,
+        env_file=env_file,
+        source_root=source_root,
+        existing={
+            "DEFAULT_WORKSPACE": "C:/Work",
+            "OPENAI_API_KEY": "sk-test",
+        },
+    )
+    session = release_runtime.remote_account_session_payload(tmp_path)
+
+    assert state["remoteControlConfigured"] is True
+    assert state["remoteControlPartiallyConfigured"] is False
+    assert session["user"]["user_id"] == "77"
+    assert session["desktop"]["desktop_id"] == "desktop-abc"
+
+
 def test_needs_first_run_setup_requires_workspace_and_provider_key():
     assert needs_first_run_setup({})
     assert needs_first_run_setup({"DEFAULT_WORKSPACE": "C:/Work"})
     assert not needs_first_run_setup({"OPENAI_API_KEY": "sk-test"})
+    assert not needs_first_run_setup({"DEFAULT_WORKSPACE": "C:/Work", "NVIDIA_API_KEY": "nvapi-test"})
     assert needs_first_run_setup({"DEFAULT_WORKSPACE": "C:/Work", "TELEGRAM_BOT_TOKEN": "123:abc"})
     assert not needs_first_run_setup({"DEFAULT_WORKSPACE": "C:/Work", "OPENAI_API_KEY": "sk-test"})
 
@@ -281,7 +408,6 @@ def test_run_first_run_setup_saves_all_provider_keys_and_onboarded_version(tmp_p
         "C:/Work",
         "https://remote.emplo.ai",
         "user@example.com",
-        "pw-123",
         "",
         "",
         "sk-openai",
@@ -289,6 +415,7 @@ def test_run_first_run_setup_saves_all_provider_keys_and_onboarded_version(tmp_p
         "google-key",
         "xai-key",
         "deepseek-key",
+        "nvidia-key",
         "openrouter-key",
         "",
         "",
@@ -308,10 +435,11 @@ def test_run_first_run_setup_saves_all_provider_keys_and_onboarded_version(tmp_p
     assert merged["GEMINI_API_KEY"] == "google-key"
     assert merged["XAI_API_KEY"] == "xai-key"
     assert merged["DEEPSEEK_API_KEY"] == "deepseek-key"
+    assert merged["NVIDIA_API_KEY"] == "nvidia-key"
     assert merged["OPENROUTER_API_KEY"] == "openrouter-key"
     assert merged["EMPLOAI_REMOTE_CONTROL_BASE_URL"] == "https://remote.emplo.ai"
     assert merged["EMPLOAI_REMOTE_CONTROL_EMAIL"] == "user@example.com"
-    assert merged["EMPLOAI_REMOTE_CONTROL_PASSWORD"] == "pw-123"
+    assert merged["EMPLOAI_REMOTE_CONTROL_PASSWORD"] == ""
     assert merged["EMPLOAI_REMOTE_DESKTOP_NAME"] == "EmploAI Desktop"
     assert merged["EMPLOAI_REMOTE_DESKTOP_KEY"] == "desktop-default"
     assert load_release_state(runtime_home)["last_onboarded_version"] == "0.1.0-beta.2"
@@ -345,7 +473,8 @@ def test_build_setup_state_marks_versioned_setup_and_provider_labels(tmp_path: P
     assert state["modelGroups"]
     assert any(group["provider"] == "openai" for group in state["modelGroups"])
     assert state["plannerModels"]
-    assert "gpt-5" in state["plannerModels"]
+    assert state["plannerModels"][0] == "gpt-5.4-mini"
+    assert "gpt-5.4-mini" in state["plannerModels"]
     assert state["validationIssues"][0].startswith("Review Telegram bot access")
     assert "voiceAvailable" in state
     assert "voiceStatus" in state
@@ -355,6 +484,47 @@ def test_build_setup_state_marks_versioned_setup_and_provider_labels(tmp_path: P
     assert state["values"]["VOICE_DEFAULT_ENGINE"] == "none"
     assert state["voicePacks"]["defaultEngine"] == "none"
     assert state["voicePacks"]["packs"][0]["id"] == "english_local"
+
+
+def test_build_setup_state_exposes_nvidia_models_when_nvidia_key_is_configured(tmp_path: Path):
+    source_root = tmp_path / "source"
+    deploy_dir = source_root / "deploy" / "windows"
+    deploy_dir.mkdir(parents=True)
+    (deploy_dir / "release_info.json").write_text('{"version":"0.1.0-beta.2"}', encoding="utf-8")
+
+    runtime_home = tmp_path / "runtime"
+    runtime_home.mkdir()
+    env_file = runtime_home / ".env"
+
+    state = build_setup_state(
+        home=runtime_home,
+        env_file=env_file,
+        source_root=source_root,
+        existing={
+            "DEFAULT_WORKSPACE": "C:/Work",
+            "NVIDIA_API_KEY": "nvapi-test",
+        },
+    )
+
+    nvidia_group = next(group for group in state["modelGroups"] if group["provider"] == "nvidia")
+    assert state["configuredProviders"] == ["NVIDIA NIM"]
+    assert nvidia_group["models"] == [
+        "google/diffusiongemma-26b-a4b-it",
+        "google/gemma-3n-e2b-it",
+        "meta/llama-3.2-11b-vision-instruct",
+        "meta/llama-4-maverick-17b-128e-instruct",
+        "minimaxai/minimax-m3",
+        "mistralai/ministral-14b-instruct-2512",
+        "mistralai/mistral-large-3-675b-instruct-2512",
+        "mistralai/mistral-medium-3.5-128b",
+        "mistralai/mistral-small-4-119b-2603",
+        "nvidia/nemotron-nano-12b-v2-vl",
+    ]
+    assert "deepseek-ai/deepseek-v4-pro" not in nvidia_group["models"]
+    assert "nvidia/llama-3.3-nemotron-super-49b-v1" not in nvidia_group["models"]
+    assert "openai/gpt-oss-120b" not in nvidia_group["models"]
+    assert "openai/gpt-oss-20b" not in nvidia_group["models"]
+    assert state["plannerModels"][0] == "mistralai/ministral-14b-instruct-2512"
 
 
 def test_save_setup_values_clears_telegram_rebind_flag(tmp_path: Path):
@@ -476,6 +646,44 @@ def test_save_setup_values_persists_planner_model_in_env(tmp_path: Path):
     assert "PLANNER_MODEL=gpt-5.4-mini" in env_file.read_text(encoding="utf-8")
 
 
+def test_save_setup_values_keeps_cloud_secrets_out_of_env(tmp_path: Path):
+    source_root = tmp_path / "source"
+    deploy_dir = source_root / "deploy" / "windows"
+    deploy_dir.mkdir(parents=True)
+    (deploy_dir / "release_info.json").write_text('{"version":"0.1.0-beta.2"}', encoding="utf-8")
+
+    runtime_home = tmp_path / "runtime"
+    runtime_home.mkdir()
+    env_file = runtime_home / ".env"
+    (runtime_home / "config.json").write_text(json.dumps(default_release_config(), indent=2), encoding="utf-8")
+
+    merged = save_setup_values(
+        home=runtime_home,
+        env_file=env_file,
+        source_root=source_root,
+        existing={
+            "DEFAULT_WORKSPACE": "C:/Work",
+        },
+        updates={
+            "DEFAULT_WORKSPACE": "C:/Work",
+            "OPENAI_API_KEY": "sk-cloud-only",
+            "TELEGRAM_BOT_TOKEN": "123456:cloud-only",
+            "ALLOWED_USER_IDS": "42",
+            "EMPLOAI_REMOTE_CONTROL_PASSWORD": "remote-password",
+            "GMAIL_LOGIN_PASSWORD": "gmail-password",
+            "PLANNER_MODEL": "gpt-5.4-mini",
+        },
+    )
+
+    rendered = env_file.read_text(encoding="utf-8")
+    assert merged["OPENAI_API_KEY"] == "sk-cloud-only"
+    assert "PLANNER_MODEL=gpt-5.4-mini" in rendered
+    assert "OPENAI_API_KEY" not in rendered
+    assert "TELEGRAM_BOT_TOKEN" not in rendered
+    assert "EMPLOAI_REMOTE_CONTROL_PASSWORD" not in rendered
+    assert "GMAIL_LOGIN_PASSWORD" not in rendered
+
+
 def test_save_setup_values_allows_hebrew_default_engine_when_requested(monkeypatch, tmp_path: Path):
     source_root = tmp_path / "source"
     deploy_dir = source_root / "deploy" / "windows"
@@ -579,6 +787,42 @@ def test_configure_process_environment_prunes_older_regex_metadata(monkeypatch, 
 
     assert not older.exists()
     assert newer.exists()
+
+
+def test_configure_process_environment_scrubs_existing_local_secrets(monkeypatch, tmp_path: Path):
+    runtime_home = tmp_path / "runtime"
+    runtime_home.mkdir()
+    env_file = runtime_home / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "DEFAULT_WORKSPACE=C:/Work",
+                "OPENAI_API_KEY=sk-stale-local",
+                "TELEGRAM_BOT_TOKEN=123456:stale-local",
+                "EMPLOAI_REMOTE_CONTROL_PASSWORD=stale-password",
+                "PLANNER_MODEL=gpt-5.4-mini",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "host-value")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "host-telegram")
+    monkeypatch.setenv("EMPLOAI_REMOTE_CONTROL_PASSWORD", "host-password")
+
+    values = configure_process_environment(runtime_home, env_file)
+    rendered = env_file.read_text(encoding="utf-8")
+
+    assert values == {
+        "DEFAULT_WORKSPACE": "C:/Work",
+        "PLANNER_MODEL": "gpt-5.4-mini",
+    }
+    assert os.environ.get("OPENAI_API_KEY") is None
+    assert os.environ.get("TELEGRAM_BOT_TOKEN") is None
+    assert os.environ.get("EMPLOAI_REMOTE_CONTROL_PASSWORD") is None
+    assert "OPENAI_API_KEY" not in rendered
+    assert "TELEGRAM_BOT_TOKEN" not in rendered
+    assert "EMPLOAI_REMOTE_CONTROL_PASSWORD" not in rendered
 
 
 def test_configure_process_environment_prunes_duplicates_when_bundle_root_is_internal(monkeypatch, tmp_path: Path):

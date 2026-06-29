@@ -1,10 +1,12 @@
 """Logic for executing CLI agent tools."""
 
 import os
+import re
 import subprocess
 import shlex
 import sys
 import threading
+import time
 import uuid
 from collections import deque
 from pathlib import Path
@@ -12,6 +14,14 @@ from typing import Dict, Any, Optional, List
 from .web_tools import duckduckgo_search
 import shutil
 from cli.config_manager import get_config_manager
+from shared.security_policy import (
+    SecurityContext,
+    confirmation_prompt_for,
+    default_security_context,
+    evaluate_tool_call,
+    filter_tool_result,
+    normalize_permission_mode,
+)
 
 INJECTED_CONTEXT_FILENAMES = {
     "agents.md",
@@ -20,6 +30,30 @@ INJECTED_CONTEXT_FILENAMES = {
     "tools.md",
     "memory.md",
 }
+
+DEFAULT_READY_OUTPUT_PATTERNS = [
+    r"\bready\b",
+    r"\blistening on\b",
+    r"\bserver (is )?running\b",
+    r"\blocal:\s+https?://",
+    r"https?://(localhost|127\.0\.0\.1)",
+    r"\bcompiled successfully\b",
+    r"\bbuilt in \d",
+]
+
+DEFAULT_MEANINGFUL_OUTPUT_PATTERNS = [
+    r"\btests? (passed|failed)\b",
+    r"\b\d+\s+passed\b",
+    r"\b\d+\s+failed\b",
+    r"\bbuild (completed|complete|failed)\b",
+    r"\b(error|exception|traceback)\b",
+]
+
+DEFAULT_FAILURE_OUTPUT_PATTERNS = [
+    r"\b(error|failed|failure|exception|traceback)\b",
+    r"\bunhandled\b",
+    r"\baddress already in use\b",
+]
 
 
 class ToolExecutor:
@@ -57,8 +91,92 @@ class ToolExecutor:
         self.custom_tool_handlers: Dict[str, Any] = {}
         # Optional callback that returns the current allowed tool-name set for the turn.
         self.allowed_tool_names_provider = None
+        # Optional callback that returns a shared.security_policy.SecurityContext
+        # or a permission-mode string for this chat/session.
+        self.security_context_provider = None
         # Track background processes: {command_id: {process, output_lines, thread, command, ...}}
         self._background_commands: Dict[str, Dict[str, Any]] = {}
+        # Optional proactive runtime hooks. The context provider is sampled when a
+        # command starts; the event callback is called from a daemon watcher thread
+        # when the process exits.
+        self.background_command_context_provider = None
+        self.background_command_event_callback = None
+
+    @staticmethod
+    def _normalize_pattern_list(value: Any) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            parts = [part.strip() for part in re.split(r"[\n,]", value) if part.strip()]
+            return parts[:20]
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()][:20]
+        return []
+
+    @staticmethod
+    def _line_matches_any(line: str, patterns: List[str]) -> bool:
+        text = str(line or "")
+        if not text.strip():
+            return False
+        for pattern in patterns:
+            try:
+                if re.search(pattern, text, flags=re.IGNORECASE):
+                    return True
+            except re.error:
+                if pattern.casefold() in text.casefold():
+                    return True
+        return False
+
+    def _security_context(self) -> SecurityContext:
+        if callable(self.security_context_provider):
+            try:
+                provided = self.security_context_provider()
+                if isinstance(provided, SecurityContext):
+                    return provided
+                if isinstance(provided, dict):
+                    return SecurityContext(
+                        permission_mode=normalize_permission_mode(provided.get("permission_mode")),
+                        workspace_path=str(provided.get("workspace_path") or self.workspace_path),
+                        workspace_binding_status=provided.get("workspace_binding_status"),
+                        workspace_write_enabled=provided.get("workspace_write_enabled"),
+                        actor_kind=provided.get("actor_kind"),
+                        surface=provided.get("surface"),
+                        session_id=provided.get("session_id"),
+                        identity_id=provided.get("identity_id"),
+                    )
+                if provided:
+                    return SecurityContext(
+                        permission_mode=normalize_permission_mode(provided),
+                        workspace_path=str(self.workspace_path),
+                    )
+            except Exception:
+                pass
+        return default_security_context(workspace_path=str(self.workspace_path))
+
+    def _authorize_tool_call(self, name: str, args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        decision = evaluate_tool_call(name, args or {}, context=self._security_context())
+        if decision.allowed:
+            return None
+        if decision.needs_confirmation:
+            if self.confirm_callback:
+                prompt = confirmation_prompt_for(decision, tool_name=name, args=args or {})
+                try:
+                    if self.confirm_callback(prompt):
+                        return None
+                except Exception:
+                    pass
+            return {
+                "error": decision.reason or "Security confirmation was required and not approved.",
+                "error_type": "security_confirmation_required",
+                "tool_name": name,
+                "security_decision": decision.action,
+                "risk": decision.risk,
+                "retry": False,
+            }
+        return decision.to_tool_result(tool_name=name)
+
+    def _filter_tool_result(self, name: str, args: Dict[str, Any], result: Any) -> Any:
+        return filter_tool_result(name, args or {}, result)
 
     def _terminate_process_tree(self, process: subprocess.Popen, *, timeout: float = 3.0) -> None:
         if process.poll() is not None:
@@ -126,6 +244,100 @@ class ToolExecutor:
             p = p.resolve()
         return p
 
+    def _normalize_command_shell(self, shell: Optional[str]) -> str:
+        requested = str(shell or "auto").strip().lower()
+        aliases = {
+            "": "auto",
+            "default": "auto",
+            "platform": "auto",
+            "cmd.exe": "cmd",
+            "powershell.exe": "powershell",
+            "ps": "powershell",
+            "ps1": "powershell",
+            "pwsh.exe": "pwsh",
+            "sh": "bash",
+        }
+        normalized = aliases.get(requested, requested)
+        allowed = {"auto", "cmd", "powershell", "pwsh", "bash"}
+        if normalized not in allowed:
+            raise ValueError(
+                f"Unsupported shell '{shell}'. Use one of: auto, cmd, powershell, pwsh, bash."
+            )
+        return normalized
+
+    def _build_command_invocation(self, command: str, shell: Optional[str]) -> tuple[Any, bool, str]:
+        requested = self._normalize_command_shell(shell)
+
+        if requested == "auto":
+            return command, True, "cmd" if os.name == "nt" else "sh"
+
+        if requested == "cmd":
+            if os.name != "nt":
+                raise ValueError("shell='cmd' is only available on Windows.")
+            return ["cmd.exe", "/d", "/s", "/c", command], False, "cmd"
+
+        if requested == "powershell":
+            executable = shutil.which("powershell") or ("powershell.exe" if os.name == "nt" else None)
+            if not executable:
+                raise ValueError("shell='powershell' was requested, but powershell is not available.")
+            return [executable, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], False, "powershell"
+
+        if requested == "pwsh":
+            executable = shutil.which("pwsh")
+            if not executable:
+                raise ValueError("shell='pwsh' was requested, but pwsh is not available.")
+            return [executable, "-NoProfile", "-Command", command], False, "pwsh"
+
+        executable = shutil.which("bash")
+        if not executable:
+            raise ValueError("shell='bash' was requested, but bash is not available.")
+        return [executable, "-lc", command], False, "bash"
+
+    def _command_creationflags(self, *, visible_terminal: bool) -> int:
+        if os.name != "nt":
+            return 0
+        if visible_terminal:
+            return getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+        return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    def _unsafe_process_scope_error(self, command: str) -> Optional[Dict[str, Any]]:
+        normalized = str(command or "").strip()
+        if not normalized:
+            return None
+        lower = normalized.lower()
+
+        broad_reason = None
+        if re.search(r"\btaskkill(?:\.exe)?\b", lower):
+            has_image_name = bool(re.search(r"(?:^|\s)/(?:im|fi)\s+", lower))
+            has_pid = bool(re.search(r"(?:^|\s)/(?:pid)\s+\d+", lower))
+            if has_image_name and not has_pid:
+                broad_reason = "taskkill by image/filter can terminate unrelated user applications."
+        elif re.search(r"\bstop-process\b", lower):
+            has_exact_id = bool(re.search(r"(?:^|\s)-(?:id|pid)\s+\d+", lower))
+            has_name = bool(re.search(r"(?:^|\s)-(?:name|processname)\s+\S+", lower))
+            piped_from_get_process = bool(re.search(r"\bget-process\b.*\|\s*stop-process\b", lower))
+            if (has_name or piped_from_get_process) and not has_exact_id:
+                broad_reason = "Stop-Process by name can terminate unrelated user applications."
+        elif re.search(r"\b(?:pkill|killall)\b", lower):
+            broad_reason = "pkill/killall can terminate unrelated user applications by name."
+
+        if not broad_reason:
+            return None
+
+        return {
+            "error": (
+                f"Unsafe broad process-control command blocked: {broad_reason} "
+                "Use kill_command(command_id) for background commands started by this agent, "
+                "or inspect processes and target an exact PID/window that is known to belong to this task."
+            ),
+            "error_type": "unsafe_process_scope",
+            "retry": True,
+            "NEXT": (
+                "Choose a scoped cleanup route: kill_command for a known command_id, "
+                "taskkill /PID <pid> for an exact task-owned PID, or close_window with an exact window title."
+            ),
+        }
+
     def _validate_required_params(self, tool_name: str, args: Dict[str, Any]) -> tuple[bool, str]:
         """
         Validate that required parameters are present for specific tools.
@@ -178,6 +390,10 @@ class ToolExecutor:
             if context_lookup_error is not None:
                 return context_lookup_error
 
+            security_error = self._authorize_tool_call(name, args)
+            if security_error is not None:
+                return security_error
+
             # Check for interruption before executing (optional callback)
             if self.check_interruption and self.check_interruption():
                 return {"interrupted": True, "message": "Execution interrupted by user"}
@@ -196,20 +412,20 @@ class ToolExecutor:
             # 1. Check for CLI-specific tool
             method = getattr(self, f"tool_{name}", None)
             if method:
-                return method(**args)
+                return self._filter_tool_result(name, args, method(**args))
 
             # 1.5. Check for session-specific handlers (Telegram bridge/browser tools)
             custom_handler = self.custom_tool_handlers.get(name)
             if custom_handler:
-                return custom_handler(args)
+                return self._filter_tool_result(name, args, custom_handler(args))
             
             # 2. Check for Task Agent tools
             if self.single_agent and hasattr(self.single_agent, 'tools'):
                 if name in self.single_agent.tools:
                     # Execute via SingleAgent's dispatcher
-                    return self.single_agent.tools[name](**args)
+                    return self._filter_tool_result(name, args, self.single_agent.tools[name](**args))
                 if hasattr(self.single_agent, "_execute_tool"):
-                    return self.single_agent._execute_tool(name, args)
+                    return self._filter_tool_result(name, args, self.single_agent._execute_tool(name, args))
 
             return {"error": f"Unknown tool: {name}", "error_type": "unknown_tool", "tool_name": name}
         except PermissionError as e:
@@ -554,7 +770,7 @@ class ToolExecutor:
             process.kill()
             return {"error": f"Command timed out after {timeout} seconds."}
 
-    def tool_run_command(self, command: str, cwd: str = None) -> Dict[str, Any]:
+    def tool_run_command(self, command: str, cwd: str = None, shell: str = "auto", visible_terminal: bool = False) -> Dict[str, Any]:
         # Resolve working directory (default to workspace)
         if cwd:
             work_dir = self._resolve_path(cwd)
@@ -575,18 +791,34 @@ class ToolExecutor:
             approved = self.confirm_callback(command)
             if not approved:
                 return {"error": "User rejected command execution."}
+
+        unsafe_error = self._unsafe_process_scope_error(command)
+        if unsafe_error is not None:
+            return unsafe_error
         
         # Interruption-aware execution using Popen
         try:
             import time
-            process = subprocess.Popen(
-                command,
-                shell=True,
-                cwd=work_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
+            popen_args, use_shell, resolved_shell = self._build_command_invocation(command, shell)
+            creationflags = self._command_creationflags(visible_terminal=bool(visible_terminal))
+            if visible_terminal and os.name == "nt":
+                process = subprocess.Popen(
+                    popen_args,
+                    shell=use_shell,
+                    cwd=work_dir,
+                    text=True,
+                    creationflags=creationflags,
+                )
+            else:
+                process = subprocess.Popen(
+                    popen_args,
+                    shell=use_shell,
+                    cwd=work_dir,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    creationflags=creationflags,
+                )
             
             start_time = time.time()
             timeout = 30 # Synchronous commands must finish in 30s. Use background tools for longer tasks.
@@ -608,11 +840,17 @@ class ToolExecutor:
                 
                 time.sleep(0.1) # Poll every 100ms
             
-            stdout, stderr = process.communicate()
+            if visible_terminal and os.name == "nt":
+                stdout, stderr = "", ""
+            else:
+                stdout, stderr = process.communicate()
             return {
                 "stdout": stdout,
                 "stderr": stderr,
-                "exit_code": process.returncode
+                "exit_code": process.returncode,
+                "shell": resolved_shell,
+                "visible_terminal": bool(visible_terminal and os.name == "nt"),
+                "output_capture": "visible_terminal" if visible_terminal and os.name == "nt" else "captured",
             }
         except Exception as e:
             return {"error": f"Execution failed: {str(e)}"}
@@ -628,13 +866,135 @@ class ToolExecutor:
             return
         proc = entry["process"]
         out_lines = entry["output_lines"]
+        if proc.stdout is None:
+            return
         try:
             for raw_line in iter(proc.stdout.readline, ""):
-                out_lines.append(raw_line.rstrip("\n"))
+                line = raw_line.rstrip("\n")
+                out_lines.append(line)
+                self._maybe_emit_background_output_event(command_id, line)
         except (ValueError, OSError):
             pass  # pipe closed
 
-    def tool_run_background_command(self, command: str, cwd: str = None) -> Dict[str, Any]:
+    def _background_event_payload(self, command_id: str, entry: Dict[str, Any], *, status: str, output: str = "", exit_code: Any = None) -> Dict[str, Any]:
+        proc = entry.get("process")
+        recent = list(entry.get("output_lines") or [])
+        return {
+            "command_id": command_id,
+            "pid": getattr(proc, "pid", None),
+            "command": entry.get("command"),
+            "shell": entry.get("shell", "auto"),
+            "cwd": entry.get("cwd"),
+            "started_at": entry.get("started_at"),
+            "completed_at": time.time() if status in {"process_completed", "process_failed"} else None,
+            "exit_code": exit_code,
+            "output": output if output else ("" if entry.get("visible_terminal") else "\n".join(recent[-80:])),
+            "total_lines": len(recent),
+            "visible_terminal": bool(entry.get("visible_terminal")),
+            "output_capture": "visible_terminal" if entry.get("visible_terminal") else "captured",
+            "resume_policy": entry.get("resume_policy") or "on_exit",
+            "persistent": bool(entry.get("persistent")),
+            "auto_resume": not bool(entry.get("killed_by_user")),
+            "status": status,
+            "ready_patterns": list(entry.get("ready_patterns") or []),
+            "meaningful_output_patterns": list(entry.get("meaningful_output_patterns") or []),
+            "failure_patterns": list(entry.get("failure_patterns") or []),
+            **dict(entry.get("context") or {}),
+        }
+
+    def _emit_background_command_event(self, event: Dict[str, Any]) -> None:
+        callback = getattr(self, "background_command_event_callback", None)
+        if callable(callback):
+            try:
+                callback(event)
+            except Exception:
+                pass
+
+    def _maybe_emit_background_output_event(self, command_id: str, line: str) -> None:
+        entry = self._background_commands.get(command_id)
+        if not entry or entry.get("visible_terminal"):
+            return
+        resume_policy = str(entry.get("resume_policy") or "on_exit").strip().lower()
+        if resume_policy in {"manual", "none", "off"}:
+            return
+        line_text = str(line or "")
+        now = time.time()
+        failure_patterns = list(entry.get("failure_patterns") or []) + DEFAULT_FAILURE_OUTPUT_PATTERNS
+        ready_patterns = list(entry.get("ready_patterns") or []) + DEFAULT_READY_OUTPUT_PATTERNS
+        meaningful_patterns = list(entry.get("meaningful_output_patterns") or []) + DEFAULT_MEANINGFUL_OUTPUT_PATTERNS
+
+        if (
+            not entry.get("failure_emitted")
+            and resume_policy in {"on_meaningful_output", "on_ready"}
+            and self._line_matches_any(line_text, failure_patterns)
+        ):
+            entry["failure_emitted"] = True
+            entry["last_output_event_at"] = now
+            self._emit_background_command_event(
+                self._background_event_payload(command_id, entry, status="process_meaningful_output", output=line_text)
+            )
+            return
+
+        if (
+            not entry.get("ready_emitted")
+            and resume_policy == "on_ready"
+            and self._line_matches_any(line_text, ready_patterns)
+        ):
+            entry["ready_emitted"] = True
+            entry["last_output_event_at"] = now
+            self._emit_background_command_event(
+                self._background_event_payload(command_id, entry, status="process_ready", output=line_text)
+            )
+            return
+
+        if (
+            not entry.get("meaningful_emitted")
+            and resume_policy == "on_meaningful_output"
+            and self._line_matches_any(line_text, meaningful_patterns)
+        ):
+            entry["meaningful_emitted"] = True
+            entry["last_output_event_at"] = now
+            self._emit_background_command_event(
+                self._background_event_payload(command_id, entry, status="process_meaningful_output", output=line_text)
+            )
+
+    def _bg_completion_thread(self, command_id: str):
+        """Daemon thread that emits a proactive event when a background process exits."""
+        entry = self._background_commands.get(command_id)
+        if not entry:
+            return
+        proc = entry.get("process")
+        if proc is None:
+            return
+        try:
+            exit_code = proc.wait()
+        except Exception:
+            return
+
+        reader = entry.get("thread")
+        if reader and reader is not threading.current_thread():
+            try:
+                reader.join(timeout=0.25)
+            except Exception:
+                pass
+
+        status = "process_failed" if exit_code not in (None, 0) else "process_completed"
+        event = self._background_event_payload(command_id, entry, status=status, exit_code=exit_code)
+        event["auto_resume"] = not bool(entry.get("killed_by_user")) and not bool(entry.get("persistent"))
+        self._emit_background_command_event(event)
+
+    def tool_run_background_command(
+        self,
+        command: str,
+        cwd: str = None,
+        shell: str = "auto",
+        visible_terminal: bool = False,
+        resume_policy: str = "on_exit",
+        persistent: bool = False,
+        ready_patterns: Optional[List[str]] = None,
+        meaningful_output_patterns: Optional[List[str]] = None,
+        failure_patterns: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         """Start a command in the background. Returns immediately with a command_id."""
         if cwd:
             work_dir = self._resolve_path(cwd)
@@ -643,43 +1003,107 @@ class ToolExecutor:
 
         command_id = uuid.uuid4().hex[:8]
 
+        unsafe_error = self._unsafe_process_scope_error(command)
+        if unsafe_error is not None:
+            return unsafe_error
+
         try:
-            process = subprocess.Popen(
-                command,
-                shell=True,
-                cwd=work_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,  # merge stderr into stdout
-                stdin=subprocess.PIPE,
-                text=True,
-                bufsize=1,  # line-buffered
-            )
+            popen_args, use_shell, resolved_shell = self._build_command_invocation(command, shell)
+            creationflags = self._command_creationflags(visible_terminal=bool(visible_terminal))
+            if visible_terminal and os.name == "nt":
+                process = subprocess.Popen(
+                    popen_args,
+                    shell=use_shell,
+                    cwd=work_dir,
+                    text=True,
+                    creationflags=creationflags,
+                )
+            else:
+                process = subprocess.Popen(
+                    popen_args,
+                    shell=use_shell,
+                    cwd=work_dir,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,  # merge stderr into stdout
+                    stdin=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,  # line-buffered
+                    creationflags=creationflags,
+                )
         except Exception as e:
             return {"error": f"Failed to start background command: {str(e)}"}
+
+        context = {}
+        context_provider = getattr(self, "background_command_context_provider", None)
+        if callable(context_provider):
+            try:
+                provided = context_provider()
+                if isinstance(provided, dict):
+                    context = dict(provided)
+            except Exception:
+                context = {}
+
+        normalized_resume_policy = str(resume_policy or "on_exit").strip().lower()
+        if normalized_resume_policy not in {"on_exit", "on_ready", "on_meaningful_output", "manual", "none", "off"}:
+            normalized_resume_policy = "on_exit"
 
         entry = {
             "process": process,
             "command": command,
+            "shell": resolved_shell,
             "cwd": str(work_dir),
             "output_lines": deque(maxlen=200),  # keep last 200 lines
             "thread": None,
+            "completion_thread": None,
+            "visible_terminal": bool(visible_terminal and os.name == "nt"),
+            "started_at": time.time(),
+            "resume_policy": normalized_resume_policy,
+            "persistent": bool(persistent),
+            "ready_patterns": self._normalize_pattern_list(ready_patterns),
+            "meaningful_output_patterns": self._normalize_pattern_list(meaningful_output_patterns),
+            "failure_patterns": self._normalize_pattern_list(failure_patterns),
+            "context": context,
         }
         self._background_commands[command_id] = entry
+        self._emit_background_command_event(
+            self._background_event_payload(command_id, entry, status="waiting_on_process", output="")
+        )
 
-        # Start reader thread (daemon so it won't block shutdown)
-        reader = threading.Thread(
-            target=self._bg_reader_thread,
+        if not (visible_terminal and os.name == "nt"):
+            # Start reader thread (daemon so it won't block shutdown)
+            reader = threading.Thread(
+                target=self._bg_reader_thread,
+                args=(command_id,),
+                daemon=True,
+            )
+            entry["thread"] = reader
+            reader.start()
+
+        completion = threading.Thread(
+            target=self._bg_completion_thread,
             args=(command_id,),
             daemon=True,
         )
-        entry["thread"] = reader
-        reader.start()
+        entry["completion_thread"] = completion
+        completion.start()
 
         return {
             "command_id": command_id,
             "pid": process.pid,
             "status": "running",
-            "message": f"Background command started. Use command_status('{command_id}') to check output.",
+            "shell": resolved_shell,
+            "visible_terminal": bool(visible_terminal and os.name == "nt"),
+            "output_capture": "visible_terminal" if visible_terminal and os.name == "nt" else "captured",
+            "resume_policy": normalized_resume_policy,
+            "persistent": bool(persistent),
+            "ready_patterns": list(entry.get("ready_patterns") or []),
+            "meaningful_output_patterns": list(entry.get("meaningful_output_patterns") or []),
+            "failure_patterns": list(entry.get("failure_patterns") or []),
+            "message": (
+                f"Background command started in a visible terminal. Use command_status('{command_id}') to check process state."
+                if visible_terminal and os.name == "nt"
+                else f"Background command started. Use command_status('{command_id}') to check output."
+            ),
         }
 
     def tool_command_status(self, command_id: str) -> Dict[str, Any]:
@@ -699,9 +1123,18 @@ class ToolExecutor:
         result = {
             "command_id": command_id,
             "command": entry["command"],
+            "shell": entry.get("shell", "auto"),
             "status": "running" if is_running else "exited",
             "output": "\n".join(tail),
             "total_lines": len(recent),
+            "visible_terminal": bool(entry.get("visible_terminal")),
+            "output_capture": "visible_terminal" if entry.get("visible_terminal") else "captured",
+            "resume_policy": entry.get("resume_policy") or "on_exit",
+            "persistent": bool(entry.get("persistent")),
+            "started_at": entry.get("started_at"),
+            "ready_emitted": bool(entry.get("ready_emitted")),
+            "meaningful_emitted": bool(entry.get("meaningful_emitted")),
+            "failure_emitted": bool(entry.get("failure_emitted")),
         }
         if not is_running:
             result["exit_code"] = exit_code
@@ -716,6 +1149,12 @@ class ToolExecutor:
         proc = entry["process"]
         if proc.poll() is not None:
             return {"error": f"Command '{command_id}' has already exited (code {proc.returncode}). Cannot send input."}
+        if entry.get("visible_terminal"):
+            return {
+                "error": "This background command is running in a visible terminal. Type directly in that terminal window instead of using send_input.",
+                "error_type": "visible_terminal_input",
+                "command_id": command_id,
+            }
 
         try:
             proc.stdin.write(input + "\n")
@@ -739,6 +1178,7 @@ class ToolExecutor:
             }
 
         try:
+            entry["killed_by_user"] = True
             self._terminate_process_tree(proc)
         except Exception as e:
             return {"error": f"Failed to kill command: {str(e)}"}
@@ -749,8 +1189,98 @@ class ToolExecutor:
             "message": f"Command '{command_id}' has been terminated.",
         }
 
+    def kill_all_background_commands(self) -> Dict[str, Any]:
+        """Terminate every background command started by this executor."""
+        killed: List[Dict[str, Any]] = []
+        already_exited: List[Dict[str, Any]] = []
+        errors: List[Dict[str, Any]] = []
+
+        for command_id, entry in list(self._background_commands.items()):
+            proc = entry.get("process")
+            if proc is None:
+                continue
+            if proc.poll() is not None:
+                already_exited.append(
+                    {
+                        "command_id": command_id,
+                        "pid": getattr(proc, "pid", None),
+                        "exit_code": proc.returncode,
+                    }
+                )
+                continue
+            try:
+                entry["killed_by_user"] = True
+                self._terminate_process_tree(proc)
+                killed.append(
+                    {
+                        "command_id": command_id,
+                        "pid": getattr(proc, "pid", None),
+                        "exit_code": proc.returncode,
+                        "visible_terminal": bool(entry.get("visible_terminal")),
+                    }
+                )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "command_id": command_id,
+                        "pid": getattr(proc, "pid", None),
+                        "error": str(exc),
+                    }
+                )
+
+        return {
+            "killed": killed,
+            "already_exited": already_exited,
+            "errors": errors,
+            "killed_count": len(killed),
+            "already_exited_count": len(already_exited),
+            "error_count": len(errors),
+        }
+
     # --- WEB TOOLS ---
 
     def tool_web_search(self, query: str) -> Dict[str, Any]:
         """Search the web using DuckDuckGo."""
         return duckduckgo_search(query)
+
+    def tool_fetch_url(self, url: str) -> Dict[str, Any]:
+        """Fetch a specific web page and return a bounded text preview."""
+        from urllib.error import HTTPError, URLError
+        from urllib.request import Request, urlopen
+
+        target = str(url or "").strip()
+        if not target.lower().startswith(("http://", "https://")):
+            return {
+                "error": "fetch_url only supports http:// and https:// URLs.",
+                "error_type": "validation_error",
+                "url": target,
+            }
+
+        try:
+            request = Request(target, headers={"User-Agent": "EmploAI-Agent/1.0"})
+            with urlopen(request, timeout=15) as response:
+                raw = response.read(1_000_000)
+                charset = response.headers.get_content_charset() or "utf-8"
+                text = raw.decode(charset, errors="replace")
+                return {
+                    "url": target,
+                    "status": getattr(response, "status", None),
+                    "content_type": response.headers.get("content-type", ""),
+                    "content": text[:10000],
+                    "truncated": len(text) > 10000,
+                }
+        except HTTPError as e:
+            return {
+                "error": f"HTTP error fetching URL: {e.code} {e.reason}",
+                "error_type": "http_error",
+                "url": target,
+                "status": e.code,
+            }
+        except URLError as e:
+            return {
+                "error": f"URL error fetching URL: {e.reason}",
+                "error_type": "connection_error",
+                "url": target,
+            }
+        except Exception as e:
+            return {"error": f"Error fetching URL: {str(e)}", "error_type": "fetch_error", "url": target}

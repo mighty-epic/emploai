@@ -13,6 +13,11 @@ from shared.channel_events import publish_current_session_changed
 from shared import compact_session_history
 
 
+def _session_sync_user_id(session, fallback_user_id: int) -> int:
+    raw = getattr(session, "sync_user_id", None)
+    return int(raw) if raw is not None else int(fallback_user_id)
+
+
 def build_session_command_handlers(
     *,
     security_manager,
@@ -68,7 +73,7 @@ def build_session_command_handlers(
         previous_id = session.session_manager.get_current_session_id() if session.session_manager else None
         session.load_session_by_id(new_session_obj.id)
         publish_current_session_changed(
-            user_id=user.id,
+            user_id=_session_sync_user_id(session, user.id),
             session_id=new_session_obj.id,
             previous_session_id=previous_id,
             origin_channel="telegram",

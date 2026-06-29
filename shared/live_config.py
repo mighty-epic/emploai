@@ -87,13 +87,20 @@ class LiveConfig:
             'memory': {
                 'auto_save_daily_logs': True,
                 'max_daily_log_days': 30,
-                'enable_semantic_search': False  # TODO: Implement
+                'enable_semantic_search': False,  # TODO: Implement
+                'prompt_context_enabled': True,
+                'search_enabled': True,
+                'write_enabled': True
             },
             'agent': {
-                'default_model': 'claude-sonnet-4-5',
+                'default_model': 'auto',
+                'default_planner_model': 'auto',
                 'default_mode': 'auto',
                 'max_turns': 100,
-                'context_compression_threshold': 0.5
+                'custom_system_prompt_append': '',
+                'context_compression_threshold': 0.5,
+                'final_quality_guard': 'planner',
+                'final_quality_max_auto_continues': 2
             },
             'skills': {
                 'auto_trigger': True,
@@ -180,7 +187,13 @@ class LiveConfig:
             if isinstance(value, dict) and part in value:
                 value = value[part]
             else:
-                return default
+                default_value = self._defaults
+                for default_part in parts:
+                    if isinstance(default_value, dict) and default_part in default_value:
+                        default_value = default_value[default_part]
+                    else:
+                        return default
+                return default_value
         
         return value
     

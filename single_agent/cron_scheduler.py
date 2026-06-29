@@ -38,6 +38,7 @@ class CronJob:
     origin_workspace: Optional[str] = None
     origin_model: Optional[str] = None
     origin_enabled_tool_packs: List[str] = field(default_factory=list)
+    one_time: bool = False
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -205,14 +206,18 @@ class CronScheduler:
                 if now >= job.next_run:
                     # Reserve the next run time before executing to avoid duplicate fires
                     # if another scheduler instance or overlapping check sees the same due job.
-                    next_run = compute_next_run(
-                        job.schedule,
-                        now_ts=now,
-                        timezone_offset_hours=job.timezone_offset_hours,
-                    ) or (now + job.interval_seconds)
                     job.last_run = now
                     job.run_count += 1
-                    job.next_run = next_run
+                    if job.one_time:
+                        job.enabled = False
+                        job.next_run = 0
+                    else:
+                        next_run = compute_next_run(
+                            job.schedule,
+                            now_ts=now,
+                            timezone_offset_hours=job.timezone_offset_hours,
+                        ) or (now + job.interval_seconds)
+                        job.next_run = next_run
                     self._save_jobs()
 
                     # Job is due - execute it
@@ -255,6 +260,7 @@ class CronScheduler:
         origin_workspace: Optional[str] = None,
         origin_model: Optional[str] = None,
         origin_enabled_tool_packs: Optional[List[str]] = None,
+        job_id: Optional[str] = None,
     ) -> str:
         """
         Add a new recurring job.
@@ -270,8 +276,9 @@ class CronScheduler:
         Returns:
             Job ID
         """
-        job_id = str(uuid.uuid4())[:8]
+        job_id = str(job_id or "").strip() or str(uuid.uuid4())[:8]
         normalized_schedule = schedule_text or f"every {interval_seconds}s"
+        one_time = _parse_delay(normalized_schedule) is not None
         default_first_run = time.time() if run_immediately else time.time() + interval_seconds
         first_run = time.time() if run_immediately else (
             compute_next_run(
@@ -295,6 +302,7 @@ class CronScheduler:
             origin_workspace=origin_workspace,
             origin_model=origin_model,
             origin_enabled_tool_packs=list(origin_enabled_tool_packs or []),
+            one_time=one_time,
         )
         
         async def _add():
@@ -461,6 +469,27 @@ def _parse_daily_time(schedule_text: str) -> Optional[Tuple[int, int]]:
     return hour, minute
 
 
+def _parse_delay(schedule_text: str) -> Optional[int]:
+    """Parse one-time delays like 'in 20 minutes'."""
+    text = (schedule_text or "").strip().lower()
+    match = re.fullmatch(r"in\s+(\d+)\s+(second|seconds|minute|minutes|hour|hours|day|days)", text)
+    if not match:
+        return None
+    amount = int(match.group(1))
+    unit = match.group(2).rstrip("s")
+    if amount <= 0:
+        return None
+    if unit == "second":
+        return amount
+    if unit == "minute":
+        return amount * 60
+    if unit == "hour":
+        return amount * 3600
+    if unit == "day":
+        return amount * 86400
+    return None
+
+
 
 def compute_next_run(
     schedule_text: str,
@@ -485,6 +514,10 @@ def compute_next_run(
 
         return candidate_local.timestamp() - tz_offset * 3600
 
+    delay = _parse_delay(schedule_text)
+    if delay:
+        return now_ts + delay
+
     interval = parse_schedule(schedule_text)
     if interval:
         return now_ts + interval
@@ -503,6 +536,10 @@ def parse_schedule(schedule_text: str) -> Optional[int]:
         "every day at 08:00" -> 86400
     """
     text = schedule_text.lower().strip()
+
+    delay = _parse_delay(text)
+    if delay:
+        return delay
 
     if _parse_daily_time(text):
         return 86400
@@ -541,7 +578,7 @@ def parse_schedule_with_error(schedule_text: str) -> Tuple[Optional[int], Option
 
     return None, (
         f"Could not parse schedule: {schedule_text}. "
-        "Supported formats include 'every 30 seconds', 'every 5 minutes', 'every 1 hour', and 'every day at 08:00'."
+        "Supported formats include 'in 20 minutes', 'every 30 seconds', 'every 5 minutes', 'every 1 hour', and 'every day at 08:00'."
     )
 
 

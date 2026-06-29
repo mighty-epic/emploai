@@ -1,19 +1,38 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { Audio } from 'expo-av';
-import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system/legacy';
-import * as ImagePicker from 'expo-image-picker';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { TextInput } from 'react-native';
 
-import { buildWsBaseUrl, loadAppConfig } from '../../lib/appConfig';
+import { buildWsBaseUrl, loadAppConfig, type AppConfig, type AppConnectionMode } from '../../lib/appConfig';
+import { reconcileRemoteAccountConfig } from '../../lib/accountSession';
 import { requestJson } from '../../lib/appHttp';
-import { describeError, logDiagnostic } from '../../lib/diagnostics';
+import { describeError, logDiagnostic, shortStatusText, userFacingError } from '../../lib/diagnostics';
 import { getUnreadCronCount } from '@/lib/cronInbox';
-import { AppDrawer, type DrawerTab } from '@/components/AppDrawer';
-import { CollapsibleSection } from '@/components/CollapsibleSection';
+import { createApprovedConfirmation } from '@/lib/sharedConfirmations';
+import { formatRelativeTime } from '@/lib/time';
+import type { DrawerTab } from '@/components/AppDrawer';
+import { useConfirmation } from '@/components/ConfirmationDialog';
 import {
+  mergeLiveMessage,
+  mergeSessionMessagesWithLocalState,
+  toChatMessage,
+  type ChatMessage,
+} from '@/screens/chatMessages';
+import {
+  formatLogLine,
+  formatRealtimeToolEntry,
+  formatTimelineLogEntry,
+  isUserVisibleRuntimeMessage,
+  isUserVisibleTimelineEvent,
+  mergeTimelineEvents,
+  mergeToolLogEntries,
+  realtimeLogEventToTimelineEvent,
+  realtimeToolEventToTimelineEvent,
+  timelineEventsToLogLines,
+  type ChatEvent,
+} from '@/screens/chatTimeline';
+import {
+  type ArtifactDetail,
+  type ArtifactSummary,
   type AgentOverview,
   type SkillSummary,
   type SkillValidation,
@@ -25,154 +44,93 @@ import {
   configureAgent,
   controlAgentRun,
   createSession,
+  deleteSession,
   fetchAgentOverview,
   fetchAgentConfig,
   fetchCronFeed,
+  fetchFleetSnapshot,
   fetchJobs,
   fetchProfile,
   fetchAgentSkills,
+  fetchSessionArtifactDetail,
+  fetchSessionArtifacts,
   fetchSubAgents,
   fetchSessionDetail,
+  fetchSidebarState,
   fetchSessions,
+  fetchTelegramBotConfigs,
   forgetLastAgentMessage,
   resetAgentContext,
   searchAgentMemory,
+  setFleetActiveIdentity,
   spawnSubAgent,
   updateAgentConfig,
+  updateSessionSecurityPermissionMode,
+  updateSessionToolPacks,
   validateAgentSkill,
   type ConfigEntry,
+  type FleetIdentity,
+  type FleetSnapshot,
   type MemorySearchResult,
   type ScheduledJob,
   type SessionDetail,
   type SessionMessage,
   type SessionSummary,
+  type SessionTimelineEvent,
+  type SidebarState,
+  type TelegramBotConfig,
+  updateSidebarState,
 } from '@/lib/appApi';
-import { formatAbsoluteTime, formatRelativeTime } from '@/lib/time';
 
-const VOICE_SEGMENT_MS = 850;
-const SOCKET_RECONNECT_MS = 1600;
-const OUTBOUND_MESSAGE_TTL_MS = 60_000;
-const OUTBOUND_RETRY_MS = 2_000;
-const QUICK_TURN_OPTIONS = [50, 100, 200, 500];
-const HELP_COMMAND_GROUPS = [
-  ['Basics', '/start /help /mode /task'],
-  ['Run control', '/pause /stop /spawn /subagents'],
-  ['Sessions and cron', '/session /schedule /jobs /job_remove'],
-  ['Agent controls', '/model /models /variant /settings /workspace /headless /monitor /verbose /bridge /heartbeat'],
-  ['Context and memory', '/history /context /files /forget /reset /memory /memory_update /config /analytics /security'],
-  ['Setup', '/setup /restart'],
-] as const;
+import {
+  CHAT_NO_ACTIVE_SESSION_STATUS,
+  DEFAULT_TOOL_PACK_IDS,
+  OUTBOUND_MESSAGE_TTL_MS,
+  OUTBOUND_RETRY_MS,
+  SOCKET_RECONNECT_MS,
+  VOICE_SEGMENT_MS,
+  createClientId,
+  fleetSessionCreateFields,
+  identityLabel,
+  loadFileSystemModule,
+  normalizeRouteSessionId,
+  normalizeRouteWorkspace,
+  normalizeWorkspacePath,
+  sessionBelongsToFleetIdentity,
+  type InterruptPolicy,
+  type PendingOutboundMessage,
+  type ScreenPreview,
+} from './ChatScreen.helpers';
+import { uploadChatAttachment, type ChatAttachmentKind } from './ChatScreenAttachments';
+import { ChatScreenView } from './ChatScreenView';
+import { handleChatRealtimeEvent } from './ChatScreenRealtime';
 
-type ChatEvent = {
-  type: string;
-  session_id?: string;
-  message?: string;
-  payload?: Record<string, any>;
-};
-
-type ChatMessage = {
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  timestamp?: string | null;
-  displayLabel?: string | null;
-  channel?: 'telegram' | 'app' | 'system' | null;
-};
-
-type ScreenPreview = {
-  uri: string;
-  backend: string;
-  width: number;
-  height: number;
-};
-
-type InterruptPolicy = 'none' | 'steer_now' | 'after_tool';
-
-type PendingOutboundMessage = {
-  id: string;
-  text: string;
-  sessionId?: string;
-  interruptPolicy: InterruptPolicy;
-  expiresAt: number;
-};
-
-function createClientId() {
-  return `app-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function normalizeRouteSessionId(value: string | string[] | undefined) {
-  if (Array.isArray(value)) {
-    return value[0];
+function appConfigSyncKey(config: AppConfig) {
+  const tokenTail = (config.accountToken || config.accessToken || '').slice(-16);
+  if (config.connectionMode === 'remote_cloud') {
+    const accountKey = config.accountUserId || config.accountEmail || config.accountMobileId || tokenTail || 'signed-out';
+    return ['remote', accountKey, config.accountMobileId || 'mobile', config.pairedDesktopId || 'unpaired'].join(':');
   }
-  return value;
-}
-
-function toChatMessage(message: SessionMessage): ChatMessage {
-  return {
-    role: message.role || 'assistant',
-    content: message.content || '',
-    timestamp: message.timestamp,
-    displayLabel: message.display_label,
-    channel: message.channel,
-  };
-}
-
-function labelForMessage(message: ChatMessage) {
-  if (message.displayLabel) return message.displayLabel;
-  if (message.role === 'assistant') return 'Assistant';
-  if (message.role === 'system') return 'System';
-  return 'You';
-}
-
-function formatConfigValue(value: unknown) {
-  if (typeof value === 'string') return value;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function formatRealtimeToolEntry(payload: Record<string, any> | undefined) {
-  if (!payload) return '';
-  if (typeof payload.formatted === 'string' && payload.formatted.trim()) {
-    return payload.formatted.trim();
-  }
-
-  const toolName = String(payload.tool_name || 'tool');
-  const durationMs = Number(payload.duration_ms || 0);
-  let resultPreview = '';
-  try {
-    resultPreview = JSON.stringify(payload.tool_result ?? {});
-  } catch {
-    resultPreview = String(payload.tool_result ?? '');
-  }
-  if (resultPreview.length > 240) {
-    resultPreview = `${resultPreview.slice(0, 237)}...`;
-  }
-  return `🔧 ${toolName} → ${resultPreview || 'ok'} (${Math.round(durationMs)}ms)`;
-}
-
-function formatLogLine(message: string, level?: string) {
-  const normalized = message.trim();
-  if (!normalized) return '';
-  if (level === 'error') return `[error] ${normalized}`;
-  if (level === 'warn') return `[warn] ${normalized}`;
-  return normalized;
+  return [config.connectionMode, config.apiBaseUrl, tokenTail || 'no-token'].join(':');
 }
 
 export default function ChatScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ sessionId?: string | string[]; newSession?: string | string[] }>();
+  const params = useLocalSearchParams<{ sessionId?: string | string[]; newSession?: string | string[]; workspace?: string | string[] }>();
   const requestedSessionId = normalizeRouteSessionId(params.sessionId);
   const requestedNewSession = normalizeRouteSessionId(params.newSession);
+  const requestedWorkspace = normalizeRouteWorkspace(params.workspace);
 
   const [sessionId, setSessionId] = useState<string | undefined>();
   const [sessionName, setSessionName] = useState('New chat');
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [fleetSnapshot, setFleetSnapshot] = useState<FleetSnapshot | null>(null);
   const [jobs, setJobs] = useState<ScheduledJob[]>([]);
+  const [sidebarState, setSidebarState] = useState<SidebarState | null>(null);
   const [toolLogs, setToolLogs] = useState<string[]>([]);
+  const [timelineEvents, setTimelineEvents] = useState<SessionTimelineEvent[]>([]);
   const [status, setStatus] = useState('disconnected');
   const [voiceState, setVoiceState] = useState('idle');
   const [voiceDraft, setVoiceDraft] = useState('');
@@ -186,7 +144,7 @@ export default function ChatScreen() {
   const [interruptPolicy, setInterruptPolicy] = useState<InterruptPolicy>('none');
   const [apiBaseUrl, setApiBaseUrl] = useState('');
   const [token, setToken] = useState('');
-  const [connectionMode, setConnectionMode] = useState<'desktop_local' | 'remote_cloud' | 'direct_backend'>('direct_backend');
+  const [connectionMode, setConnectionMode] = useState<AppConnectionMode>('direct_backend');
   const [pairedDesktopId, setPairedDesktopId] = useState('');
   const [configLoaded, setConfigLoaded] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -194,6 +152,14 @@ export default function ChatScreen() {
   const [cronUnreadCount, setCronUnreadCount] = useState(0);
   const [pairPromptOpen, setPairPromptOpen] = useState(false);
   const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false);
+  const [composerMenu, setComposerMenu] = useState<'model' | 'tools' | 'permissions' | null>(null);
+  const [draftModel, setDraftModel] = useState('');
+  const [draftVariant, setDraftVariant] = useState('');
+  const [draftPlanner, setDraftPlanner] = useState('');
+  const [draftEnabledToolPacks, setDraftEnabledToolPacks] = useState<string[] | null>(null);
+  const [draftSecurityPermissionMode, setDraftSecurityPermissionMode] = useState<'low' | 'standard' | 'full_permissions' | ''>('');
+  const [draftSessionWorkspace, setDraftSessionWorkspace] = useState<string | undefined>();
+  const [telegramBots, setTelegramBots] = useState<TelegramBotConfig[]>([]);
   const [verboseMode, setVerboseMode] = useState(true);
   const [agentOverview, setAgentOverview] = useState<AgentOverview | null>(null);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
@@ -208,14 +174,18 @@ export default function ChatScreen() {
   const [heartbeatDraft, setHeartbeatDraft] = useState('1800');
   const [subAgentPrompt, setSubAgentPrompt] = useState('');
   const [subAgents, setSubAgents] = useState<SubAgentStatus | null>(null);
+  const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
+  const [artifactDetail, setArtifactDetail] = useState<ArtifactDetail | null>(null);
+  const [artifactStatus, setArtifactStatus] = useState('idle');
+  const { confirm, confirmationDialog } = useConfirmation();
 
   const chatWsRef = useRef<WebSocket | null>(null);
   const voiceWsRef = useRef<WebSocket | null>(null);
   const screenWsRef = useRef<WebSocket | null>(null);
   const appClientIdRef = useRef(createClientId());
   const composerInputRef = useRef<TextInput | null>(null);
-  const recordingRef = useRef<Audio.Recording | null>(null);
-  const assistantSoundRef = useRef<Audio.Sound | null>(null);
+  const recordingRef = useRef<any | null>(null);
+  const assistantSoundRef = useRef<any | null>(null);
   const assistantAudioPathRef = useRef<string | null>(null);
   const pendingMessagesRef = useRef<PendingOutboundMessage[]>([]);
   const outboundRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -227,17 +197,135 @@ export default function ChatScreen() {
   const voiceActiveRef = useRef(false);
   const finishingSegmentRef = useRef<Promise<void> | null>(null);
   const sessionIdRef = useRef<string | undefined>(undefined);
+  const securityPermissionMutationInFlightRef = useRef<string | null>(null);
+  const blankChatRequestedRef = useRef(false);
+  const accountSyncKeyRef = useRef('');
 
   const steeringArmed = steeringBetaEnabled && interruptPolicy !== 'none';
   const canStartVoice = !isVoiceBusy || steeringArmed;
-  const mobileVoiceEnabled = connectionMode !== 'remote_cloud';
-  const setupMissing = !apiBaseUrl || !token || (connectionMode === 'remote_cloud' && !pairedDesktopId);
+  const mobileVoiceEnabled = false;
+  const chatConnected = Boolean(apiBaseUrl && token && !(connectionMode === 'remote_cloud' && !pairedDesktopId));
+  const chatBlocked = !configLoaded || !chatConnected;
+  const setupMissing = configLoaded && !chatConnected;
+  const hasActiveChatSession = Boolean(sessionId);
+  const agentControlsDisabled = chatBlocked || !hasActiveChatSession;
+  const subAgentSpawnDisabled = agentControlsDisabled || !subAgentPrompt.trim();
+  const activeSessionSummary = sessions.find((item) => item.id === sessionId);
+  const activeSecurityPermissionMode = String(
+    activeSessionSummary?.security_permission_mode
+    || draftSecurityPermissionMode
+    || 'standard',
+  );
+  const activeSecurityPermissionLabel = activeSecurityPermissionMode === 'full_permissions'
+    ? 'Full access'
+    : activeSecurityPermissionMode === 'low'
+      ? 'Ask for approval'
+      : 'Approve for me';
+
+  const showChatError = (error: unknown, fallback = 'Chat action did not finish.') => {
+    setStatus(userFacingError(error, fallback));
+  };
+
+  const runtimeStatusText = (message: string, fallback = 'Run needs attention.') => (
+    userFacingError(message, fallback)
+  );
 
   const missingConnectionStatus = () => {
-    if (!apiBaseUrl) return connectionMode === 'remote_cloud' ? 'add the service URL first' : 'missing backend';
-    if (!token) return connectionMode === 'remote_cloud' ? 'sign in and pair this phone first' : 'pair this phone first';
+    if (!configLoaded) return 'Loading setup.';
+    if (!apiBaseUrl) return connectionMode === 'remote_cloud' ? 'Service URL needed.' : 'Connect backend first.';
+    if (!token) return connectionMode === 'remote_cloud' ? 'Sign in and pair this phone.' : 'Pair this phone first.';
     if (connectionMode === 'remote_cloud' && !pairedDesktopId) return 'pair this phone with a desktop first';
-    return 'missing setup';
+    return 'Setup needs attention.';
+  };
+  const requireChatConnection = (options?: { prompt?: boolean }) => {
+    if (configLoaded && chatConnected) return true;
+    setStatus(missingConnectionStatus());
+    if (options?.prompt !== false && configLoaded) {
+      setPairPromptOpen(true);
+    }
+    return false;
+  };
+  const ensureChatActiveSession = () => {
+    if (!requireChatConnection()) return false;
+    if (!sessionIdRef.current) {
+      setStatus(CHAT_NO_ACTIVE_SESSION_STATUS);
+      return false;
+    }
+    return true;
+  };
+
+  const isCurrentAccountRequest = (requestKey: string) => (
+    requestKey === accountSyncKeyRef.current
+  );
+
+  const resetAccountScopedState = (label = 'syncing account') => {
+    pendingMessagesRef.current = [];
+    blankChatRequestedRef.current = false;
+    sessionIdRef.current = undefined;
+    if (outboundRetryRef.current) {
+      clearTimeout(outboundRetryRef.current);
+      outboundRetryRef.current = null;
+    }
+    if (chatReconnectRef.current) {
+      clearTimeout(chatReconnectRef.current);
+      chatReconnectRef.current = null;
+    }
+    if (voiceReconnectRef.current) {
+      clearTimeout(voiceReconnectRef.current);
+      voiceReconnectRef.current = null;
+    }
+    if (screenReconnectRef.current) {
+      clearTimeout(screenReconnectRef.current);
+      screenReconnectRef.current = null;
+    }
+    [chatWsRef, voiceWsRef, screenWsRef].forEach((socketRef) => {
+      if (socketRef.current) {
+        try {
+          socketRef.current.close();
+        } catch {
+          // no-op
+        }
+        socketRef.current = null;
+      }
+    });
+    setSessionId(undefined);
+    setSessionName('New chat');
+    setInput('');
+    setMessages([]);
+    setSessions([]);
+    setFleetSnapshot(null);
+    setJobs([]);
+    setSidebarState(null);
+    setToolLogs([]);
+    setTimelineEvents([]);
+    setVoiceState('idle');
+    setVoiceDraft('');
+    setIsRecording(false);
+    setIsVoiceBusy(false);
+    setScreenPreview(null);
+    setScreenStatus('idle');
+    setScreenLiveState('off');
+    setIsScreenLive(false);
+    setPairPromptOpen(false);
+    setWorkspacePanelOpen(false);
+    setComposerMenu(null);
+    setDraftModel('');
+    setDraftVariant('');
+    setDraftPlanner('');
+    setDraftEnabledToolPacks(null);
+    setDraftSecurityPermissionMode('');
+    setDraftSessionWorkspace(undefined);
+    setTelegramBots([]);
+    setAgentOverview(null);
+    setSkills([]);
+    setSkillValidation(null);
+    setMemoryResults([]);
+    setConfigEntries([]);
+    setSubAgents(null);
+    setArtifacts([]);
+    setArtifactDetail(null);
+    setArtifactStatus('no artifacts');
+    setStatus(label);
   };
 
   useEffect(() => {
@@ -247,17 +335,23 @@ export default function ChatScreen() {
   useEffect(() => {
     let active = true;
     loadAppConfig()
-      .then((config) => {
+      .then(async (loadedConfig) => {
+        const { config } = await reconcileRemoteAccountConfig(loadedConfig);
         if (!active) return;
+        const nextAccountSyncKey = appConfigSyncKey(config);
+        if (accountSyncKeyRef.current && accountSyncKeyRef.current !== nextAccountSyncKey) {
+          resetAccountScopedState('syncing signed-in account');
+        }
+        accountSyncKeyRef.current = nextAccountSyncKey;
         setApiBaseUrl(config.apiBaseUrl);
-        setToken(config.accessToken);
+        setToken(config.accountToken || config.accessToken);
         setConnectionMode(config.connectionMode);
         setPairedDesktopId(config.pairedDesktopId);
         setConfigLoaded(true);
       })
       .catch(() => {
         if (!active) return;
-        setStatus('config error');
+        setStatus('Setup needs attention.');
         setConfigLoaded(true);
       });
     return () => {
@@ -265,10 +359,162 @@ export default function ChatScreen() {
     };
   }, []);
 
+  const refreshArtifacts = async (targetSessionId?: string) => {
+    const requestKey = accountSyncKeyRef.current;
+    const activeSessionId = targetSessionId || sessionIdRef.current;
+    if (!activeSessionId) {
+      setArtifactStatus('no session');
+      return;
+    }
+    if (!chatConnected) {
+      setArtifactStatus(missingConnectionStatus());
+      return;
+    }
+    setArtifactStatus('loading artifacts');
+    try {
+      const result = await fetchSessionArtifacts(apiBaseUrl, token, activeSessionId);
+      if (!isCurrentAccountRequest(requestKey)) return;
+      setArtifacts(Array.isArray(result) ? result : []);
+      setArtifactStatus(result.length ? 'ready' : 'no artifacts');
+    } catch (error) {
+      if (!isCurrentAccountRequest(requestKey)) return;
+      setArtifactStatus(userFacingError(error, 'Artifacts did not load.'));
+    }
+  };
+
+  const openArtifact = async (artifact: ArtifactSummary) => {
+    const activeSessionId = sessionIdRef.current;
+    if (!activeSessionId) return;
+    if (!requireChatConnection({ prompt: false })) return;
+    setArtifactStatus('loading artifact');
+    try {
+      const detail = await fetchSessionArtifactDetail(apiBaseUrl, token, activeSessionId, artifact.artifact_id);
+      setArtifactDetail(detail);
+      setArtifactStatus('ready');
+    } catch (error) {
+      setArtifactStatus(userFacingError(error, 'Artifact did not open.'));
+    }
+  };
+
   const applySessionDetail = (detail: SessionDetail) => {
+    const previousSessionId = sessionIdRef.current;
+    const serverMessages = detail.messages.map((message) => toChatMessage(message));
+    const timelineLogs = timelineEventsToLogLines(detail.timeline_events);
+    sessionIdRef.current = detail.id;
     setSessionId(detail.id);
     setSessionName(detail.name);
-    setMessages(detail.messages.map((message) => toChatMessage(message)));
+    setTimelineEvents(Array.isArray(detail.timeline_events) ? detail.timeline_events.filter(isUserVisibleTimelineEvent) : []);
+    setMessages((previous) => mergeSessionMessagesWithLocalState(
+      serverMessages,
+      previous,
+      detail.id,
+      !previousSessionId || previousSessionId === detail.id
+    ));
+    setToolLogs((previous) => mergeToolLogEntries(
+      previousSessionId === detail.id ? [...previous, ...timelineLogs] : timelineLogs
+    ));
+    setArtifactDetail(null);
+    if (detail.artifact_count > 0) {
+      setArtifactStatus('loading artifacts');
+      void refreshArtifacts(detail.id);
+    } else {
+      setArtifacts([]);
+      setArtifactStatus('no artifacts');
+    }
+    setDraftModel('');
+    setDraftVariant('');
+    setDraftPlanner('');
+    setDraftEnabledToolPacks(null);
+    setDraftSecurityPermissionMode('');
+    setComposerMenu(null);
+  };
+
+  const updateChatSecurityPermissionMode = async (permissionMode: 'low' | 'standard' | 'full_permissions') => {
+    const activeSessionId = sessionIdRef.current;
+    if (!requireChatConnection()) return;
+    const currentMode = activeSessionId ? activeSecurityPermissionMode : (draftSecurityPermissionMode || 'standard');
+    if (currentMode === permissionMode) {
+      setComposerMenu(null);
+      setStatus(permissionMode === 'full_permissions' ? 'Full access is already enabled for this chat session' : `Permission mode: ${permissionMode}`);
+      return;
+    }
+    const mutationKey = activeSessionId ? `${activeSessionId}:${permissionMode}` : `draft:${permissionMode}`;
+    if (securityPermissionMutationInFlightRef.current === mutationKey) {
+      return;
+    }
+    securityPermissionMutationInFlightRef.current = mutationKey;
+    try {
+      if (!activeSessionId) {
+        if (permissionMode === 'full_permissions') {
+          const confirmationId = await createApprovedConfirmation(apiBaseUrl, token, confirm, {
+            action_kind: 'session_full_permissions',
+            title: 'Use Full access for this new chat?',
+            message: 'The first message will create a chat with broader computer-control permission. Sensitive actions will still ask before execution.',
+            risk_tier: 'access',
+            origin_surface: 'mobile',
+            payload: { draft_chat: true },
+          }, {
+            confirmLabel: 'Use Full access',
+            tone: 'access',
+            details: ['Full access applies only to the chat created from this draft.', 'The app still blocks hard safety risks.'],
+          });
+          if (!confirmationId) return;
+        }
+        setDraftSecurityPermissionMode(permissionMode);
+        setComposerMenu(null);
+        setStatus(permissionMode === 'full_permissions' ? 'Full access queued for the new chat' : `Draft permission: ${permissionMode}`);
+        return;
+      }
+      let confirmationId: string | null = null;
+      if (permissionMode === 'full_permissions') {
+        confirmationId = await createApprovedConfirmation(apiBaseUrl, token, confirm, {
+          action_kind: 'session_full_permissions',
+          title: 'Enable Full access?',
+          message: 'This gives this chat broader computer-control permission. Sensitive actions will still ask before execution.',
+          risk_tier: 'access',
+          origin_surface: 'mobile',
+          origin_chat_id: activeSessionId,
+          payload: { session_id: activeSessionId },
+        }, {
+          confirmLabel: 'Enable Full access',
+          tone: 'access',
+          details: ['Full access lasts only for this chat session.', 'The app will still block hard safety risks and ask before sensitive actions.'],
+        });
+        if (!confirmationId) return;
+      }
+      setStatus('updating permission mode');
+      try {
+        const detail = await updateSessionSecurityPermissionMode(apiBaseUrl, token, activeSessionId, {
+          security_permission_mode: permissionMode,
+        }, confirmationId);
+        applySessionDetail(detail);
+        await refreshSidebarData();
+        setStatus(permissionMode === 'full_permissions' ? 'Full access enabled for this chat session' : `Permission mode: ${permissionMode}`);
+      } catch (error) {
+        showChatError(error, 'Permission was not updated.');
+      }
+    } finally {
+      if (securityPermissionMutationInFlightRef.current === mutationKey) {
+        securityPermissionMutationInFlightRef.current = null;
+      }
+    }
+  };
+
+  const clearVisibleSession = (label = 'New chat') => {
+    sessionIdRef.current = undefined;
+    setSessionId(undefined);
+    setSessionName(label);
+    setMessages([]);
+    setTimelineEvents([]);
+    setToolLogs([]);
+    setAgentOverview(null);
+    setVerboseMode(true);
+    setArtifacts([]);
+    setArtifactDetail(null);
+    setArtifactStatus('no artifacts');
+    setScreenPreview(null);
+    setScreenStatus('idle');
+    setStatus('ready');
   };
 
   const syncOverviewFromSessionDetail = (detail: SessionDetail) => {
@@ -288,10 +534,34 @@ export default function ChatScreen() {
   const applySessionSync = (payload?: Record<string, any>) => {
     const detail = payload?.session as SessionDetail | undefined;
     const syncedSessions = payload?.sessions as SessionSummary[] | undefined;
+    const sharedState = payload?.shared_state as Record<string, any> | undefined;
+    const activeSessionId = sessionIdRef.current;
+    const activeSessionWasDeleted = Boolean(
+      activeSessionId
+      && Array.isArray(syncedSessions)
+      && !syncedSessions.some((item) => item.id === activeSessionId)
+    );
     if (Array.isArray(syncedSessions)) {
       setSessions(syncedSessions);
     }
-    if (detail?.id) {
+    if (sharedState?.sidebar_state && typeof sharedState.sidebar_state === 'object') {
+      setSidebarState(sharedState.sidebar_state as SidebarState);
+    }
+    if (activeSessionWasDeleted && (!detail?.id || detail.id === activeSessionId)) {
+      clearVisibleSession('New chat');
+      router.replace('/chat');
+      setStatus('chat deleted');
+      return;
+    }
+    if (activeSessionWasDeleted && detail?.id && detail.id !== activeSessionId) {
+      applySessionDetail(detail);
+      syncOverviewFromSessionDetail(detail);
+      router.replace({ pathname: '/chat', params: { sessionId: detail.id } });
+      setStatus('chat deleted, switched to current chat');
+      void refreshAgentControls(detail.id);
+      return;
+    }
+    if (detail?.id && (!sessionIdRef.current || detail.id === sessionIdRef.current)) {
       applySessionDetail(detail);
       syncOverviewFromSessionDetail(detail);
       void refreshAgentControls(detail.id);
@@ -299,19 +569,37 @@ export default function ChatScreen() {
   };
 
   const refreshSidebarData = async () => {
-    if (!apiBaseUrl || !token) return;
+    if (!chatConnected) return;
+    const requestKey = accountSyncKeyRef.current;
     try {
-      const [sessionsData, jobsData, cronFeed] = await Promise.all([
+      const [sessionsData, jobsData, cronFeed, nextSidebarState, botConfigs, fleetData] = await Promise.all([
         fetchSessions(apiBaseUrl, token),
         fetchJobs(apiBaseUrl, token),
         fetchCronFeed(apiBaseUrl, token).catch(() => []),
+        fetchSidebarState(apiBaseUrl, token).catch(() => null),
+        fetchTelegramBotConfigs(apiBaseUrl, token).catch(() => []),
+        fetchFleetSnapshot(apiBaseUrl, token).catch(() => null),
       ]);
+      if (!isCurrentAccountRequest(requestKey)) return;
       setSessions(Array.isArray(sessionsData) ? sessionsData : []);
       setJobs(Array.isArray(jobsData) ? jobsData : []);
-      setCronUnreadCount(await getUnreadCronCount(Array.isArray(cronFeed) ? cronFeed : []));
+      setTelegramBots(Array.isArray(botConfigs) ? botConfigs : []);
+      if (fleetData) {
+        setFleetSnapshot(fleetData);
+      }
+      if (nextSidebarState?.state) {
+        setSidebarState(nextSidebarState.state);
+      }
+      const nextUnreadCount = await getUnreadCronCount(Array.isArray(cronFeed) ? cronFeed : []);
+      if (!isCurrentAccountRequest(requestKey)) return;
+      setCronUnreadCount(nextUnreadCount);
       const activeSummary = sessionsData.find((session) => session.id === sessionIdRef.current);
       if (activeSummary) {
         setSessionName(activeSummary.name);
+      } else if (sessionIdRef.current) {
+        clearVisibleSession('New chat');
+        router.replace('/chat');
+        setStatus('chat deleted');
       }
     } catch {
       // Sidebar data should not interrupt the active chat.
@@ -319,7 +607,8 @@ export default function ChatScreen() {
   };
 
   const refreshAgentControls = async (targetSessionId?: string) => {
-    if (!apiBaseUrl || !token) return;
+    if (!chatConnected) return;
+    const requestKey = accountSyncKeyRef.current;
     try {
       const [overview, skillsResult, subAgentResult] = await Promise.all([
         fetchAgentOverview(apiBaseUrl, token, {
@@ -328,6 +617,7 @@ export default function ChatScreen() {
         fetchAgentSkills(apiBaseUrl, token, targetSessionId).catch(() => ({ items: [] })),
         fetchSubAgents(apiBaseUrl, token, targetSessionId).catch(() => null),
       ]);
+      if (!isCurrentAccountRequest(requestKey)) return;
       setAgentOverview(overview);
       setVerboseMode(Boolean(overview.verbose_mode));
       setWorkspaceDraft(overview.workspace || '');
@@ -341,7 +631,7 @@ export default function ChatScreen() {
   };
 
   const applyQuickAgentConfig = async (payload: Parameters<typeof configureAgent>[2]) => {
-    if (!apiBaseUrl || !token) return;
+    if (!ensureChatActiveSession()) return;
 
     setStatus('updating agent controls');
     try {
@@ -355,7 +645,7 @@ export default function ChatScreen() {
       await refreshSidebarData();
       setStatus('agent controls updated');
     } catch (error) {
-      setStatus(describeError(error));
+      showChatError(error, 'Agent controls were not saved.');
     }
   };
 
@@ -364,16 +654,31 @@ export default function ChatScreen() {
     action: () => Promise<string | void>,
     options?: { refreshControls?: boolean; successStatus?: string }
   ) => {
+    if (!ensureChatActiveSession()) return;
     setStatus(label);
     try {
       const resultMessage = await action();
       if (options?.refreshControls !== false) {
         await refreshAgentControls(sessionIdRef.current);
       }
-      setStatus(resultMessage || options?.successStatus || 'ready');
+      setStatus(shortStatusText(resultMessage || options?.successStatus || 'ready'));
     } catch (error) {
-      setStatus(describeError(error));
+      showChatError(error, 'Action did not finish.');
     }
+  };
+
+  const resetCurrentContext = async () => {
+    if (!ensureChatActiveSession()) return;
+    const ok = await confirm({
+      title: 'Reset chat context?',
+      message: 'This clears the active agent context for this chat. The visible history stays, but the runtime will start fresh.',
+      confirmLabel: 'Reset',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    await runWorkspaceAction('resetting context', async () => {
+      await resetAgentContext(apiBaseUrl, token, sessionIdRef.current);
+    });
   };
 
   const focusComposer = (draft?: string) => {
@@ -387,7 +692,7 @@ export default function ChatScreen() {
   };
 
   const toggleSkill = async (skillName: string, active: boolean) => {
-    if (!apiBaseUrl || !token) return;
+    if (!requireChatConnection()) return;
     await runWorkspaceAction(active ? `activating ${skillName}` : `removing ${skillName}`, async () => {
       await activateAgentSkill(apiBaseUrl, token, { name: skillName, active }, sessionIdRef.current);
       const skillsResult = await fetchAgentSkills(apiBaseUrl, token, sessionIdRef.current);
@@ -399,7 +704,7 @@ export default function ChatScreen() {
   };
 
   const runSkillValidation = async (skillName: string) => {
-    if (!apiBaseUrl || !token) return;
+    if (!requireChatConnection()) return;
     await runWorkspaceAction(`validating ${skillName}`, async () => {
       const result = await validateAgentSkill(apiBaseUrl, token, skillName, sessionIdRef.current);
       setSkillValidation(result);
@@ -407,10 +712,10 @@ export default function ChatScreen() {
   };
 
   const spawnBackgroundTask = async () => {
-    if (!apiBaseUrl || !token) return;
+    if (!ensureChatActiveSession()) return;
     const prompt = subAgentPrompt.trim();
     if (!prompt) {
-      setStatus('sub-agent prompt required');
+      setStatus('Prompt required.');
       return;
     }
 
@@ -423,7 +728,7 @@ export default function ChatScreen() {
   };
 
   const runTaskControl = async (action: 'pause' | 'stop' | 'restart') => {
-    if (!apiBaseUrl || !token) return;
+    if (!requireChatConnection()) return;
     await runWorkspaceAction(`${action} requested`, async () => {
       const response = await controlAgentRun(apiBaseUrl, token, action, sessionIdRef.current);
       if (response?.message) {
@@ -437,18 +742,32 @@ export default function ChatScreen() {
     });
   };
 
-  const selectSession = async (nextSessionId: string, options?: { updateRoute?: boolean; keepLogs?: boolean }) => {
-    if (!apiBaseUrl || !token) {
-      setStatus(missingConnectionStatus());
-      return;
+  const persistSidebarState = async (nextState: SidebarState) => {
+    setSidebarState(nextState);
+    if (!chatConnected) return;
+    try {
+      const result = await updateSidebarState(apiBaseUrl, token, nextState);
+      if (result.state) {
+        setSidebarState(result.state);
+      }
+      setStatus('sidebar updated');
+    } catch (error) {
+      showChatError(error, 'Sidebar was not saved.');
+      void refreshSidebarData();
     }
+  };
 
+  const selectSession = async (nextSessionId: string, options?: { updateRoute?: boolean; keepLogs?: boolean }) => {
+    if (!requireChatConnection({ prompt: false })) return;
+
+    blankChatRequestedRef.current = false;
+    setDraftSessionWorkspace(undefined);
     setStatus('loading session');
     try {
       const detail = await activateSession(apiBaseUrl, token, nextSessionId);
       applySessionDetail(detail);
       if (!options?.keepLogs) {
-        setToolLogs([]);
+        setToolLogs(timelineEventsToLogLines(detail.timeline_events));
       }
       if (options?.updateRoute !== false) {
         router.replace({ pathname: '/chat', params: { sessionId: detail.id } });
@@ -457,69 +776,292 @@ export default function ChatScreen() {
       void refreshSidebarData();
       void refreshAgentControls(detail.id);
     } catch (error) {
-      setStatus(describeError(error));
+      showChatError(error, 'Identity was not switched.');
     }
   };
 
-  const createConversation = async () => {
-    if (!apiBaseUrl || !token) {
+  const deleteConversation = async (targetSessionId: string) => {
+    if (!targetSessionId) {
+      setStatus('Choose a chat first.');
+      return;
+    }
+    if (!requireChatConnection({ prompt: false })) {
       setStatus(missingConnectionStatus());
-      setPairPromptOpen(true);
+      return;
+    }
+    setStatus('deleting chat');
+    try {
+      const result = await deleteSession(apiBaseUrl, token, targetSessionId);
+      const deletedSessionId = result.deleted_session_id || targetSessionId;
+      setSessions((previous) => previous.filter((item) => item.id !== deletedSessionId));
+      if (sessionIdRef.current === deletedSessionId) {
+        blankChatRequestedRef.current = true;
+        setDraftSessionWorkspace(undefined);
+        clearVisibleSession('New chat');
+        router.replace('/chat');
+      }
+      await refreshSidebarData();
+      setStatus('chat deleted');
+    } catch (error) {
+      showChatError(error, 'Chat did not open.');
+    }
+  };
+
+  const activeFleetIdentity = (
+    fleetSnapshot?.active_identity
+    || fleetSnapshot?.identities?.find((identity) => identity.identity_id === fleetSnapshot.active_identity_id)
+    || null
+  );
+  const activeFleetIdentityId = activeFleetIdentity?.identity_id || '';
+  const visibleSessions = activeFleetIdentity
+    ? sessions.filter((item) => sessionBelongsToFleetIdentity(item, activeFleetIdentity))
+    : sessions;
+  const activeFleetIdentitySelectedChatId = activeFleetIdentityId
+    ? String(fleetSnapshot?.selected_chat_by_identity?.[activeFleetIdentityId] || '').trim()
+    : '';
+  const activeFleetIdentityTargetChatId = activeFleetIdentity
+    ? activeFleetIdentitySelectedChatId || ''
+    : '';
+  const currentSessionSummary = sessions.find((item) => item.id === sessionId);
+  const selectFleetIdentityFromChat = async (identity: FleetIdentity) => {
+    if (!identity.identity_id) {
+      return;
+    }
+    if (!requireChatConnection({ prompt: false })) return;
+    setStatus(`switching to ${identityLabel(identity)}`);
+    try {
+      const selectedChatId = fleetSnapshot?.selected_chat_by_identity?.[identity.identity_id] || null;
+      const result = await setFleetActiveIdentity(apiBaseUrl, token, identity.identity_id, selectedChatId, 'mobile');
+      const nextSnapshot = await fetchFleetSnapshot(apiBaseUrl, token).catch(() => null);
+      if (nextSnapshot) {
+        setFleetSnapshot(nextSnapshot);
+      }
+      const nextSelectedChatId = String(
+        selectedChatId
+        || (result as Record<string, any> | null | undefined)?.selected_chat_id
+        || nextSnapshot?.selected_chat_by_identity?.[identity.identity_id]
+        || '',
+      ).trim();
+      if (nextSelectedChatId) {
+        await selectSession(nextSelectedChatId, { updateRoute: true });
+      } else {
+        clearVisibleSession('New chat');
+        router.replace('/chat');
+        setStatus(`Active identity: ${identityLabel(identity)}`);
+      }
+    } catch (error) {
+      showChatError(error, 'Identity was not switched.');
+    }
+  };
+
+  useEffect(() => {
+    if (!activeFleetIdentity) {
       return;
     }
 
-    setStatus('creating session');
+    const currentSummary = sessionId ? sessions.find((item) => item.id === sessionId) || null : null;
+    if (currentSummary && sessionBelongsToFleetIdentity(currentSummary, activeFleetIdentity)) {
+      return;
+    }
+
+    if (activeFleetIdentityTargetChatId) {
+      if (activeFleetIdentityTargetChatId !== sessionIdRef.current) {
+        void selectSession(activeFleetIdentityTargetChatId, { updateRoute: true });
+      }
+      return;
+    }
+
+    if (sessionIdRef.current || messages.length || timelineEvents.length || agentOverview) {
+      clearVisibleSession('New chat');
+      router.replace('/chat');
+      setStatus(`Active identity: ${identityLabel(activeFleetIdentity)}`);
+    }
+  }, [
+    activeFleetIdentity,
+    activeFleetIdentityTargetChatId,
+    agentOverview,
+    messages.length,
+    router,
+    sessionId,
+    sessions,
+    timelineEvents.length,
+  ]);
+  const currentEnabledToolPacks = currentSessionSummary?.enabled_tool_packs?.length
+    ? currentSessionSummary.enabled_tool_packs
+    : agentOverview?.enabled_tool_packs?.length
+      ? agentOverview.enabled_tool_packs
+      : DEFAULT_TOOL_PACK_IDS;
+  const currentAvailableToolPacks = Array.isArray(currentSessionSummary?.available_tool_packs)
+    ? currentSessionSummary.available_tool_packs
+    : Array.isArray(agentOverview?.available_tool_packs)
+      ? agentOverview.available_tool_packs
+      : DEFAULT_TOOL_PACK_IDS;
+  const lockReasons = (
+    (currentSessionSummary?.lock_status?.disabled_pack_reasons as Record<string, unknown> | undefined)
+    || (agentOverview?.lock_status?.disabled_pack_reasons as Record<string, unknown> | undefined)
+    || {}
+  );
+  const effectiveEnabledToolPacks = draftEnabledToolPacks || currentEnabledToolPacks;
+  const currentModelLabel = draftModel || agentOverview?.current_model || currentSessionSummary?.model || 'Model';
+  const currentVariantLabel = draftVariant || agentOverview?.current_variant || '';
+
+  const toggleChatToolPack = async (packId: string) => {
+    if (!currentAvailableToolPacks.includes(packId)) {
+      const hasLockReason = Boolean(lockReasons[packId]);
+      setStatus(hasLockReason ? 'Tool is locked.' : 'Tool unavailable.');
+      return;
+    }
+    const next = effectiveEnabledToolPacks.includes(packId)
+      ? effectiveEnabledToolPacks.filter((item) => item !== packId)
+      : [...effectiveEnabledToolPacks, packId];
+    const activeSessionId = sessionIdRef.current;
+    if (!activeSessionId) {
+      setDraftEnabledToolPacks(next);
+      setStatus(`Draft tools: ${next.length}`);
+      return;
+    }
+    if (!requireChatConnection()) return;
+    setStatus('updating tools');
     try {
-      const data = await createSession(apiBaseUrl, token);
-      applySessionDetail(data.session);
-      setToolLogs([]);
-      router.replace({ pathname: '/chat', params: { sessionId: data.session.id } });
+      const detail = await updateSessionToolPacks(apiBaseUrl, token, activeSessionId, { enabled_tool_packs: next });
+      applySessionDetail(detail);
+      await refreshSidebarData();
+      setStatus(`Tools: ${next.length}`);
+    } catch (error) {
+      showChatError(error, 'Tools were not updated.');
+    }
+  };
+
+  const openBlankChat = (workspace?: string) => {
+    blankChatRequestedRef.current = true;
+    setDraftSessionWorkspace(normalizeRouteWorkspace(workspace));
+    clearVisibleSession('New chat');
+    setInput('');
+    setVoiceDraft('');
+    setComposerMenu(null);
+    router.replace('/chat');
+    setStatus('ready');
+  };
+
+  const ensureSessionForSend = async () => {
+    if (sessionIdRef.current) return sessionIdRef.current;
+    if (!requireChatConnection()) return null;
+
+    setStatus('creating chat');
+    try {
+      const data = await createSession(apiBaseUrl, token, {
+        workspace: draftSessionWorkspace || undefined,
+        telegram_bot_config_id: telegramBots.find((bot) => bot.is_default)?.id || telegramBots[0]?.id || undefined,
+        enabled_tool_packs: draftEnabledToolPacks || currentEnabledToolPacks,
+        security_permission_mode: draftSecurityPermissionMode || undefined,
+        ...fleetSessionCreateFields(activeFleetIdentity),
+      });
+
+      if (draftModel || draftVariant || draftPlanner) {
+        await configureAgent(
+          apiBaseUrl,
+          token,
+          {
+            model: draftModel || undefined,
+            variant: draftVariant || undefined,
+            planner_model: draftPlanner || undefined,
+          },
+          data.session.id,
+        );
+      }
+
+      const detail = await fetchSessionDetail(apiBaseUrl, token, data.session.id).catch(() => data.session);
+      blankChatRequestedRef.current = false;
+      setDraftSessionWorkspace(undefined);
+      applySessionDetail(detail);
+      setToolLogs(timelineEventsToLogLines(detail.timeline_events));
+      router.replace({ pathname: '/chat', params: { sessionId: detail.id } });
       setStatus('session ready');
       void refreshSidebarData();
-      void refreshAgentControls(data.session.id);
+      void refreshAgentControls(detail.id);
+      return detail.id;
     } catch (error) {
-      setStatus(describeError(error));
+      showChatError(error, 'Chat was not created.');
+      return null;
     }
   };
 
   useEffect(() => {
     if (!configLoaded) return;
-    if (!apiBaseUrl || !token) return;
+    if (!chatConnected) {
+      setStatus(missingConnectionStatus());
+      return;
+    }
 
     let cancelled = false;
+    const requestKey = accountSyncKeyRef.current;
 
     (async () => {
       try {
-        const [profile, sessionsData, jobsData] = await Promise.all([
+        const [profile, sessionsData, jobsData, nextSidebarState, botConfigs, fleetData] = await Promise.all([
           fetchProfile(apiBaseUrl, token),
           fetchSessions(apiBaseUrl, token),
           fetchJobs(apiBaseUrl, token),
+          fetchSidebarState(apiBaseUrl, token).catch(() => null),
+          fetchTelegramBotConfigs(apiBaseUrl, token).catch(() => []),
+          fetchFleetSnapshot(apiBaseUrl, token).catch(() => null),
         ]);
 
-        if (cancelled) return;
+        if (cancelled || !isCurrentAccountRequest(requestKey)) return;
         setSessions(Array.isArray(sessionsData) ? sessionsData : []);
         setJobs(Array.isArray(jobsData) ? jobsData : []);
+        setTelegramBots(Array.isArray(botConfigs) ? botConfigs : []);
+        if (fleetData) {
+          setFleetSnapshot(fleetData);
+        }
+        const loadedActiveFleetIdentity = (
+          fleetData?.active_identity
+          || fleetData?.identities?.find((identity) => identity.identity_id === fleetData.active_identity_id)
+          || null
+        );
+        const loadedVisibleSessions = loadedActiveFleetIdentity
+          ? sessionsData.filter((item) => sessionBelongsToFleetIdentity(item, loadedActiveFleetIdentity))
+          : sessionsData;
+        if (nextSidebarState?.state) {
+          setSidebarState(nextSidebarState.state);
+        }
 
         if (requestedNewSession === '1') {
-          const created = await createSession(apiBaseUrl, token);
           if (cancelled) return;
-          applySessionDetail(created.session);
-          setStatus('session ready');
-          void refreshSidebarData();
-          router.replace({ pathname: '/chat', params: { sessionId: created.session.id } });
+          blankChatRequestedRef.current = true;
+          setDraftSessionWorkspace(requestedWorkspace);
+          clearVisibleSession('New chat');
+          setInput('');
+          setVoiceDraft('');
+          setComposerMenu(null);
+          router.replace('/chat');
           return;
         }
 
-        const nextSessionId = requestedSessionId || profile.current_session_id || sessionsData[0]?.id || undefined;
+        const selectedIdentityChatId = loadedActiveFleetIdentity
+          ? String(fleetData?.selected_chat_by_identity?.[loadedActiveFleetIdentity.identity_id] || '').trim()
+          : '';
+        const suppressAutoSessionLoad = blankChatRequestedRef.current && !requestedSessionId;
+        const profileCurrentSessionId = !suppressAutoSessionLoad
+          && !loadedActiveFleetIdentity
+          && profile.current_session_id
+          && loadedVisibleSessions.some((item) => item.id === profile.current_session_id)
+          ? profile.current_session_id
+          : '';
+        const nextSessionId = requestedSessionId
+          || (!suppressAutoSessionLoad && selectedIdentityChatId && loadedVisibleSessions.some((item) => item.id === selectedIdentityChatId) ? selectedIdentityChatId : '')
+          || profileCurrentSessionId
+          || undefined;
         if (nextSessionId) {
           const detail = requestedSessionId && requestedSessionId !== profile.current_session_id
             ? await activateSession(apiBaseUrl, token, nextSessionId)
             : await fetchSessionDetail(apiBaseUrl, token, nextSessionId);
-          if (cancelled) return;
+          if (cancelled || !isCurrentAccountRequest(requestKey)) return;
           applySessionDetail(detail);
           setStatus('connected');
           void refreshAgentControls(detail.id);
         } else {
+          sessionIdRef.current = undefined;
           setSessionId(undefined);
           setSessionName('New chat');
           setMessages([]);
@@ -528,24 +1070,24 @@ export default function ChatScreen() {
         }
       } catch (error) {
         if (cancelled) return;
-        setStatus(describeError(error));
+        showChatError(error, 'Chat did not load.');
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [apiBaseUrl, configLoaded, requestedNewSession, requestedSessionId, router, token]);
+  }, [apiBaseUrl, chatConnected, configLoaded, connectionMode, pairedDesktopId, requestedNewSession, requestedSessionId, requestedWorkspace, router, token]);
 
   useEffect(() => {
-    if (!configLoaded || !apiBaseUrl || !token) return;
+    if (!configLoaded || !chatConnected) return;
 
     const intervalId = setInterval(() => {
       void refreshSidebarData();
     }, 10_000);
 
     return () => clearInterval(intervalId);
-  }, [apiBaseUrl, configLoaded, token]);
+  }, [apiBaseUrl, chatConnected, configLoaded, connectionMode, pairedDesktopId, token]);
 
   useEffect(() => {
     if (!configLoaded || !apiBaseUrl) return;
@@ -592,20 +1134,23 @@ export default function ChatScreen() {
 
   const appendLog = (entry: string) => {
     if (!entry) return;
-    setToolLogs((prev) => [entry, ...prev].slice(0, 40));
+    setToolLogs((prev) => mergeToolLogEntries([entry, ...prev]));
   };
 
-  const appendSystemMessage = (text: string, displayLabel = 'System') => {
+  const appendSystemMessage = (
+    text: string,
+    displayLabel = 'System',
+    options?: { ephemeralLocal?: boolean; localSessionId?: string | null }
+  ) => {
     if (!text) return;
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: 'system',
-        content: text,
-        displayLabel,
-        timestamp: new Date().toISOString(),
-      },
-    ]);
+    setMessages((prev) => mergeLiveMessage(prev, {
+      role: 'system',
+      content: text,
+      displayLabel,
+      timestamp: new Date().toISOString(),
+      localSessionId: options?.localSessionId ?? sessionIdRef.current ?? null,
+      ephemeralLocal: options?.ephemeralLocal,
+    }));
   };
 
   const appendAssistantDelta = (delta: string) => {
@@ -615,9 +1160,19 @@ export default function ChatScreen() {
       const last = next[next.length - 1];
       if (last?.role === 'assistant') {
         last.content += delta;
+        last.ephemeralLocal = last.ephemeralLocal ?? true;
+        last.localSessionId = last.localSessionId ?? sessionIdRef.current ?? null;
+        last.timestamp = last.timestamp || new Date().toISOString();
         return [...next];
       }
-      return [...next, { role: 'assistant', content: delta, displayLabel: 'Assistant' }];
+      return [...next, {
+        role: 'assistant',
+        content: delta,
+        displayLabel: 'Assistant',
+        timestamp: new Date().toISOString(),
+        localSessionId: sessionIdRef.current || null,
+        ephemeralLocal: true,
+      }];
     });
   };
 
@@ -627,19 +1182,48 @@ export default function ChatScreen() {
       const last = next[next.length - 1];
       if (last?.role === 'assistant') {
         last.content = text || last.content;
+        last.ephemeralLocal = last.ephemeralLocal ?? true;
+        last.localSessionId = last.localSessionId ?? sessionIdRef.current ?? null;
+        last.timestamp = last.timestamp || new Date().toISOString();
         return [...next];
       }
-      return [...next, { role: 'assistant', content: text, displayLabel: 'Assistant' }];
+      return [...next, {
+        role: 'assistant',
+        content: text,
+        displayLabel: 'Assistant',
+        timestamp: new Date().toISOString(),
+        localSessionId: sessionIdRef.current || null,
+        ephemeralLocal: true,
+      }];
     });
   };
 
-  const appendUserMessage = (text: string) => {
+  const appendUserMessage = (text: string, targetSessionId?: string | null) => {
     if (!text) return;
-    setMessages((prev) => [...prev, { role: 'user', content: text, displayLabel: 'You' }]);
+    setMessages((prev) => mergeLiveMessage(prev, {
+      role: 'user',
+      content: text,
+      displayLabel: 'You',
+      timestamp: new Date().toISOString(),
+      localId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      localSessionId: targetSessionId ?? sessionIdRef.current ?? null,
+      pendingLocal: true,
+    }));
   };
 
   const canSendOverChatSocket = () =>
     Boolean(chatWsRef.current && chatWsRef.current.readyState === WebSocket.OPEN);
+
+  const closeFailedChatSocket = (ws: WebSocket) => {
+    if (chatWsRef.current === ws) {
+      chatWsRef.current = null;
+    }
+    try {
+      ws.close();
+    } catch {
+      // no-op
+    }
+  };
 
   const schedulePendingFlush = () => {
     if (outboundRetryRef.current) {
@@ -698,11 +1282,19 @@ export default function ChatScreen() {
         interruptPolicy: next.interruptPolicy,
         textPreview: next.text.slice(0, 140),
       });
-      ws.send(JSON.stringify({
-        text: next.text,
-        session_id: next.sessionId,
-        interrupt_policy: next.interruptPolicy,
-      }));
+      try {
+        ws.send(JSON.stringify({
+          text: next.text,
+          session_id: next.sessionId,
+          interrupt_policy: next.interruptPolicy,
+        }));
+      } catch (error) {
+        pendingMessagesRef.current.unshift(next);
+        logDiagnostic('chat.queue', 'queued chat send failed; retrying', describeError(error), 'warn');
+        closeFailedChatSocket(ws);
+        setStatus('chat reconnecting');
+        break;
+      }
     }
 
     if (pendingMessagesRef.current.length) {
@@ -715,17 +1307,23 @@ export default function ChatScreen() {
     setStatus('connected');
   };
 
-  const queuePendingMessage = (text: string) => {
+  const queuePendingMessage = (
+    text: string,
+    options?: { appendLocal?: boolean; sessionId?: string | null }
+  ) => {
+    const targetSessionId = options?.sessionId || sessionIdRef.current || null;
     const pending: PendingOutboundMessage = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       text,
-      sessionId: sessionIdRef.current,
+      sessionId: targetSessionId || undefined,
       interruptPolicy,
       expiresAt: Date.now() + OUTBOUND_MESSAGE_TTL_MS,
     };
 
     pendingMessagesRef.current.push(pending);
-    appendUserMessage(text);
+    if (options?.appendLocal !== false) {
+      appendUserMessage(text, targetSessionId);
+    }
     appendLog('[queue] message queued for backend startup (up to 60s)');
     appendSystemMessage(
       'Your message was queued because the backend is still starting or reconnecting. It will be delivered automatically for up to 1 minute.',
@@ -753,6 +1351,7 @@ export default function ChatScreen() {
     assistantAudioPathRef.current = null;
     if (audioPath) {
       try {
+        const FileSystem = await loadFileSystemModule();
         await FileSystem.deleteAsync(audioPath, { idempotent: true });
       } catch {
         // no-op
@@ -776,60 +1375,10 @@ export default function ChatScreen() {
       return;
     }
 
-    const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
-    if (!baseDir) {
-      setStatus('audio cache unavailable');
-      setVoiceState('idle');
-      setIsVoiceBusy(false);
-      return;
-    }
-
-    try {
-      await cleanupAssistantAudio();
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-      });
-
-      const ext = audioExtensionForMime(mimeType);
-      const path = `${baseDir}assistant-${Date.now()}.${ext}`;
-      await FileSystem.writeAsStringAsync(path, audioBase64, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      assistantAudioPathRef.current = path;
-
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: path },
-        { shouldPlay: true }
-      );
-      assistantSoundRef.current = sound;
-      setVoiceState('speaking');
-      setStatus('assistant speaking');
-
-      sound.setOnPlaybackStatusUpdate((playbackStatus) => {
-        if (!playbackStatus.isLoaded) {
-          if (playbackStatus.error) {
-            setStatus('assistant audio error');
-            setVoiceState('idle');
-            setIsVoiceBusy(false);
-            void cleanupAssistantAudio();
-          }
-          return;
-        }
-
-        if (playbackStatus.didJustFinish) {
-          setStatus('voice ready');
-          setVoiceState('idle');
-          setIsVoiceBusy(false);
-          void cleanupAssistantAudio();
-        }
-      });
-    } catch {
-      setStatus('assistant audio error');
-      setVoiceState('idle');
-      setIsVoiceBusy(false);
-      await cleanupAssistantAudio();
-    }
+    await cleanupAssistantAudio();
+    setVoiceState('idle');
+    setStatus('assistant audio unavailable on mobile');
+    setIsVoiceBusy(false);
   };
 
   const clearReconnectTimers = () => {
@@ -861,279 +1410,24 @@ export default function ChatScreen() {
     });
   };
 
-  const handleRealtimeEvent = (data: ChatEvent, channel: 'chat' | 'voice' | 'screen') => {
-    if (data.type === 'session_snapshot' && data.session_id) {
-      setSessionId(data.session_id);
-    }
+  const handleRealtimeEvent = (data: ChatEvent, channel: 'chat' | 'voice' | 'screen') => handleChatRealtimeEvent({ router, params, requestedSessionId, requestedNewSession, requestedWorkspace, sessionId, setSessionId, sessionName, setSessionName, input, setInput, messages, setMessages, sessions, setSessions, fleetSnapshot, setFleetSnapshot, jobs, setJobs, sidebarState, setSidebarState, toolLogs, setToolLogs, timelineEvents, setTimelineEvents, status, setStatus, voiceState, setVoiceState, voiceDraft, setVoiceDraft, isRecording, setIsRecording, isVoiceBusy, setIsVoiceBusy, screenPreview, setScreenPreview, screenStatus, setScreenStatus, screenLiveState, setScreenLiveState, isScreenLive, setIsScreenLive, steeringBetaEnabled, setSteeringBetaEnabled, interruptPolicy, setInterruptPolicy, apiBaseUrl, setApiBaseUrl, token, setToken, connectionMode, setConnectionMode, pairedDesktopId, setPairedDesktopId, configLoaded, setConfigLoaded, drawerOpen, setDrawerOpen, drawerTab, setDrawerTab, cronUnreadCount, setCronUnreadCount, pairPromptOpen, setPairPromptOpen, workspacePanelOpen, setWorkspacePanelOpen, composerMenu, setComposerMenu, draftModel, setDraftModel, draftVariant, setDraftVariant, draftPlanner, setDraftPlanner, draftEnabledToolPacks, setDraftEnabledToolPacks, draftSecurityPermissionMode, setDraftSecurityPermissionMode, draftSessionWorkspace, setDraftSessionWorkspace, telegramBots, setTelegramBots, verboseMode, setVerboseMode, agentOverview, setAgentOverview, skills, setSkills, skillValidation, setSkillValidation, memoryQuery, setMemoryQuery, memoryNote, setMemoryNote, memoryResults, setMemoryResults, configKey, setConfigKey, configValue, setConfigValue, configEntries, setConfigEntries, workspaceDraft, setWorkspaceDraft, heartbeatDraft, setHeartbeatDraft, subAgentPrompt, setSubAgentPrompt, subAgents, setSubAgents, artifacts, setArtifacts, artifactDetail, setArtifactDetail, artifactStatus, setArtifactStatus, confirm, confirmationDialog, chatWsRef, voiceWsRef, screenWsRef, appClientIdRef, composerInputRef, recordingRef, assistantSoundRef, assistantAudioPathRef, pendingMessagesRef, outboundRetryRef, segmentTimeoutRef, chatReconnectRef, voiceReconnectRef, screenReconnectRef, segmentSequenceRef, voiceActiveRef, finishingSegmentRef, sessionIdRef, blankChatRequestedRef, steeringArmed, canStartVoice, mobileVoiceEnabled, chatConnected, chatBlocked, setupMissing, hasActiveChatSession, agentControlsDisabled, subAgentSpawnDisabled, activeSessionSummary, activeSecurityPermissionMode, activeSecurityPermissionLabel, showChatError, runtimeStatusText, missingConnectionStatus, requireChatConnection, ensureChatActiveSession, refreshArtifacts, openArtifact, applySessionDetail, updateChatSecurityPermissionMode, clearVisibleSession, syncOverviewFromSessionDetail, applySessionSync, refreshSidebarData, refreshAgentControls, applyQuickAgentConfig, runWorkspaceAction, resetCurrentContext, focusComposer, toggleSkill, runSkillValidation, spawnBackgroundTask, runTaskControl, persistSidebarState, selectSession, deleteConversation, activeFleetIdentity, activeFleetIdentityId, visibleSessions, activeFleetIdentitySelectedChatId, activeFleetIdentityTargetChatId, currentSessionSummary, selectFleetIdentityFromChat, currentEnabledToolPacks, currentAvailableToolPacks, lockReasons, effectiveEnabledToolPacks, currentModelLabel, currentVariantLabel, toggleChatToolPack, openBlankChat, ensureSessionForSend, appendLog, appendSystemMessage, appendAssistantDelta, applyAssistantFinal, appendUserMessage, canSendOverChatSocket, closeFailedChatSocket, schedulePendingFlush, expirePendingMessages, flushPendingMessages, queuePendingMessage, cleanupAssistantAudio, audioExtensionForMime, playAssistantAudio, clearReconnectTimers, applyScreenPayload }, data, channel);
 
-    if (channel === 'screen') {
-      if (data.type === 'screen_frame') {
-        applyScreenPayload(data.payload);
-        setScreenStatus('live');
-        return;
-      }
-
-      if (data.type === 'screen_state') {
-        const nextState = String(data.payload?.state || 'idle');
-        setScreenLiveState(nextState);
-        setScreenStatus(`live ${nextState}`);
-        return;
-      }
-    }
-
-    if (data.type === 'assistant_delta') {
-      appendAssistantDelta(String(data.payload?.delta || ''));
-      return;
-    }
-
-    if (data.type === 'user_message') {
-      const message = data.payload?.message as SessionMessage | undefined;
-      if (message) {
-        setMessages((prev) => [...prev, toChatMessage(message)]);
-      }
-      return;
-    }
-
-    if (data.type === 'session_sync') {
-      applySessionSync(data.payload);
-      if (channel !== 'screen') {
-        setStatus('connected');
-      }
-      return;
-    }
-
-    if (data.type === 'assistant_final') {
-      const message = data.payload?.message as SessionMessage | undefined;
-      if (message) {
-        setMessages((prev) => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          if (last?.role === 'assistant') {
-            next[next.length - 1] = toChatMessage(message);
-            return next;
-          }
-          return [...next, toChatMessage(message)];
-        });
-      } else {
-        applyAssistantFinal(String(data.payload?.text || ''));
-      }
-      if (channel !== 'voice') {
-        setIsVoiceBusy(false);
-      }
-      void refreshSidebarData();
-      return;
-    }
-
-    if (data.type === 'thinking') {
-      const formatted = String(data.payload?.formatted || data.payload?.text || '').trim();
-      const raw = String(data.payload?.text || '').trim();
-      if (formatted) {
-        appendSystemMessage(formatted, 'Thinking');
-      }
-      if (raw) {
-        appendLog(`[thinking] ${raw}`);
-      }
-      return;
-    }
-
-    if (data.type === 'assistant_audio') {
-      const audioBase64 = String(data.payload?.audio_base64 || '');
-      const mimeType = String(data.payload?.mime_type || 'audio/mpeg');
-      void playAssistantAudio(audioBase64, mimeType);
-      return;
-    }
-
-    if (data.type === 'tool_event') {
-      const entry = formatRealtimeToolEntry(data.payload);
-      appendLog(entry);
-      logDiagnostic(
-        `${channel}.tool`,
-        'tool event',
-        data.payload,
-        data.payload?.level === 'error' ? 'error' : 'info'
-      );
-      return;
-    }
-
-    if (data.type === 'warning') {
-      const message = String(data.payload?.message || data.message || 'warning');
-      const detail = String(data.payload?.detail || '').trim();
-      if (channel === 'screen') {
-        setScreenStatus(message);
-        setScreenLiveState('warning');
-        appendLog(`[screen] ${message}`);
-        if (detail) appendLog(`[screen] ${detail}`);
-      } else {
-        setStatus(message);
-        if (channel === 'voice') {
-          setIsVoiceBusy(false);
-        }
-        appendLog(`[warn] ${message}`);
-        if (detail) appendLog(detail);
-      }
-      logDiagnostic(`${channel}.runtime`, 'warning event', data.payload || data, 'warn');
-      return;
-    }
-
-    if (data.type === 'error') {
-      const message = String(data.payload?.message || data.message || 'error');
-      const detail = String(data.payload?.detail || '').trim();
-      if (channel === 'screen') {
-        setScreenStatus(message);
-        setScreenLiveState('error');
-        appendLog(`[screen] ${message}`);
-        if (detail) appendLog(`[screen] ${detail}`);
-      } else {
-        setStatus(message);
-        if (channel === 'voice') {
-          setVoiceState('error');
-          setIsVoiceBusy(false);
-        }
-        appendLog(`[error] ${message}`);
-        if (detail) appendLog(detail);
-        appendSystemMessage(detail ? `${message}\n\n${detail}` : message, 'Error');
-      }
-      logDiagnostic(`${channel}.runtime`, 'error event', data.payload || data, 'error');
-      return;
-    }
-
-    if (data.type === 'status' || data.type === 'log') {
-      const message = String(data.payload?.message || data.message || '');
-      const level = typeof data.payload?.level === 'string' ? data.payload.level : undefined;
-      if (message) appendLog(formatLogLine(message, level));
-      if (data.type === 'status') {
-        if (channel === 'screen') {
-          setScreenStatus(message || screenStatus);
-        } else {
-          setStatus(message || status);
-        }
-      }
-      if (message) {
-        logDiagnostic(
-          `${channel}.runtime`,
-          `${data.type} event`,
-          data.payload || data,
-          level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info'
-        );
-      }
-      return;
-    }
-
-    if (channel === 'voice') {
-      if (data.type === 'voice_state') {
-        const nextState = String(data.payload?.state || 'idle');
-        setVoiceState(nextState);
-        if (nextState === 'idle' || nextState === 'cancelled') {
-          setIsVoiceBusy(false);
-        }
-        if (nextState !== 'listening') {
-          setStatus(`voice ${nextState}`);
-        }
-        return;
-      }
-
-      if (data.type === 'voice_partial') {
-        setVoiceDraft(String(data.payload?.text || ''));
-        return;
-      }
-
-      if (data.type === 'voice_final') {
-        const transcript = String(data.payload?.text || '');
-        setVoiceDraft(transcript);
-        appendUserMessage(transcript);
-        setVoiceState('processing');
-        void refreshSidebarData();
-      }
-    }
-  };
-
-  const uploadAttachment = async (kind: 'camera' | 'gallery' | 'document') => {
-    if (!apiBaseUrl) {
-      setStatus(missingConnectionStatus());
-      return;
-    }
-    if (!token) {
-      setStatus(missingConnectionStatus());
-      return;
-    }
-    if (connectionMode === 'remote_cloud' && !pairedDesktopId) {
-      setStatus(missingConnectionStatus());
-      return;
-    }
-
-    try {
-      let asset: { uri: string; name: string; mimeType?: string | null } | null = null;
-
-      if (kind === 'camera') {
-        const permission = await ImagePicker.requestCameraPermissionsAsync();
-        if (!permission.granted) {
-          setStatus('camera denied');
-          return;
-        }
-        const result = await ImagePicker.launchCameraAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          quality: 0.8,
-        });
-        if (result.canceled || !result.assets?.length) return;
-        const picked = result.assets[0];
-        asset = { uri: picked.uri, name: picked.fileName || `camera-${Date.now()}.jpg`, mimeType: picked.mimeType };
-      } else if (kind === 'gallery') {
-        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (!permission.granted) {
-          setStatus('gallery denied');
-          return;
-        }
-        const result = await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          quality: 0.8,
-        });
-        if (result.canceled || !result.assets?.length) return;
-        const picked = result.assets[0];
-        asset = { uri: picked.uri, name: picked.fileName || `gallery-${Date.now()}.jpg`, mimeType: picked.mimeType };
-      } else {
-        const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, multiple: false });
-        if (result.canceled || !result.assets?.length) return;
-        const picked = result.assets[0];
-        asset = { uri: picked.uri, name: picked.name, mimeType: picked.mimeType };
-      }
-
-      if (!asset) return;
-
-      const form = new FormData();
-      form.append('file', {
-        uri: asset.uri,
-        name: asset.name,
-        type: asset.mimeType || 'application/octet-stream',
-      } as any);
-      if (sessionIdRef.current) form.append('session_id', sessionIdRef.current);
-
-      const data = await requestJson<{ filename?: string; session_id?: string }>({
-        scope: 'chat.upload',
-        url: `${apiBaseUrl}/api/app/upload`,
-        init: {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-          body: form,
-        },
-      });
-      if (data.session_id) {
-        setSessionId(String(data.session_id));
-      }
-      appendLog(`Attached: ${data.filename}`);
-      setStatus('attachment ready');
-      void refreshSidebarData();
-    } catch (error) {
-      setStatus(describeError(error));
-    }
-  };
+  const uploadAttachment = async (kind: ChatAttachmentKind) => uploadChatAttachment(kind, {
+    requireChatConnection,
+    setStatus,
+    ensureSessionForSend,
+    apiBaseUrl,
+    token,
+    sessionIdRef,
+    setSessionId,
+    appendLog,
+    refreshSidebarData,
+    showChatError,
+  });
 
   const refreshScreenshot = async () => {
-    if (!apiBaseUrl) {
-      setScreenStatus('missing backend');
-      return;
-    }
-    if (!token) {
-      setScreenStatus('missing token');
+    if (!configLoaded || !chatConnected) {
+      setScreenStatus(missingConnectionStatus());
       return;
     }
 
@@ -1151,7 +1445,7 @@ export default function ChatScreen() {
       applyScreenPayload(data);
       setScreenStatus('ready');
     } catch (error) {
-      setScreenStatus(describeError(error));
+      setScreenStatus(userFacingError(error, 'Screen preview failed.'));
     }
   };
 
@@ -1184,6 +1478,7 @@ export default function ChatScreen() {
       if (!uri) return;
 
       try {
+        const FileSystem = await loadFileSystemModule();
         const base64 = await FileSystem.readAsStringAsync(uri, {
           encoding: FileSystem.EncodingType.Base64,
         });
@@ -1211,6 +1506,7 @@ export default function ChatScreen() {
         logDiagnostic('voice.ws', 'voice chunk upload preparation failed', describeError(error), 'error');
       } finally {
         try {
+          const FileSystem = await loadFileSystemModule();
           await FileSystem.deleteAsync(uri, { idempotent: true });
         } catch {
           // no-op
@@ -1231,31 +1527,17 @@ export default function ChatScreen() {
   const startSegmentRecording = async () => {
     if (!voiceActiveRef.current || recordingRef.current) return;
 
-    try {
-      const recording = new Audio.Recording();
-      await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      await recording.startAsync();
-      recordingRef.current = recording;
-      segmentTimeoutRef.current = setTimeout(() => {
-        void finishCurrentSegment(true);
-      }, VOICE_SEGMENT_MS);
-    } catch {
-      setStatus('recording error');
-      setVoiceState('error');
-      setIsRecording(false);
-      setIsVoiceBusy(false);
-      voiceActiveRef.current = false;
-    }
+    setStatus('mobile voice is disabled in v1');
+    setVoiceState('idle');
+    setIsRecording(false);
+    setIsVoiceBusy(false);
+    voiceActiveRef.current = false;
   };
 
   const startVoiceCapture = async () => {
-    if (!configLoaded || !apiBaseUrl || !token) {
-      setStatus(missingConnectionStatus());
-      setPairPromptOpen(true);
-      return;
-    }
+    if (!requireChatConnection()) return;
     if (!mobileVoiceEnabled) {
-      setStatus('voice is disabled in remote mobile v1');
+      setStatus('mobile voice is disabled in v1');
       return;
     }
     if (isVoiceBusy && !steeringArmed) {
@@ -1271,17 +1553,6 @@ export default function ChatScreen() {
       if (isVoiceBusy && steeringArmed) {
         await cleanupAssistantAudio();
       }
-
-      const permission = await Audio.requestPermissionsAsync();
-      if (!permission.granted) {
-        setStatus('microphone denied');
-        return;
-      }
-
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
 
       voiceActiveRef.current = true;
       segmentSequenceRef.current = 0;
@@ -1299,7 +1570,7 @@ export default function ChatScreen() {
 
       await startSegmentRecording();
     } catch (error) {
-      setStatus(describeError(error) || 'voice start error');
+      showChatError(error, 'Voice did not start.');
       logDiagnostic('voice.ws', 'voice start failed', describeError(error), 'error');
       setVoiceState('error');
       setIsRecording(false);
@@ -1336,15 +1607,6 @@ export default function ChatScreen() {
       setStatus('voice cancelled');
       setIsVoiceBusy(false);
     }
-
-    try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-      });
-    } catch {
-      // no-op
-    }
   };
 
   useEffect(() => {
@@ -1352,16 +1614,14 @@ export default function ChatScreen() {
 
     clearReconnectTimers();
 
-    if (!apiBaseUrl) {
-      setStatus(missingConnectionStatus());
-      return;
-    }
-    if (!token) {
+    if (!chatConnected) {
       setStatus(missingConnectionStatus());
       return;
     }
 
     let disposed = false;
+    const connectionAccountKey = accountSyncKeyRef.current;
+    const socketStillCurrent = () => !disposed && accountSyncKeyRef.current === connectionAccountKey;
 
     const buildWsUrl = (path: string) => {
       const base = buildWsBaseUrl(apiBaseUrl);
@@ -1371,12 +1631,13 @@ export default function ChatScreen() {
     };
 
     const connectChatSocket = () => {
-      if (disposed) return;
+      if (!socketStillCurrent()) return;
       const url = buildWsUrl(connectionMode === 'remote_cloud' ? '/ws/remote/mobile' : '/ws/app/chat');
       logDiagnostic('chat.ws', 'connecting', { url });
       const ws = new WebSocket(url);
       chatWsRef.current = ws;
       ws.onopen = () => {
+        if (!socketStillCurrent()) return;
         logDiagnostic('chat.ws', 'connected', { url });
         if (pendingMessagesRef.current.length) {
           setStatus('connected · sending queued message');
@@ -1386,18 +1647,20 @@ export default function ChatScreen() {
         }
       };
       ws.onclose = (event) => {
+        const shouldReconnect = socketStillCurrent();
         logDiagnostic('chat.ws', 'closed', {
           code: event.code,
           reason: event.reason || '<empty>',
           wasClean: event.wasClean,
         }, event.wasClean ? 'info' : 'warn');
         if (chatWsRef.current === ws) chatWsRef.current = null;
-        if (!disposed) {
+        if (shouldReconnect) {
           setStatus('chat reconnecting');
           chatReconnectRef.current = setTimeout(connectChatSocket, SOCKET_RECONNECT_MS);
         }
       };
       ws.onerror = () => {
+        if (!socketStillCurrent()) return;
         logDiagnostic('chat.ws', 'error', { readyState: ws.readyState }, 'error');
         setStatus('chat error');
         if (pendingMessagesRef.current.length) {
@@ -1405,6 +1668,7 @@ export default function ChatScreen() {
         }
       };
       ws.onmessage = (event) => {
+        if (!socketStillCurrent()) return;
         try {
           const payload = JSON.parse(event.data) as ChatEvent;
           logDiagnostic('chat.ws', 'message', { type: payload.type || 'unknown' });
@@ -1420,32 +1684,36 @@ export default function ChatScreen() {
         setVoiceState('disabled');
         return;
       }
-      if (disposed) return;
+      if (!socketStillCurrent()) return;
       const url = buildWsUrl('/ws/app/voice');
       logDiagnostic('voice.ws', 'connecting', { url });
       const ws = new WebSocket(url);
       voiceWsRef.current = ws;
       ws.onopen = () => {
+        if (!socketStillCurrent()) return;
         logDiagnostic('voice.ws', 'connected', { url });
         setVoiceState('ready');
       };
       ws.onclose = (event) => {
+        const shouldReconnect = socketStillCurrent();
         logDiagnostic('voice.ws', 'closed', {
           code: event.code,
           reason: event.reason || '<empty>',
           wasClean: event.wasClean,
         }, event.wasClean ? 'info' : 'warn');
         if (voiceWsRef.current === ws) voiceWsRef.current = null;
-        if (!disposed) {
+        if (shouldReconnect) {
           setVoiceState('reconnecting');
           voiceReconnectRef.current = setTimeout(connectVoiceSocket, SOCKET_RECONNECT_MS);
         }
       };
       ws.onerror = () => {
+        if (!socketStillCurrent()) return;
         logDiagnostic('voice.ws', 'error', { readyState: ws.readyState }, 'error');
         setVoiceState('error');
       };
       ws.onmessage = (event) => {
+        if (!socketStillCurrent()) return;
         try {
           const payload = JSON.parse(event.data) as ChatEvent;
           logDiagnostic('voice.ws', 'message', { type: payload.type || 'unknown' });
@@ -1481,15 +1749,18 @@ export default function ChatScreen() {
         voiceWsRef.current = null;
       }
     };
-  }, [apiBaseUrl, configLoaded, connectionMode, pairedDesktopId, token]);
+  }, [apiBaseUrl, chatConnected, configLoaded, connectionMode, pairedDesktopId, token]);
 
   useEffect(() => {
     if (!configLoaded) return;
 
-    if (!apiBaseUrl || !token || !isScreenLive) {
+    if (!chatConnected || !isScreenLive) {
       if (!isScreenLive) {
         setScreenLiveState('off');
         setScreenStatus('idle');
+      } else {
+        setScreenLiveState('warning');
+        setScreenStatus(missingConnectionStatus());
       }
       if (screenReconnectRef.current) {
         clearTimeout(screenReconnectRef.current);
@@ -1503,11 +1774,13 @@ export default function ChatScreen() {
     }
 
     let disposed = false;
+    const connectionAccountKey = accountSyncKeyRef.current;
+    const socketStillCurrent = () => !disposed && accountSyncKeyRef.current === connectionAccountKey;
     setScreenLiveState('connecting');
     setScreenStatus('live connecting');
 
     const connectScreenSocket = () => {
-      if (disposed) return;
+      if (!socketStillCurrent()) return;
       const base = buildWsBaseUrl(apiBaseUrl);
       const params = new URLSearchParams({
         token,
@@ -1520,11 +1793,13 @@ export default function ChatScreen() {
       const ws = new WebSocket(url);
       screenWsRef.current = ws;
       ws.onopen = () => {
+        if (!socketStillCurrent()) return;
         logDiagnostic('screen.ws', 'connected', { url });
         setScreenLiveState('connected');
         setScreenStatus('live connected');
       };
       ws.onclose = (event) => {
+        const shouldReconnect = socketStillCurrent();
         logDiagnostic('screen.ws', 'closed', {
           code: event.code,
           reason: event.reason || '<empty>',
@@ -1533,18 +1808,20 @@ export default function ChatScreen() {
         if (screenWsRef.current === ws) {
           screenWsRef.current = null;
         }
-        if (!disposed) {
+        if (shouldReconnect) {
           setScreenLiveState('reconnecting');
           setScreenStatus('live reconnecting');
           screenReconnectRef.current = setTimeout(connectScreenSocket, SOCKET_RECONNECT_MS);
         }
       };
       ws.onerror = () => {
+        if (!socketStillCurrent()) return;
         logDiagnostic('screen.ws', 'error', { readyState: ws.readyState }, 'error');
         setScreenLiveState('error');
         setScreenStatus('live error');
       };
       ws.onmessage = (event) => {
+        if (!socketStillCurrent()) return;
         try {
           const payload = JSON.parse(event.data) as ChatEvent;
           logDiagnostic('screen.ws', 'message', { type: payload.type || 'unknown' });
@@ -1568,42 +1845,65 @@ export default function ChatScreen() {
         screenWsRef.current = null;
       }
     };
-  }, [apiBaseUrl, configLoaded, isScreenLive, token]);
+  }, [apiBaseUrl, chatConnected, configLoaded, connectionMode, isScreenLive, pairedDesktopId, token]);
 
-  const send = () => {
-    if (setupMissing) {
-      setStatus(missingConnectionStatus());
-      setPairPromptOpen(true);
-      return;
+  const requireProviderApiKey = () => {
+    if (!agentOverview) {
+      return true;
     }
+    const hasModelProvider = (agentOverview.model_groups || []).some((group: any) => (
+      Array.isArray(group?.models) && group.models.length > 0
+    ));
+    if (hasModelProvider) {
+      return true;
+    }
+    const message = 'You have not set an API key yet. Add an API key in Setup before sending a message.';
+    setStatus(message);
+    appendLog(`[setup] ${message}`);
+    appendSystemMessage(message, 'Setup');
+    return false;
+  };
+
+  const send = async () => {
+    if (!requireChatConnection()) return;
+    if (!requireProviderApiKey()) return;
     const trimmed = input.trim();
     if (!trimmed) return;
+    const materializedSessionId = await ensureSessionForSend();
+    if (!materializedSessionId) return;
     if (!canSendOverChatSocket()) {
-      queuePendingMessage(trimmed);
+      queuePendingMessage(trimmed, { sessionId: materializedSessionId });
       return;
     }
     const ws = chatWsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-      queuePendingMessage(trimmed);
+      queuePendingMessage(trimmed, { sessionId: materializedSessionId });
       return;
     }
-    appendUserMessage(trimmed);
+    appendUserMessage(trimmed, materializedSessionId);
     logDiagnostic('chat.ws', 'sending chat message', {
-      sessionId: sessionIdRef.current || null,
+      sessionId: materializedSessionId,
       interruptPolicy,
       textPreview: trimmed.slice(0, 140),
     });
-    ws.send(JSON.stringify({
-      text: trimmed,
-      session_id: sessionIdRef.current,
-      interrupt_policy: interruptPolicy,
-    }));
+    try {
+      ws.send(JSON.stringify({
+        text: trimmed,
+        session_id: materializedSessionId,
+        interrupt_policy: interruptPolicy,
+      }));
+    } catch (error) {
+      logDiagnostic('chat.ws', 'chat send failed; queueing message', describeError(error), 'warn');
+      closeFailedChatSocket(ws);
+      queuePendingMessage(trimmed, { appendLocal: false, sessionId: materializedSessionId });
+      return;
+    }
     setInput('');
     setVoiceDraft('');
   };
 
   const toggleVerboseMode = async () => {
-    if (!apiBaseUrl || !token) return;
+    if (!ensureChatActiveSession()) return;
 
     const nextValue = !verboseMode;
     setStatus(nextValue ? 'enabling verbose feed' : 'disabling verbose feed');
@@ -1618,1384 +1918,39 @@ export default function ChatScreen() {
       setStatus(nextValue ? 'verbose feed enabled' : 'verbose feed disabled');
       appendLog(nextValue ? 'Verbose run feed enabled.' : 'Verbose run feed disabled.');
     } catch (error) {
-      setStatus(describeError(error));
+      showChatError(error, 'Verbose feed was not updated.');
     }
   };
 
   const sessionUpdatedAt = sessions.find((item) => item.id === sessionId)?.updated_at;
-  const subtitle = setupMissing
+  const subtitle = !configLoaded
+    ? 'Loading chat setup...'
+    : setupMissing
     ? (connectionMode === 'remote_cloud'
       ? 'Sign in and pair this phone with your desktop to open the shared chat space.'
       : (apiBaseUrl ? 'Tap the message field to finish pairing' : 'Tap the message field to connect this phone'))
-    : (sessionId ? `Updated ${formatRelativeTime(sessionUpdatedAt)}` : 'Ready to chat');
+    : (sessionId
+      ? `Updated ${formatRelativeTime(sessionUpdatedAt)}`
+      : draftSessionWorkspace
+        ? `Ready in ${draftSessionWorkspace}`
+        : 'Ready to chat');
   const pairingPromptTitle = connectionMode === 'remote_cloud'
     ? 'Connect this phone to your desktop'
     : (apiBaseUrl ? 'Finish pairing this phone' : 'Connect this phone');
   const pairingPromptText = connectionMode === 'remote_cloud'
-    ? 'Sign in to the EmploAI control plane, then complete desktop pairing. After that, the phone stays synced through the VPS while the desktop remains the execution machine.'
+    ? 'Sign in to the Kraitos control plane, then complete desktop pairing. After that, the phone stays synced through the VPS while the desktop remains the execution machine.'
     : (
       apiBaseUrl
         ? 'This phone already knows the backend URL, but it still needs a trusted-device token before chat opens up.'
         : 'Add the backend URL first, then complete trusted-device pairing. After that, chat stays as the main workspace.'
     );
   const workspaceStatus = [
-    { label: 'Connection', value: status },
-    { label: 'Voice', value: mobileVoiceEnabled ? voiceState : 'disabled in remote v1' },
+    { label: 'Connection', value: shortStatusText(status) },
     { label: 'Session', value: sessionId ? sessionName : 'No session yet' },
+    ...(draftSessionWorkspace && !sessionId ? [{ label: 'Workspace', value: draftSessionWorkspace }] : []),
   ];
+  const fleetIdentities = fleetSnapshot?.identities || [];
+  const sendDisabled = chatBlocked || !input.trim();
 
-  return (
-    <SafeAreaView edges={['top', 'left', 'right']} style={styles.container}>
-      <AppDrawer
-        visible={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        initialTab={drawerTab}
-        sessions={sessions}
-        jobs={jobs}
-        cronUnreadCount={cronUnreadCount}
-        activeSessionId={sessionId}
-        backendLabel={apiBaseUrl || 'Backend not configured'}
-        onSelectSession={(nextSessionId) => {
-          void selectSession(nextSessionId, { updateRoute: false });
-        }}
-        onCreateSession={() => {
-          void createConversation();
-        }}
-      />
-
-      <Modal transparent visible={pairPromptOpen} animationType="fade" onRequestClose={() => setPairPromptOpen(false)}>
-        <View style={styles.modalOverlay}>
-          <Pressable style={styles.modalBackdrop} onPress={() => setPairPromptOpen(false)} />
-          <View style={styles.promptCard}>
-            <Text style={styles.promptTitle}>{pairingPromptTitle}</Text>
-            <Text style={styles.promptText}>{pairingPromptText}</Text>
-            <View style={styles.promptActions}>
-              <Pressable
-                style={styles.primaryButton}
-                onPress={() => {
-                  setPairPromptOpen(false);
-                  router.push('/pair');
-                }}
-              >
-                <Text style={styles.primaryButtonText}>Open Pair</Text>
-              </Pressable>
-              <Pressable
-                style={styles.secondaryButton}
-                onPress={() => {
-                  setPairPromptOpen(false);
-                  router.push('/settings');
-                }}
-              >
-                <Text style={styles.secondaryButtonText}>Settings</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      <Modal transparent visible={workspacePanelOpen} animationType="slide" onRequestClose={() => setWorkspacePanelOpen(false)}>
-        <View style={styles.sheetOverlay}>
-          <Pressable style={styles.sheetBackdrop} onPress={() => setWorkspacePanelOpen(false)} />
-          <SafeAreaView edges={['bottom']} style={styles.sheet}>
-            <View style={styles.sheetHandle} />
-            <View style={styles.sheetHeader}>
-              <View style={styles.sheetHeading}>
-                <Text style={styles.sheetTitle}>Workspace</Text>
-                <Text style={styles.sheetSubtitle}>Every Telegram command now maps here as a chat-side control, panel, or shortcut</Text>
-              </View>
-              <Pressable onPress={() => setWorkspacePanelOpen(false)}>
-                <Text style={styles.sheetClose}>Done</Text>
-              </Pressable>
-            </View>
-
-            <ScrollView contentContainerStyle={styles.sheetContent}>
-              <View style={styles.rowWrap}>
-                <Pressable
-                  style={styles.secondaryButton}
-                  onPress={() => {
-                    setWorkspacePanelOpen(false);
-                    void createConversation();
-                  }}
-                >
-                  <Text style={styles.secondaryButtonText}>New chat</Text>
-                </Pressable>
-                <Pressable
-                  style={styles.secondaryButton}
-                  onPress={() => {
-                    setWorkspacePanelOpen(false);
-                    setDrawerTab('chats');
-                    setDrawerOpen(true);
-                  }}
-                >
-                  <Text style={styles.secondaryButtonText}>Sessions (/session)</Text>
-                </Pressable>
-                <Pressable
-                  style={styles.secondaryButton}
-                  onPress={() => {
-                    void refreshSidebarData();
-                    setWorkspacePanelOpen(false);
-                  }}
-                >
-                  <Text style={styles.secondaryButtonText}>Refresh lists</Text>
-                </Pressable>
-                <Pressable
-                  style={styles.secondaryButton}
-                  onPress={() => {
-                    setWorkspacePanelOpen(false);
-                    setDrawerTab('cron');
-                    setDrawerOpen(true);
-                  }}
-                >
-                  <Text style={styles.secondaryButtonText}>
-                    {cronUnreadCount > 0 ? `Cron (${cronUnreadCount})` : 'Cron (/schedule /jobs)'}
-                  </Text>
-                </Pressable>
-                <Pressable
-                  style={[styles.secondaryButton, verboseMode ? styles.activeSecondary : null]}
-                  onPress={() => void toggleVerboseMode()}
-                >
-                  <Text style={styles.secondaryButtonText}>{verboseMode ? 'Verbose on' : 'Verbose off'}</Text>
-                </Pressable>
-              </View>
-
-              <CollapsibleSection
-                title="Setup and help"
-                meta="/start /help /mode /setup /restart"
-                defaultExpanded={false}
-              >
-                <View style={styles.infoCard}>
-                  <Text style={styles.infoCardLabel}>/start</Text>
-                  <Text style={styles.infoCardText}>
-                    EmploAI mobile channel connected. Current model: {agentOverview?.current_model || 'Unknown'} · variant: {agentOverview?.current_variant || 'Unknown'} · max turns: {agentOverview?.max_turns || '-'}
-                  </Text>
-                </View>
-                <View style={styles.infoCard}>
-                  <Text style={styles.infoCardLabel}>/mode</Text>
-                  <Text style={styles.infoCardText}>Auto mode is always on. The app uses the unified agent directly.</Text>
-                </View>
-                <View style={styles.quickControlBlock}>
-                  <Text style={styles.quickControlLabel}>/help command map</Text>
-                  {HELP_COMMAND_GROUPS.map(([label, commands]) => (
-                    <View key={label} style={styles.infoCard}>
-                      <Text style={styles.infoCardLabel}>{label}</Text>
-                      <Text style={styles.infoCardText}>{commands}</Text>
-                    </View>
-                  ))}
-                </View>
-                <View style={styles.rowWrap}>
-                  <Pressable
-                    style={styles.secondaryButton}
-                    onPress={() => {
-                      setWorkspacePanelOpen(false);
-                      router.push(setupMissing ? '/pair' : '/settings');
-                    }}
-                  >
-                    <Text style={styles.secondaryButtonText}>{setupMissing ? 'Open setup' : 'Open settings'}</Text>
-                  </Pressable>
-                  <Pressable
-                    style={styles.secondaryButton}
-                    onPress={() => void runTaskControl('restart')}
-                  >
-                    <Text style={styles.secondaryButtonText}>Restart backend</Text>
-                  </Pressable>
-                </View>
-              </CollapsibleSection>
-
-              <CollapsibleSection
-                title="Task controls"
-                meta="/task /pause /stop /spawn /subagents"
-                defaultExpanded={false}
-              >
-                <Text style={styles.helperText}>
-                  `/task` maps to the normal composer. Use a new message to steer the current run instead of relying on the removed legacy `/continue` path.
-                </Text>
-                <View style={styles.rowWrap}>
-                  <Pressable style={styles.secondaryButton} onPress={() => focusComposer()}>
-                    <Text style={styles.secondaryButtonText}>Open composer</Text>
-                  </Pressable>
-                  <Pressable style={styles.secondaryButton} onPress={() => void runTaskControl('pause')}>
-                    <Text style={styles.secondaryButtonText}>Pause run</Text>
-                  </Pressable>
-                  <Pressable style={styles.secondaryButton} onPress={() => void runTaskControl('stop')}>
-                    <Text style={styles.secondaryButtonText}>Stop run</Text>
-                  </Pressable>
-                </View>
-
-                <View style={styles.quickControlBlock}>
-                  <Text style={styles.quickControlLabel}>Spawn sub-agent</Text>
-                  <TextInput
-                    style={styles.textAreaInput}
-                    value={subAgentPrompt}
-                    onChangeText={setSubAgentPrompt}
-                    placeholder="Describe the background task for /spawn"
-                    placeholderTextColor="#7f8aa3"
-                    multiline
-                  />
-                  <View style={styles.rowWrap}>
-                    <Pressable style={styles.secondaryButton} onPress={() => void spawnBackgroundTask()}>
-                      <Text style={styles.secondaryButtonText}>Spawn</Text>
-                    </Pressable>
-                    <Pressable
-                      style={styles.secondaryButton}
-                      onPress={() =>
-                        void runWorkspaceAction(
-                          'refreshing sub-agents',
-                          async () => {
-                            const result = await fetchSubAgents(apiBaseUrl, token, sessionIdRef.current);
-                            setSubAgents(result);
-                          },
-                          { refreshControls: false }
-                        )
-                      }
-                    >
-                      <Text style={styles.secondaryButtonText}>Refresh list</Text>
-                    </Pressable>
-                  </View>
-                </View>
-
-                <View style={styles.infoCard}>
-                  <Text style={styles.infoCardText}>
-                    Sub-agents: {subAgents?.total_tasks || 0} total · {subAgents?.running || 0} running · {subAgents?.completed || 0} completed · {subAgents?.failed || 0} failed
-                  </Text>
-                </View>
-                {(subAgents?.tasks || []).length ? (
-                  subAgents!.tasks.map((task) => (
-                    <View key={task.id} style={styles.infoCard}>
-                      <Text style={styles.infoCardLabel}>{task.id} · {task.status}</Text>
-                      <Text style={styles.infoCardText}>{task.prompt}</Text>
-                      <Text style={styles.infoCardText}>
-                        {task.completed_at
-                          ? `Completed ${formatRelativeTime(task.completed_at)}`
-                          : task.created_at
-                            ? `Created ${formatRelativeTime(task.created_at)}`
-                            : 'Waiting for timestamps'}
-                      </Text>
-                    </View>
-                  ))
-                ) : (
-                  <Text style={styles.helperText}>No sub-agents yet.</Text>
-                )}
-              </CollapsibleSection>
-
-              <CollapsibleSection
-                title="Skills"
-                meta="/skills /skill /skilltest"
-                defaultExpanded={false}
-              >
-                <Text style={styles.helperText}>Activate one skill for the next messages or validate it from the phone without using Telegram.</Text>
-                <View style={styles.rowWrap}>
-                  <Pressable
-                    style={styles.secondaryButton}
-                    onPress={() =>
-                      void runWorkspaceAction(
-                        'refreshing skills',
-                        async () => {
-                          const result = await fetchAgentSkills(apiBaseUrl, token, sessionIdRef.current);
-                          setSkills(result.items || []);
-                        },
-                        { refreshControls: false }
-                      )
-                    }
-                  >
-                    <Text style={styles.secondaryButtonText}>Refresh skills</Text>
-                  </Pressable>
-                </View>
-                {skills.length ? (
-                  skills.map((skill) => (
-                    <View key={skill.name} style={styles.infoCard}>
-                      <Text style={styles.infoCardLabel}>
-                        {skill.name}
-                        {skill.active ? ' · active' : ''}
-                        {!skill.available ? ' · gated' : ''}
-                      </Text>
-                      <Text style={styles.infoCardText}>
-                        {skill.description}
-                        {skill.unavailable_reason ? `\n${skill.unavailable_reason}` : ''}
-                      </Text>
-                      <View style={styles.rowWrap}>
-                        <Pressable
-                          style={[styles.secondaryButton, skill.active ? styles.activeSecondary : null, !skill.available ? styles.disabledButton : null]}
-                          disabled={!skill.available}
-                          onPress={() => void toggleSkill(skill.name, !skill.active)}
-                        >
-                          <Text style={styles.secondaryButtonText}>{skill.active ? 'Deactivate' : 'Activate'}</Text>
-                        </Pressable>
-                        <Pressable
-                          style={styles.secondaryButton}
-                          onPress={() => void runSkillValidation(skill.name)}
-                        >
-                          <Text style={styles.secondaryButtonText}>Validate</Text>
-                        </Pressable>
-                      </View>
-                    </View>
-                  ))
-                ) : (
-                  <Text style={styles.helperText}>No skills available.</Text>
-                )}
-                {skillValidation ? (
-                  <View style={styles.infoCard}>
-                    <Text style={styles.infoCardLabel}>{skillValidation.name} · {skillValidation.valid ? 'valid' : 'invalid'}</Text>
-                    <Text style={styles.infoCardText}>
-                      Scripts: {skillValidation.scripts_count} · References: {skillValidation.references_count} · Assets: {skillValidation.assets_count}
-                    </Text>
-                    {skillValidation.errors.map((item) => (
-                      <Text key={`error-${item}`} style={styles.infoCardText}>Error: {item}</Text>
-                    ))}
-                    {skillValidation.warnings.map((item) => (
-                      <Text key={`warning-${item}`} style={styles.infoCardText}>Warning: {item}</Text>
-                    ))}
-                  </View>
-                ) : null}
-              </CollapsibleSection>
-
-              <CollapsibleSection title="Status" meta="Moved off the main chat to keep the screen clean" defaultExpanded={false}>
-                {workspaceStatus.map((item) => (
-                  <View key={item.label} style={styles.statusRowCompact}>
-                    <Text style={styles.statusRowLabel}>{item.label}</Text>
-                    <Text style={styles.statusRowValue}>{item.value}</Text>
-                  </View>
-                ))}
-              </CollapsibleSection>
-
-              <CollapsibleSection
-                title="Quick controls"
-                meta={
-                  agentOverview
-                    ? `/model /models /variant /settings /verbose · ${agentOverview.current_model} · ${agentOverview.current_variant} · ${agentOverview.max_turns} turns`
-                    : '/model /models /variant /settings /verbose'
-                }
-                defaultExpanded={false}
-              >
-                <Text style={styles.helperText}>Fast equivalents for the Telegram model and settings commands. Use Agent Controls for deeper inspection if needed.</Text>
-
-                {agentOverview?.model_groups.map((group) => (
-                  <View key={group.provider} style={styles.quickControlBlock}>
-                    <Text style={styles.quickControlLabel}>{group.provider.toUpperCase()}</Text>
-                    <View style={styles.rowWrap}>
-                      {group.models.map((model) => (
-                        <Pressable
-                          key={model}
-                          style={[styles.secondaryButton, model === agentOverview.current_model ? styles.activeSecondary : null]}
-                          onPress={() => void applyQuickAgentConfig({ model })}
-                        >
-                          <Text style={styles.secondaryButtonText}>{model}</Text>
-                        </Pressable>
-                      ))}
-                    </View>
-                  </View>
-                ))}
-
-                <View style={styles.quickControlBlock}>
-                  <Text style={styles.quickControlLabel}>Variant</Text>
-                  <View style={styles.rowWrap}>
-                    {(agentOverview?.available_variants || []).map((variant) => (
-                      <Pressable
-                        key={variant}
-                        style={[styles.secondaryButton, variant === agentOverview?.current_variant ? styles.activeSecondary : null]}
-                        onPress={() => void applyQuickAgentConfig({ variant })}
-                      >
-                        <Text style={styles.secondaryButtonText}>{variant}</Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                </View>
-
-                <View style={styles.quickControlBlock}>
-                  <Text style={styles.quickControlLabel}>Max turns</Text>
-                  <View style={styles.rowWrap}>
-                    {QUICK_TURN_OPTIONS.map((turns) => (
-                      <Pressable
-                        key={turns}
-                        style={[styles.secondaryButton, turns === agentOverview?.max_turns ? styles.activeSecondary : null]}
-                        onPress={() => void applyQuickAgentConfig({ max_turns: turns })}
-                      >
-                        <Text style={styles.secondaryButtonText}>{turns}</Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                </View>
-
-                <View style={styles.rowWrap}>
-                  <Pressable
-                    style={[styles.secondaryButton, verboseMode ? styles.activeSecondary : null]}
-                    onPress={() => void toggleVerboseMode()}
-                  >
-                    <Text style={styles.secondaryButtonText}>{verboseMode ? 'Verbose on' : 'Verbose off'}</Text>
-                  </Pressable>
-                  <Pressable
-                    style={styles.secondaryButton}
-                    onPress={() => {
-                      setWorkspacePanelOpen(false);
-                      router.push('/agent');
-                    }}
-                  >
-                    <Text style={styles.secondaryButtonText}>More controls</Text>
-                  </Pressable>
-                </View>
-              </CollapsibleSection>
-
-              <CollapsibleSection
-                title="Runtime controls"
-                meta={
-                  agentOverview
-                    ? `/monitor /workspace /headless /heartbeat /bridge · ${agentOverview.bridge_enabled ? 'Real Chrome' : 'Selenium'} · ${agentOverview.headless_mode} · heartbeat ${agentOverview.heartbeat.enabled ? 'on' : 'off'}`
-                    : '/monitor /workspace /headless /heartbeat /bridge'
-                }
-                defaultExpanded={false}
-              >
-                <View style={styles.quickControlBlock}>
-                  <Text style={styles.quickControlLabel}>Monitor</Text>
-                  <View style={styles.rowWrap}>
-                    <Pressable
-                      style={[styles.secondaryButton, agentOverview?.auto_reply_enabled ? styles.activeSecondary : null]}
-                      onPress={() => void applyQuickAgentConfig({ auto_reply_enabled: true })}
-                    >
-                      <Text style={styles.secondaryButtonText}>Monitor on</Text>
-                    </Pressable>
-                    <Pressable
-                      style={[styles.secondaryButton, agentOverview && !agentOverview.auto_reply_enabled ? styles.activeSecondary : null]}
-                      onPress={() => void applyQuickAgentConfig({ auto_reply_enabled: false })}
-                    >
-                      <Text style={styles.secondaryButtonText}>Monitor off</Text>
-                    </Pressable>
-                  </View>
-                </View>
-
-                <View style={styles.quickControlBlock}>
-                  <Text style={styles.quickControlLabel}>Browser bridge</Text>
-                  <View style={styles.rowWrap}>
-                    <Pressable
-                      style={[styles.secondaryButton, agentOverview?.bridge_enabled ? styles.activeSecondary : null]}
-                      onPress={() => void applyQuickAgentConfig({ bridge_enabled: true })}
-                    >
-                      <Text style={styles.secondaryButtonText}>Real Chrome</Text>
-                    </Pressable>
-                    <Pressable
-                      style={[styles.secondaryButton, agentOverview && !agentOverview.bridge_enabled ? styles.activeSecondary : null]}
-                      onPress={() => void applyQuickAgentConfig({ bridge_enabled: false })}
-                    >
-                      <Text style={styles.secondaryButtonText}>Selenium</Text>
-                    </Pressable>
-                  </View>
-                </View>
-
-                <View style={styles.quickControlBlock}>
-                  <Text style={styles.quickControlLabel}>Browser mode</Text>
-                  <View style={styles.rowWrap}>
-                    <Pressable
-                      style={[styles.secondaryButton, agentOverview?.headless_mode === 'headless' ? styles.activeSecondary : null]}
-                      onPress={() => void applyQuickAgentConfig({ headless_mode: 'headless' })}
-                    >
-                      <Text style={styles.secondaryButtonText}>Headless</Text>
-                    </Pressable>
-                    <Pressable
-                      style={[styles.secondaryButton, agentOverview?.headless_mode === 'headed' ? styles.activeSecondary : null]}
-                      onPress={() => void applyQuickAgentConfig({ headless_mode: 'headed' })}
-                    >
-                      <Text style={styles.secondaryButtonText}>Headed</Text>
-                    </Pressable>
-                  </View>
-                </View>
-
-                <View style={styles.quickControlBlock}>
-                  <Text style={styles.quickControlLabel}>Heartbeat</Text>
-                  <View style={styles.rowWrap}>
-                    <Pressable
-                      style={[styles.secondaryButton, agentOverview?.heartbeat.enabled ? styles.activeSecondary : null]}
-                      onPress={() => void applyQuickAgentConfig({ heartbeat_enabled: true })}
-                    >
-                      <Text style={styles.secondaryButtonText}>Heartbeat on</Text>
-                    </Pressable>
-                    <Pressable
-                      style={[styles.secondaryButton, agentOverview && !agentOverview.heartbeat.enabled ? styles.activeSecondary : null]}
-                      onPress={() => void applyQuickAgentConfig({ heartbeat_enabled: false })}
-                    >
-                      <Text style={styles.secondaryButtonText}>Heartbeat off</Text>
-                    </Pressable>
-                  </View>
-                  <View style={styles.rowWrap}>
-                    <TextInput
-                      style={styles.workspaceInputCompact}
-                      value={heartbeatDraft}
-                      onChangeText={setHeartbeatDraft}
-                      placeholder="1800"
-                      placeholderTextColor="#7f8aa3"
-                      keyboardType="number-pad"
-                    />
-                    <Pressable
-                      style={styles.secondaryButton}
-                      onPress={() => void applyQuickAgentConfig({ heartbeat_interval_seconds: Number(heartbeatDraft) || 1800 })}
-                    >
-                      <Text style={styles.secondaryButtonText}>Set interval</Text>
-                    </Pressable>
-                  </View>
-                  <Text style={styles.helperText}>
-                    {agentOverview?.heartbeat.last_heartbeat
-                      ? `Last heartbeat ${formatRelativeTime(agentOverview.heartbeat.last_heartbeat)}`
-                      : 'No heartbeat recorded yet.'}
-                  </Text>
-                </View>
-
-                <View style={styles.quickControlBlock}>
-                  <Text style={styles.quickControlLabel}>Workspace</Text>
-                  <View style={styles.rowWrap}>
-                    <TextInput
-                      style={styles.workspaceInput}
-                      value={workspaceDraft}
-                      onChangeText={setWorkspaceDraft}
-                      placeholder="Workspace path"
-                      placeholderTextColor="#7f8aa3"
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                    />
-                    <Pressable
-                      style={styles.secondaryButton}
-                      onPress={() => void applyQuickAgentConfig({ workspace: workspaceDraft })}
-                    >
-                      <Text style={styles.secondaryButtonText}>Apply</Text>
-                    </Pressable>
-                  </View>
-                </View>
-              </CollapsibleSection>
-
-              <CollapsibleSection
-                title="Context and files"
-                meta={
-                  agentOverview
-                    ? `/history /context /files /forget /reset · ${agentOverview.context_usage.message_count} messages · ${agentOverview.pending_files.length} pending files`
-                    : '/history /context /files /forget /reset'
-                }
-                defaultExpanded={false}
-              >
-                <View style={styles.infoCard}>
-                  <Text style={styles.infoCardText}>
-                    Context: {agentOverview?.context_usage.estimated_tokens || 0} / {agentOverview?.context_usage.max_tokens || 0} estimated tokens
-                    {agentOverview ? ` (${agentOverview.context_usage.usage_percent}%)` : ''}
-                  </Text>
-                </View>
-
-                {(agentOverview?.history || []).slice(0, 6).map((item, index) => (
-                  <View key={`${item.timestamp || index}-${item.preview}`} style={styles.infoCard}>
-                    <Text style={styles.infoCardLabel}>
-                      {item.display_label || item.role}
-                      {item.timestamp ? ` · ${formatRelativeTime(item.timestamp)}` : ''}
-                    </Text>
-                    <Text style={styles.infoCardText}>{item.preview}</Text>
-                  </View>
-                ))}
-
-                {(agentOverview?.pending_files || []).slice(0, 6).map((item) => (
-                  <View key={`${item.filename}-${item.uploaded_at || item.source_format || 'file'}`} style={styles.infoCard}>
-                    <Text style={styles.infoCardLabel}>{item.filename}</Text>
-                    <Text style={styles.infoCardText}>
-                      {item.mime_type || 'unknown type'}
-                      {item.size ? ` · ${item.size} bytes` : ''}
-                      {item.uploaded_at ? ` · ${formatRelativeTime(item.uploaded_at)}` : ''}
-                    </Text>
-                  </View>
-                ))}
-
-                <View style={styles.rowWrap}>
-                  <Pressable
-                    style={styles.secondaryButton}
-                    onPress={() =>
-                      void runWorkspaceAction('clearing pending files', async () => {
-                        await clearAgentPendingFiles(apiBaseUrl, token, sessionIdRef.current);
-                      })
-                    }
-                  >
-                    <Text style={styles.secondaryButtonText}>Clear files</Text>
-                  </Pressable>
-                  <Pressable
-                    style={styles.secondaryButton}
-                    onPress={() =>
-                      void runWorkspaceAction('forgetting last message', async () => {
-                        await forgetLastAgentMessage(apiBaseUrl, token, sessionIdRef.current);
-                      })
-                    }
-                  >
-                    <Text style={styles.secondaryButtonText}>Forget last</Text>
-                  </Pressable>
-                  <Pressable
-                    style={styles.secondaryButton}
-                    onPress={() =>
-                      void runWorkspaceAction('resetting context', async () => {
-                        await resetAgentContext(apiBaseUrl, token, sessionIdRef.current);
-                      })
-                    }
-                  >
-                    <Text style={styles.secondaryButtonText}>Reset context</Text>
-                  </Pressable>
-                </View>
-              </CollapsibleSection>
-
-              <CollapsibleSection
-                title="Memory and config"
-                meta="/memory /memory_update /config /analytics /security"
-                defaultExpanded={false}
-              >
-                <View style={styles.infoCard}>
-                  <Text style={styles.infoCardText}>
-                    Memory file: {agentOverview?.memory_summary.memory_file_exists ? 'present' : 'missing'} · daily logs: {agentOverview?.memory_summary.daily_log_count || 0}
-                  </Text>
-                  <Text style={styles.infoCardText}>
-                    Analytics: {agentOverview?.analytics.total_messages || 0} messages · {agentOverview?.analytics.total_commands || 0} commands · {agentOverview?.analytics.total_tokens || 0} tokens
-                  </Text>
-                  <Text style={styles.infoCardText}>
-                    Security: {agentOverview?.security.allowed_users_count || 0} allowed users · {agentOverview?.security.max_requests_per_minute || 0}/min · {agentOverview?.security.security_events_24h || 0} events in 24h
-                  </Text>
-                </View>
-
-                <View style={styles.quickControlBlock}>
-                  <Text style={styles.quickControlLabel}>Search memory</Text>
-                  <View style={styles.rowWrap}>
-                    <TextInput
-                      style={styles.workspaceInput}
-                      value={memoryQuery}
-                      onChangeText={setMemoryQuery}
-                      placeholder="Search memory"
-                      placeholderTextColor="#7f8aa3"
-                    />
-                    <Pressable
-                      style={styles.secondaryButton}
-                      onPress={() =>
-                        void runWorkspaceAction(
-                          'searching memory',
-                          async () => {
-                            const result = await searchAgentMemory(apiBaseUrl, token, memoryQuery, sessionIdRef.current);
-                            setMemoryResults(result.results || []);
-                          },
-                          { refreshControls: false }
-                        )
-                      }
-                    >
-                      <Text style={styles.secondaryButtonText}>Search</Text>
-                    </Pressable>
-                  </View>
-                  {memoryResults.map((result, index) => (
-                    <View key={`${result.source}-${result.line || index}`} style={styles.infoCard}>
-                      <Text style={styles.infoCardLabel}>
-                        {result.source}
-                        {result.line ? `:${result.line}` : ''}
-                      </Text>
-                      <Text style={styles.infoCardText}>{result.content}</Text>
-                    </View>
-                  ))}
-                </View>
-
-                <View style={styles.quickControlBlock}>
-                  <Text style={styles.quickControlLabel}>Save memory note</Text>
-                  <TextInput
-                    style={styles.textAreaInput}
-                    value={memoryNote}
-                    onChangeText={setMemoryNote}
-                    placeholder="Add a durable note or preference"
-                    placeholderTextColor="#7f8aa3"
-                    multiline
-                  />
-                  <Pressable
-                    style={styles.secondaryButton}
-                    onPress={() =>
-                      void runWorkspaceAction('saving memory note', async () => {
-                        await appendAgentMemoryNote(apiBaseUrl, token, memoryNote, sessionIdRef.current);
-                        setMemoryNote('');
-                      })
-                    }
-                  >
-                    <Text style={styles.secondaryButtonText}>Save note</Text>
-                  </Pressable>
-                </View>
-
-                <View style={styles.quickControlBlock}>
-                  <Text style={styles.quickControlLabel}>Config</Text>
-                  <View style={styles.rowWrap}>
-                    <TextInput
-                      style={styles.workspaceInputCompact}
-                      value={configKey}
-                      onChangeText={setConfigKey}
-                      placeholder="config.key"
-                      placeholderTextColor="#7f8aa3"
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                    />
-                    <TextInput
-                      style={styles.workspaceInput}
-                      value={configValue}
-                      onChangeText={setConfigValue}
-                      placeholder="value"
-                      placeholderTextColor="#7f8aa3"
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                    />
-                  </View>
-                  <View style={styles.rowWrap}>
-                    <Pressable
-                      style={styles.secondaryButton}
-                      onPress={() =>
-                        void runWorkspaceAction(
-                          'loading config',
-                          async () => {
-                            const result = await fetchAgentConfig(apiBaseUrl, token, configKey || undefined, sessionIdRef.current);
-                            setConfigEntries(result.items || []);
-                          },
-                          { refreshControls: false }
-                        )
-                      }
-                    >
-                      <Text style={styles.secondaryButtonText}>Load key</Text>
-                    </Pressable>
-                    <Pressable
-                      style={styles.secondaryButton}
-                      onPress={() =>
-                        void runWorkspaceAction('saving config', async () => {
-                          await updateAgentConfig(apiBaseUrl, token, { key: configKey, value: configValue }, sessionIdRef.current);
-                          setConfigValue('');
-                        })
-                      }
-                    >
-                      <Text style={styles.secondaryButtonText}>Set value</Text>
-                    </Pressable>
-                  </View>
-                  {(configEntries.length ? configEntries : agentOverview?.config_preview || []).slice(0, 10).map((entry) => (
-                    <View key={entry.key} style={styles.infoCard}>
-                      <Text style={styles.infoCardLabel}>{entry.key}</Text>
-                      <Text style={styles.infoCardText}>{formatConfigValue(entry.value)}</Text>
-                    </View>
-                  ))}
-                </View>
-              </CollapsibleSection>
-
-              <CollapsibleSection title="Remote view" meta={`${screenStatus} · ${screenLiveState}`} defaultExpanded={false}>
-                <View style={styles.rowWrap}>
-                  <Pressable style={styles.secondaryButton} onPress={() => void refreshScreenshot()}>
-                    <Text style={styles.secondaryButtonText}>Refresh screen</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[styles.secondaryButton, isScreenLive ? styles.liveButton : null]}
-                    onPress={() => setIsScreenLive((prev) => !prev)}
-                  >
-                    <Text style={styles.secondaryButtonText}>{isScreenLive ? 'Stop live' : 'Start live'}</Text>
-                  </Pressable>
-                </View>
-                {screenPreview ? (
-                  <>
-                    <Image source={{ uri: screenPreview.uri }} style={styles.screenPreview} resizeMode="cover" />
-                    <Text style={styles.helperText}>
-                      {screenPreview.backend} · {screenPreview.width}x{screenPreview.height}
-                    </Text>
-                  </>
-                ) : (
-                  <Text style={styles.helperText}>No screenshot yet.</Text>
-                )}
-              </CollapsibleSection>
-
-              <CollapsibleSection title="Composer tools" meta="Uploads and steering" defaultExpanded={false}>
-                <View style={styles.rowWrap}>
-                  <Pressable style={styles.secondaryButton} onPress={() => void uploadAttachment('camera')}>
-                    <Text style={styles.secondaryButtonText}>Camera</Text>
-                  </Pressable>
-                  <Pressable style={styles.secondaryButton} onPress={() => void uploadAttachment('gallery')}>
-                    <Text style={styles.secondaryButtonText}>Gallery</Text>
-                  </Pressable>
-                  <Pressable style={styles.secondaryButton} onPress={() => void uploadAttachment('document')}>
-                    <Text style={styles.secondaryButtonText}>Document</Text>
-                  </Pressable>
-                </View>
-                {steeringBetaEnabled ? (
-                  <View style={styles.betaBlock}>
-                    <Text style={styles.helperText}>Beta steering</Text>
-                    <View style={styles.rowWrap}>
-                      <Pressable
-                        style={[styles.secondaryButton, interruptPolicy === 'none' ? styles.activeSecondary : null]}
-                        onPress={() => setInterruptPolicy('none')}
-                      >
-                        <Text style={styles.secondaryButtonText}>Standard</Text>
-                      </Pressable>
-                      <Pressable
-                        style={[styles.secondaryButton, interruptPolicy === 'steer_now' ? styles.activeSecondary : null]}
-                        onPress={() => setInterruptPolicy('steer_now')}
-                      >
-                        <Text style={styles.secondaryButtonText}>Steer now</Text>
-                      </Pressable>
-                      <Pressable
-                        style={[styles.secondaryButton, interruptPolicy === 'after_tool' ? styles.activeSecondary : null]}
-                        onPress={() => setInterruptPolicy('after_tool')}
-                      >
-                        <Text style={styles.secondaryButtonText}>After tool</Text>
-                      </Pressable>
-                    </View>
-                  </View>
-                ) : null}
-              </CollapsibleSection>
-
-              <CollapsibleSection
-                title="Run feed"
-                meta={`${verboseMode ? 'Verbose on' : 'Verbose off'} · ${toolLogs.length ? `${toolLogs.length} recent updates` : 'Quiet'}`}
-                defaultExpanded={false}
-              >
-                {!verboseMode ? (
-                  <Text style={styles.helperText}>Verbose feed is off. Turn it on to stream tool activity live.</Text>
-                ) : toolLogs.length === 0 ? (
-                  <Text style={styles.helperText}>No tool or status updates yet.</Text>
-                ) : (
-                  toolLogs.slice(0, 14).map((entry, index) => (
-                    <Text key={`${entry}-${index}`} style={styles.logLine}>{entry}</Text>
-                  ))
-                )}
-              </CollapsibleSection>
-            </ScrollView>
-          </SafeAreaView>
-        </View>
-      </Modal>
-
-      <View style={styles.topBar}>
-        <Pressable
-          style={styles.topButton}
-          onPress={() => {
-            setDrawerTab('chats');
-            setDrawerOpen(true);
-          }}
-        >
-          <Text style={styles.topButtonText}>Sidebar</Text>
-          {cronUnreadCount > 0 ? (
-            <View style={styles.topButtonBadge}>
-              <Text style={styles.topButtonBadgeText}>{cronUnreadCount > 9 ? '9+' : String(cronUnreadCount)}</Text>
-            </View>
-          ) : null}
-        </Pressable>
-        <View style={styles.titleBlock}>
-          <Text style={styles.title}>{sessionName}</Text>
-          <Text style={styles.subtitle}>{subtitle}</Text>
-        </View>
-        <Pressable style={styles.plusButton} onPress={() => setWorkspacePanelOpen(true)}>
-          <Text style={styles.plusButtonText}>+</Text>
-        </Pressable>
-      </View>
-
-      <ScrollView style={styles.messages} contentContainerStyle={styles.messagesContent}>
-        {messages.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyHint}>
-              {setupMissing ? 'Tap the message field to connect this phone.' : 'Your conversation will appear here.'}
-            </Text>
-          </View>
-        ) : (
-          messages.map((message, index) => (
-            <View
-              key={`${message.role}-${index}-${message.timestamp || ''}`}
-              style={[
-                styles.bubble,
-                message.role === 'user'
-                  ? styles.userBubble
-                  : message.role === 'system'
-                    ? styles.systemBubble
-                    : styles.assistantBubble,
-              ]}
-            >
-              <View style={styles.bubbleHeader}>
-                <Text style={styles.bubbleRole}>{labelForMessage(message)}</Text>
-                {message.timestamp ? (
-                  <Text style={styles.bubbleTime}>{formatAbsoluteTime(message.timestamp)}</Text>
-                ) : null}
-              </View>
-              <Text style={styles.bubbleText}>{message.content}</Text>
-            </View>
-          ))
-        )}
-      </ScrollView>
-
-      {mobileVoiceEnabled && (voiceDraft || isRecording || isVoiceBusy) ? (
-        <View style={styles.voiceBanner}>
-          <Text style={styles.voiceBannerTitle}>Voice</Text>
-          <Text style={styles.voiceBannerText}>
-            {voiceDraft || (isRecording ? 'Listening... transcript will appear here.' : 'Finalizing voice input...')}
-          </Text>
-        </View>
-      ) : null}
-
-      <View style={styles.composerShell}>
-        <View style={styles.composerActionRow}>
-          <Pressable style={styles.plusButtonSmall} onPress={() => setWorkspacePanelOpen(true)}>
-            <Text style={styles.plusButtonSmallText}>+</Text>
-          </Pressable>
-          {mobileVoiceEnabled && isRecording ? (
-            <>
-              <Pressable style={styles.voiceStopButton} onPress={() => void stopVoiceCapture(true)}>
-                <Text style={styles.voiceButtonText}>Stop and send</Text>
-              </Pressable>
-              <Pressable style={styles.voiceCancelButton} onPress={() => void stopVoiceCapture(false)}>
-                <Text style={styles.voiceButtonText}>Cancel</Text>
-              </Pressable>
-            </>
-          ) : mobileVoiceEnabled ? (
-            <Pressable
-              style={[styles.voiceStartButton, !canStartVoice ? styles.disabledButton : null]}
-              onPress={() => void startVoiceCapture()}
-              disabled={!canStartVoice}
-            >
-              <Text style={styles.voiceButtonText}>
-                {isVoiceBusy ? (steeringArmed ? 'Interrupt with voice' : 'Voice busy') : 'Start voice'}
-              </Text>
-            </Pressable>
-          ) : null}
-        </View>
-
-        <View style={styles.inputRow}>
-          {setupMissing ? (
-            <Pressable style={[styles.input, styles.lockedInput]} onPress={() => setPairPromptOpen(true)}>
-              <Text style={styles.lockedInputText}>
-                {connectionMode === 'remote_cloud'
-                  ? 'Tap to sign in and pair this phone'
-                  : (apiBaseUrl ? 'Tap to finish pairing' : 'Tap to add backend and pair')}
-              </Text>
-            </Pressable>
-          ) : (
-            <TextInput
-              ref={composerInputRef}
-              style={styles.input}
-              value={input}
-              onChangeText={setInput}
-              placeholder="Message EmploAI"
-              placeholderTextColor="#7f8aa3"
-              multiline
-            />
-          )}
-          <Pressable style={styles.sendButton} onPress={send}>
-            <Text style={styles.sendButtonText}>Send</Text>
-          </Pressable>
-        </View>
-      </View>
-    </SafeAreaView>
-  );
+  return <ChatScreenView scope={{ router, params, requestedSessionId, requestedNewSession, requestedWorkspace, sessionId, setSessionId, sessionName, setSessionName, input, setInput, messages, setMessages, sessions, setSessions, fleetSnapshot, setFleetSnapshot, jobs, setJobs, sidebarState, setSidebarState, toolLogs, setToolLogs, timelineEvents, setTimelineEvents, status, setStatus, voiceState, setVoiceState, voiceDraft, setVoiceDraft, isRecording, setIsRecording, isVoiceBusy, setIsVoiceBusy, screenPreview, setScreenPreview, screenStatus, setScreenStatus, screenLiveState, setScreenLiveState, isScreenLive, setIsScreenLive, steeringBetaEnabled, setSteeringBetaEnabled, interruptPolicy, setInterruptPolicy, apiBaseUrl, setApiBaseUrl, token, setToken, connectionMode, setConnectionMode, pairedDesktopId, setPairedDesktopId, configLoaded, setConfigLoaded, drawerOpen, setDrawerOpen, drawerTab, setDrawerTab, cronUnreadCount, setCronUnreadCount, pairPromptOpen, setPairPromptOpen, workspacePanelOpen, setWorkspacePanelOpen, composerMenu, setComposerMenu, draftModel, setDraftModel, draftVariant, setDraftVariant, draftPlanner, setDraftPlanner, draftEnabledToolPacks, setDraftEnabledToolPacks, draftSecurityPermissionMode, setDraftSecurityPermissionMode, draftSessionWorkspace, setDraftSessionWorkspace, telegramBots, setTelegramBots, verboseMode, setVerboseMode, agentOverview, setAgentOverview, skills, setSkills, skillValidation, setSkillValidation, memoryQuery, setMemoryQuery, memoryNote, setMemoryNote, memoryResults, setMemoryResults, configKey, setConfigKey, configValue, setConfigValue, configEntries, setConfigEntries, workspaceDraft, setWorkspaceDraft, heartbeatDraft, setHeartbeatDraft, subAgentPrompt, setSubAgentPrompt, subAgents, setSubAgents, artifacts, setArtifacts, artifactDetail, setArtifactDetail, artifactStatus, setArtifactStatus, confirm, confirmationDialog, chatWsRef, voiceWsRef, screenWsRef, appClientIdRef, composerInputRef, recordingRef, assistantSoundRef, assistantAudioPathRef, pendingMessagesRef, outboundRetryRef, segmentTimeoutRef, chatReconnectRef, voiceReconnectRef, screenReconnectRef, segmentSequenceRef, voiceActiveRef, finishingSegmentRef, sessionIdRef, blankChatRequestedRef, steeringArmed, canStartVoice, mobileVoiceEnabled, chatConnected, chatBlocked, setupMissing, hasActiveChatSession, agentControlsDisabled, subAgentSpawnDisabled, activeSessionSummary, activeSecurityPermissionMode, activeSecurityPermissionLabel, showChatError, runtimeStatusText, missingConnectionStatus, requireChatConnection, ensureChatActiveSession, refreshArtifacts, openArtifact, applySessionDetail, updateChatSecurityPermissionMode, clearVisibleSession, syncOverviewFromSessionDetail, applySessionSync, refreshSidebarData, refreshAgentControls, applyQuickAgentConfig, runWorkspaceAction, resetCurrentContext, focusComposer, toggleSkill, runSkillValidation, spawnBackgroundTask, runTaskControl, persistSidebarState, selectSession, deleteConversation, activeFleetIdentity, activeFleetIdentityId, visibleSessions, activeFleetIdentitySelectedChatId, activeFleetIdentityTargetChatId, currentSessionSummary, selectFleetIdentityFromChat, currentEnabledToolPacks, currentAvailableToolPacks, lockReasons, effectiveEnabledToolPacks, currentModelLabel, currentVariantLabel, toggleChatToolPack, openBlankChat, ensureSessionForSend, appendLog, appendSystemMessage, appendAssistantDelta, applyAssistantFinal, appendUserMessage, canSendOverChatSocket, closeFailedChatSocket, schedulePendingFlush, expirePendingMessages, flushPendingMessages, queuePendingMessage, cleanupAssistantAudio, audioExtensionForMime, playAssistantAudio, clearReconnectTimers, applyScreenPayload, handleRealtimeEvent, uploadAttachment, refreshScreenshot, finishCurrentSegment, startSegmentRecording, startVoiceCapture, stopVoiceCapture, send, toggleVerboseMode, sessionUpdatedAt, subtitle, pairingPromptTitle, pairingPromptText, workspaceStatus, fleetIdentities, sendDisabled }} />;
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0b1020',
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    gap: 12,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(5, 8, 18, 0.6)',
-    justifyContent: 'center',
-    paddingHorizontal: 22,
-  },
-  modalBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  promptCard: {
-    backgroundColor: '#111a31',
-    borderRadius: 24,
-    padding: 20,
-    gap: 12,
-  },
-  promptTitle: {
-    color: '#ffffff',
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  promptText: {
-    color: '#d7e3fb',
-    fontSize: 15,
-    lineHeight: 22,
-  },
-  promptActions: {
-    flexDirection: 'row',
-    gap: 10,
-    flexWrap: 'wrap',
-    paddingTop: 4,
-  },
-  sheetOverlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(5, 8, 18, 0.42)',
-  },
-  sheetBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  sheet: {
-    backgroundColor: '#0f1730',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 10,
-    maxHeight: '82%',
-    gap: 12,
-  },
-  sheetHandle: {
-    alignSelf: 'center',
-    width: 44,
-    height: 5,
-    borderRadius: 999,
-    backgroundColor: '#41547f',
-  },
-  sheetHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: 12,
-  },
-  sheetHeading: {
-    flex: 1,
-    gap: 4,
-  },
-  sheetTitle: {
-    color: '#ffffff',
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  sheetSubtitle: {
-    color: '#92a6cd',
-    fontSize: 13,
-    lineHeight: 19,
-  },
-  sheetClose: {
-    color: '#7cc7ff',
-    fontWeight: '700',
-    fontSize: 14,
-  },
-  sheetContent: {
-    gap: 12,
-    paddingBottom: 10,
-  },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  topButton: {
-    backgroundColor: '#182342',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    position: 'relative',
-  },
-  topButtonText: {
-    color: '#dce8ff',
-    fontWeight: '700',
-    fontSize: 13,
-  },
-  topButtonBadge: {
-    position: 'absolute',
-    top: -6,
-    right: -6,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    paddingHorizontal: 5,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#f97316',
-  },
-  topButtonBadgeText: {
-    color: '#ffffff',
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  titleBlock: {
-    flex: 1,
-    gap: 4,
-  },
-  title: {
-    color: '#ffffff',
-    fontSize: 22,
-    fontWeight: '700',
-  },
-  subtitle: {
-    color: '#8fa2c8',
-    fontSize: 13,
-  },
-  plusButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#182342',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  plusButtonText: {
-    color: '#ffffff',
-    fontWeight: '700',
-    fontSize: 22,
-  },
-  messages: {
-    flex: 1,
-  },
-  messagesContent: {
-    gap: 12,
-    paddingBottom: 12,
-    flexGrow: 1,
-  },
-  emptyState: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 30,
-  },
-  emptyHint: {
-    color: '#6f82a8',
-    fontSize: 15,
-    textAlign: 'center',
-  },
-  bubble: {
-    borderRadius: 18,
-    padding: 14,
-    gap: 8,
-  },
-  userBubble: {
-    backgroundColor: '#21406b',
-    alignSelf: 'flex-end',
-    maxWidth: '88%',
-  },
-  assistantBubble: {
-    backgroundColor: '#172038',
-    alignSelf: 'flex-start',
-    maxWidth: '94%',
-  },
-  systemBubble: {
-    backgroundColor: '#1f2941',
-    alignSelf: 'center',
-    maxWidth: '96%',
-  },
-  bubbleHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 10,
-  },
-  bubbleRole: {
-    color: '#8ecfff',
-    fontWeight: '700',
-    fontSize: 12,
-  },
-  bubbleTime: {
-    color: '#8194b9',
-    fontSize: 11,
-  },
-  bubbleText: {
-    color: '#eef4ff',
-    fontSize: 15,
-    lineHeight: 22,
-  },
-  voiceBanner: {
-    backgroundColor: '#16253f',
-    borderRadius: 18,
-    padding: 12,
-    gap: 6,
-  },
-  voiceBannerTitle: {
-    color: '#ffffff',
-    fontWeight: '700',
-  },
-  voiceBannerText: {
-    color: '#dce8ff',
-    fontSize: 14,
-  },
-  rowWrap: {
-    flexDirection: 'row',
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  statusRowCompact: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 6,
-  },
-  statusRowLabel: {
-    color: '#8fa2c8',
-    fontSize: 13,
-  },
-  statusRowValue: {
-    flex: 1,
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '600',
-    textAlign: 'right',
-  },
-  helperText: {
-    color: '#a9bbdf',
-    fontSize: 13,
-    lineHeight: 19,
-  },
-  screenPreview: {
-    width: '100%',
-    aspectRatio: 16 / 10,
-    borderRadius: 14,
-    backgroundColor: '#0f1730',
-  },
-  betaBlock: {
-    gap: 8,
-  },
-  quickControlBlock: {
-    gap: 8,
-  },
-  quickControlLabel: {
-    color: '#dce8ff',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  workspaceInput: {
-    flex: 1,
-    minWidth: 180,
-    backgroundColor: '#0f1730',
-    color: '#ffffff',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  workspaceInputCompact: {
-    minWidth: 110,
-    backgroundColor: '#0f1730',
-    color: '#ffffff',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  textAreaInput: {
-    minHeight: 92,
-    backgroundColor: '#0f1730',
-    color: '#ffffff',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    textAlignVertical: 'top',
-  },
-  infoCard: {
-    backgroundColor: '#101933',
-    borderRadius: 14,
-    padding: 12,
-    gap: 4,
-  },
-  infoCardLabel: {
-    color: '#dce8ff',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  infoCardText: {
-    color: '#d8e5fb',
-    fontSize: 12,
-    lineHeight: 18,
-  },
-  logLine: {
-    color: '#d8e5fb',
-    fontSize: 12,
-    lineHeight: 18,
-  },
-  composerShell: {
-    backgroundColor: '#10192e',
-    borderRadius: 20,
-    padding: 12,
-    gap: 10,
-    marginBottom: 8,
-  },
-  composerActionRow: {
-    flexDirection: 'row',
-    gap: 8,
-    flexWrap: 'wrap',
-    alignItems: 'center',
-  },
-  plusButtonSmall: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#182342',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  plusButtonSmallText: {
-    color: '#ffffff',
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  voiceStartButton: {
-    backgroundColor: '#0f8f62',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  voiceStopButton: {
-    backgroundColor: '#b45309',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  voiceCancelButton: {
-    backgroundColor: '#6a2630',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  voiceButtonText: {
-    color: '#ffffff',
-    fontWeight: '700',
-    fontSize: 13,
-  },
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 10,
-  },
-  input: {
-    flex: 1,
-    backgroundColor: '#141c33',
-    color: '#ffffff',
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    minHeight: 50,
-    maxHeight: 110,
-  },
-  lockedInput: {
-    justifyContent: 'center',
-  },
-  lockedInputText: {
-    color: '#8ea2cb',
-    fontSize: 15,
-  },
-  sendButton: {
-    backgroundColor: '#3b82f6',
-    borderRadius: 16,
-    paddingHorizontal: 18,
-    paddingVertical: 14,
-  },
-  sendButtonText: {
-    color: '#ffffff',
-    fontWeight: '700',
-  },
-  primaryButton: {
-    backgroundColor: '#3b82f6',
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  primaryButtonText: {
-    color: '#ffffff',
-    fontWeight: '700',
-  },
-  secondaryButton: {
-    backgroundColor: '#223153',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  secondaryButtonText: {
-    color: '#ffffff',
-    fontWeight: '700',
-    fontSize: 13,
-  },
-  activeSecondary: {
-    backgroundColor: '#3b82f6',
-  },
-  liveButton: {
-    backgroundColor: '#0f8f62',
-  },
-  disabledButton: {
-    opacity: 0.55,
-  },
-});

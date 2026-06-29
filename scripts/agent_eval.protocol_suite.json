@@ -4,6 +4,9 @@
   "workspace": "tests/fixtures/agent_eval/protocol_suite",
   "model": "gpt-5.4-mini",
   "variant": "standard",
+  "planner_model": "gpt-5.4-mini",
+  "final_quality_guard": "planner",
+  "final_quality_max_auto_continues": 2,
   "enabled_tool_packs": [
     "interactive_desktop",
     "browser_isolated",
@@ -24,18 +27,15 @@
       "expectations": {
         "required_tool_sequence": [
           [
-            "browser_navigate",
-            "open_browser"
+            "browser_navigate"
           ],
           [
             "browser_snapshot",
-            "observe_browser",
             "browser_read_text"
           ],
           "write_file",
           [
             "open_file",
-            "execute_command",
             "run_command"
           ],
           [
@@ -79,8 +79,7 @@
           "describe_screen",
           "observe_desktop",
           "ocr_screen",
-          "browser_navigate",
-          "open_browser"
+          "browser_navigate"
         ],
         "final_answer_forbidden_phrases": [
           "error in model generation",
@@ -102,7 +101,6 @@
           "write_file",
           [
             "open_file",
-            "execute_command",
             "run_command",
             "read_file"
           ]
@@ -155,7 +153,6 @@
         "required_tool_sequence": [
           "write_file",
           [
-            "execute_command",
             "run_command"
           ]
         ],
@@ -211,12 +208,10 @@
       "expectations": {
         "required_tool_sequence": [
           [
-            "browser_navigate",
-            "open_browser"
+            "browser_navigate"
           ],
           [
             "browser_snapshot",
-            "observe_browser",
             "browser_read_text"
           ],
           [
@@ -270,12 +265,10 @@
       "expectations": {
         "required_tool_sequence": [
           [
-            "browser_navigate",
-            "open_browser"
+            "browser_navigate"
           ],
           [
             "browser_snapshot",
-            "observe_browser",
             "browser_read_text"
           ],
           [
@@ -336,8 +329,7 @@
         "required_tool_sequence": [
           "write_file",
           [
-            "run_command",
-            "execute_command"
+            "run_command"
           ],
           [
             "list_dir",
@@ -346,8 +338,7 @@
           ],
           [
             "open_file",
-            "run_command",
-            "execute_command"
+            "run_command"
           ],
           [
             "describe_screen",
@@ -394,13 +385,11 @@
         "required_tool_sequence": [
           "write_file",
           [
-            "run_command",
-            "execute_command"
+            "run_command"
           ],
           [
             "read_file",
-            "run_command",
-            "execute_command"
+            "run_command"
           ]
         ],
         "tool_arg_checks": [
@@ -454,16 +443,13 @@
           "write_file",
           [
             "run_background_command",
-            "run_command",
-            "execute_command"
+            "run_command"
           ],
           [
-            "browser_navigate",
-            "open_browser"
+            "browser_navigate"
           ],
           [
             "browser_snapshot",
-            "observe_browser",
             "browser_read_text"
           ],
           [
@@ -472,8 +458,7 @@
           ],
           [
             "browser_read_text",
-            "browser_snapshot",
-            "observe_browser"
+            "browser_snapshot"
           ],
           "write_file"
         ],

@@ -1,0 +1,68 @@
+:root {
+  color-scheme: dark;
+  --scrollbar-size: 12px;
+  --scrollbar-track: #081122;
+  --scrollbar-track-edge: #1b2742;
+  --scrollbar-thumb: linear-gradient(180deg, #274d7f 0%, #1a355b 100%);
+  --scrollbar-thumb-hover: linear-gradient(180deg, #62d2ff 0%, #2c7eb9 100%);
+  --scrollbar-thumb-active: linear-gradient(180deg, #d4ff65 0%, #74c8ff 100%);
+  --scrollbar-shadow: rgba(6, 14, 28, 0.9);
+}
+
+html,
+body,
+#root {
+  background: #07111f;
+}
+
+textarea:focus,
+input:focus,
+button:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+#desktop-composer-input,
+#desktop-composer-input:focus {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  -webkit-appearance: none;
+  appearance: none;
+  resize: none !important;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2c6aa5 var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+  border-left: 1px solid var(--scrollbar-track-edge);
+  border-top: 1px solid var(--scrollbar-track-edge);
+}
+
+*::-webkit-scrollbar-corner {
+  background: var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 999px;
+  border: 2px solid var(--scrollbar-shadow);
+  box-shadow: inset 0 0 0 1px rgba(134, 200, 255, 0.18);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-active);
+}

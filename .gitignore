@@ -74,6 +74,10 @@ chat-preview-workspace.png
 # local model/data artifacts
 voice_packs/
 marketing_assets/generated/
+marketing_assets/*_log.json
+marketing_assets/rendered_assets.md
+marketing_assets/video_drop/*
+!marketing_assets/video_drop/README.md
 
 # Windows beta release artifacts
 build/
@@ -84,6 +88,7 @@ desktop_app/node_modules/
 desktop_app/backend/
 desktop_app/renderer/
 mobile_app/client/dist/
+mobile_app/client/builds/
 mobile_app/client/node_modules/
 mobile_app/client/.expo/
 mobile_app/client/.eas/

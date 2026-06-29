@@ -86,6 +86,16 @@ sudo certbot --nginx -d your-emploai-domain.example
 curl https://your-emploai-domain.example/api/app/health
 ```
 
+## Websocket routing
+The control plane has two command-routing modes:
+
+- `EMPLOAI_REMOTE_CONTROL_ROUTING_MODE=single_process` keeps desktop command delivery in memory. Use exactly one app worker.
+- `EMPLOAI_REMOTE_CONTROL_ROUTING_MODE=sqlite_broker` stores remote desktop commands in the shared `EMPLOAI_HOME` SQLite database so another worker process on the same VPS can claim and deliver them to the desktop websocket it owns.
+
+`sqlite_broker` is for one VPS/shared-disk deployments. A multi-host cluster still needs a real external broker or load-balancer design that preserves command ownership across hosts.
+
+The release deployment template defaults to `sqlite_broker` even when the systemd unit runs one worker, so adding more app workers on the same VPS does not silently fall back to in-memory desktop command delivery. Keep `EMPLOAI_REMOTE_CONTROL_ALLOW_UNSAFE_MULTIPROCESS=0` for public deployments.
+
 ## Important notes
 - Mobile v1 is text-first and does not expose mobile voice.
 - The desktop app still needs to be configured with the same VPS URL and account credentials so its managed remote-control worker can connect outward.

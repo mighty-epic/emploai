@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict
@@ -49,16 +50,42 @@ def build_message_handlers(
             return
 
         session = get_session(user.id)
-        bridge = AppSessionBridge(user_id=user.id, workspace=Path(getattr(session, "workspace", Path.cwd())))
+        turn_orchestrator = None
+        turn_lease = None
+        raw_state_user_id = getattr(session, "sync_user_id", None)
+        state_user_id = int(raw_state_user_id) if raw_state_user_id is not None else int(user.id)
+        bridge = AppSessionBridge(user_id=state_user_id, workspace=Path(getattr(session, "workspace", Path.cwd())))
         bot_token = str(getattr(getattr(context, "bot", None), "token", "") or "").strip()
-        bot_store = TelegramBotConfigStore(user_id=user.id)
+        bot_store = TelegramBotConfigStore(user_id=state_user_id)
+        bot_store.ensure_default_from_env(bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""))
         matched_bot_config_id = None
         for item in bot_store.list_configs():
             if str(item.get("bot_token") or "").strip() == bot_token:
                 matched_bot_config_id = str(item.get("id") or "").strip() or None
                 break
-        focused_session_id = str(getattr(session, "shared_current_session_id", "") or "").strip() or bridge.session_manager.get_current_session_id()
-        target_session_id = bridge.orchestrator.resolve_session_for_inbound_bot(
+
+        def _fleet_active_session_id() -> str | None:
+            try:
+                from mobile_app.backend.app_server import _get_remote_control_store
+
+                snapshot = _get_remote_control_store().get_fleet_snapshot(user_id=state_user_id)
+                active_identity_id = str(snapshot.get("active_identity_id") or "").strip()
+                selected_by_identity = snapshot.get("selected_chat_by_identity")
+                if not active_identity_id or not isinstance(selected_by_identity, dict):
+                    return None
+                selected_session_id = str(selected_by_identity.get(active_identity_id) or "").strip()
+                return selected_session_id or None
+            except Exception:
+                logger.debug("Failed to resolve Fleet active session for Telegram message", exc_info=True)
+                return None
+
+        fleet_session_id = _fleet_active_session_id()
+        focused_session_id = (
+            fleet_session_id
+            or str(getattr(session, "shared_current_session_id", "") or "").strip()
+            or bridge.session_manager.get_current_session_id()
+        )
+        target_session_id = fleet_session_id or bridge.orchestrator.resolve_session_for_inbound_bot(
             bot_config_id=matched_bot_config_id,
             focused_session_id=focused_session_id,
         )
@@ -66,13 +93,21 @@ def build_message_handlers(
             previous_session_id = bridge.session_manager.get_current_session_id()
             bridge.session_manager.set_current_session(target_session_id)
             publish_current_session_changed(
-                user_id=user.id,
+                user_id=state_user_id,
                 session_id=target_session_id,
                 previous_session_id=previous_session_id,
                 origin_channel="telegram",
                 reason="telegram_inbound_focus",
             )
             session = bridge.orchestrator.get_worker(target_session_id)
+            turn_orchestrator = bridge.orchestrator
+            # The orchestrator worker is keyed by the shared app user id so it
+            # reads/writes the same desktop session state. Telegram delivery
+            # still has to target the real Telegram chat/user id; otherwise
+            # send_chat_action/replies can fail against chat_id=0 after the
+            # user message has already been synced to the desktop.
+            session.user_id = int(user.id)
+            session.sync_user_id = state_user_id
 
         async with session.lock:
             session.session_context.update_activity()
@@ -113,7 +148,20 @@ def build_message_handlers(
                     session.refined_agent.stop()
                 return
 
-        await run_chat_flow(update, context, session, user_message)
+        if turn_orchestrator is not None and target_session_id:
+            turn_lease = await turn_orchestrator.prepare_turn(str(target_session_id), origin_channel="telegram")
+            if turn_lease.busy:
+                await safe_reply(update, turn_lease.error or "⚠️ Already processing a message. Try again in a moment.")
+                return
+            session = turn_lease.worker
+            session.user_id = int(user.id)
+            session.sync_user_id = state_user_id
+
+        try:
+            await run_chat_flow(update, context, session, user_message)
+        finally:
+            if turn_orchestrator is not None and turn_lease is not None:
+                await turn_orchestrator.complete_turn(turn_lease)
 
     async def handle_message_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle edited messages and update context."""

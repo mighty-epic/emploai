@@ -15,6 +15,7 @@ from cli.agent_tools.loop import run_tool_loop
 from cli.tui_constants import MODEL_CONFIGS
 from single_agent.agent import AGENT_TOOLS
 from shared import current_session_id
+from shared.proactive_runtime import install_background_process_hooks
 from shared.tool_packs import (
     filter_openai_tools_by_enabled_packs,
     filter_tools_by_enabled_packs,
@@ -145,6 +146,8 @@ async def run_cron_job_via_unified_flow(
     }
 
     loop = asyncio.get_running_loop()
+    if session.tool_executor:
+        install_background_process_hooks(session, event_loop=loop)
     session.current_turn_allowed_tool_names = tools_for_enabled_packs(active_tool_packs)
     session.current_turn_allowed_tool_definitions = filter_tools_by_enabled_packs(CLI_AGENT_TOOLS, active_tool_packs)
     try:
@@ -170,6 +173,19 @@ async def run_cron_job_via_unified_flow(
 
     final_response = result.content or "".join(response_buffer)
     clean_response = final_response.strip() or "Done (no text response)"
+    try:
+        session.chat_history.append(
+            {
+                "role": "assistant",
+                "content": clean_response,
+                "timestamp": datetime.now().isoformat(),
+                "scheduled_job": True,
+                "scheduled_job_id": scheduled_job_id,
+            }
+        )
+        session.save_session()
+    except Exception:
+        pass
 
     if session.memory_manager:
         try:

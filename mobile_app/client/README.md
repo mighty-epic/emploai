@@ -1,31 +1,46 @@
-# EmploAI Mobile App Client
+# Kraitos Mobile App Client
 
-Expo/React Native client for the VPS-hosted `app` channel.
+Expo/React Native client for the public Kraitos remote-control product.
 
-Current state:
-- Expo Router screens for Pair, Chat, Sessions, Jobs, and Settings
-- Android package id `com.emploai.app`
-- EAS build profiles: development, preview, production
-- secure local storage for backend URL and device token
-- live chat WebSocket client
-- live voice capture client with chunk upload and partial transcript display
-- screenshot refresh and live VPS screen feed
-- attachment upload hooks for camera, gallery, and documents
+The current mobile app is a remote companion to the desktop app. It signs into
+the public control plane, pairs with one of the user's desktops, and sends chat
+and control actions through that paired desktop. The desktop remains the
+execution owner for local tools, files, browser/desktop automation, voice
+runtime, and agent runs.
 
-Important packaging rule:
-- do not ship this app with `127.0.0.1` as the default backend
-- the packaged app should point to a real VPS URL entered by the user or injected through `EXPO_PUBLIC_EMPLOAI_APP_URL`
+Current code-backed facts:
+- Expo package name: `kraitos-mobile`
+- app display name: `Kraitos`
+- Android package id: `app.kraitos.mobile`
+- default release API base: `https://api.kraitos.app`
+- EAS profiles: development, preview, local APK, Play Store, and production
+- production and Play builds keep Android cleartext traffic disabled
+- remote-cloud mobile v1 is text-first; mobile voice capture is intentionally disabled
+- file intake supports camera, gallery/media selection, and document picking
 
-First Android build path:
+Primary mobile screens/routes:
+- account sign-in and signup
+- desktop pairing
+- chat and shared timeline
+- fleet dashboard
+- cron/automations
+- agent settings and diagnostics
+- app settings and recovery controls
+
+Build and verification:
 1. Install dependencies in `mobile_app/client`.
-2. Log in to Expo/EAS.
-3. Build an internal Android APK/AAB with `eas build -p android --profile preview`.
-4. Install the build on a physical phone.
-5. Open Pair or Settings, save the VPS HTTPS URL, then complete trusted-device pairing.
-6. Test chat, voice, uploads, sessions, jobs, and the VPS screen feed against the real server.
+2. Run `npm run typecheck`.
+3. Log in to Expo/EAS.
+4. Build with one of the package scripts, for example `npm run build:android:preview`
+   or `npm run build:android:playstore`.
+5. Smoke test login, pairing, chat, timeline updates, fleet/automation screens,
+   attachments, and settings against the public control plane.
 
-Backend dependency:
-- the app expects the server contract documented in `mobile_app/docs/VPS_BOT_HANDOFF.md`
+Current architecture docs:
+- `mobile_app/docs/ARCHITECTURE.md`
+- `mobile_app/docs/REMOTE_CONTROL_PLANE.md`
+- `mobile_app/client/PLAYSTORE.md`
 
-Current limitation:
-- no verified local typecheck/build result is committed from this workspace until `node_modules` is installed
+Historical note:
+- `mobile_app/docs/VPS_BOT_HANDOFF.md` is now an archive marker, not the mobile
+  product contract.

@@ -8,20 +8,17 @@ import sys
 import textwrap
 from copy import deepcopy
 from pathlib import Path
-from typing import Callable, Dict, Mapping, MutableMapping
+from typing import Any, Callable, Dict, Mapping, MutableMapping
 
-from dotenv import dotenv_values, load_dotenv
+from dotenv import dotenv_values
 
 from cli.tui_constants import AVAILABLE_MODELS, MODEL_CONFIGS
-from mobile_app.backend.voice_pack_manager import (
-    get_english_pack_status,
-    get_hebrew_pack_status,
-)
 from shared.model_availability import (
     enabled_providers_from_env,
     filter_models_by_provider_access,
     group_models_by_provider,
 )
+from shared.model_defaults import default_model_pair_for_enabled_providers
 from shared.tesseract_runtime import resolve_tesseract_runtime
 
 try:
@@ -31,6 +28,7 @@ except ImportError:  # pragma: no cover
 
 
 APP_NAME = "EmploAI"
+PACKAGED_RUNTIME_HOME_NAME = "EmploAI Beta"
 ENV_FILENAME = ".env"
 LOG_DIRNAME = "logs"
 EXTENSION_DIRNAME = "browser_extension"
@@ -39,6 +37,7 @@ EXTENSION_GUIDE_FILENAME = "HOW_TO_LOAD_BROWSER_EXTENSION.txt"
 TELEGRAM_REBIND_REQUIRED_STATE_KEY = "telegram_rebind_required"
 RUNTIME_DATA_SCHEMA_STATE_KEY = "runtime_data_schema_version"
 RUNTIME_DATA_SCHEMA_VERSION = 2
+REMOTE_ACCOUNT_SESSION_FILENAME = "remote-account-session.json"
 
 _ENV_ORDER = [
     "TELEGRAM_BOT_TOKEN",
@@ -54,6 +53,7 @@ _ENV_ORDER = [
     "GEMINI_API_KEY",
     "XAI_API_KEY",
     "DEEPSEEK_API_KEY",
+    "NVIDIA_API_KEY",
     "OPENROUTER_API_KEY",
     "MAX_REQUESTS_PER_MINUTE",
     "MAX_REQUESTS_PER_HOUR",
@@ -70,12 +70,35 @@ _PROVIDER_KEY_FIELDS = [
     "GOOGLE_API_KEY",
     "XAI_API_KEY",
     "DEEPSEEK_API_KEY",
+    "NVIDIA_API_KEY",
     "OPENROUTER_API_KEY",
 ]
+_LOCAL_SECRET_ENV_FIELDS = frozenset(
+    {
+        *_PROVIDER_KEY_FIELDS,
+        "GEMINI_API_KEY",
+        "TELEGRAM_BOT_TOKEN",
+        "EMPLOAI_TELEGRAM_BOT_TOKENS_JSON",
+        "EMPLOAI_REMOTE_CONTROL_PASSWORD",
+        "EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN",
+        "GMAIL_LOGIN_EMAIL",
+        "GMAIL_LOGIN_PASSWORD",
+        "GMAIL_EMAIL",
+        "GMAIL_PASSWORD",
+    }
+)
 
 VOICE_ENGINE_NONE = "none"
 VOICE_ENGINE_ENGLISH = "english_local"
 VOICE_ENGINE_HEBREW = "hebrew_local"
+VOICE_ENGINE_KOKORO_TTS = "kokoro_tts"
+VOICE_ENGINE_KYUTAI_TTS = "kyutai_clone_tts"
+TTS_BACKEND_OPENAI = "openai"
+TTS_BACKEND_KOKORO = "kokoro_onnx"
+TTS_BACKEND_KYUTAI = "pocket"
+STT_BACKEND_LOCAL_WHISPER = "local_whisper"
+STT_BACKEND_OPENAI = "openai"
+STT_BACKEND_OPENAI_REALTIME = "openai_realtime"
 VOICE_DEFAULT_ENGINE_FIELD = "VOICE_DEFAULT_ENGINE"
 VOICE_ENGLISH_REQUESTED_FIELD = "VOICE_ENGLISH_REQUESTED"
 VOICE_HEBREW_REQUESTED_FIELD = "VOICE_HEBREW_REQUESTED"
@@ -84,6 +107,33 @@ _VOICE_SETUP_FIELDS = [
     VOICE_ENGLISH_REQUESTED_FIELD,
     VOICE_HEBREW_REQUESTED_FIELD,
 ]
+
+
+def _voice_pack_status_functions():
+    from mobile_app.backend.voice_pack_manager import (
+        get_english_pack_status,
+        get_hebrew_pack_status,
+        get_kokoro_tts_pack_status,
+        get_kyutai_tts_pack_status,
+    )
+
+    return (
+        get_english_pack_status,
+        get_hebrew_pack_status,
+        get_kokoro_tts_pack_status,
+        get_kyutai_tts_pack_status,
+    )
+
+
+def _deferred_voice_pack_status(pack_id: str, *, requested: bool) -> Dict[str, object]:
+    return {
+        "id": pack_id,
+        "available": False,
+        "requested": bool(requested),
+        "state": "checking",
+        "source": "deferred",
+        "issues": [],
+    }
 VOICE_PACK_REGISTRY_KEY = r"Software\MightyEpic\EmploAI\VoicePacks"
 VOICE_PACK_SELECTION_SCHEMA_VERSION = 1
 
@@ -108,6 +158,7 @@ _PROVIDER_LABELS = {
     "GOOGLE_API_KEY": "Google Gemini",
     "XAI_API_KEY": "xAI Grok",
     "DEEPSEEK_API_KEY": "DeepSeek",
+    "NVIDIA_API_KEY": "NVIDIA NIM",
     "OPENROUTER_API_KEY": "OpenRouter",
 }
 
@@ -116,6 +167,79 @@ _REMOTE_CONTROL_REQUIRED_FIELDS = (
     "EMPLOAI_REMOTE_CONTROL_EMAIL",
     "EMPLOAI_REMOTE_CONTROL_PASSWORD",
 )
+REMOTE_CONTROL_BASE_URL_ENV = "EMPLOAI_REMOTE_CONTROL_BASE_URL"
+REMOTE_CONTROL_SESSION_TOKEN_ENV = "EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN"
+REMOTE_CONTROL_USER_ID_ENV = "EMPLOAI_REMOTE_CONTROL_USER_ID"
+REMOTE_CONTROL_DESKTOP_ID_ENV = "EMPLOAI_REMOTE_CONTROL_DESKTOP_ID"
+
+
+def remote_account_session_path(home: Path) -> Path:
+    return home / REMOTE_ACCOUNT_SESSION_FILENAME
+
+
+def _read_remote_account_session_file_payload(home: Path) -> Dict[str, Any]:
+    path = remote_account_session_path(home)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    if payload.get("storage") == "plain_json_fallback" and isinstance(payload.get("payload"), dict):
+        return dict(payload.get("payload") or {})
+    return payload
+
+
+def remote_account_session_payload(home: Path, values: Mapping[str, str] | None = None) -> Dict[str, Any]:
+    payload = dict(_read_remote_account_session_file_payload(home))
+    overrides = values or {}
+
+    def configured_value(key: str) -> str:
+        return str(overrides.get(key) or os.getenv(key, "") or "").strip()
+
+    base_url = str(
+        configured_value(REMOTE_CONTROL_BASE_URL_ENV)
+        or payload.get("apiBaseUrl")
+        or payload.get("api_base_url")
+        or ""
+    ).strip()
+    session_token = str(
+        configured_value(REMOTE_CONTROL_SESSION_TOKEN_ENV)
+        or payload.get("sessionToken")
+        or payload.get("session_token")
+        or ""
+    ).strip()
+    user_id = str(configured_value(REMOTE_CONTROL_USER_ID_ENV) or payload.get("user_id") or "").strip()
+    desktop_payload = payload.get("desktop") if isinstance(payload.get("desktop"), dict) else {}
+    desktop_id = str(
+        configured_value(REMOTE_CONTROL_DESKTOP_ID_ENV)
+        or desktop_payload.get("desktop_id")
+        or payload.get("desktop_id")
+        or ""
+    ).strip()
+
+    if base_url:
+        payload["apiBaseUrl"] = base_url
+    if session_token:
+        payload["sessionToken"] = session_token
+    if user_id:
+        user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+        payload["user"] = {**user, "user_id": user_id}
+        payload["user_id"] = user_id
+    if desktop_id:
+        payload["desktop"] = {**desktop_payload, "desktop_id": desktop_id}
+        payload["desktop_id"] = desktop_id
+    return payload
+
+
+def remote_account_session_configured(home: Path, values: Mapping[str, str] | None = None) -> bool:
+    payload = remote_account_session_payload(home, values)
+    if not payload:
+        return False
+    return bool(
+        str(payload.get("apiBaseUrl") or payload.get("api_base_url") or "").strip()
+        and str(payload.get("sessionToken") or payload.get("session_token") or "").strip()
+    )
 
 
 def is_frozen() -> bool:
@@ -189,12 +313,18 @@ def runtime_home() -> Path:
     if configured:
         return Path(configured).expanduser().resolve()
 
+    runtime_home_name = os.getenv("EMPLOAI_RUNTIME_HOME_NAME", "").strip()
+    if not runtime_home_name and getattr(sys, "frozen", False):
+        runtime_home_name = os.getenv("EMPLOAI_PACKAGED_RUNTIME_HOME_NAME", "").strip()
+    if not runtime_home_name:
+        runtime_home_name = PACKAGED_RUNTIME_HOME_NAME if getattr(sys, "frozen", False) else APP_NAME
+
     base = (
         os.getenv("LOCALAPPDATA")
         or os.getenv("APPDATA")
         or str(Path.home())
     )
-    return (Path(base) / APP_NAME).resolve()
+    return (Path(base) / runtime_home_name).resolve()
 
 
 def _parse_numeric_version(value: str) -> tuple[int, ...]:
@@ -361,6 +491,7 @@ def _default_voice_config(*, installer_preferences: Mapping[str, object] | None 
     return {
         "selection_source": "default",
         "default_engine": VOICE_ENGINE_NONE,
+        "tts_backend": TTS_BACKEND_OPENAI,
         "packs": {
             VOICE_ENGINE_ENGLISH: {
                 "requested": False,
@@ -370,6 +501,18 @@ def _default_voice_config(*, installer_preferences: Mapping[str, object] | None 
             VOICE_ENGINE_HEBREW: {
                 "requested": False,
                 "display_name": "Hebrew voice pack",
+                "placeholder": False,
+            },
+        },
+        "tts_packs": {
+            VOICE_ENGINE_KOKORO_TTS: {
+                "requested": False,
+                "display_name": "Kokoro voice pack",
+                "placeholder": False,
+            },
+            VOICE_ENGINE_KYUTAI_TTS: {
+                "requested": False,
+                "display_name": "Kyutai clone voice pack",
                 "placeholder": False,
             },
         },
@@ -399,6 +542,18 @@ def _normalize_voice_config(
     hebrew_pack.setdefault("display_name", "Hebrew voice pack")
     hebrew_pack["placeholder"] = False
 
+    tts_packs = existing_voice.setdefault("tts_packs", {})
+    kokoro_tts_pack = tts_packs.setdefault(VOICE_ENGINE_KOKORO_TTS, {})
+    kyutai_tts_pack = tts_packs.setdefault(VOICE_ENGINE_KYUTAI_TTS, {})
+    kokoro_requested = _coerce_bool(kokoro_tts_pack.get("requested"), False)
+    kyutai_requested = _coerce_bool(kyutai_tts_pack.get("requested"), False)
+    kokoro_tts_pack["requested"] = kokoro_requested
+    kyutai_tts_pack["requested"] = kyutai_requested
+    kokoro_tts_pack.setdefault("display_name", "Kokoro voice pack")
+    kokoro_tts_pack["placeholder"] = False
+    kyutai_tts_pack.setdefault("display_name", "Kyutai clone voice pack")
+    kyutai_tts_pack["placeholder"] = False
+
     default_engine = str(existing_voice.get("default_engine") or "").strip().lower()
     if default_engine not in {VOICE_ENGINE_NONE, VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW}:
         default_engine = VOICE_ENGINE_ENGLISH if english_requested else VOICE_ENGINE_HEBREW if hebrew_requested else VOICE_ENGINE_NONE
@@ -407,6 +562,15 @@ def _normalize_voice_config(
     if default_engine == VOICE_ENGINE_HEBREW and not hebrew_requested:
         default_engine = VOICE_ENGINE_ENGLISH if english_requested else VOICE_ENGINE_NONE
     existing_voice["default_engine"] = default_engine
+
+    tts_backend = str(existing_voice.get("tts_backend") or TTS_BACKEND_OPENAI).strip().lower().replace("-", "_")
+    if tts_backend not in {TTS_BACKEND_OPENAI, TTS_BACKEND_KOKORO, TTS_BACKEND_KYUTAI}:
+        tts_backend = TTS_BACKEND_OPENAI
+    if tts_backend == TTS_BACKEND_KOKORO and not kokoro_requested:
+        tts_backend = TTS_BACKEND_KYUTAI if kyutai_requested else TTS_BACKEND_OPENAI
+    if tts_backend == TTS_BACKEND_KYUTAI and not kyutai_requested:
+        tts_backend = TTS_BACKEND_KOKORO if kokoro_requested else TTS_BACKEND_OPENAI
+    existing_voice["tts_backend"] = tts_backend
 
     selection_source = str(existing_voice.get("selection_source") or "").strip().lower()
     if selection_source not in {"default", "installer", "settings"}:
@@ -442,25 +606,36 @@ def apply_installer_voice_pack_preferences(home: Path) -> Dict[str, object]:
 
 def _voice_pack_setup_payload(voice_config: Mapping[str, object], voice_status: Mapping[str, object]) -> Dict[str, object]:
     packs = voice_config.get("packs") if isinstance(voice_config.get("packs"), dict) else {}
+    tts_packs = voice_config.get("tts_packs") if isinstance(voice_config.get("tts_packs"), dict) else {}
     english_requested = _coerce_bool((packs.get(VOICE_ENGINE_ENGLISH) or {}).get("requested"), False)
     hebrew_requested = _coerce_bool((packs.get(VOICE_ENGINE_HEBREW) or {}).get("requested"), False)
+    kokoro_tts_requested = _coerce_bool((tts_packs.get(VOICE_ENGINE_KOKORO_TTS) or {}).get("requested"), False)
+    kyutai_tts_requested = _coerce_bool((tts_packs.get(VOICE_ENGINE_KYUTAI_TTS) or {}).get("requested"), False)
     default_engine = str(voice_config.get("default_engine") or VOICE_ENGINE_NONE).strip().lower()
     if default_engine not in {VOICE_ENGINE_NONE, VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW}:
         default_engine = VOICE_ENGINE_ENGLISH if english_requested else VOICE_ENGINE_HEBREW if hebrew_requested else VOICE_ENGINE_NONE
+    tts_backend = str(voice_config.get("tts_backend") or TTS_BACKEND_OPENAI).strip().lower().replace("-", "_")
+    if tts_backend not in {TTS_BACKEND_OPENAI, TTS_BACKEND_KOKORO, TTS_BACKEND_KYUTAI}:
+        tts_backend = TTS_BACKEND_OPENAI
 
     english_pack_status = voice_status.get("english_pack_status") if isinstance(voice_status.get("english_pack_status"), dict) else {}
     hebrew_pack_status = voice_status.get("hebrew_pack_status") if isinstance(voice_status.get("hebrew_pack_status"), dict) else {}
+    kokoro_tts_pack_status = voice_status.get("kokoro_tts_pack_status") if isinstance(voice_status.get("kokoro_tts_pack_status"), dict) else {}
+    kyutai_tts_pack_status = voice_status.get("kyutai_tts_pack_status") if isinstance(voice_status.get("kyutai_tts_pack_status"), dict) else {}
     english_pack_ready = _coerce_bool(english_pack_status.get("available"), _coerce_bool(voice_status.get("english_pack_ready"), False))
     hebrew_pack_ready = _coerce_bool(hebrew_pack_status.get("available"), _coerce_bool(voice_status.get("hebrew_pack_ready"), False))
 
     def build_pack_summary(
         *,
         pack_id: str,
+        kind: str,
         title: str,
         description: str,
         requested: bool,
         enabled: bool,
         pack_status: Mapping[str, object],
+        supports_always_on: bool,
+        backend: str | None = None,
     ) -> dict[str, object]:
         installed = _coerce_bool(pack_status.get("installed"), False)
         available = _coerce_bool(pack_status.get("available"), installed)
@@ -477,6 +652,8 @@ def _voice_pack_setup_payload(voice_config: Mapping[str, object], voice_status: 
         )
         return {
             "id": pack_id,
+            "kind": kind,
+            "backend": backend,
             "title": title,
             "description": description,
             "requested": requested,
@@ -484,11 +661,11 @@ def _voice_pack_setup_payload(voice_config: Mapping[str, object], voice_status: 
             "available": available,
             "enabled": enabled,
             "placeholder": False,
-            "supportsAlwaysOn": True,
+            "supportsAlwaysOn": supports_always_on,
             "status": status,
             "removable": removable,
             "source": source,
-            "path": str(pack_status.get("model_dir") or pack_status.get("binary_path") or ""),
+            "path": str(pack_status.get("path") or pack_status.get("model_dir") or pack_status.get("binary_path") or ""),
             "issues": list(pack_status.get("issues") or []),
         }
 
@@ -498,19 +675,45 @@ def _voice_pack_setup_payload(voice_config: Mapping[str, object], voice_status: 
         "packs": [
             build_pack_summary(
                 pack_id=VOICE_ENGINE_ENGLISH,
+                kind="stt",
                 title="English voice pack",
                 description="Optional local English speech-to-text with push-to-talk and always-on support.",
                 requested=english_requested,
                 enabled=default_engine == VOICE_ENGINE_ENGLISH,
                 pack_status=english_pack_status,
+                supports_always_on=True,
             ),
             build_pack_summary(
                 pack_id=VOICE_ENGINE_HEBREW,
+                kind="stt",
                 title="Hebrew voice pack",
                 description="Optional local Hebrew speech-to-text using the same push-to-talk and always-on capture flow as English.",
                 requested=hebrew_requested,
                 enabled=default_engine == VOICE_ENGINE_HEBREW,
                 pack_status=hebrew_pack_status,
+                supports_always_on=True,
+            ),
+            build_pack_summary(
+                pack_id=VOICE_ENGINE_KOKORO_TTS,
+                kind="tts",
+                title="Kokoro speech pack",
+                description="Local Jarvis speech output with Kokoro ONNX and the EmploAI voice bundle.",
+                requested=kokoro_tts_requested,
+                enabled=tts_backend == TTS_BACKEND_KOKORO,
+                pack_status=kokoro_tts_pack_status,
+                supports_always_on=False,
+                backend=TTS_BACKEND_KOKORO,
+            ),
+            build_pack_summary(
+                pack_id=VOICE_ENGINE_KYUTAI_TTS,
+                kind="tts",
+                title="Kyutai clone speech pack",
+                description="Local Jarvis speech output using Pocket TTS and the bundled cloned voice state.",
+                requested=kyutai_tts_requested,
+                enabled=tts_backend == TTS_BACKEND_KYUTAI,
+                pack_status=kyutai_tts_pack_status,
+                supports_always_on=False,
+                backend=TTS_BACKEND_KYUTAI,
             ),
         ],
     }
@@ -537,10 +740,13 @@ def default_release_config(*, installer_preferences: Mapping[str, object] | None
             "enable_semantic_search": False,
         },
         "agent": {
-            "default_model": "gpt-4o-mini",
+            "default_model": "auto",
+            "default_planner_model": "auto",
             "default_mode": "auto",
             "max_turns": 100,
             "context_compression_threshold": 0.5,
+            "final_quality_guard": "planner",
+            "final_quality_max_auto_continues": 2,
         },
         "skills": {
             "auto_trigger": True,
@@ -743,6 +949,14 @@ def load_existing_env_values(path: Path) -> Dict[str, str]:
     }
 
 
+def strip_local_secret_env_values(values: Mapping[str, str]) -> Dict[str, str]:
+    return {
+        str(key): str(value)
+        for key, value in dict(values or {}).items()
+        if str(key) not in _LOCAL_SECRET_ENV_FIELDS
+    }
+
+
 def _release_info_path(source_root: Path) -> Path:
     return source_root / "deploy" / "windows" / "release_info.json"
 
@@ -808,7 +1022,7 @@ def render_env(values: Mapping[str, str]) -> str:
 
 
 def save_env(path: Path, values: Mapping[str, str]) -> None:
-    path.write_text(render_env(values), encoding="utf-8")
+    path.write_text(render_env(strip_local_secret_env_values(values)), encoding="utf-8")
 
 
 def needs_first_run_setup(values: Mapping[str, str]) -> bool:
@@ -998,11 +1212,7 @@ def run_first_run_setup(
                 "Remote control account email [optional; Enter=skip]: "
             ).strip()
 
-        updates["EMPLOAI_REMOTE_CONTROL_PASSWORD"] = _prompt_secret(
-            "Remote control account password",
-            existing=existing.get("EMPLOAI_REMOTE_CONTROL_PASSWORD", ""),
-            input_fn=input_fn,
-        )
+        updates["EMPLOAI_REMOTE_CONTROL_PASSWORD"] = ""
         updates["EMPLOAI_REMOTE_DESKTOP_NAME"] = _prompt_with_default(
             "Remote desktop display name",
             existing.get("EMPLOAI_REMOTE_DESKTOP_NAME", "EmploAI Desktop"),
@@ -1037,6 +1247,11 @@ def run_first_run_setup(
         updates["DEEPSEEK_API_KEY"] = _prompt_secret(
             "DeepSeek API key",
             existing=existing.get("DEEPSEEK_API_KEY", ""),
+            input_fn=input_fn,
+        )
+        updates["NVIDIA_API_KEY"] = _prompt_secret(
+            "NVIDIA API key",
+            existing=existing.get("NVIDIA_API_KEY", ""),
             input_fn=input_fn,
         )
         updates["OPENROUTER_API_KEY"] = _prompt_secret(
@@ -1081,18 +1296,24 @@ def run_first_run_setup(
 def configure_process_environment(home: Path, env_file: Path) -> Dict[str, str]:
     _prune_all_duplicate_bundled_dist_info()
     os.chdir(home)
-    load_dotenv(dotenv_path=env_file, override=True)
 
     values = load_existing_env_values(env_file)
-    for key, value in values.items():
+    persisted_values = strip_local_secret_env_values(values)
+    if values != persisted_values:
+        save_env(env_file, persisted_values)
+
+    for key in _LOCAL_SECRET_ENV_FIELDS:
+        os.environ.pop(key, None)
+
+    for key, value in persisted_values.items():
         os.environ[key] = value
 
-    os.environ.setdefault("DEFAULT_WORKSPACE", values.get("DEFAULT_WORKSPACE", str(default_workspace())))
-    os.environ.setdefault("BETA_MODE", values.get("BETA_MODE", "true"))
-    os.environ.setdefault("HEADLESS", values.get("HEADLESS", "false"))
+    os.environ.setdefault("DEFAULT_WORKSPACE", persisted_values.get("DEFAULT_WORKSPACE", str(default_workspace())))
+    os.environ.setdefault("BETA_MODE", persisted_values.get("BETA_MODE", "true"))
+    os.environ.setdefault("HEADLESS", persisted_values.get("HEADLESS", "false"))
     os.environ.setdefault("EMPLOAI_HOME", str(home))
     configure_ssl_certificate_environment()
-    return values
+    return persisted_values
 
 
 def print_runtime_banner(home: Path) -> None:
@@ -1155,6 +1376,7 @@ def configured_model_groups(values: Mapping[str, str]) -> list[dict[str, object]
 def configured_planner_models(values: Mapping[str, str]) -> list[str]:
     normalized = _normalized_existing_values(values)
     enabled_providers = enabled_providers_from_env(normalized)
+    default_planner = default_model_pair_for_enabled_providers(enabled_providers).planner_model
     available_models = filter_models_by_provider_access(
         AVAILABLE_MODELS,
         MODEL_CONFIGS,
@@ -1164,12 +1386,13 @@ def configured_planner_models(values: Mapping[str, str]) -> list[str]:
     for model in available_models:
         config = MODEL_CONFIGS.get(model, {})
         provider = str(config.get("provider", "unknown"))
-        api = str(config.get("api", "chat"))
         if provider == "google":
             supported.append(model)
             continue
-        if provider in {"openai", "anthropic", "xai", "deepseek", "openrouter"} and api != "responses":
+        if provider in {"openai", "anthropic", "xai", "deepseek", "openrouter", "nvidia"}:
             supported.append(model)
+    if default_planner in supported:
+        supported = [default_planner, *[model for model in supported if model != default_planner]]
     return supported
 
 
@@ -1191,15 +1414,6 @@ def validate_setup_values(values: Mapping[str, str]) -> list[str]:
     if allowed_ids and not token:
         issues.append("Telegram bot token is required when allowed Telegram user ID(s) are configured.")
 
-    remote_values = {field: normalized.get(field, "").strip() for field in _REMOTE_CONTROL_REQUIRED_FIELDS}
-    remote_present = [field for field, value in remote_values.items() if value]
-    if remote_present and len(remote_present) != len(_REMOTE_CONTROL_REQUIRED_FIELDS):
-        missing = [field for field in _REMOTE_CONTROL_REQUIRED_FIELDS if not remote_values.get(field)]
-        issues.append(
-            "Remote control requires service URL, email, and password together. Missing: "
-            + ", ".join(missing)
-        )
-
     remote_url = normalized.get("EMPLOAI_REMOTE_CONTROL_BASE_URL", "").strip()
     if remote_url and not (remote_url.startswith("https://") or remote_url.startswith("http://")):
         issues.append("Remote control service URL must start with http:// or https://.")
@@ -1207,7 +1421,7 @@ def validate_setup_values(values: Mapping[str, str]) -> list[str]:
     return issues
 
 
-def resolve_voice_runtime_status() -> Dict[str, object]:
+def resolve_voice_runtime_status(*, include_pack_status: bool = True) -> Dict[str, object]:
     runtime_config = load_runtime_config(runtime_home())
     _normalize_voice_config(runtime_config, installer_preferences=_read_installer_voice_pack_preferences())
     voice_config = runtime_config.get("voice") if isinstance(runtime_config.get("voice"), dict) else {}
@@ -1223,34 +1437,63 @@ def resolve_voice_runtime_status() -> Dict[str, object]:
     if default_engine == VOICE_ENGINE_HEBREW and not hebrew_requested:
         default_engine = VOICE_ENGINE_ENGLISH if english_requested else VOICE_ENGINE_NONE
 
-    stt_backend = (os.getenv("EMPLO_APP_STT_BACKEND", "local_whisper").strip().lower() or "local_whisper")
+    stt_backend = (
+        os.getenv("EMPLO_APP_STT_BACKEND", STT_BACKEND_LOCAL_WHISPER).strip().lower().replace("-", "_")
+        or STT_BACKEND_LOCAL_WHISPER
+    )
+    api_stt_backend = stt_backend in {STT_BACKEND_OPENAI, STT_BACKEND_OPENAI_REALTIME}
     stt_model = os.getenv("EMPLO_APP_STT_MODEL", "base.en-q5_1").strip() or "base.en-q5_1"
     draft_model = os.getenv("EMPLO_APP_STT_DRAFT_MODEL", "tiny.en").strip() or "tiny.en"
+    realtime_stt_model = (
+        os.getenv("EMPLO_APP_STT_REALTIME_TRANSCRIPTION_MODEL", "").strip()
+        or os.getenv("EMPLO_APP_STT_REALTIME_MODEL", "gpt-realtime-whisper").strip()
+        or "gpt-realtime-whisper"
+    )
     binary_flavor = os.getenv("EMPLO_APP_STT_BINARY_FLAVOR", "blas").strip() or "blas"
     tts_enabled = os.getenv("EMPLO_APP_TTS_ENABLED", "1").strip().lower() not in {"0", "false", "off", "no"}
+    tts_backend = os.getenv("EMPLO_APP_TTS_BACKEND", str(voice_config.get("tts_backend") or TTS_BACKEND_OPENAI)).strip().lower().replace("-", "_") or TTS_BACKEND_OPENAI
 
-    english_pack_status = get_english_pack_status()
-    hebrew_pack_status = get_hebrew_pack_status()
+    tts_packs = voice_config.get("tts_packs") if isinstance(voice_config.get("tts_packs"), dict) else {}
+    kokoro_tts_requested = _coerce_bool((tts_packs.get(VOICE_ENGINE_KOKORO_TTS) or {}).get("requested"), False)
+    kyutai_tts_requested = _coerce_bool((tts_packs.get(VOICE_ENGINE_KYUTAI_TTS) or {}).get("requested"), False)
+    if include_pack_status:
+        (
+            get_english_pack_status,
+            get_hebrew_pack_status,
+            get_kokoro_tts_pack_status,
+            get_kyutai_tts_pack_status,
+        ) = _voice_pack_status_functions()
+        english_pack_status = get_english_pack_status()
+        hebrew_pack_status = get_hebrew_pack_status()
+        kokoro_tts_pack_status = get_kokoro_tts_pack_status()
+        kyutai_tts_pack_status = get_kyutai_tts_pack_status()
+    else:
+        english_pack_status = _deferred_voice_pack_status(VOICE_ENGINE_ENGLISH, requested=english_requested)
+        hebrew_pack_status = _deferred_voice_pack_status(VOICE_ENGINE_HEBREW, requested=hebrew_requested)
+        kokoro_tts_pack_status = _deferred_voice_pack_status(VOICE_ENGINE_KOKORO_TTS, requested=kokoro_tts_requested)
+        kyutai_tts_pack_status = _deferred_voice_pack_status(VOICE_ENGINE_KYUTAI_TTS, requested=kyutai_tts_requested)
     english_pack_issues = list(english_pack_status.get("issues") or [])
     hebrew_pack_issues = list(hebrew_pack_status.get("issues") or [])
     english_pack_ready = bool(english_pack_status.get("available"))
     hebrew_pack_ready = bool(hebrew_pack_status.get("available"))
 
     input_issues: list[str] = []
-    if default_engine == VOICE_ENGINE_NONE:
+    if default_engine == VOICE_ENGINE_NONE and not api_stt_backend:
         input_issues.append("Voice input is disabled in setup and settings.")
-    elif default_engine == VOICE_ENGINE_HEBREW:
-        input_issues.extend(hebrew_pack_issues)
-    elif stt_backend == "openai":
+    elif api_stt_backend:
         if not os.getenv("OPENAI_API_KEY", "").strip():
             input_issues.append("OPENAI_API_KEY is not configured, so app voice transcription is unavailable.")
+    elif default_engine == VOICE_ENGINE_HEBREW:
+        input_issues.extend(hebrew_pack_issues)
     else:
         input_issues.extend(english_pack_issues)
 
-    if default_engine == VOICE_ENGINE_NONE:
+    if default_engine == VOICE_ENGINE_NONE and not api_stt_backend:
         selected_engine_state = "disabled"
     elif input_issues:
         selected_engine_state = "error"
+    elif api_stt_backend:
+        selected_engine_state = "ready"
     elif default_engine == VOICE_ENGINE_HEBREW:
         try:
             from mobile_app.backend.voice_runtime import hebrew_model_bundle_loaded
@@ -1267,19 +1510,30 @@ def resolve_voice_runtime_status() -> Dict[str, object]:
         "issues": input_issues,
         "stt_backend": stt_backend,
         "stt_model": (
-            str(hebrew_pack_status.get("model_dir") or "")
+            f"{realtime_stt_model} realtime transcription"
+            if stt_backend == STT_BACKEND_OPENAI_REALTIME
+            else os.getenv("EMPLO_APP_STT_MODEL", "gpt-4o-mini-transcribe")
+            if stt_backend == STT_BACKEND_OPENAI
+            else str(hebrew_pack_status.get("model_dir") or "")
             if default_engine == VOICE_ENGINE_HEBREW
             else stt_model
-            if stt_backend != "openai"
-            else os.getenv("EMPLO_APP_STT_MODEL", "gpt-4o-mini-transcribe")
         ),
         "draft_model": (
-            str(hebrew_pack_status.get("model_dir") or "")
+            None
+            if api_stt_backend
+            else str(hebrew_pack_status.get("model_dir") or "")
             if default_engine == VOICE_ENGINE_HEBREW
-            else None if stt_backend == "openai" else draft_model
+            else draft_model
         ),
-        "binary_flavor": None if default_engine == VOICE_ENGINE_HEBREW or stt_backend == "openai" else binary_flavor,
+        "binary_flavor": None if default_engine == VOICE_ENGINE_HEBREW or api_stt_backend else binary_flavor,
         "tts_enabled": tts_enabled,
+        "tts_backend": tts_backend,
+        "tts_ready": (
+            (tts_backend == TTS_BACKEND_OPENAI and bool(os.getenv("OPENAI_API_KEY", "").strip()))
+            or (tts_backend == TTS_BACKEND_KOKORO and bool(kokoro_tts_pack_status.get("available")))
+            or (tts_backend == TTS_BACKEND_KYUTAI and bool(kyutai_tts_pack_status.get("available")))
+        ),
+        "pack_status_deferred": not include_pack_status,
         "selected_engine": default_engine,
         "english_requested": english_requested,
         "hebrew_requested": hebrew_requested,
@@ -1287,6 +1541,8 @@ def resolve_voice_runtime_status() -> Dict[str, object]:
         "hebrew_pack_ready": hebrew_pack_ready,
         "english_pack_status": english_pack_status,
         "hebrew_pack_status": hebrew_pack_status,
+        "kokoro_tts_pack_status": kokoro_tts_pack_status,
+        "kyutai_tts_pack_status": kyutai_tts_pack_status,
         "english_pack_manifest": english_pack_status.get("manifest"),
         "english_pack_manifest_verified": bool(english_pack_status.get("manifest_verified")),
         "selected_engine_state": selected_engine_state,
@@ -1302,6 +1558,7 @@ def build_setup_state(
     env_file: Path,
     source_root: Path,
     existing: Mapping[str, str],
+    include_voice_runtime_status: bool = True,
 ) -> Dict[str, object]:
     state = load_release_state(home)
     release_version = current_release_version(source_root)
@@ -1322,11 +1579,14 @@ def build_setup_state(
             *validation_issues,
         ]
     runtime = resolve_tesseract_runtime()
-    voice_status = resolve_voice_runtime_status()
+    voice_status = resolve_voice_runtime_status(include_pack_status=include_voice_runtime_status)
     runtime_config = load_runtime_config(home)
     _normalize_voice_config(runtime_config, installer_preferences=_read_installer_voice_pack_preferences())
     voice_config = runtime_config.get("voice") if isinstance(runtime_config.get("voice"), dict) else {}
     values = {field: normalized.get(field, "").strip() for field in _SETUP_EDITABLE_FIELDS}
+    for field in _LOCAL_SECRET_ENV_FIELDS:
+        if field in values:
+            values[field] = ""
     english_requested = _coerce_bool(
         (((voice_config.get("packs") or {}).get(VOICE_ENGINE_ENGLISH) or {}).get("requested")),
         False,
@@ -1338,6 +1598,11 @@ def build_setup_state(
     values[VOICE_DEFAULT_ENGINE_FIELD] = str(voice_config.get("default_engine") or VOICE_ENGINE_NONE)
     values[VOICE_ENGLISH_REQUESTED_FIELD] = _setting_bool(english_requested, False)
     values[VOICE_HEBREW_REQUESTED_FIELD] = _setting_bool(hebrew_requested, False)
+    legacy_remote_configured = bool(all(normalized.get(field, "").strip() for field in _REMOTE_CONTROL_REQUIRED_FIELDS))
+    legacy_remote_partial = bool(
+        any(normalized.get(field, "").strip() for field in _REMOTE_CONTROL_REQUIRED_FIELDS)
+    ) and not legacy_remote_configured
+    token_remote_configured = remote_account_session_configured(home, normalized)
 
     return {
         "required": bool(blocking_validation_issues),
@@ -1356,10 +1621,8 @@ def build_setup_state(
         "telegramPartiallyConfigured": False if telegram_rebind_required else bool(
             bool(normalized.get("TELEGRAM_BOT_TOKEN")) ^ bool(normalized.get("ALLOWED_USER_IDS"))
         ),
-        "remoteControlConfigured": bool(all(normalized.get(field, "").strip() for field in _REMOTE_CONTROL_REQUIRED_FIELDS)),
-        "remoteControlPartiallyConfigured": bool(
-            any(normalized.get(field, "").strip() for field in _REMOTE_CONTROL_REQUIRED_FIELDS)
-        ) and not bool(all(normalized.get(field, "").strip() for field in _REMOTE_CONTROL_REQUIRED_FIELDS)),
+        "remoteControlConfigured": bool(token_remote_configured or legacy_remote_configured),
+        "remoteControlPartiallyConfigured": bool(not token_remote_configured and legacy_remote_partial),
         "telegramRebindRequired": telegram_rebind_required,
         "ocrAvailable": runtime.executable is not None,
         "ocrSource": runtime.source,
@@ -1453,23 +1716,38 @@ def update_voice_pack_preferences(
     packs = voice_config.setdefault("packs", {})
     english_pack = packs.setdefault(VOICE_ENGINE_ENGLISH, {})
     hebrew_pack = packs.setdefault(VOICE_ENGINE_HEBREW, {})
+    tts_packs = voice_config.setdefault("tts_packs", {})
+    kokoro_tts_pack = tts_packs.setdefault(VOICE_ENGINE_KOKORO_TTS, {})
+    kyutai_tts_pack = tts_packs.setdefault(VOICE_ENGINE_KYUTAI_TTS, {})
 
     if pack_id is not None and requested is not None:
         if pack_id == VOICE_ENGINE_ENGLISH:
             english_pack["requested"] = bool(requested)
         elif pack_id == VOICE_ENGINE_HEBREW:
             hebrew_pack["requested"] = bool(requested)
+        elif pack_id == VOICE_ENGINE_KOKORO_TTS:
+            kokoro_tts_pack["requested"] = bool(requested)
+        elif pack_id == VOICE_ENGINE_KYUTAI_TTS:
+            kyutai_tts_pack["requested"] = bool(requested)
         else:
             raise ValueError(f"Unsupported voice pack: {pack_id}")
 
     english_requested = _coerce_bool(english_pack.get("requested"), False)
     hebrew_requested = _coerce_bool(hebrew_pack.get("requested"), False)
+    kokoro_tts_requested = _coerce_bool(kokoro_tts_pack.get("requested"), False)
+    kyutai_tts_requested = _coerce_bool(kyutai_tts_pack.get("requested"), False)
     english_pack["requested"] = english_requested
     hebrew_pack["requested"] = hebrew_requested
     english_pack["placeholder"] = False
     hebrew_pack["placeholder"] = False
     english_pack.setdefault("display_name", "English voice pack")
     hebrew_pack.setdefault("display_name", "Hebrew voice pack")
+    kokoro_tts_pack["requested"] = kokoro_tts_requested
+    kyutai_tts_pack["requested"] = kyutai_tts_requested
+    kokoro_tts_pack["placeholder"] = False
+    kyutai_tts_pack["placeholder"] = False
+    kokoro_tts_pack.setdefault("display_name", "Kokoro voice pack")
+    kyutai_tts_pack.setdefault("display_name", "Kyutai clone voice pack")
 
     next_default_engine = str(default_engine or voice_config.get("default_engine") or VOICE_ENGINE_NONE).strip().lower()
     if next_default_engine not in {VOICE_ENGINE_NONE, VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW}:
@@ -1480,6 +1758,18 @@ def update_voice_pack_preferences(
         next_default_engine = VOICE_ENGINE_ENGLISH if english_requested else VOICE_ENGINE_NONE
 
     voice_config["default_engine"] = next_default_engine
+    next_tts_backend = str(voice_config.get("tts_backend") or TTS_BACKEND_OPENAI).strip().lower().replace("-", "_")
+    if pack_id == VOICE_ENGINE_KOKORO_TTS and requested:
+        next_tts_backend = TTS_BACKEND_KOKORO
+    elif pack_id == VOICE_ENGINE_KYUTAI_TTS and requested:
+        next_tts_backend = TTS_BACKEND_KYUTAI
+    elif pack_id == VOICE_ENGINE_KOKORO_TTS and requested is False and next_tts_backend == TTS_BACKEND_KOKORO:
+        next_tts_backend = TTS_BACKEND_KYUTAI if kyutai_tts_requested else TTS_BACKEND_OPENAI
+    elif pack_id == VOICE_ENGINE_KYUTAI_TTS and requested is False and next_tts_backend == TTS_BACKEND_KYUTAI:
+        next_tts_backend = TTS_BACKEND_KOKORO if kokoro_tts_requested else TTS_BACKEND_OPENAI
+    if next_tts_backend not in {TTS_BACKEND_OPENAI, TTS_BACKEND_KOKORO, TTS_BACKEND_KYUTAI}:
+        next_tts_backend = TTS_BACKEND_OPENAI
+    voice_config["tts_backend"] = next_tts_backend
     voice_config["selection_source"] = "settings"
     save_runtime_config(home, runtime_config)
     return runtime_config

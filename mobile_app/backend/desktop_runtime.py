@@ -18,11 +18,9 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
-from mobile_app.backend.app_server import TOKEN_TTL_SECONDS, _default_user_id, _workspace_root, create_app
 from mobile_app.backend.auth_store import AppAuthStore
-from mobile_app.backend.cron_runtime import ensure_global_cron_scheduler_started
 from shared.live_config import get_live_config
-from shared.runtime_paths import log_root
+from shared.runtime_paths import log_root, runtime_home
 
 if TYPE_CHECKING:
     from mobile_app.backend.session_bridge import AppSessionBridge
@@ -36,6 +34,9 @@ READINESS_POLL_INTERVAL_SECONDS = 0.25
 DEFAULT_DEVICE_NAME = "EmploAI Desktop"
 DEFAULT_DEVICE_PLATFORM = "desktop-electron"
 DEFAULT_DEVICE_KEY = "desktop-local"
+DEFAULT_APP_USER_ID = 0
+REMOTE_ACCOUNT_SESSION_FILENAME = "remote-account-session.json"
+TOKEN_TTL_SECONDS = 60 * 60 * 24 * 180
 logger = logging.getLogger(__name__)
 
 
@@ -63,6 +64,7 @@ class DesktopRuntimeStatus:
     state: str
     mode: str
     api_base_url: str
+    runtime_home: Optional[str] = None
     startup_state: Optional[str] = None
     degraded: bool = False
     issues: list[str] | None = None
@@ -75,6 +77,35 @@ def _load_workspace() -> Path:
     load_dotenv(workspace / ".env", override=False)
     load_dotenv(override=False)
     return workspace
+
+
+def _workspace_root() -> Path:
+    configured = os.getenv("EMPLOAI_HOME", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return Path(__file__).resolve().parents[2]
+
+
+def _remote_account_user_id() -> int | None:
+    home = runtime_home() or _runtime_home()
+    path = home / REMOTE_ACCOUNT_SESSION_FILENAME
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+    raw_user_id = user.get("user_id") or payload.get("user_id")
+    try:
+        user_id = int(raw_user_id)
+    except (TypeError, ValueError):
+        return None
+    return user_id if user_id > 0 else None
+
+
+def _default_user_id() -> int:
+    return _remote_account_user_id() or DEFAULT_APP_USER_ID
 
 
 def load_desktop_runtime_config() -> DesktopRuntimeConfig:
@@ -156,6 +187,28 @@ def get_runtime_status() -> DesktopRuntimeStatus:
             detail="No compatible local runtime responded on the configured desktop host/port",
         )
 
+    payload_runtime_home = str(payload.get("runtime_home") or "").strip()
+    expected_runtime_home = str(runtime_home() or "").strip()
+    if payload_runtime_home and expected_runtime_home:
+        try:
+            payload_runtime_home = str(Path(payload_runtime_home).expanduser().resolve())
+            expected_runtime_home = str(Path(expected_runtime_home).expanduser().resolve())
+        except Exception:
+            pass
+        if os.path.normcase(payload_runtime_home) != os.path.normcase(expected_runtime_home):
+            return DesktopRuntimeStatus(
+                ok=False,
+                state="offline",
+                mode="detached",
+                api_base_url=config.api_base_url,
+                runtime_home=payload_runtime_home,
+                detail=(
+                    "A local runtime responded on the configured desktop port, but it belongs to a "
+                    "different runtime home. Restart the desktop runtime so this app uses the correct local state."
+                ),
+                process_id=int(payload.get("process_id") or 0) or None,
+            )
+
     dependency_status = payload.get("dependency_status") or {}
     degraded = bool(dependency_status.get("degraded"))
     issues = [str(item) for item in dependency_status.get("issues", [])]
@@ -165,6 +218,7 @@ def get_runtime_status() -> DesktopRuntimeStatus:
         state=state,
         mode="attached",
         api_base_url=config.api_base_url,
+        runtime_home=payload_runtime_home or None,
         startup_state=str(payload.get("startup_state") or ""),
         degraded=degraded,
         issues=issues,
@@ -385,9 +439,12 @@ def start_runtime_context() -> dict[str, Any]:
 
 async def run_desktop_runtime_server(host: str, port: int) -> None:
     import uvicorn
+    from mobile_app.backend.app_server import create_app
 
     async def _start_background_services() -> None:
         try:
+            from mobile_app.backend.cron_runtime import ensure_global_cron_scheduler_started
+
             await ensure_global_cron_scheduler_started()
         except Exception:
             logger.exception("Desktop runtime background service startup failed")
@@ -398,7 +455,8 @@ async def run_desktop_runtime_server(host: str, port: int) -> None:
             create_app(),
             host=host,
             port=port,
-            log_level="info",
+            log_level="warning",
+            access_log=False,
             loop="asyncio",
             http="h11",
             ws="websockets",

@@ -47,23 +47,42 @@ from shared.model_availability import (
     first_available_model,
     group_models_by_provider,
 )
+from shared.model_defaults import (
+    ANTHROPIC_DEFAULT_PLANNER_MODEL,
+    GOOGLE_DEFAULT_PLANNER_MODEL,
+    OPENAI_DEFAULT_MODEL,
+    OPENAI_DEFAULT_PLANNER_MODEL,
+    default_model_pair_for_enabled_providers,
+    default_planner_for_model,
+    is_auto_model_setting,
+    provider_for_model,
+)
+from cli.agent_tools.gemini_client import create_gemini_openai_client
 from shared.runtime_paths import normalize_legacy_workspace_path, user_state_root
 from shared.telegram_bot_config_store import TelegramBotConfigStore
 from shared.tool_packs import default_enabled_tool_packs
 
 from openai import OpenAI
 from anthropic import Anthropic
-try:
-    import google.generativeai as genai
-    HAS_GEMINI = True
-except ImportError:
-    HAS_GEMINI = False
 
 
 logger = logging.getLogger(__name__)
 _telegram_application: Optional[Application] = None
 _telegram_loop: Optional[asyncio.AbstractEventLoop] = None
+TELEGRAM_STATE_USER_ID_ENV = "EMPLOAI_TELEGRAM_STATE_USER_ID"
 _BASE64_KEYS = frozenset({"image_base64", "base64", "image_data", "data", "screenshot"})
+DEFAULT_RUNTIME_MODEL = OPENAI_DEFAULT_MODEL
+DEFAULT_PLANNER_MODEL = OPENAI_DEFAULT_PLANNER_MODEL
+MODEL_NAME_ALIASES = {
+    "claude-sonnet-4-5": "claude-sonnet-4.5",
+    "claude-opus-4-5": "claude-opus-4.5",
+    "claude-haiku-4-5": "claude-haiku-4.5",
+}
+
+
+def _normalize_model_name(value: Any) -> str:
+    cleaned = str(value or "").strip()
+    return MODEL_NAME_ALIASES.get(cleaned, cleaned)
 
 
 REAL_CHROME_TASK_HINTS = (
@@ -100,6 +119,16 @@ def _task_requires_real_chrome(task_text: Optional[str]) -> bool:
     if not normalized:
         return False
     return any(hint in normalized for hint in REAL_CHROME_TASK_HINTS)
+
+
+def resolve_telegram_state_user_id(user_id: int) -> int:
+    raw = str(os.getenv(TELEGRAM_STATE_USER_ID_ENV, "") or "").strip()
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            logger.warning("Ignoring invalid %s=%r", TELEGRAM_STATE_USER_ID_ENV, raw)
+    return int(user_id)
 
 
 def _format_verbose_tool_message(payload: Dict[str, Any]) -> str:
@@ -159,7 +188,8 @@ class BrowserTaskContext:
 class TelegramSession:
     """Holds per-user state for the Telegram bot."""
     user_id: int
-    current_model: str = "gpt-5.2"
+    sync_user_id: Optional[int] = None
+    current_model: str = DEFAULT_RUNTIME_MODEL
     current_variant: str = "standard"
     planner_model: Optional[str] = None
     default_planner_model: Optional[str] = None
@@ -169,6 +199,7 @@ class TelegramSession:
     agent_mode: str = "auto"  # Default to auto for full autonomous behavior
     max_turns: int = 100
     chat_history: List[Dict] = field(default_factory=list)
+    event_timeline: List[Dict[str, Any]] = field(default_factory=list)
 
     # Agents (Legacy SingleAgent for backwards compatibility)
     single_agent: Optional[SingleAgent] = None
@@ -209,6 +240,7 @@ class TelegramSession:
     xai_client: Optional[OpenAI] = None
     deepseek_client: Optional[OpenAI] = None
     openrouter_client: Optional[OpenAI] = None
+    nvidia_client: Optional[OpenAI] = None
 
     # Telegram context
     _app: Optional[Application] = None
@@ -262,12 +294,72 @@ class TelegramSession:
         from bot_core.system_info import get_system_info
         self.system_info = get_system_info()
 
+    def _live_config_string(self, path: str) -> str:
+        if not getattr(self, "live_config", None):
+            return ""
+        try:
+            return str(self.live_config.get(path, "") or "").strip()
+        except Exception:
+            return ""
+
+    def _configured_provider_keys(self) -> set[str]:
+        enabled: set[str] = set()
+        manager = getattr(self, "config_manager", None)
+        for provider, env_var in {
+            "openai": "OPENAI_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY",
+            "google": "GOOGLE_API_KEY",
+            "xai": "XAI_API_KEY",
+            "deepseek": "DEEPSEEK_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
+            "nvidia": "NVIDIA_API_KEY",
+        }.items():
+            configured = ""
+            if manager is not None:
+                try:
+                    configured = str(manager.get_api_key(provider) or "").strip()
+                except Exception:
+                    configured = ""
+            if configured or str(os.getenv(env_var, "") or "").strip():
+                enabled.add(provider)
+        return enabled
+
+    def _provider_default_model_pair(self):
+        return default_model_pair_for_enabled_providers(self._configured_provider_keys())
+
+    def _configured_default_model(self) -> str:
+        raw = str(os.getenv("AGENT_DEFAULT_MODEL", "") or "").strip() or self._live_config_string("agent.default_model")
+        if is_auto_model_setting(raw):
+            return self._provider_default_model_pair().model
+        return _normalize_model_name(raw)
+
+    def _configured_default_planner_model(self, model_name: Optional[str] = None) -> Optional[str]:
+        raw = (
+            str(os.getenv("PLANNER_MODEL", "") or "").strip()
+            or str(os.getenv("AGENT_DEFAULT_PLANNER_MODEL", "") or "").strip()
+            or self._live_config_string("agent.default_planner_model")
+            or self._live_config_string("agent.planner_model")
+        )
+        if is_auto_model_setting(raw):
+            current_model = str(model_name or getattr(self, "current_model", "") or "").strip()
+            return default_planner_for_model(
+                current_model,
+                enabled_providers=self._configured_provider_keys(),
+            )
+        configured = _normalize_model_name(raw)
+        return configured or None
+
     # Session auto-rename: tracks which message-count thresholds have fired
     _session_rename_checkpoints: set = field(default_factory=set)
 
     def __post_init__(self):
+        if self.sync_user_id is None:
+            self.sync_user_id = resolve_telegram_state_user_id(self.user_id)
+        else:
+            self.sync_user_id = int(self.sync_user_id)
+
         # Isolation: Ensure each user has their own dedicated data and workspace directory
-        user_data_path = user_state_root(self.user_id)
+        user_data_path = user_state_root(self.sync_user_id)
         user_data_path.mkdir(parents=True, exist_ok=True)
         
         # If workspace is still the implicit cwd default in local/dev runs, switch
@@ -281,7 +373,7 @@ class TelegramSession:
 
         # Initialize session context
         session_registry = get_session_registry()
-        self.session_context = session_registry.get_or_create_main_session(self.user_id)
+        self.session_context = session_registry.get_or_create_main_session(self.sync_user_id)
 
         # Initialize memory manager with user-isolated workspace
         self.memory_manager = get_memory_manager(self.workspace)
@@ -290,18 +382,23 @@ class TelegramSession:
         self.context_loader = get_context_loader(self.workspace)
         self.context_loader.initialize_workspace()  # Create default files
 
+        self.config_manager = get_config_manager()
+
         # Initialize live config
         self.live_config = get_live_config(self.workspace / "config.json")
         self.live_config.import_from_env()  # Load from env vars
-        self.default_planner_model = str(os.getenv("PLANNER_MODEL", "")).strip() or None
+        configured_default_model = self._configured_default_model()
+        if configured_default_model and self.current_model == DEFAULT_RUNTIME_MODEL:
+            self.current_model = configured_default_model
+        if not self.default_planner_model:
+            self.default_planner_model = self._configured_default_planner_model(self.current_model)
 
         # Initialize existing managers - isolation by user_id
-        user_base_path = user_state_root(self.user_id)
+        user_base_path = user_state_root(self.sync_user_id)
         self.session_manager = SessionManager(base_path=user_base_path)
 
         self._initialize_runtime_session()
         
-        self.config_manager = get_config_manager()
         # Initialize skills and hooks systems
         self.skill_registry = get_skill_registry()
         self.hook_manager = get_hook_manager()
@@ -318,14 +415,15 @@ class TelegramSession:
         self.context_manager = ContextManager(
             model_context_sizes=DEFAULT_CONTEXT_SIZES,
             compression_client=self.gemini_openai_client,
-            compression_model="gemini-2.0-flash",
+            compression_model="gemini-3.1-flash-lite",
             provider_clients={
                 "openai": self.openai_client,
                 "anthropic": self.anthropic_client,
-                "google": self.google_client,
+                "google": self.gemini_openai_client or self.google_client,
                 "xai": self.xai_client,
                 "deepseek": self.deepseek_client,
                 "openrouter": self.openrouter_client,
+                "nvidia": self.nvidia_client,
             },
         )
 
@@ -349,9 +447,9 @@ class TelegramSession:
                 variant=self.current_variant,
                 agent_mode="auto",
                 planner_model=self.planner_model or self.default_planner_model,
-                enabled_tool_packs=list(self.enabled_tool_packs),
-                telegram_bot_config_id=self.telegram_bot_config_id,
-                headless_eligible=self.headless_eligible,
+                enabled_tool_packs=list(getattr(self, "enabled_tool_packs", []) or default_enabled_tool_packs()),
+                telegram_bot_config_id=getattr(self, "telegram_bot_config_id", None),
+                headless_eligible=bool(getattr(self, "headless_eligible", False)),
             )
             self.session_manager.set_current_session(self.session.id)
             target_session_id = self.session.id
@@ -372,9 +470,9 @@ class TelegramSession:
                 variant=self.current_variant,
                 agent_mode="auto",
                 planner_model=self.planner_model or self.default_planner_model,
-                enabled_tool_packs=list(self.enabled_tool_packs),
-                telegram_bot_config_id=self.telegram_bot_config_id,
-                headless_eligible=self.headless_eligible,
+                enabled_tool_packs=list(getattr(self, "enabled_tool_packs", []) or default_enabled_tool_packs()),
+                telegram_bot_config_id=getattr(self, "telegram_bot_config_id", None),
+                headless_eligible=bool(getattr(self, "headless_eligible", False)),
             )
             self.session_manager.set_current_session(self.session.id)
             self.load_session_by_id(self.session.id)
@@ -389,7 +487,7 @@ class TelegramSession:
         try:
             from mobile_app.backend.session_bridge import AppSessionBridge
 
-            bridge = AppSessionBridge(user_id=self.user_id, workspace=workspace)
+            bridge = AppSessionBridge(user_id=self._sync_state_user_id(), workspace=workspace)
             current = bridge.get_current_session()
         except Exception:
             return None
@@ -409,6 +507,9 @@ class TelegramSession:
             if session_id:
                 return session_id
         return None
+
+    def _sync_state_user_id(self) -> int:
+        return int(self.sync_user_id) if self.sync_user_id is not None else int(self.user_id)
 
     def _preferred_session_workspace(self) -> Path:
         preferred = normalize_legacy_workspace_path(self.workspace, fallback=self.workspace)
@@ -441,6 +542,20 @@ class TelegramSession:
         self.tool_executor.allowed_tool_names_provider = (
             lambda: getattr(self, "current_turn_allowed_tool_names", None)
         )
+        workspace_for_security = str(getattr(self, "workspace", ""))
+        self.tool_executor.security_context_provider = lambda: {
+            "permission_mode": getattr(getattr(self, "session", None), "security_permission_mode", "standard"),
+            "workspace_path": workspace_for_security,
+            "workspace_binding_status": getattr(getattr(self, "session", None), "workspace_binding_status", None),
+            "workspace_write_enabled": (
+                None
+                if not workspace_for_security
+                else Path(workspace_for_security).expanduser().exists()
+            ),
+            "surface": "telegram",
+            "session_id": getattr(getattr(self, "session", None), "id", None),
+            "identity_id": getattr(getattr(self, "session", None), "fleet_identity_id", None),
+        }
         self.tool_executor.custom_tool_handlers = existing_handlers
         return self.tool_executor
 
@@ -457,6 +572,8 @@ class TelegramSession:
         self.context_loader = get_context_loader(resolved)
         self.live_config = LiveConfig(resolved / "config.json")
         self.live_config.import_from_env()
+        if not self.default_planner_model:
+            self.default_planner_model = self._configured_default_planner_model(self.current_model)
 
         heartbeat_manager = getattr(self, "heartbeat_manager", None)
         if heartbeat_manager and getattr(heartbeat_manager, "workspace", None) != resolved:
@@ -607,6 +724,7 @@ class TelegramSession:
         xai_key = self.config_manager.get_api_key("xai") or os.getenv("XAI_API_KEY")
         deepseek_key = self.config_manager.get_api_key("deepseek") or os.getenv("DEEPSEEK_API_KEY")
         openrouter_key = self.config_manager.get_api_key("openrouter") or os.getenv("OPENROUTER_API_KEY")
+        nvidia_key = self.config_manager.get_api_key("nvidia") or os.getenv("NVIDIA_API_KEY")
         google_key = self.config_manager.get_api_key("google") or os.getenv("GOOGLE_API_KEY")
 
         self.openai_client = OpenAI(api_key=openai_key) if openai_key else None
@@ -614,14 +732,11 @@ class TelegramSession:
         self.xai_client = OpenAI(api_key=xai_key, base_url="https://api.x.ai/v1") if xai_key else None
         self.deepseek_client = OpenAI(api_key=deepseek_key, base_url="https://api.deepseek.com") if deepseek_key else None
         self.openrouter_client = OpenAI(api_key=openrouter_key, base_url="https://openrouter.ai/api/v1") if openrouter_key else None
+        self.nvidia_client = OpenAI(api_key=nvidia_key, base_url="https://integrate.api.nvidia.com/v1") if nvidia_key else None
         
-        if HAS_GEMINI and google_key:
-            genai.configure(api_key=google_key)
-            self.google_client = genai
-            self.gemini_openai_client = OpenAI(
-                api_key=google_key,
-                base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
-            )
+        if google_key:
+            self.google_client = None
+            self.gemini_openai_client = create_gemini_openai_client(google_key)
         else:
             self.google_client = None
             self.gemini_openai_client = None
@@ -640,6 +755,7 @@ class TelegramSession:
             xai_client=self.xai_client,
             deepseek_client=self.deepseek_client,
             openrouter_client=self.openrouter_client,
+            nvidia_client=self.nvidia_client,
         )
 
     def get_available_models(self, candidate_models: Optional[List[str]] = None) -> List[str]:
@@ -658,14 +774,58 @@ class TelegramSession:
         for model in available:
             config = MODEL_CONFIGS.get(model, {})
             provider = str(config.get("provider", "unknown"))
-            api = str(config.get("api", "chat"))
             if provider == "google":
                 if self.gemini_openai_client is not None:
                     supported.append(model)
                 continue
-            if provider in {"openai", "anthropic", "xai", "deepseek", "openrouter"} and api != "responses":
+            if provider in {"openai", "anthropic", "xai", "deepseek", "openrouter", "nvidia"}:
                 supported.append(model)
+        default_planner = self._configured_default_planner_model(self.current_model)
+        if default_planner in supported:
+            supported = [default_planner, *[model for model in supported if model != default_planner]]
         return supported
+
+    def ensure_planner_model_available(self, candidate_models: Optional[List[str]] = None) -> bool:
+        """Keep automatic/default planner selection available and provider-aligned."""
+        supported_models = self.get_supported_planner_models(candidate_models)
+        supported = set(supported_models)
+        current_provider = provider_for_model(self.current_model)
+        planner_provider = provider_for_model(self.planner_model or "")
+        known_default_planners = {
+            OPENAI_DEFAULT_PLANNER_MODEL,
+            ANTHROPIC_DEFAULT_PLANNER_MODEL,
+            GOOGLE_DEFAULT_PLANNER_MODEL,
+        }
+        effective_default = self._configured_default_planner_model(self.current_model)
+        registry_first_planner = next((model for model in supported_models if model != effective_default), None)
+        changed = False
+
+        if self.planner_model:
+            planner_unavailable = self.planner_model not in supported
+            stale_default_provider = (
+                self.planner_model in known_default_planners
+                and current_provider in {"openai", "anthropic"}
+                and planner_provider
+                and planner_provider != current_provider
+            )
+            stale_registry_first_default = (
+                bool(effective_default)
+                and self.planner_model == registry_first_planner
+                and self.planner_model != effective_default
+            )
+            if planner_unavailable or stale_default_provider or stale_registry_first_default:
+                self.planner_model = None
+                changed = True
+
+        if self.planner_model is None:
+            next_default = effective_default
+            if next_default and next_default not in supported and supported_models:
+                next_default = supported_models[0]
+            if self.default_planner_model != next_default:
+                self.default_planner_model = next_default
+                changed = True
+
+        return changed
 
     def get_available_model_groups(self, candidate_models: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """Return filtered model groups by provider."""
@@ -678,13 +838,17 @@ class TelegramSession:
         """Move off an unavailable model when its provider is not configured."""
         available_models = self.get_available_models(candidate_models)
         preferred = first_available_model(available_models, self.current_model)
+        provider_default = self._provider_default_model_pair().model
+        if self.current_model not in available_models and provider_default in available_models:
+            preferred = provider_default
         if preferred is None or preferred == self.current_model:
-            return False
+            return self.ensure_planner_model_available(candidate_models)
 
         self.current_model = preferred
         available_variants = self.get_available_variants()
         if self.current_variant not in available_variants:
             self.current_variant = available_variants[0] if available_variants else "standard"
+        self.ensure_planner_model_available(candidate_models)
         return True
 
     def get_client_for_specific_model(self, model_name: str):
@@ -702,6 +866,8 @@ class TelegramSession:
             return self.deepseek_client, provider
         if provider == "openrouter":
             return self.openrouter_client, provider
+        if provider == "nvidia":
+            return self.nvidia_client, provider
         if provider == "google":
             return self.gemini_openai_client or self.google_client, provider
         return None, provider
@@ -721,8 +887,10 @@ class TelegramSession:
             return self.deepseek_client, provider
         if provider == "openrouter":
             return self.openrouter_client, provider
+        if provider == "nvidia":
+            return self.nvidia_client, provider
         if provider == "google":
-            return self.google_client, provider
+            return self.gemini_openai_client or self.google_client, provider
         return self.anthropic_client, "anthropic"
 
     def save_session(self):
@@ -756,6 +924,7 @@ class TelegramSession:
 
         # Update session with current runtime state
         session_obj.chat_history = self.chat_history
+        session_obj.event_timeline = list(getattr(self, "event_timeline", []) or [])
         session_obj.workspace = str(self.workspace)
         session_obj.model = self.current_model
         session_obj.variant = self.current_variant
@@ -784,16 +953,22 @@ class TelegramSession:
                 return
             raise RuntimeError("Cannot switch sessions while a task is still running")
 
-        session_obj = self.session_manager.load_session(session_id, set_current=set_current)
+        try:
+            session_obj = self.session_manager.load_session(session_id, set_current=set_current)
+        except TypeError:
+            session_obj = self.session_manager.load_session(session_id)
         self.session = session_obj
 
         # Sync to runtime state
         self.chat_history = session_obj.chat_history
+        self.event_timeline = list(getattr(session_obj, "event_timeline", []) or [])
         if session_obj.workspace:
             self.set_workspace(Path(session_obj.workspace))
-        self.current_model = session_obj.model
+        self.current_model = _normalize_model_name(session_obj.model)
         self.current_variant = session_obj.variant
         self.planner_model = session_obj.planner_model
+        if self.planner_model is None:
+            self.default_planner_model = self._configured_default_planner_model(self.current_model)
         self.enabled_tool_packs = list(getattr(session_obj, "enabled_tool_packs", []) or [])
         self.telegram_bot_config_id = getattr(session_obj, "telegram_bot_config_id", None)
         self.headless_eligible = bool(getattr(session_obj, "headless_eligible", False))
@@ -1057,14 +1232,14 @@ class TelegramSession:
             await self._handle_channel_sync_event(event)
 
         self._channel_sync_subscription_id = get_channel_sync_hub().subscribe(
-            user_id=self.user_id,
+            user_id=self._sync_state_user_id(),
             channel="telegram",
             callback=_callback,
             loop=self._loop,
         )
 
     def _telegram_bot_store(self) -> TelegramBotConfigStore:
-        store = TelegramBotConfigStore(user_id=self.user_id)
+        store = TelegramBotConfigStore(user_id=self._sync_state_user_id())
         store.ensure_default_from_env(bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""))
         return store
 
@@ -1236,9 +1411,6 @@ class TelegramSession:
         else:
             logger.info(f"🤖 {message.strip()}")
 
-        if not self._app:
-            return
-
         if "Turn" in message:
             text = f"🔄 {message.strip()}"
         elif "[TOOL]" in message:
@@ -1255,19 +1427,7 @@ class TelegramSession:
         else:
             text = message
 
-        try:
-            await bot.send_message(
-                chat_id=self.user_id,
-                text=text,
-                parse_mode=ParseMode.MARKDOWN,
-            )
-            self._mark_last_emitting_session()
-        except Exception:
-            try:
-                await bot.send_message(chat_id=self.user_id, text=text)
-                self._mark_last_emitting_session()
-            except Exception:
-                pass
+        await self._safe_send_bot_message(text)
 
 
 user_sessions: Dict[int, TelegramSession] = {}

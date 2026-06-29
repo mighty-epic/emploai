@@ -15,6 +15,7 @@ except ImportError:
 from openai import OpenAI
 from anthropic import Anthropic
 
+from cli.agent_tools.gemini_client import validate_gemini_api_key
 from cli.models.config import ProviderConfig, AppConfig
 from shared.runtime_paths import scoped_keyring_service, shared_state_root
 
@@ -29,6 +30,7 @@ PROVIDERS = [
     {"id": "google", "name": "Google (Gemini)", "key_prefix": "", "env_var": "GOOGLE_API_KEY"},
     {"id": "xai", "name": "xAI (Grok)", "key_prefix": "", "env_var": "XAI_API_KEY"},
     {"id": "deepseek", "name": "DeepSeek", "key_prefix": "sk-", "env_var": "DEEPSEEK_API_KEY"},
+    {"id": "nvidia", "name": "NVIDIA NIM", "key_prefix": "", "env_var": "NVIDIA_API_KEY"},
     {"id": "openrouter", "name": "OpenRouter", "key_prefix": "sk-or-", "env_var": "OPENROUTER_API_KEY"},
 ]
 
@@ -103,6 +105,7 @@ class ConfigManager:
             "xai": "XAI_API_KEY",
             "deepseek": "DEEPSEEK_API_KEY",
             "openrouter": "OPENROUTER_API_KEY",
+            "nvidia": "NVIDIA_API_KEY",
         }
         
         env_var = env_vars.get(provider, "")
@@ -161,7 +164,7 @@ class ConfigManager:
         except Exception:
             return False
     
-    def test_api_key(self, provider: str) -> tuple[bool, str]:
+    def test_api_key(self, provider: str, key_override: Optional[str] = None) -> tuple[bool, str]:
         """Test if an API key is valid by making a simple API call.
         
         Args:
@@ -170,7 +173,7 @@ class ConfigManager:
         Returns:
             Tuple of (success, message).
         """
-        key = self.get_api_key(provider)
+        key = key_override or self.get_api_key(provider)
         
         if not key:
             return False, "No API key configured"
@@ -189,12 +192,21 @@ class ConfigManager:
                 return True, "OK"
             
             elif provider == "google":
-                # Google Gemini validation would go here
-                return True, "OK (not validated)"
+                return validate_gemini_api_key(key)
             
             elif provider == "xai":
                 # xAI/Grok validation would go here
                 return True, "OK (not validated)"
+
+            elif provider == "nvidia":
+                client = OpenAI(api_key=key, base_url="https://integrate.api.nvidia.com/v1")
+                client.chat.completions.create(
+                    model="mistralai/ministral-14b-instruct-2512",
+                    messages=[{"role": "user", "content": "ping"}],
+                    max_tokens=1,
+                    temperature=0,
+                )
+                return True, "OK"
             
             return False, "Unknown provider"
             
@@ -210,14 +222,10 @@ class ConfigManager:
         Returns:
             True if enabled, False otherwise.
         """
-        config = self.load()
-        provider_config = config.providers.get(provider)
-        
-        if provider_config and provider_config.enabled:
-            return True
-        
-        # Also check if we have an API key (from env or keyring)
-        return self.get_api_key(provider) is not None
+        # The enabled flag is only metadata for the config UI. Runtime access is
+        # controlled by whether a usable key is available from keyring or env.
+        key = self.get_api_key(provider)
+        return bool(str(key or "").strip())
     
     def get_enabled_providers(self) -> list[str]:
         """Get list of enabled provider IDs.

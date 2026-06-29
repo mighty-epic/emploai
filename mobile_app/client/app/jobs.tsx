@@ -1,1 +1,5 @@
-export { default } from '@/screens/CronScreen';
+import { Redirect } from 'expo-router';
+
+export default function JobsRedirect() {
+  return <Redirect href="/cron" />;
+}

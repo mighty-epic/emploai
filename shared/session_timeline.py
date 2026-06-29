@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, Optional
 from uuid import uuid4
+from shared.security_policy import redact_json, redact_text
 
 
 MAX_TIMELINE_EVENTS = 2000
@@ -10,13 +11,14 @@ _BASE64_KEYS = frozenset({"image_base64", "base64", "image_data", "data", "scree
 
 
 def _truncate(text: Any, limit: int = 1200) -> str:
-    value = str(text or "").strip()
+    value = redact_text(str(text or "")).strip()
     if len(value) <= limit:
         return value
     return value[: limit - 3] + "..."
 
 
 def _safe_value(value: Any, *, limit: int = 120) -> str:
+    value = redact_json(value)
     if isinstance(value, dict):
         keys = [str(key) for key in value.keys() if str(key) not in _BASE64_KEYS]
         preview = ", ".join(keys[:4]) or "object"
@@ -28,7 +30,7 @@ def _safe_value(value: Any, *, limit: int = 120) -> str:
 
 def _tool_args_preview(tool_args: Dict[str, Any]) -> str:
     parts = []
-    for key, value in list((tool_args or {}).items())[:4]:
+    for key, value in list((redact_json(tool_args or {}) or {}).items())[:4]:
         value_str = str(value)
         if key in _BASE64_KEYS and len(value_str) > 100:
             continue
@@ -37,6 +39,7 @@ def _tool_args_preview(tool_args: Dict[str, Any]) -> str:
 
 
 def _tool_result_preview(tool_result: Any) -> tuple[str, str]:
+    tool_result = redact_json(tool_result)
     if isinstance(tool_result, dict):
         if "error" in tool_result:
             return "error", f"Error: {_truncate(tool_result.get('error'), 220)}"
@@ -59,8 +62,10 @@ def build_tool_timeline_event(
     channel: Optional[str] = None,
     source_format: Optional[str] = None,
 ) -> Dict[str, Any]:
-    args_preview = _tool_args_preview(tool_args)
-    tone, result_preview = _tool_result_preview(tool_result)
+    safe_args = redact_json(tool_args or {})
+    safe_result = redact_json(tool_result)
+    args_preview = _tool_args_preview(safe_args)
+    tone, result_preview = _tool_result_preview(safe_result)
     call_preview = f"{tool_name}({args_preview})" if args_preview else f"{tool_name}()"
     content = f"{call_preview}\n-> {result_preview} ({duration_ms:.0f}ms)"
     return create_timeline_event(

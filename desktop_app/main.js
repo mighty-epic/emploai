@@ -1,8 +1,10 @@
-const { app, BrowserWindow, ipcMain, shell, clipboard, net, protocol, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, clipboard, net, protocol, dialog, Menu, safeStorage } = require('electron');
 const { execFile, spawn, spawnSync } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
+const { createRemoteControlServices } = require('./remote_control_services');
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -20,21 +22,85 @@ protocol.registerSchemesAsPrivileged([
 const repoRoot = path.resolve(__dirname, '..');
 const desktopRoot = __dirname;
 const packagedRendererIndex = path.join(desktopRoot, 'renderer', 'index.html');
-const devRendererIndex = path.join(repoRoot, 'mobile_app', 'client', 'dist', 'index.html');
+const devRendererIndex = path.join(desktopRoot, 'renderer_client', 'dist', 'index.html');
 const packagedBackendExe = path.join(desktopRoot, 'backend', 'EmploAIBackend.exe');
 const configuredPythonCommand = String(process.env.EMPLOAI_DESKTOP_PYTHON || '').trim();
+const packagedRuntimeHomeName =
+  String(process.env.EMPLOAI_PACKAGED_RUNTIME_HOME_NAME || 'EmploAI Beta').trim() || 'EmploAI Beta';
+const backendHelperDefaultTimeoutMs = 120000;
+const backendBootstrapTimeoutMs = 30000;
+const runtimeSecretOverlayEnv = 'EMPLOAI_DESKTOP_RUNTIME_SECRET_OVERLAY_JSON';
 
 let mainWindow = null;
 let bootstrapCache = null;
 let runtimeStatusCache = null;
+let bootstrapRuntimePromise = null;
+let startLocalRuntimePromise = null;
+let runtimeStatusPromise = null;
 let shutdownForQuitPromise = null;
 let quitAfterManagedShutdown = false;
 let resolvedDevBackendCommand = null;
+
+function desktopDebugShortcutsEnabled() {
+  return (
+    String(process.env.EMPLOAI_DESKTOP_DEBUG_SHORTCUTS || '').trim() === '1' ||
+    String(process.env.EMPLOAI_DESKTOP_DEVTOOLS || '').trim() === '1'
+  );
+}
+
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  process.exit(0);
+}
+
+app.on('second-instance', () => {
+  showMainWindow('second_instance');
+});
 
 function emitRuntimeEvent(payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('emploai:runtime-event', payload);
   }
+}
+
+function authDebugEnabled() {
+  return String(process.env.EMPLOAI_AUTH_DEBUG || '').trim() === '1';
+}
+
+function tokenHashPrefix(token) {
+  const value = String(token || '').trim();
+  if (!value) {
+    return '';
+  }
+  return crypto.createHash('sha256').update(value, 'utf8').digest('hex').slice(0, 12);
+}
+
+let remoteControlService = null;
+
+function remoteControlServices() {
+  if (!remoteControlService) {
+    remoteControlService = createRemoteControlServices({
+      net,
+      shell,
+      safeStorage,
+      resolveRuntimeHome,
+      saveSetup,
+      getBootstrapCache: () => bootstrapCache,
+    });
+  }
+  return remoteControlService;
+}
+
+
+function logAuthDebug(label, payload) {
+  if (!authDebugEnabled()) {
+    return;
+  }
+  const tokenHash = tokenHashPrefix(payload?.accessToken);
+  console.log(
+    `[auth-debug] ${label} home=${resolveRuntimeHome()} api=${payload?.apiBaseUrl || ''} ` +
+    `runtime_ok=${Boolean(payload?.runtimeStatus?.ok)} token_hash=${tokenHash || '<empty>'}`
+  );
 }
 
 function commandAvailable(command, probeArgs = []) {
@@ -147,17 +213,27 @@ function resolveRendererAssetPath(rendererRoot, requestUrl) {
 function runBackendJson(args, options = {}) {
   const backend = resolveBackendCommand();
   const payload = options.input === undefined ? null : JSON.stringify(options.input);
+  const timeoutMs = Number.isFinite(Number(options.timeoutMs))
+    ? Math.max(1000, Math.trunc(Number(options.timeoutMs)))
+    : backendHelperDefaultTimeoutMs;
 
   return new Promise((resolve, reject) => {
+    let settled = false;
     const child = execFile(
       backend.command,
       [...backend.prefixArgs, ...args],
       {
         cwd: backend.cwd,
+        env: backendEnvironment(),
         maxBuffer: 8 * 1024 * 1024,
         windowsHide: true,
       },
       (error, stdout, stderr) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
         if (error) {
           if (error.code === 'ENOENT') {
             reject(new Error(`Backend helper command not found: ${backend.command}`));
@@ -178,9 +254,25 @@ function runBackendJson(args, options = {}) {
         }
       }
     );
+    const timeout = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      try {
+        child.kill();
+      } catch (_error) {
+        // no-op; the helper may already have exited.
+      }
+      reject(new Error(`Backend helper timed out after ${Math.round(timeoutMs / 1000)}s: ${args.join(' ')}`));
+    }, timeoutMs);
 
     if (payload !== null && child.stdin) {
       child.stdin.end(payload);
+      return;
+    }
+    if (child.stdin) {
+      child.stdin.end();
     }
   });
 }
@@ -195,6 +287,7 @@ function runBackendJsonStream(args, options = {}) {
       [...backend.prefixArgs, ...args],
       {
         cwd: backend.cwd,
+        env: backendEnvironment(),
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
       }
@@ -297,23 +390,57 @@ function runBackendJsonStream(args, options = {}) {
   });
 }
 
-function updateBootstrapCaches(payload) {
-  bootstrapCache = payload;
-  runtimeStatusCache = payload?.runtimeStatus || null;
+function attachLocalRuntimeSecretPreviews(payload) {
+  if (!payload || typeof payload !== 'object' || !payload.setupState) {
+    return payload;
+  }
+  payload.setupState = {
+    ...payload.setupState,
+    localRuntimeSecrets: remoteControlServices().runtimeSecretOverlayPreviews(),
+  };
+  return payload;
 }
 
-async function bootstrapRuntime() {
+function updateBootstrapCaches(payload) {
+  const nextPayload = attachLocalRuntimeSecretPreviews(payload);
+  bootstrapCache = nextPayload;
+  runtimeStatusCache = nextPayload?.runtimeStatus || null;
+}
+
+async function bootstrapRuntime(options = {}) {
+  if (bootstrapRuntimePromise) {
+    return bootstrapRuntimePromise;
+  }
+  bootstrapRuntimePromise = (async () => {
   emitRuntimeEvent({ type: 'bootstrap_start' });
-  const payload = await runBackendJson(['bootstrap', '--launch-if-needed']);
+  const args = ['bootstrap'];
+  if (options?.deferServices) {
+    args.push('--defer-services');
+  }
+  if (options?.launchIfNeeded) {
+    args.push('--launch-if-needed');
+  }
+  const payload = await runBackendJson(args, { timeoutMs: backendBootstrapTimeoutMs });
+  logAuthDebug('bootstrap', payload);
   updateBootstrapCaches(payload);
   emitRuntimeEvent({
     type: 'bootstrap_ready',
     payload,
   });
   return payload;
+  })();
+  try {
+    return await bootstrapRuntimePromise;
+  } finally {
+    bootstrapRuntimePromise = null;
+  }
 }
 
 async function startLocalRuntime(options = {}) {
+  if (startLocalRuntimePromise) {
+    return startLocalRuntimePromise;
+  }
+  startLocalRuntimePromise = (async () => {
   emitRuntimeEvent({ type: 'runtime_starting' });
   const attachTimeoutSeconds = Number.isFinite(Number(options?.attachTimeoutSeconds))
     ? Math.max(2, Math.trunc(Number(options.attachTimeoutSeconds)))
@@ -328,6 +455,9 @@ async function startLocalRuntime(options = {}) {
   if (restartAttachTimeoutSeconds) {
     args.push('--restart-attach-timeout-seconds', String(restartAttachTimeoutSeconds));
   }
+  if (options?.deferServices) {
+    args.push('--defer-services');
+  }
   const payload = await runBackendJson(args);
   updateBootstrapCaches(payload);
   emitRuntimeEvent({
@@ -335,6 +465,12 @@ async function startLocalRuntime(options = {}) {
     payload,
   });
   return payload;
+  })();
+  try {
+    return await startLocalRuntimePromise;
+  } finally {
+    startLocalRuntimePromise = null;
+  }
 }
 
 async function stopLocalRuntime() {
@@ -349,10 +485,20 @@ async function stopLocalRuntime() {
 }
 
 async function getRuntimeStatus() {
+  if (runtimeStatusPromise) {
+    return runtimeStatusPromise;
+  }
+  runtimeStatusPromise = (async () => {
   const status = await runBackendJson(['status']);
   runtimeStatusCache = status;
   emitRuntimeEvent({ type: 'runtime_status', payload: status });
   return status;
+  })();
+  try {
+    return await runtimeStatusPromise;
+  } finally {
+    runtimeStatusPromise = null;
+  }
 }
 
 async function getFreshRuntimeStatus() {
@@ -365,7 +511,12 @@ async function getFreshRuntimeStatus() {
 }
 
 async function saveSetup(payload) {
-  const next = await runBackendJson(['save-setup'], { input: payload });
+  const safePayload = {
+    ...(payload || {}),
+    values: remoteControlServices().sanitizeSetupValuesForLocal((payload || {}).values || {}),
+  };
+  remoteControlServices().rememberRuntimeSecretOverlay(safePayload.values);
+  const next = await runBackendJson(['save-setup'], { input: safePayload });
   updateBootstrapCaches(next);
   emitRuntimeEvent({
     type: 'setup_saved',
@@ -419,7 +570,11 @@ async function checkUpdates(force = false) {
 }
 
 async function installUpdate() {
-  const result = await runBackendJson(['install-update']);
+  const args = ['install-update'];
+  if (app.isPackaged && process.execPath) {
+    args.push('--restart-executable', process.execPath);
+  }
+  const result = await runBackendJson(args);
   if (result?.launched) {
     setTimeout(() => app.quit(), 250);
   }
@@ -463,6 +618,7 @@ async function copyManagedText(textValue) {
 }
 
 const SETUP_VALIDATION_TIMEOUT_MS = 8000;
+const NVIDIA_SETUP_VALIDATION_TIMEOUT_MS = 60000;
 
 function setupValidationResult(field, status, message) {
   return {
@@ -473,11 +629,12 @@ function setupValidationResult(field, status, message) {
 }
 
 async function fetchValidationPayload(url, options = {}) {
+  const { timeoutMs = SETUP_VALIDATION_TIMEOUT_MS, ...fetchOptions } = options || {};
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), SETUP_VALIDATION_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
-      ...options,
+      ...fetchOptions,
       signal: controller.signal,
     });
     const contentType = String(response.headers.get('content-type') || '').toLowerCase();
@@ -590,6 +747,28 @@ async function validateSetupField(fieldName, rawValue) {
       return response.ok
         ? setupValidationResult(field, 'valid', 'Valid DeepSeek key')
         : setupValidationResult(field, 'invalid', extractValidationMessage(payload, `DeepSeek rejected this key (${response.status})`, text));
+    }
+
+    if (field === 'NVIDIA_API_KEY') {
+      const { response, payload, text } = await fetchValidationPayload('https://integrate.api.nvidia.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${value}`,
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'mistralai/ministral-14b-instruct-2512',
+          messages: [{ role: 'user', content: 'ping' }],
+          max_tokens: 1,
+          temperature: 0,
+          stream: false,
+        }),
+        timeoutMs: NVIDIA_SETUP_VALIDATION_TIMEOUT_MS,
+      });
+      return response.ok
+        ? setupValidationResult(field, 'valid', 'Valid NVIDIA key')
+        : setupValidationResult(field, 'invalid', extractValidationMessage(payload, `NVIDIA rejected this key (${response.status})`, text));
     }
 
     if (field === 'OPENROUTER_API_KEY') {
@@ -941,6 +1120,55 @@ async function pickSidebarFolder(defaultPath) {
   return path.resolve(result.filePaths[0]);
 }
 
+function defaultAutomaticProjectParent() {
+  const documentsPath = app.getPath('documents') || app.getPath('home');
+  return path.resolve(path.join(documentsPath, 'EmploAI Chats'));
+}
+
+function defaultAutomaticProjectName() {
+  const now = new Date();
+  const stamp = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+    '-',
+    String(now.getHours()).padStart(2, '0'),
+    String(now.getMinutes()).padStart(2, '0'),
+    String(now.getSeconds()).padStart(2, '0'),
+  ].join('');
+  return `Chat-${stamp}-${crypto.randomBytes(2).toString('hex')}`;
+}
+
+function sanitizeAutomaticProjectName(value) {
+  const cleaned = String(value || '')
+    .trim()
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/[.\s]+$/g, '')
+    .slice(0, 80);
+  return cleaned || defaultAutomaticProjectName();
+}
+
+function createSidebarFolder(payload = {}) {
+  const parentPath = path.resolve(String(payload.parentPath || '').trim() || defaultAutomaticProjectParent());
+  const baseName = sanitizeAutomaticProjectName(payload.folderName);
+  fs.mkdirSync(parentPath, { recursive: true });
+
+  let candidate = path.join(parentPath, baseName);
+  let suffix = 2;
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(parentPath, `${baseName}-${suffix}`);
+    suffix += 1;
+  }
+  fs.mkdirSync(candidate);
+
+  return {
+    path: path.resolve(candidate),
+    parentPath,
+    folderName: path.basename(candidate),
+  };
+}
+
 function resolveRuntimeHome() {
   const configured = String(process.env.EMPLOAI_HOME || '').trim();
   if (configured) {
@@ -948,7 +1176,22 @@ function resolveRuntimeHome() {
   }
 
   const base = process.env.LOCALAPPDATA || process.env.APPDATA || app.getPath('home');
-  return path.resolve(path.join(base, 'EmploAI'));
+  const runtimeHomeName = app.isPackaged ? packagedRuntimeHomeName : 'EmploAI';
+  return path.resolve(path.join(base, runtimeHomeName));
+}
+
+function backendEnvironment() {
+  const env = {
+    ...process.env,
+    EMPLOAI_HOME: resolveRuntimeHome(),
+  };
+  const runtimeSecretOverlayJson = remoteControlServices().runtimeSecretOverlayEnvironment();
+  if (runtimeSecretOverlayJson) {
+    env[runtimeSecretOverlayEnv] = runtimeSecretOverlayJson;
+  } else {
+    delete env[runtimeSecretOverlayEnv];
+  }
+  return env;
 }
 
 function loadDesktopShutdownPreferences() {
@@ -990,6 +1233,14 @@ async function shutdownManagedProcessesForQuit() {
 }
 
 async function loadRenderer(window) {
+  if (String(process.env.EMPLOAI_DESKTOP_CLEAR_RENDERER_CACHE || '').trim() === '1') {
+    try {
+      await window.webContents.session.clearCache();
+    } catch (_error) {
+      // Renderer cache is an optimization only; startup should continue if it cannot be cleared.
+    }
+  }
+
   const devUrl = process.env.EMPLOAI_DESKTOP_RENDERER_URL;
   if (devUrl) {
     await window.loadURL(devUrl);
@@ -1001,14 +1252,15 @@ async function loadRenderer(window) {
     const html = [
       '<html><body style="background:#0b1020;color:#fff;font-family:Segoe UI;padding:32px;">',
       '<h2>Desktop renderer not built</h2>',
-      '<p>Run <code>npm --prefix mobile_app/client run export:web</code> before launching the desktop shell without a dev server.</p>',
+      '<p>Run <code>npm --prefix desktop_app/renderer_client run export:web</code> before launching the desktop shell without a dev server.</p>',
       '</body></html>',
     ].join('');
     await window.loadURL(`data:text/html,${encodeURIComponent(html)}`);
     return;
   }
 
-  await window.loadURL('emploai://renderer/');
+  const rendererVersion = encodeURIComponent(app.getVersion() || 'dev');
+  await window.loadURL(`emploai://renderer/?v=${rendererVersion}`);
 }
 
 async function createWindow() {
@@ -1019,6 +1271,12 @@ async function createWindow() {
     minHeight: 760,
     backgroundColor: '#0b1020',
     autoHideMenuBar: true,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#202020',
+      symbolColor: '#e8e8e8',
+      height: 34,
+    },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -1027,32 +1285,122 @@ async function createWindow() {
     },
   });
 
+  mainWindow.setMenu(null);
+  mainWindow.setMenuBarVisibility(false);
+  installRendererSecurityHandlers(mainWindow);
   await loadRenderer(mainWindow);
 }
 
+function hideMainWindowForSleepMode() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { ok: false, hidden: false, detail: 'Desktop window is not available' };
+  }
+  mainWindow.hide();
+  return { ok: true, hidden: true };
+}
+
+function showMainWindow(reason = 'activate') {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { ok: false, shown: false, detail: 'Desktop window is not available' };
+  }
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  mainWindow.show();
+  mainWindow.focus();
+  emitRuntimeEvent({
+    type: 'desktop_window_reopened',
+    payload: { reason },
+  });
+  return { ok: true, shown: true };
+}
+
+function isAllowedRendererNavigation(rawUrl) {
+  try {
+    const parsed = new URL(String(rawUrl || ''));
+    return parsed.protocol === 'emploai:' || parsed.protocol === 'data:';
+  } catch (_error) {
+    return false;
+  }
+}
+
+function isAllowedRendererWindowOpen(rawUrl) {
+  try {
+    const parsed = new URL(String(rawUrl || ''));
+    return parsed.protocol === 'blob:';
+  } catch (_error) {
+    return false;
+  }
+}
+
+function installRendererSecurityHandlers(window) {
+  window.webContents.on('before-input-event', (event, input) => {
+    if (desktopDebugShortcutsEnabled()) {
+      return;
+    }
+
+    const key = String(input.key || '').toLowerCase();
+    const controlOrMeta = Boolean(input.control || input.meta);
+    const reloadShortcut =
+      key === 'f5' ||
+      (controlOrMeta && key === 'r');
+    const devtoolsShortcut =
+      key === 'f12' ||
+      (controlOrMeta && input.shift && key === 'i') ||
+      (controlOrMeta && input.alt && key === 'i');
+
+    if (reloadShortcut || devtoolsShortcut) {
+      event.preventDefault();
+    }
+  });
+
+  window.webContents.on('devtools-opened', () => {
+    if (!desktopDebugShortcutsEnabled()) {
+      window.webContents.closeDevTools();
+    }
+  });
+
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAllowedRendererWindowOpen(url)) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          autoHideMenuBar: true,
+          webPreferences: {
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
+            spellcheck: false,
+          },
+        },
+      };
+    }
+    return { action: 'deny' };
+  });
+
+  window.webContents.on('will-navigate', (event, url) => {
+    if (!isAllowedRendererNavigation(url)) {
+      event.preventDefault();
+    }
+  });
+
+  window.webContents.on('will-attach-webview', (event) => {
+    event.preventDefault();
+  });
+}
+
 app.whenReady().then(async () => {
+  Menu.setApplicationMenu(null);
+
   protocol.handle('emploai', (request) => {
     const rendererRoot = resolveRendererRoot();
     const targetFile = resolveRendererAssetPath(rendererRoot, new URL(request.url));
     return net.fetch(pathToFileURL(targetFile).toString());
   });
 
-  ipcMain.handle('emploai:bootstrap', async () => {
-    const status = await getFreshRuntimeStatus();
-    if (
-      bootstrapCache &&
-      bootstrapCache.accessToken &&
-      status?.ok
-    ) {
-      const nextPayload = {
-        ...bootstrapCache,
-        runtimeStatus: status,
-      };
-      updateBootstrapCaches(nextPayload);
-      return nextPayload;
-    }
+  ipcMain.handle('emploai:bootstrap', async (_event, payload) => {
     bootstrapCache = null;
-    return bootstrapRuntime();
+    return bootstrapRuntime(payload || {});
   });
 
   ipcMain.handle('emploai:get-runtime-status', async () => getRuntimeStatus());
@@ -1061,6 +1409,48 @@ app.whenReady().then(async () => {
   ipcMain.handle('emploai:runtime:stop', async () => stopLocalRuntime());
   ipcMain.handle('emploai:setup:save', async (_event, payload) => saveSetup(payload || {}));
   ipcMain.handle('emploai:setup:validate-field', async (_event, payload) => validateSetupField(payload?.field, payload?.value));
+  ipcMain.handle('emploai:remote-auth:status', async () => remoteControlServices().remoteAuthStatus());
+  ipcMain.handle('emploai:remote-auth:login', async (_event, payload) => remoteControlServices().remoteAuthLogin(payload || {}));
+  ipcMain.handle('emploai:remote-auth:google-login', async (_event, payload) => remoteControlServices().remoteAuthGoogleLogin(payload || {}));
+  ipcMain.handle('emploai:remote-auth:register', async (_event, payload) => remoteControlServices().remoteAuthRegister(payload || {}));
+  ipcMain.handle('emploai:remote-auth:otp-verify', async (_event, payload) => remoteControlServices().remoteAuthVerifyOtp(payload || {}));
+  ipcMain.handle('emploai:remote-auth:otp-resend', async (_event, payload) => remoteControlServices().remoteAuthResendOtp(payload || {}));
+  ipcMain.handle('emploai:remote-auth:logout', async () => remoteControlServices().remoteAuthLogout());
+  ipcMain.handle('emploai:remote-auth:create-pairing-token', async () => remoteControlServices().remoteAuthCreatePairingToken());
+  ipcMain.handle('emploai:remote-auth:list-secrets', async (_event, payload) => remoteControlServices().remoteAuthListSecrets(payload || {}));
+  ipcMain.handle('emploai:remote-auth:save-setup-secrets', async (_event, payload) => remoteControlServices().remoteAuthSaveSetupSecrets(payload || {}));
+  ipcMain.handle('emploai:remote-auth:save-secrets', async (_event, payload) => remoteControlServices().remoteAuthSaveSecrets(payload || {}));
+  ipcMain.handle('emploai:remote-auth:apply-account-data', async () => remoteControlServices().remoteAuthApplyAccountData());
+  ipcMain.handle('emploai:remote-auth:delete-secret', async (_event, payload) => remoteControlServices().remoteAuthDeleteSecret(payload || {}));
+  ipcMain.handle('emploai:remote-auth:delete-account-data', async (_event, payload) => remoteControlServices().remoteAuthDeleteAccountData(payload || {}));
+  ipcMain.handle('emploai:remote-auth:profile', async () => remoteControlServices().remoteAuthProfile());
+  ipcMain.handle('emploai:remote-auth:update-profile', async (_event, payload) => remoteControlServices().remoteAuthUpdateProfile(payload || {}));
+  ipcMain.handle('emploai:remote-auth:apply-setup-secrets', async (_event, payload) => remoteControlServices().remoteAuthApplySetupSecrets(payload || {}));
+  ipcMain.handle('emploai:fleet:snapshot', async () => remoteControlServices().fleetSnapshot());
+  ipcMain.handle('emploai:fleet:set-active-identity', async (_event, payload) => remoteControlServices().fleetSetActiveIdentity(payload || {}));
+  ipcMain.handle('emploai:fleet:set-identity-active-chat', async (_event, payload) => remoteControlServices().fleetSetIdentityActiveChat(payload || {}));
+  ipcMain.handle('emploai:fleet:create-local-worker', async (_event, payload) => remoteControlServices().fleetCreateLocalWorker(payload || {}));
+  ipcMain.handle('emploai:fleet:create-enrollment', async (_event, payload) => remoteControlServices().fleetCreateEnrollment(payload || {}));
+  ipcMain.handle('emploai:fleet:rename-worker', async (_event, payload) => remoteControlServices().fleetRenameWorker(payload || {}));
+  ipcMain.handle('emploai:fleet:reset-worker', async (_event, payload) => remoteControlServices().fleetResetWorker(payload || {}));
+  ipcMain.handle('emploai:fleet:delete-worker', async (_event, payload) => remoteControlServices().fleetDeleteWorker(payload || {}));
+  ipcMain.handle('emploai:fleet:stop-worker', async (_event, payload) => remoteControlServices().fleetStopWorker(payload || {}));
+  ipcMain.handle('emploai:fleet:stop-all', async (_event, payload) => remoteControlServices().fleetStopAll(payload || {}));
+  ipcMain.handle('emploai:fleet:request-worker-preview', async (_event, payload) => remoteControlServices().fleetRequestWorkerPreview(payload || {}));
+  ipcMain.handle('emploai:fleet:create-group', async (_event, payload) => remoteControlServices().fleetCreateGroup(payload || {}));
+  ipcMain.handle('emploai:fleet:update-group', async (_event, payload) => remoteControlServices().fleetUpdateGroup(payload || {}));
+  ipcMain.handle('emploai:fleet:delete-group', async (_event, payload) => remoteControlServices().fleetDeleteGroup(payload || {}));
+  ipcMain.handle('emploai:fleet:assign-task', async (_event, payload) => remoteControlServices().fleetAssignTask(payload || {}));
+  ipcMain.handle('emploai:fleet:assign-group-task', async (_event, payload) => remoteControlServices().fleetAssignGroupTask(payload || {}));
+  ipcMain.handle('emploai:fleet:continue-worker-queue', async (_event, payload) => remoteControlServices().fleetContinueWorkerQueue(payload || {}));
+  ipcMain.handle('emploai:fleet:reorder-tasks', async (_event, payload) => remoteControlServices().fleetReorderTasks(payload || {}));
+  ipcMain.handle('emploai:fleet:redirect-task', async (_event, payload) => remoteControlServices().fleetRedirectTask(payload || {}));
+  ipcMain.handle('emploai:fleet:update-task-status', async (_event, payload) => remoteControlServices().fleetUpdateTaskStatus(payload || {}));
+  ipcMain.handle('emploai:fleet:create-task-report', async (_event, payload) => remoteControlServices().fleetCreateTaskReport(payload || {}));
+  ipcMain.handle('emploai:fleet:search-reports', async (_event, payload) => remoteControlServices().fleetSearchReports(payload || {}));
+  ipcMain.handle('emploai:fleet:upsert-workspace-binding', async (_event, payload) => remoteControlServices().fleetUpsertWorkspaceBinding(payload || {}));
+  ipcMain.handle('emploai:fleet:request-tool-grant', async (_event, payload) => remoteControlServices().fleetRequestToolGrant(payload || {}));
+  ipcMain.handle('emploai:fleet:decide-tool-grant', async (_event, payload) => remoteControlServices().fleetDecideToolGrant(payload || {}));
   ipcMain.handle('emploai:voice-packs:install', async (_event, packId) => installVoicePack(packId));
   ipcMain.handle('emploai:voice-packs:remove', async (_event, packId) => removeVoicePack(packId));
   ipcMain.handle('emploai:voice-packs:set-default-engine', async (_event, engine) => setDefaultVoiceEngine(engine));
@@ -1074,16 +1464,20 @@ app.whenReady().then(async () => {
   ipcMain.handle('emploai:sidebar:read-state', async () => readSidebarState());
   ipcMain.handle('emploai:sidebar:write-state', async (_event, payload) => writeSidebarState(payload?.state ?? null));
   ipcMain.handle('emploai:sidebar:pick-folder', async (_event, payload) => pickSidebarFolder(payload?.defaultPath));
+  ipcMain.handle('emploai:sidebar:create-folder', async (_event, payload) => createSidebarFolder(payload || {}));
   ipcMain.handle('emploai:sidebar:path-status', async (_event, payload) => getSidebarPathStatus(payload?.path));
   ipcMain.handle('emploai:sidebar:git-repo-info', async (_event, payload) => getSidebarGitRepoInfo(payload?.path));
   ipcMain.handle('emploai:sidebar:checkout-branch', async (_event, payload) => checkoutSidebarGitBranch(payload?.path, payload?.branch));
+  ipcMain.handle('emploai:window:sleep-hide', async () => hideMainWindowForSleepMode());
 
   await createWindow();
 
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       await createWindow();
+      return;
     }
+    showMainWindow('activate');
   });
 });
 

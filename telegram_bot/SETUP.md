@@ -84,7 +84,7 @@ From the `emploai/` directory:
 pip install -r requirements.txt
 ```
 
-This installs everything: LLM clients (OpenAI, Anthropic, Google), Selenium, PyAutoGUI, Tesseract bindings, Telegram bot library, and more.
+This installs everything: LLM clients (OpenAI, Anthropic, Google, NVIDIA-compatible OpenAI clients), Selenium, PyAutoGUI, Tesseract bindings, Telegram bot library, and more.
 
 If you get errors on specific packages:
 
@@ -184,6 +184,7 @@ The bot only responds to authorized user IDs. To find yours:
    XAI_API_KEY=xai-...
    GEMINI_API_KEY=AIza...
    DEEPSEEK_API_KEY=sk-...
+   NVIDIA_API_KEY=...
    OPENROUTER_API_KEY=sk-or-...
    
    # === BETA MODE (leave as true) ===
@@ -336,7 +337,7 @@ Once the bot is running, these commands are available in Telegram:
 
 ### Model not available
 - If running in BETA_MODE, only cheap Anthropic models (Claude Haiku) are available
-- All OpenAI, Gemini, xAI, DeepSeek, and OpenRouter models are unrestricted
+- All OpenAI, Gemini, xAI, DeepSeek, NVIDIA NIM, and OpenRouter models are unrestricted
 - Check available models with `/models`
 
 ---

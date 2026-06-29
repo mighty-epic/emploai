@@ -154,7 +154,7 @@ class ChatProcessor:
             if provider == "anthropic":
                 client = self.anthropic
             elif provider == "google":
-                client = self.genai
+                client = getattr(self, "gemini_openai_client", None) or self.genai
             elif provider == "openai":
                 client = self.client
             elif provider == "xai":
@@ -163,6 +163,8 @@ class ChatProcessor:
                 client = getattr(self, "deepseek_client", None)
             elif provider == "openrouter":
                 client = getattr(self, "openrouter_client", None)
+            elif provider == "nvidia":
+                client = getattr(self, "nvidia_client", None)
 
             if not client:
                 return CommandResult(False, f"{provider.upper()} client or API key not configured.")

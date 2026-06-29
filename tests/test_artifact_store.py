@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from mobile_app.backend import session_bridge
+from shared import channel_runtime
 from shared.artifact_store import ChatArtifactStore
 
 
@@ -49,6 +50,61 @@ def test_artifact_store_builds_index_and_retrieval(monkeypatch, tmp_path: Path) 
     assert second.artifact_id in combined
     assert "Brussels is the capital of Belgium" in combined
     assert "Should never appear" not in combined
+
+
+def test_generated_artifacts_are_cloud_mirrored_with_quota_metadata(monkeypatch, tmp_path: Path) -> None:
+    runtime_home = tmp_path / "runtime"
+    runtime_home.mkdir()
+    monkeypatch.setenv("EMPLOAI_HOME", str(runtime_home))
+
+    store = ChatArtifactStore(user_id=77, session_id="sess-cloud")
+    record = store.create_text_artifact(
+        artifact_kind="command_output",
+        title="Command output",
+        text="important generated output",
+        source_kind="agent",
+    )
+
+    assert record.metadata["cloud_sync_status"] == "synced"
+    assert record.metadata["cloud_object_key"]
+    assert record.metadata["cloud_storage_backend"] == "vps_object_store"
+
+    upload = store.create_text_artifact(
+        artifact_kind="upload",
+        title="Upload: private.txt",
+        text="user supplied file",
+        source_kind="upload",
+    )
+    assert "cloud_sync_status" not in upload.metadata
+
+
+def test_screen_artifact_uses_sidecar_vision_summary(monkeypatch, tmp_path: Path) -> None:
+    runtime_home = tmp_path / "runtime"
+    runtime_home.mkdir()
+    monkeypatch.setenv("EMPLOAI_HOME", str(runtime_home))
+
+    store = ChatArtifactStore(user_id=77, session_id="sess-vision")
+    artifact_ids = channel_runtime._capture_tool_artifact_ids(
+        SimpleNamespace(workspace=str(tmp_path)),
+        store=store,
+        tool_name="describe_screen",
+        tool_args={"question": "Did the requested file open?"},
+        tool_result={
+            "image_base64": "ZmFrZQ==",
+            "description": "Screenshot captured successfully.",
+            "question": "Did the requested file open?",
+            "vision_question": "Did the requested file open?",
+            "vision_summary": "Notepad is visible with the exact requested file content.",
+        },
+        task_id=1,
+    )
+
+    assert len(artifact_ids) == 1
+    record = store.get_record(artifact_ids[0])
+    assert record is not None
+    assert "Vision summary: Notepad is visible" in record.summary_text
+    assert "Question: Did the requested file open?" in record.summary_text
+    assert record.metadata["tool_result"]["image_base64"].startswith("[omitted image data")
 
 
 def test_session_bridge_upload_creates_chat_artifact(monkeypatch, tmp_path: Path) -> None:

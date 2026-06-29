@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class ModelConfig:
     """Configuration for a specific model."""
     name: str
-    provider: str  # anthropic, openai, google, xai, deepseek, openrouter
+    provider: str  # anthropic, openai, google, xai, deepseek, openrouter, nvidia
     model_id: str
     supports_thinking: bool = False
     supports_tools: bool = True
@@ -606,7 +606,7 @@ class UnifiedToolRegistry:
         ]
     
     def _format_for_openai(self) -> List[Dict]:
-        """Format tools for OpenAI API (also works for XAI, DeepSeek, OpenRouter)."""
+        """Format tools for OpenAI API (also works for XAI, DeepSeek, OpenRouter, NVIDIA)."""
         return [
             {
                 'type': 'function',
@@ -706,7 +706,7 @@ class UnifiedAgent:
                 # Call model with provider-specific logic
                 if self.model_config.provider == 'anthropic':
                     response = self._call_anthropic(tools)
-                elif self.model_config.provider in ['openai', 'xai', 'deepseek', 'openrouter']:
+                elif self.model_config.provider in ['openai', 'xai', 'deepseek', 'openrouter', 'nvidia']:
                     response = self._call_openai_compatible(tools)
                 elif self.model_config.provider == 'google':
                     response = self._call_google(tools)
@@ -733,7 +733,7 @@ class UnifiedAgent:
     
     def _call_anthropic(self, tools: List[Dict]) -> Any:
         """Call Anthropic API with correct message formatting."""
-        system_text = ""
+        system_parts = []
         anthropic_messages = []
         
         for m in self.conversation_history:
@@ -741,7 +741,8 @@ class UnifiedAgent:
             content = m.get("content")
             
             if role == "system":
-                system_text = content
+                if content:
+                    system_parts.append(str(content))
                 continue
             
             if role == "assistant" and m.get("tool_calls"):
@@ -776,7 +777,7 @@ class UnifiedAgent:
         response = self.client.messages.create(
             model=self.model_config.model_id,
             max_tokens=4096,
-            system=system_text if system_text else None,
+            system="\n\n".join(system_parts) if system_parts else None,
             tools=tools if tools else None,
             messages=anthropic_messages
         )
@@ -865,7 +866,7 @@ class UnifiedAgent:
         """Check if the task is complete (no more tool calls)."""
         if self.model_config.provider == 'anthropic':
             return response.stop_reason == 'end_turn'
-        elif self.model_config.provider in ['openai', 'xai', 'deepseek', 'openrouter']:
+        elif self.model_config.provider in ['openai', 'xai', 'deepseek', 'openrouter', 'nvidia']:
             message = response.choices[0].message
             return not hasattr(message, 'tool_calls') or message.tool_calls is None
         elif self.model_config.provider == 'google':
@@ -879,7 +880,7 @@ class UnifiedAgent:
                 if hasattr(block, 'text'):
                     return block.text
             return str(response.content)
-        elif self.model_config.provider in ['openai', 'xai', 'deepseek', 'openrouter']:
+        elif self.model_config.provider in ['openai', 'xai', 'deepseek', 'openrouter', 'nvidia']:
             return response.choices[0].message.content or "Task completed"
         elif self.model_config.provider == 'google':
             return response.text if hasattr(response, 'text') else str(response)
@@ -954,7 +955,7 @@ class UnifiedAgent:
                     })
             return tool_calls
         
-        elif self.model_config.provider in ['openai', 'xai', 'deepseek', 'openrouter']:
+        elif self.model_config.provider in ['openai', 'xai', 'deepseek', 'openrouter', 'nvidia']:
             message = response.choices[0].message
             if hasattr(message, 'tool_calls') and message.tool_calls:
                 return [
@@ -993,7 +994,7 @@ class UnifiedAgent:
                 'content': content
             })
         
-        elif self.model_config.provider in ['openai', 'xai', 'deepseek', 'openrouter']:
+        elif self.model_config.provider in ['openai', 'xai', 'deepseek', 'openrouter', 'nvidia']:
             for result in tool_results:
                 self.conversation_history.append({
                     'role': 'tool',
@@ -1064,12 +1065,14 @@ def create_unified_agent(
         "claude-sonnet-4": ModelConfig(name="claude-sonnet-4", provider="anthropic", model_id="claude-sonnet-4-20250514", max_context=200000),
         "claude-opus-4": ModelConfig(name="claude-opus-4", provider="anthropic", model_id="claude-opus-4-20250514", max_context=200000),
         "claude-haiku-4": ModelConfig(name="claude-haiku-4", provider="anthropic", model_id="claude-haiku-4-5-20251001", max_context=200000),
-        "gemini-3-pro": ModelConfig(name="gemini-3-pro", provider="google", model_id="gemini-3-pro", max_context=1048576),
-        "gemini-3-flash": ModelConfig(name="gemini-3-flash", provider="google", model_id="gemini-3-flash", max_context=1048576),
+        "gemini-3.5-flash": ModelConfig(name="gemini-3.5-flash", provider="google", model_id="gemini-3.5-flash", max_context=1048576),
+        "gemini-3.1-pro-preview": ModelConfig(name="gemini-3.1-pro-preview", provider="google", model_id="gemini-3.1-pro-preview", max_context=1048576),
+        "gemini-3.1-pro-preview-customtools": ModelConfig(name="gemini-3.1-pro-preview-customtools", provider="google", model_id="gemini-3.1-pro-preview-customtools", max_context=1048576),
+        "gemini-3-flash-preview": ModelConfig(name="gemini-3-flash-preview", provider="google", model_id="gemini-3-flash-preview", max_context=1048576),
+        "gemini-3.1-flash-lite": ModelConfig(name="gemini-3.1-flash-lite", provider="google", model_id="gemini-3.1-flash-lite", max_context=1048576),
         "gemini-2.5-pro": ModelConfig(name="gemini-2.5-pro", provider="google", model_id="gemini-2.5-pro", max_context=1048576),
         "gemini-2.5-flash": ModelConfig(name="gemini-2.5-flash", provider="google", model_id="gemini-2.5-flash", max_context=1048576),
-        "gemini-2.0-flash": ModelConfig(name="gemini-2.0-flash", provider="google", model_id="gemini-2.0-flash-exp", max_context=1048576),
-        "gemini-1.5-pro": ModelConfig(name="gemini-1.5-pro", provider="google", model_id="gemini-1.5-pro", max_context=2097152),
+        "gemini-2.5-flash-lite": ModelConfig(name="gemini-2.5-flash-lite", provider="google", model_id="gemini-2.5-flash-lite", max_context=1048576),
         "grok-4.1-fast-reasoning": ModelConfig(name="grok-4.1-fast-reasoning", provider="xai", model_id="grok-4-1-fast-reasoning", max_context=2000000),
         "grok-4.1-fast-non-reasoning": ModelConfig(name="grok-4.1-fast-non-reasoning", provider="xai", model_id="grok-4-1-fast-non-reasoning", max_context=2000000),
         "grok-code-fast-1": ModelConfig(name="grok-code-fast-1", provider="xai", model_id="grok-code-fast-1", max_context=256000),
@@ -1089,12 +1092,30 @@ def create_unified_agent(
     
     config = model_configs.get(model_name)
     if not config:
-        config = ModelConfig(
-            name=model_name,
-            provider='openai',
-            model_id=model_name,
-            max_context=128000
-        )
+        registry_config = None
+        try:
+            from cli.tui_constants import MODEL_CONFIGS
+
+            registry_config = MODEL_CONFIGS.get(model_name)
+        except Exception:
+            registry_config = None
+
+        if registry_config:
+            config = ModelConfig(
+                name=model_name,
+                provider=str(registry_config.get("provider", "openai")),
+                model_id=str(registry_config.get("id", model_name)),
+                supports_thinking=bool(registry_config.get("reasoning", False)),
+                max_context=int(registry_config.get("context", 128000) or 128000),
+                api_type=str(registry_config.get("api", "chat") or "chat"),
+            )
+        else:
+            config = ModelConfig(
+                name=model_name,
+                provider='openai',
+                model_id=model_name,
+                max_context=128000
+            )
     
     provider = config.provider
     

@@ -18,10 +18,13 @@
     "enable_semantic_search": false
   },
   "agent": {
-    "default_model": "claude-sonnet-4-5",
+    "default_model": "auto",
+    "default_planner_model": "auto",
     "default_mode": "auto",
     "max_turns": 100,
-    "context_compression_threshold": 0.5
+    "context_compression_threshold": 0.5,
+    "final_quality_guard": "planner",
+    "final_quality_max_auto_continues": 2
   },
   "skills": {
     "auto_trigger": true,
@@ -43,6 +46,22 @@
   "browser": {
     "use_extension": false
   },
+  "voice": {
+    "selection_source": "settings",
+    "default_engine": "english_local",
+    "packs": {
+      "english_local": {
+        "requested": true,
+        "display_name": "English voice pack",
+        "placeholder": false
+      },
+      "hebrew_local": {
+        "requested": true,
+        "display_name": "Hebrew voice pack",
+        "placeholder": false
+      }
+    }
+  },
   "channels": {
     "telegram": {
       "enabled": true
@@ -54,6 +73,13 @@
       "auth_mode": "token",
       "steering_beta": false,
       "push_notifications": false
+    },
+    "desktop": {
+      "enabled": true,
+      "host": "127.0.0.1",
+      "port": 8787,
+      "auto_start": false,
+      "attach_timeout_seconds": 20
     }
   }
 }

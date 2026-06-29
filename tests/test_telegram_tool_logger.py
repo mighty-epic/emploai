@@ -33,3 +33,20 @@ def test_log_tool_call_survives_non_utf_console(monkeypatch):
     rendered = "".join(stream.writes)
     assert "TOOL CALL: describe_screen" in rendered
     assert "[OPENAI]" in rendered
+
+
+def test_log_tool_call_redacts_secret_values(monkeypatch):
+    logged = []
+
+    monkeypatch.setattr(tool_logger.tool_logger, "info", lambda message, *args, **kwargs: logged.append(str(message)))
+
+    tool_logger.log_tool_call(
+        "run_command",
+        {"command": "echo sk-live-secret1234567890", "password": "plain-secret"},
+        provider="openai",
+    )
+
+    rendered = "\n".join(logged)
+    assert "sk-live-secret1234567890" not in rendered
+    assert "plain-secret" not in rendered
+    assert "[REDACTED_SECRET]" in rendered

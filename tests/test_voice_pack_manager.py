@@ -20,6 +20,16 @@ def _write_hebrew_pack(root: Path) -> None:
         (root / filename).write_text(filename, encoding="utf-8")
 
 
+def _write_kokoro_tts_pack(root: Path) -> None:
+    models_dir = root / "models"
+    site_packages_dir = root / "site-packages" / "kokoro_onnx"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    site_packages_dir.mkdir(parents=True, exist_ok=True)
+    (models_dir / "kokoro-v1.0.onnx").write_text("onnx", encoding="utf-8")
+    (models_dir / "voices-emploai-v1.0.bin").write_text("voices", encoding="utf-8")
+    (site_packages_dir / "__init__.py").write_text("", encoding="utf-8")
+
+
 def test_packaged_release_ignores_local_english_override(monkeypatch, tmp_path: Path):
     runtime_home = tmp_path / "runtime-home"
     override_dir = tmp_path / "override-english"
@@ -88,4 +98,30 @@ def test_install_english_voice_pack_reports_progress(monkeypatch, tmp_path: Path
     assert events[0]["state"] == "starting"
     assert any(event["state"] == "downloading" for event in events)
     assert any(event["state"] == "verifying" for event in events)
+    assert events[-1]["state"] == "ready"
+
+
+def test_install_kokoro_tts_voice_pack_from_local_source(monkeypatch, tmp_path: Path):
+    runtime_home = tmp_path / "runtime-home"
+    source_dir = tmp_path / "kokoro-source"
+    _write_kokoro_tts_pack(source_dir)
+
+    monkeypatch.setattr(voice_pack_manager, "runtime_root", lambda: runtime_home)
+    monkeypatch.setattr(voice_pack_manager.sys, "frozen", False, raising=False)
+    monkeypatch.delenv(voice_pack_manager.ALLOW_DEV_VOICE_PACK_SOURCES_ENV, raising=False)
+    monkeypatch.delenv(voice_pack_manager.APP_TTS_KOKORO_PACK_DIR_ENV, raising=False)
+    monkeypatch.delenv(voice_pack_manager.KOKORO_TTS_PACK_ARCHIVE_URL_ENV, raising=False)
+    monkeypatch.setenv(voice_pack_manager.KOKORO_TTS_PACK_SOURCE_DIR_ENV, str(source_dir))
+    monkeypatch.setenv(voice_pack_manager.APP_TTS_KOKORO_PACK_REPO_ENV, "mighty1234/emploai-kokoro-tts-pack")
+
+    events: list[dict[str, object]] = []
+    status = voice_pack_manager.install_voice_pack("kokoro_tts", progress_callback=events.append)
+
+    assert status["installed"] is True
+    assert status["available"] is True
+    assert status["manifest_verified"] is True
+    assert Path(status["model_dir"]).resolve() == (runtime_home / "voice_packs" / "kokoro_tts").resolve()
+    assert status["manifest"]["pack_id"] == voice_pack_manager.DEFAULT_KOKORO_TTS_PACK_ID
+    assert events[0]["state"] == "starting"
+    assert any(event["phase"] == "copy" for event in events)
     assert events[-1]["state"] == "ready"

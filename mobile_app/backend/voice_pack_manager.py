@@ -25,7 +25,11 @@ except Exception:  # pragma: no cover
 
 VOICE_ENGINE_ENGLISH = "english_local"
 VOICE_ENGINE_HEBREW = "hebrew_local"
-VOICE_PACK_IDS = (VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW)
+VOICE_ENGINE_KOKORO_TTS = "kokoro_tts"
+VOICE_ENGINE_KYUTAI_TTS = "kyutai_clone_tts"
+STT_VOICE_PACK_IDS = (VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW)
+TTS_VOICE_PACK_IDS = (VOICE_ENGINE_KOKORO_TTS, VOICE_ENGINE_KYUTAI_TTS)
+VOICE_PACK_IDS = (*STT_VOICE_PACK_IDS, *TTS_VOICE_PACK_IDS)
 
 APP_STT_MODEL_ENV = "EMPLO_APP_STT_MODEL"
 APP_STT_DRAFT_MODEL_ENV = "EMPLO_APP_STT_DRAFT_MODEL"
@@ -40,6 +44,16 @@ APP_STT_HEBREW_MODEL_DIR_ENV = "EMPLO_APP_STT_HEBREW_MODEL_DIR"
 HEBREW_PACK_ARCHIVE_URL_ENV = "EMPLOAI_HEBREW_VOICE_PACK_ARCHIVE_URL"
 HEBREW_PACK_SOURCE_DIR_ENV = "EMPLOAI_HEBREW_VOICE_PACK_SOURCE_DIR"
 HEBREW_PACK_REVISION_ENV = "EMPLOAI_HEBREW_VOICE_PACK_REVISION"
+APP_TTS_KOKORO_PACK_REPO_ENV = "EMPLO_APP_TTS_KOKORO_PACK_REPO"
+APP_TTS_KOKORO_PACK_DIR_ENV = "EMPLO_APP_TTS_KOKORO_PACK_DIR"
+KOKORO_TTS_PACK_ARCHIVE_URL_ENV = "EMPLOAI_KOKORO_TTS_PACK_ARCHIVE_URL"
+KOKORO_TTS_PACK_SOURCE_DIR_ENV = "EMPLOAI_KOKORO_TTS_PACK_SOURCE_DIR"
+KOKORO_TTS_PACK_REVISION_ENV = "EMPLOAI_KOKORO_TTS_PACK_REVISION"
+APP_TTS_KYUTAI_PACK_REPO_ENV = "EMPLO_APP_TTS_KYUTAI_PACK_REPO"
+APP_TTS_KYUTAI_PACK_DIR_ENV = "EMPLO_APP_TTS_KYUTAI_PACK_DIR"
+KYUTAI_TTS_PACK_ARCHIVE_URL_ENV = "EMPLOAI_KYUTAI_TTS_PACK_ARCHIVE_URL"
+KYUTAI_TTS_PACK_SOURCE_DIR_ENV = "EMPLOAI_KYUTAI_TTS_PACK_SOURCE_DIR"
+KYUTAI_TTS_PACK_REVISION_ENV = "EMPLOAI_KYUTAI_TTS_PACK_REVISION"
 ALLOW_DEV_VOICE_PACK_SOURCES_ENV = "EMPLOAI_ALLOW_DEV_VOICE_PACK_SOURCES"
 
 DEFAULT_LOCAL_STT_MODEL = "base.en-q5_1"
@@ -54,12 +68,27 @@ DEFAULT_HEBREW_PACK_ASSET_NAME = "hebrew-whisper-small-pass3-knesset-runtime-rea
 DEFAULT_HEBREW_PACK_REVISION = "main"
 DEFAULT_HEBREW_PACK_ENGINE = "transformers"
 DEFAULT_HEBREW_PACK_TUNING_PRESET = "pass3_knesset_desktop"
+DEFAULT_KOKORO_TTS_PACK_ID = "kokoro-onnx-emploai-desktop"
+DEFAULT_KOKORO_TTS_PACK_ENGINE = "kokoro_onnx"
+DEFAULT_KOKORO_TTS_PACK_REVISION = "main"
+DEFAULT_KOKORO_TTS_MODEL_FILENAME = "kokoro-v1.0.onnx"
+DEFAULT_KOKORO_TTS_VOICES_FILENAME = "voices-emploai-v1.0.bin"
+FALLBACK_KOKORO_TTS_VOICES_FILENAME = "voices-v1.0.bin"
+DEFAULT_KOKORO_TTS_VOICE = "jarvis"
+DEFAULT_KYUTAI_TTS_PACK_ID = "kyutai-pocket-tts-emploai-clone-desktop"
+DEFAULT_KYUTAI_TTS_PACK_ENGINE = "pocket"
+DEFAULT_KYUTAI_TTS_PACK_REVISION = "main"
+DEFAULT_KYUTAI_TTS_VOICE_FILENAME = "jarvis.safetensors"
+DEFAULT_KYUTAI_TTS_LANGUAGE = "english"
 VOICE_PACK_MANIFEST_FILENAME = "pack_manifest.json"
 
 MANAGED_VOICE_PACKS_DIRNAME = "voice_packs"
 ENGLISH_RUNTIME_DIRNAME = "runtime"
 ENGLISH_MODELS_DIRNAME = "models"
 HEBREW_RUNTIME_DIRNAME = "model"
+TTS_MODELS_DIRNAME = "models"
+TTS_SITE_PACKAGES_DIRNAME = "site-packages"
+TTS_VOICES_DIRNAME = "voices"
 HEBREW_REQUIRED_MODEL_FILES = (
     "added_tokens.json",
     "config.json",
@@ -90,6 +119,23 @@ def _managed_hebrew_pack_root() -> Path:
     return (managed_voice_packs_root() / VOICE_ENGINE_HEBREW).resolve()
 
 
+def _managed_kokoro_tts_pack_root() -> Path:
+    return (managed_voice_packs_root() / VOICE_ENGINE_KOKORO_TTS).resolve()
+
+
+def _managed_kyutai_tts_pack_root() -> Path:
+    return (managed_voice_packs_root() / VOICE_ENGINE_KYUTAI_TTS).resolve()
+
+
+def _legacy_kokoro_tts_runtime_root() -> Path:
+    local_app_data = Path(os.getenv("LOCALAPPDATA", str(Path.home()))).expanduser()
+    return local_app_data / "EmploAI" / "tts_runtimes" / "kokoro_onnx"
+
+
+def _legacy_pocket_tts_site_packages() -> Path:
+    return Path(os.getenv("TEMP", str(Path.home()))).expanduser() / "emploai-pocket-tts-bench" / ".venv" / "Lib" / "site-packages"
+
+
 def _allow_dev_voice_pack_sources() -> bool:
     return os.getenv(ALLOW_DEV_VOICE_PACK_SOURCES_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -99,7 +145,13 @@ def _managed_release_voice_mode() -> bool:
 
 
 def _voice_pack_label(pack_id: str) -> str:
-    return "Hebrew" if pack_id == VOICE_ENGINE_HEBREW else "English"
+    if pack_id == VOICE_ENGINE_HEBREW:
+        return "Hebrew"
+    if pack_id == VOICE_ENGINE_KOKORO_TTS:
+        return "Kokoro"
+    if pack_id == VOICE_ENGINE_KYUTAI_TTS:
+        return "Kyutai clone"
+    return "English"
 
 
 def _emit_progress(
@@ -581,6 +633,289 @@ def hebrew_pack_runtime_dir() -> Path:
     return _required_hebrew_runtime_dir()
 
 
+def kokoro_tts_pack_repo() -> str:
+    return os.getenv(APP_TTS_KOKORO_PACK_REPO_ENV, "").strip()
+
+
+def kyutai_tts_pack_repo() -> str:
+    return os.getenv(APP_TTS_KYUTAI_PACK_REPO_ENV, "").strip()
+
+
+def _kokoro_tts_pack_revision() -> str:
+    return os.getenv(KOKORO_TTS_PACK_REVISION_ENV, "").strip() or DEFAULT_KOKORO_TTS_PACK_REVISION
+
+
+def _kyutai_tts_pack_revision() -> str:
+    return os.getenv(KYUTAI_TTS_PACK_REVISION_ENV, "").strip() or DEFAULT_KYUTAI_TTS_PACK_REVISION
+
+
+def _required_kokoro_tts_pack_root() -> Path:
+    if _managed_release_voice_mode():
+        return _managed_kokoro_tts_pack_root()
+    configured = os.getenv(APP_TTS_KOKORO_PACK_DIR_ENV, "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return _managed_kokoro_tts_pack_root()
+
+
+def _required_kyutai_tts_pack_root() -> Path:
+    if _managed_release_voice_mode():
+        return _managed_kyutai_tts_pack_root()
+    configured = os.getenv(APP_TTS_KYUTAI_PACK_DIR_ENV, "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return _managed_kyutai_tts_pack_root()
+
+
+def kokoro_tts_pack_root() -> Path:
+    return _required_kokoro_tts_pack_root()
+
+
+def kyutai_tts_pack_root() -> Path:
+    return _required_kyutai_tts_pack_root()
+
+
+def kokoro_tts_model_path() -> Path:
+    return kokoro_tts_pack_root() / TTS_MODELS_DIRNAME / DEFAULT_KOKORO_TTS_MODEL_FILENAME
+
+
+def kokoro_tts_voices_path() -> Path:
+    custom = kokoro_tts_pack_root() / TTS_MODELS_DIRNAME / DEFAULT_KOKORO_TTS_VOICES_FILENAME
+    if custom.exists():
+        return custom
+    return kokoro_tts_pack_root() / TTS_MODELS_DIRNAME / FALLBACK_KOKORO_TTS_VOICES_FILENAME
+
+
+def kokoro_tts_site_packages_path() -> Path:
+    return kokoro_tts_pack_root() / TTS_SITE_PACKAGES_DIRNAME
+
+
+def kyutai_tts_voice_path() -> Path:
+    return kyutai_tts_pack_root() / TTS_VOICES_DIRNAME / DEFAULT_KYUTAI_TTS_VOICE_FILENAME
+
+
+def kyutai_tts_site_packages_path() -> Path:
+    return kyutai_tts_pack_root() / TTS_SITE_PACKAGES_DIRNAME
+
+
+def _tts_manifest_path(pack_root: Path) -> Path:
+    return pack_root / VOICE_PACK_MANIFEST_FILENAME
+
+
+def _read_tts_pack_manifest(pack_root: Path) -> dict[str, Any] | None:
+    manifest_path = _tts_manifest_path(pack_root)
+    if not manifest_path.exists():
+        return None
+    try:
+        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def _write_tts_pack_manifest(pack_root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    manifest_path = _tts_manifest_path(pack_root)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return manifest
+
+
+def _expected_kokoro_tts_pack_manifest() -> dict[str, Any]:
+    return {
+        "pack_id": DEFAULT_KOKORO_TTS_PACK_ID,
+        "engine": DEFAULT_KOKORO_TTS_PACK_ENGINE,
+        "repo_id": kokoro_tts_pack_repo(),
+        "revision": _kokoro_tts_pack_revision(),
+        "model_filename": DEFAULT_KOKORO_TTS_MODEL_FILENAME,
+        "voices_filename": DEFAULT_KOKORO_TTS_VOICES_FILENAME,
+        "default_voice": DEFAULT_KOKORO_TTS_VOICE,
+    }
+
+
+def _expected_kyutai_tts_pack_manifest() -> dict[str, Any]:
+    return {
+        "pack_id": DEFAULT_KYUTAI_TTS_PACK_ID,
+        "engine": DEFAULT_KYUTAI_TTS_PACK_ENGINE,
+        "repo_id": kyutai_tts_pack_repo(),
+        "revision": _kyutai_tts_pack_revision(),
+        "voice_filename": DEFAULT_KYUTAI_TTS_VOICE_FILENAME,
+        "language": DEFAULT_KYUTAI_TTS_LANGUAGE,
+    }
+
+
+def _is_expected_tts_manifest(manifest: dict[str, Any] | None, expected: dict[str, Any]) -> bool:
+    if not isinstance(manifest, dict):
+        return False
+    for key in ("pack_id", "engine", "repo_id", "revision"):
+        if str(manifest.get(key) or "").strip() != str(expected[key]).strip():
+            return False
+    return True
+
+
+def _kokoro_tts_pack_ready(pack_root: Path) -> bool:
+    voices_ready = (
+        (pack_root / TTS_MODELS_DIRNAME / DEFAULT_KOKORO_TTS_VOICES_FILENAME).exists()
+        or (pack_root / TTS_MODELS_DIRNAME / FALLBACK_KOKORO_TTS_VOICES_FILENAME).exists()
+    )
+    return (
+        (pack_root / TTS_MODELS_DIRNAME / DEFAULT_KOKORO_TTS_MODEL_FILENAME).exists()
+        and voices_ready
+        and (pack_root / TTS_SITE_PACKAGES_DIRNAME / "kokoro_onnx").exists()
+    )
+
+
+def _kyutai_tts_pack_ready(pack_root: Path) -> bool:
+    return (
+        (pack_root / TTS_VOICES_DIRNAME / DEFAULT_KYUTAI_TTS_VOICE_FILENAME).exists()
+        and (pack_root / TTS_SITE_PACKAGES_DIRNAME / "pocket_tts").exists()
+    )
+
+
+def _candidate_kokoro_tts_source_dir() -> Path | None:
+    if _managed_release_voice_mode():
+        return None
+    configured = os.getenv(KOKORO_TTS_PACK_SOURCE_DIR_ENV, "").strip()
+    candidates = [Path(configured).expanduser().resolve()] if configured else []
+    candidates.append(_legacy_kokoro_tts_runtime_root().resolve())
+    for candidate in candidates:
+        if candidate.exists() and _kokoro_tts_pack_ready(candidate):
+            return candidate
+    return None
+
+
+def _candidate_kyutai_tts_source_dir() -> Path | None:
+    if _managed_release_voice_mode():
+        return None
+    configured = os.getenv(KYUTAI_TTS_PACK_SOURCE_DIR_ENV, "").strip()
+    if configured:
+        candidate = Path(configured).expanduser().resolve()
+        if _kyutai_tts_pack_ready(candidate):
+            return candidate
+    return None
+
+
+def _find_nested_kokoro_tts_pack_root(root: Path) -> Path | None:
+    if _kokoro_tts_pack_ready(root):
+        return root
+    for candidate in root.rglob("*"):
+        if candidate.is_dir() and _kokoro_tts_pack_ready(candidate):
+            return candidate
+    return None
+
+
+def _find_nested_kyutai_tts_pack_root(root: Path) -> Path | None:
+    if _kyutai_tts_pack_ready(root):
+        return root
+    for candidate in root.rglob("*"):
+        if candidate.is_dir() and _kyutai_tts_pack_ready(candidate):
+            return candidate
+    return None
+
+
+def _tts_pack_status(
+    *,
+    pack_id: str,
+    pack_root: Path,
+    managed_root: Path,
+    ready_fn: Callable[[Path], bool],
+    expected_manifest_fn: Callable[[], dict[str, Any]],
+    repo_fn: Callable[[], str],
+    archive_env: str,
+    source_env: str,
+    configured_dir_env: str,
+    primary_path: Path,
+) -> dict[str, Any]:
+    installed = ready_fn(pack_root)
+    managed = installed and pack_root.resolve() == managed_root.resolve()
+    manifest = _read_tts_pack_manifest(pack_root) if installed else None
+    if manifest is None and installed and managed:
+        manifest = _write_tts_pack_manifest(
+            pack_root,
+            {
+                **expected_manifest_fn(),
+                "source_kind": "managed_default",
+            },
+        )
+    expected = expected_manifest_fn()
+    manifest_verified = installed and _is_expected_tts_manifest(manifest, expected)
+    source = (
+        str(manifest.get("pack_id") or "").strip()
+        if isinstance(manifest, dict) and str(manifest.get("pack_id") or "").strip()
+        else "managed"
+        if managed
+        else "local_override"
+        if installed
+        else "missing"
+    )
+
+    issues: list[str] = []
+    if not installed:
+        configured_dir = "" if _managed_release_voice_mode() else os.getenv(configured_dir_env, "").strip()
+        if configured_dir:
+            issues.append(f"Configured {_voice_pack_label(pack_id)} voice pack path is missing required files: {pack_root}")
+        elif os.getenv(archive_env, "").strip():
+            issues.append(f"{_voice_pack_label(pack_id)} voice pack is not installed yet. Expected files under {pack_root}")
+        elif repo_fn():
+            issues.append(f"{_voice_pack_label(pack_id)} voice pack is not installed yet. Expected files under {pack_root}")
+        elif os.getenv(source_env, "").strip():
+            issues.append(f"Configured {_voice_pack_label(pack_id)} local source is missing required files.")
+        else:
+            issues.append(
+                f"{_voice_pack_label(pack_id)} voice pack is not installed and no public source is configured. "
+                f"Set a Hugging Face repo or {source_env} to a runtime-ready folder."
+            )
+    elif not manifest_verified:
+        issues.append(f"The installed {_voice_pack_label(pack_id)} voice pack is not the pinned desktop pack. Reinstall it from setup.")
+
+    return {
+        "id": pack_id,
+        "installed": installed,
+        "available": installed and manifest_verified,
+        "managed": managed,
+        "removable": managed,
+        "source": source,
+        "issues": issues,
+        "model_dir": str(pack_root),
+        "path": str(primary_path),
+        "repo_id": repo_fn() or None,
+        "manifest": manifest,
+        "manifest_verified": manifest_verified,
+        "expected_manifest": expected,
+    }
+
+
+def get_kokoro_tts_pack_status() -> dict[str, Any]:
+    pack_root = kokoro_tts_pack_root()
+    return _tts_pack_status(
+        pack_id=VOICE_ENGINE_KOKORO_TTS,
+        pack_root=pack_root,
+        managed_root=_managed_kokoro_tts_pack_root(),
+        ready_fn=_kokoro_tts_pack_ready,
+        expected_manifest_fn=_expected_kokoro_tts_pack_manifest,
+        repo_fn=kokoro_tts_pack_repo,
+        archive_env=KOKORO_TTS_PACK_ARCHIVE_URL_ENV,
+        source_env=KOKORO_TTS_PACK_SOURCE_DIR_ENV,
+        configured_dir_env=APP_TTS_KOKORO_PACK_DIR_ENV,
+        primary_path=kokoro_tts_voices_path(),
+    )
+
+
+def get_kyutai_tts_pack_status() -> dict[str, Any]:
+    pack_root = kyutai_tts_pack_root()
+    return _tts_pack_status(
+        pack_id=VOICE_ENGINE_KYUTAI_TTS,
+        pack_root=pack_root,
+        managed_root=_managed_kyutai_tts_pack_root(),
+        ready_fn=_kyutai_tts_pack_ready,
+        expected_manifest_fn=_expected_kyutai_tts_pack_manifest,
+        repo_fn=kyutai_tts_pack_repo,
+        archive_env=KYUTAI_TTS_PACK_ARCHIVE_URL_ENV,
+        source_env=KYUTAI_TTS_PACK_SOURCE_DIR_ENV,
+        configured_dir_env=APP_TTS_KYUTAI_PACK_DIR_ENV,
+        primary_path=kyutai_tts_voice_path(),
+    )
+
+
 def get_english_pack_status() -> dict[str, Any]:
     pack_root = _required_english_pack_root()
     managed_root = _managed_english_pack_root()
@@ -718,6 +1053,10 @@ def get_voice_pack_status(pack_id: str) -> dict[str, Any]:
         return get_english_pack_status()
     if pack_id == VOICE_ENGINE_HEBREW:
         return get_hebrew_pack_status()
+    if pack_id == VOICE_ENGINE_KOKORO_TTS:
+        return get_kokoro_tts_pack_status()
+    if pack_id == VOICE_ENGINE_KYUTAI_TTS:
+        return get_kyutai_tts_pack_status()
     raise ValueError(f"Unsupported voice pack: {pack_id}")
 
 
@@ -1051,6 +1390,175 @@ def install_hebrew_voice_pack(
     return get_hebrew_pack_status()
 
 
+def _install_tts_voice_pack(
+    *,
+    pack_id: str,
+    target_root: Path,
+    ready_fn: Callable[[Path], bool],
+    nested_dir_resolver: Callable[[Path], Path | None],
+    candidate_source_dir: Callable[[], Path | None],
+    archive_env: str,
+    repo_fn: Callable[[], str],
+    revision_fn: Callable[[], str],
+    expected_manifest_fn: Callable[[], dict[str, Any]],
+    status_fn: Callable[[], dict[str, Any]],
+    force: bool = False,
+    progress_callback: VoicePackProgressCallback | None = None,
+) -> dict[str, Any]:
+    label = _voice_pack_label(pack_id)
+    if ready_fn(target_root) and not force:
+        _emit_progress(
+            progress_callback,
+            pack_id=pack_id,
+            state="ready",
+            phase="complete",
+            message=f"{label} voice pack is already installed.",
+            percent=100,
+        )
+        return status_fn()
+
+    _emit_progress(
+        progress_callback,
+        pack_id=pack_id,
+        state="starting",
+        phase="prepare",
+        message=f"Preparing {label} voice pack install...",
+        percent=0,
+    )
+
+    source_dir = candidate_source_dir()
+    archive_url = os.getenv(archive_env, "").strip()
+    repo_id = repo_fn()
+    revision = revision_fn() or None
+
+    if source_dir is not None:
+        _emit_progress(
+            progress_callback,
+            pack_id=pack_id,
+            state="downloading",
+            phase="copy",
+            message=f"Copying {label} voice pack from local source...",
+        )
+        _copy_tree(source_dir, target_root)
+        manifest = {
+            **expected_manifest_fn(),
+            "source_kind": "local_source_dir",
+            "source_dir": str(source_dir),
+        }
+    elif archive_url:
+        _download_pack_archive(
+            archive_url=archive_url,
+            target_dir=target_root,
+            nested_dir_resolver=nested_dir_resolver,
+            missing_files_message=f"Downloaded {label} voice pack archive did not contain the required runtime files",
+            pack_id=pack_id,
+            progress_callback=progress_callback,
+        )
+        manifest = {
+            **expected_manifest_fn(),
+            "source_kind": "archive_url",
+            "archive_url": archive_url,
+        }
+    elif repo_id:
+        if snapshot_download is None:
+            raise RuntimeError(f"The `huggingface_hub` package is required to download the {label} voice pack.")
+        if target_root.exists():
+            shutil.rmtree(target_root)
+        target_root.parent.mkdir(parents=True, exist_ok=True)
+        _emit_progress(
+            progress_callback,
+            pack_id=pack_id,
+            state="downloading",
+            phase="download",
+            message=f"Downloading {label} voice pack from Hugging Face...",
+            percent=0,
+        )
+        snapshot_download(
+            repo_id=repo_id,
+            local_dir=str(target_root),
+            revision=revision,
+            local_dir_use_symlinks=False,
+            tqdm_class=_snapshot_progress_tqdm_class(
+                pack_id=pack_id,
+                progress_callback=progress_callback,
+            ),
+        )
+        manifest = {
+            **expected_manifest_fn(),
+            "source_kind": "huggingface_repo",
+            "repo_id": repo_id,
+            "revision": revision or "main",
+        }
+    else:
+        raise RuntimeError(
+            f"No {label} voice pack source is configured. "
+            "Set a Hugging Face repo, archive URL, or local runtime-ready source folder."
+        )
+
+    _emit_progress(
+        progress_callback,
+        pack_id=pack_id,
+        state="verifying",
+        phase="verify",
+        message=f"Verifying {label} voice pack files...",
+        percent=92,
+    )
+    if not ready_fn(target_root):
+        raise RuntimeError(f"{label} voice pack installation completed, but required files are still missing in {target_root}")
+    _write_tts_pack_manifest(target_root, manifest)
+    _emit_progress(
+        progress_callback,
+        pack_id=pack_id,
+        state="ready",
+        phase="complete",
+        message=f"{label} voice pack installed.",
+        percent=100,
+    )
+    return status_fn()
+
+
+def install_kokoro_tts_voice_pack(
+    *,
+    force: bool = False,
+    progress_callback: VoicePackProgressCallback | None = None,
+) -> dict[str, Any]:
+    return _install_tts_voice_pack(
+        pack_id=VOICE_ENGINE_KOKORO_TTS,
+        target_root=_managed_kokoro_tts_pack_root(),
+        ready_fn=_kokoro_tts_pack_ready,
+        nested_dir_resolver=_find_nested_kokoro_tts_pack_root,
+        candidate_source_dir=_candidate_kokoro_tts_source_dir,
+        archive_env=KOKORO_TTS_PACK_ARCHIVE_URL_ENV,
+        repo_fn=kokoro_tts_pack_repo,
+        revision_fn=_kokoro_tts_pack_revision,
+        expected_manifest_fn=_expected_kokoro_tts_pack_manifest,
+        status_fn=get_kokoro_tts_pack_status,
+        force=force,
+        progress_callback=progress_callback,
+    )
+
+
+def install_kyutai_tts_voice_pack(
+    *,
+    force: bool = False,
+    progress_callback: VoicePackProgressCallback | None = None,
+) -> dict[str, Any]:
+    return _install_tts_voice_pack(
+        pack_id=VOICE_ENGINE_KYUTAI_TTS,
+        target_root=_managed_kyutai_tts_pack_root(),
+        ready_fn=_kyutai_tts_pack_ready,
+        nested_dir_resolver=_find_nested_kyutai_tts_pack_root,
+        candidate_source_dir=_candidate_kyutai_tts_source_dir,
+        archive_env=KYUTAI_TTS_PACK_ARCHIVE_URL_ENV,
+        repo_fn=kyutai_tts_pack_repo,
+        revision_fn=_kyutai_tts_pack_revision,
+        expected_manifest_fn=_expected_kyutai_tts_pack_manifest,
+        status_fn=get_kyutai_tts_pack_status,
+        force=force,
+        progress_callback=progress_callback,
+    )
+
+
 def install_voice_pack(
     pack_id: str,
     *,
@@ -1061,6 +1569,10 @@ def install_voice_pack(
         return install_english_voice_pack(force=force, progress_callback=progress_callback)
     if pack_id == VOICE_ENGINE_HEBREW:
         return install_hebrew_voice_pack(force=force, progress_callback=progress_callback)
+    if pack_id == VOICE_ENGINE_KOKORO_TTS:
+        return install_kokoro_tts_voice_pack(force=force, progress_callback=progress_callback)
+    if pack_id == VOICE_ENGINE_KYUTAI_TTS:
+        return install_kyutai_tts_voice_pack(force=force, progress_callback=progress_callback)
     raise ValueError(f"Unsupported voice pack: {pack_id}")
 
 
@@ -1090,11 +1602,31 @@ def remove_hebrew_voice_pack() -> dict[str, Any]:
     return get_hebrew_pack_status()
 
 
+def remove_kokoro_tts_voice_pack() -> dict[str, Any]:
+    try:
+        shutil.rmtree(_managed_kokoro_tts_pack_root(), ignore_errors=True)
+    except Exception:
+        pass
+    return get_kokoro_tts_pack_status()
+
+
+def remove_kyutai_tts_voice_pack() -> dict[str, Any]:
+    try:
+        shutil.rmtree(_managed_kyutai_tts_pack_root(), ignore_errors=True)
+    except Exception:
+        pass
+    return get_kyutai_tts_pack_status()
+
+
 def remove_voice_pack(pack_id: str) -> dict[str, Any]:
     if pack_id == VOICE_ENGINE_ENGLISH:
         return remove_english_voice_pack()
     if pack_id == VOICE_ENGINE_HEBREW:
         return remove_hebrew_voice_pack()
+    if pack_id == VOICE_ENGINE_KOKORO_TTS:
+        return remove_kokoro_tts_voice_pack()
+    if pack_id == VOICE_ENGINE_KYUTAI_TTS:
+        return remove_kyutai_tts_voice_pack()
     raise ValueError(f"Unsupported voice pack: {pack_id}")
 
 
@@ -1105,6 +1637,10 @@ def requested_voice_pack_ids(config_path: Path | None = None) -> list[str]:
         requested.append(VOICE_ENGINE_ENGLISH)
     if bool(config.get("voice.packs.hebrew_local.requested", False)):
         requested.append(VOICE_ENGINE_HEBREW)
+    if bool(config.get("voice.tts_packs.kokoro_tts.requested", False)):
+        requested.append(VOICE_ENGINE_KOKORO_TTS)
+    if bool(config.get("voice.tts_packs.kyutai_clone_tts.requested", False)):
+        requested.append(VOICE_ENGINE_KYUTAI_TTS)
     return requested
 
 

@@ -2,19 +2,39 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from mobile_app.backend.session_bridge import AppSessionBridge
 from single_agent.cron_scheduler import get_scheduler
 from shared.artifact_store import ChatArtifactStore
-from shared.cron_feed_store import CronFeedStore
+from shared.proactive_runtime import append_event
 from shared.runtime_paths import default_workspace_root
 
 if TYPE_CHECKING:
     from telegram_bot.telegram_session_state import TelegramSession
 
 _CRON_RUNTIME_SESSIONS: dict[int, TelegramSession] = {}
+
+
+def _append_scheduled_history(session: object, *, content: str, job_id: str, job_name: str, role: str = "assistant") -> None:
+    history = getattr(session, "chat_history", None)
+    if not isinstance(history, list):
+        return
+    history.append(
+        {
+            "role": role,
+            "content": content,
+            "timestamp": datetime.now().isoformat(),
+            "scheduled_job": True,
+            "scheduled_job_id": job_id,
+            "scheduled_job_name": job_name,
+        }
+    )
+    save = getattr(session, "save_session", None)
+    if callable(save):
+        save()
 
 
 def _telegram_session_cls():
@@ -53,15 +73,21 @@ def get_cron_runtime_session(user_id: int = 0) -> TelegramSession:
 
 
 async def cron_announcement_callback(message: str) -> None:
-    feed = CronFeedStore(user_id=0)
-    feed.append(kind="announcement", content=message, status="running")
+    append_event(
+        user_id=0,
+        kind="announcement",
+        content=message,
+        status="running",
+        event_type="automation_announcement",
+        event_source="schedule",
+        importance="normal",
+    )
 
 
 async def cron_spawn_callback(job_id: str, prompt: str) -> None:
     scheduler = get_scheduler()
     job = scheduler.get_job(job_id)
     owner_user_id = int(job.owner_user_id) if job and job.owner_user_id is not None else 0
-    feed = CronFeedStore(user_id=owner_user_id)
     bridge = AppSessionBridge(user_id=owner_user_id, workspace=_workspace())
     target_session_id = str(getattr(job, "origin_session_id", "") or "").strip()
     if target_session_id:
@@ -75,16 +101,30 @@ async def cron_spawn_callback(job_id: str, prompt: str) -> None:
     bot_label = str(bot_config.get("label") or "").strip() if bot_config else None
 
     if job and job.owner_user_id:
-        feed.append(
+        _append_scheduled_history(
+            session,
+            content=f"Scheduled job running: {job.name}",
+            job_id=job_id,
+            job_name=job.name,
+        )
+        append_event(
+            user_id=owner_user_id,
             kind="announcement",
             content=f"Scheduled job running: {job.name}",
             session_id=target_session_id or None,
             session_name=getattr(target_session, "name", None),
-            job_id=job_id,
-            job_name=job.name,
-            telegram_bot_config_id=bot_config_id or None,
-            telegram_bot_label=bot_label or None,
+            automation_id=job_id,
+            automation_name=job.name,
             status="running",
+            event_type="automation_started",
+            event_source="schedule",
+            importance="normal",
+            metadata={
+                "automation_id": job_id,
+                "prompt": prompt,
+                "telegram_bot_config_id": bot_config_id or None,
+                "telegram_bot_label": bot_label or None,
+            },
         )
         if target_session_id:
             ChatArtifactStore(user_id=owner_user_id, session_id=target_session_id).create_text_artifact(
@@ -107,6 +147,7 @@ async def cron_spawn_callback(job_id: str, prompt: str) -> None:
                 },
             )
 
+    history_count_before_result = len(getattr(session, "chat_history", []) or [])
     result = await _run_cron_job_via_unified_flow()(
         session,
         prompt,
@@ -114,16 +155,30 @@ async def cron_spawn_callback(job_id: str, prompt: str) -> None:
     )
 
     if job and job.owner_user_id:
-        feed.append(
+        if len(getattr(session, "chat_history", []) or []) <= history_count_before_result:
+            _append_scheduled_history(
+                session,
+                content=result,
+                job_id=job_id,
+                job_name=job.name if job else "Scheduled job",
+            )
+        append_event(
+            user_id=owner_user_id,
             kind="result",
             content=result,
             session_id=target_session_id or None,
             session_name=getattr(target_session, "name", None),
-            job_id=job_id,
-            job_name=job.name if job else None,
-            telegram_bot_config_id=bot_config_id or None,
-            telegram_bot_label=bot_label or None,
+            automation_id=job_id,
+            automation_name=job.name if job else None,
             status="completed",
+            event_type="automation_completed",
+            event_source="schedule",
+            importance="important",
+            metadata={
+                "automation_id": job_id,
+                "telegram_bot_config_id": bot_config_id or None,
+                "telegram_bot_label": bot_label or None,
+            },
         )
         if target_session_id:
             ChatArtifactStore(user_id=owner_user_id, session_id=target_session_id).create_text_artifact(

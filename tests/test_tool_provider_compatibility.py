@@ -1,4 +1,9 @@
+import os
+import shutil
+import subprocess
 from types import SimpleNamespace
+
+import pytest
 
 import cli.agent_tools.loop as loop_module
 from cli.agent_tools.adapters import (
@@ -8,12 +13,14 @@ from cli.agent_tools.adapters import (
     validate_provider_tool_names,
 )
 from cli.agent_tools.definitions import CLI_AGENT_TOOLS
+import cli.agent_tools.executor as executor_module
 from cli.agent_tools.executor import ToolExecutor
 from cli.agent_tools.loop import run_tool_loop
 from shared.openai_api import create_openai_completion
 from shared.unified_agent import UnifiedToolRegistry
-from shared.tool_packs import filter_tools_by_enabled_packs
+from shared.tool_packs import filter_tools_by_enabled_packs, tools_for_enabled_packs
 from single_agent.extension_tool import create_extension_tool
+from single_agent.tool_manifest import AGENT_TOOLS
 
 
 ANTHROPIC_NATIVE_EDITOR = {
@@ -68,6 +75,45 @@ class DummyClient:
         self.chat = SimpleNamespace(completions=DummyCompletions())
 
 
+class DummyGoogleCompletionsWithTool:
+    def __init__(self):
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if len(self.calls) == 1:
+            tool_delta = SimpleNamespace(
+                index=0,
+                id="gemini-call-1",
+                function=SimpleNamespace(
+                    name="read_file",
+                    arguments='{"path":"README.md"}',
+                ),
+            )
+            chunk = SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(content=None, reasoning_content=None, tool_calls=[tool_delta])
+                    )
+                ]
+            )
+            return iter([chunk])
+
+        final_chunk = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content="Gemini used the tool.", reasoning_content=None, tool_calls=None)
+                )
+            ]
+        )
+        return iter([final_chunk])
+
+
+class DummyGoogleOpenAIClient:
+    def __init__(self):
+        self.chat = SimpleNamespace(completions=DummyGoogleCompletionsWithTool())
+
+
 class DummyResponses:
     def __init__(self):
         self.last_kwargs = None
@@ -117,7 +163,7 @@ def _openai_tool_names(tools):
 
 
 def test_openai_compatible_models_get_openai_tools_only():
-    for provider in ["openai", "xai", "deepseek", "openrouter"]:
+    for provider in ["openai", "xai", "deepseek", "openrouter", "nvidia"]:
         tools = build_tools_for_provider(provider, [ANTHROPIC_NATIVE_EDITOR, EXTRA_OPENAI_TOOL])
         names = _openai_tool_names(tools)
 
@@ -176,6 +222,82 @@ def test_run_tool_loop_sends_openai_compatible_tool_set_for_openai_model():
     assert "write_file" in names
     assert "edit_file" in names
     assert "desktop_status_probe" in names
+
+
+def test_run_tool_loop_sends_nvidia_tools_without_openai_stream_options():
+    client = DummyClient()
+
+    result = run_tool_loop(
+        provider="nvidia",
+        model_id="mistralai/ministral-14b-instruct-2512",
+        client=client,
+        messages=[{"role": "user", "content": "hello"}],
+        tool_executor=DummyExecutor(),
+        callbacks={},
+        extra_tools=[ANTHROPIC_NATIVE_EDITOR, EXTRA_OPENAI_TOOL],
+    )
+
+    sent_kwargs = client.chat.completions.last_kwargs
+    names = _openai_tool_names(sent_kwargs["tools"])
+    assert result.content == "ready"
+    assert sent_kwargs["model"] == "mistralai/ministral-14b-instruct-2512"
+    assert sent_kwargs["stream"] is True
+    assert sent_kwargs["tool_choice"] == "auto"
+    assert "stream_options" not in sent_kwargs
+    assert "str_replace_based_edit_tool" not in names
+    assert "write_file" in names
+    assert "edit_file" in names
+    assert "desktop_status_probe" in names
+
+
+def test_run_tool_loop_forces_explicitly_named_nvidia_tool():
+    client = DummyClient()
+
+    result = run_tool_loop(
+        provider="nvidia",
+        model_id="mistralai/ministral-14b-instruct-2512",
+        client=client,
+        messages=[{"role": "user", "content": "Use the describe screen tool and the write file tool."}],
+        tool_executor=DummyExecutor(),
+        callbacks={},
+        extra_tools=AGENT_TOOLS,
+    )
+
+    sent_kwargs = client.chat.completions.last_kwargs
+    assert result.content == "ready"
+    assert sent_kwargs["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "describe_screen"},
+    }
+
+
+def test_run_tool_loop_uses_openai_compatible_transport_for_gemini_tools():
+    class ExecutorWithReadFile:
+        check_interruption = None
+
+        def execute(self, name, args):
+            assert name == "read_file"
+            assert args == {"path": "README.md"}
+            return {"content": "hello from README", "path": args["path"]}
+
+    client = DummyGoogleOpenAIClient()
+
+    result = run_tool_loop(
+        provider="google",
+        model_id="gemini-3.5-flash",
+        client=client,
+        messages=[{"role": "user", "content": "Read README.md and summarize it."}],
+        tool_executor=ExecutorWithReadFile(),
+        callbacks={},
+    )
+
+    first_call = client.chat.completions.calls[0]
+    second_call = client.chat.completions.calls[1]
+    assert result.content == "Gemini used the tool."
+    assert "stream_options" not in first_call
+    assert all(tool.get("type") == "function" and "function" in tool for tool in first_call["tools"])
+    assert "read_file" in _openai_tool_names(first_call["tools"])
+    assert any(message.get("role") == "tool" and message.get("tool_call_id") == "gemini-call-1" for message in second_call["messages"])
 
 
 def test_run_tool_loop_uses_responses_api_for_responses_models():
@@ -260,6 +382,7 @@ def test_run_tool_loop_uses_sidecar_summary_instead_of_reinjecting_raw_image(mon
         messages=[{"role": "user", "content": "Open the file in Notepad and verify it."}],
         tool_executor=ExecutorWithScreenTool(),
         callbacks={},
+        extra_tools=AGENT_TOOLS,
     )
 
     assert result.content == "Verified."
@@ -275,6 +398,150 @@ def test_run_tool_loop_uses_sidecar_summary_instead_of_reinjecting_raw_image(mon
     assert tool_messages
     assert "vision_summary" in str(tool_messages[-1]["content"])
     assert "Notepad is open" in str(tool_messages[-1]["content"])
+
+
+def test_run_tool_loop_auto_continues_empty_post_tool_final():
+    class EmptyThenFinalCompletions:
+        def __init__(self):
+            self.calls = []
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                tool_delta = SimpleNamespace(
+                    index=0,
+                    id="call-1",
+                    function=SimpleNamespace(
+                        name="describe_screen",
+                        arguments='{"question":"What is visible on screen?"}',
+                    ),
+                )
+                return iter([
+                    SimpleNamespace(
+                        choices=[SimpleNamespace(delta=SimpleNamespace(content=None, reasoning_content=None, tool_calls=[tool_delta]))]
+                    )
+                ])
+            if len(self.calls) == 2:
+                return iter([
+                    SimpleNamespace(
+                        choices=[SimpleNamespace(delta=SimpleNamespace(content=None, reasoning_content=None, tool_calls=None))]
+                    )
+                ])
+            return iter([
+                SimpleNamespace(
+                    choices=[SimpleNamespace(delta=SimpleNamespace(content="I can see the desktop app.", reasoning_content=None, tool_calls=None))]
+                )
+            ])
+
+    class Client:
+        def __init__(self):
+            self.chat = SimpleNamespace(completions=EmptyThenFinalCompletions())
+
+    class Executor:
+        check_interruption = None
+
+        def execute(self, name, args):
+            assert name == "describe_screen"
+            return {
+                "image_captured": True,
+                "description": "The desktop app is visible with a chat open.",
+                "question": args.get("question"),
+            }
+
+    client = Client()
+    result = run_tool_loop(
+        provider="nvidia",
+        model_id="nvidia-test",
+        client=client,
+        messages=[{"role": "user", "content": "what do you see?"}],
+        tool_executor=Executor(),
+        callbacks={},
+        extra_tools=AGENT_TOOLS,
+    )
+
+    assert result.content == "I can see the desktop app."
+    assert len(client.chat.completions.calls) == 3
+    retry_messages = client.chat.completions.calls[2]["messages"]
+    assert any(
+        "previous turn ended with no user-visible assistant reply after tool use" in str(message.get("content") or "")
+        for message in retry_messages
+        if isinstance(message, dict)
+    )
+    assert not any(
+        message.get("role") == "assistant" and message.get("content") is None and not message.get("tool_calls")
+        for message in retry_messages
+    )
+
+
+def test_run_tool_loop_falls_back_if_empty_post_tool_retry_stays_empty():
+    class AlwaysEmptyAfterToolCompletions:
+        def __init__(self):
+            self.calls = []
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                tool_delta = SimpleNamespace(
+                    index=0,
+                    id="call-1",
+                    function=SimpleNamespace(
+                        name="describe_screen",
+                        arguments='{"question":"What is visible on screen?"}',
+                    ),
+                )
+                return iter([
+                    SimpleNamespace(
+                        choices=[SimpleNamespace(delta=SimpleNamespace(content=None, reasoning_content=None, tool_calls=[tool_delta]))]
+                    )
+                ])
+            return iter([
+                SimpleNamespace(
+                    choices=[SimpleNamespace(delta=SimpleNamespace(content=None, reasoning_content=None, tool_calls=None))]
+                )
+            ])
+
+    class Client:
+        def __init__(self):
+            self.chat = SimpleNamespace(completions=AlwaysEmptyAfterToolCompletions())
+
+    class Executor:
+        check_interruption = None
+
+        def execute(self, name, _args):
+            assert name == "describe_screen"
+            return {
+                "image_captured": True,
+                "description": "Visible state: the EmploAI chat is open.",
+            }
+
+    result = run_tool_loop(
+        provider="nvidia",
+        model_id="nvidia-test",
+        client=Client(),
+        messages=[{"role": "user", "content": "what do you see?"}],
+        tool_executor=Executor(),
+        callbacks={},
+        extra_tools=AGENT_TOOLS,
+    )
+
+    assert result.content.startswith("I looked at the screen.")
+    assert "EmploAI chat is open" in result.content
+
+
+def test_process_control_guard_blocks_broad_process_name_cleanup(tmp_path):
+    executor = ToolExecutor(workspace_path=tmp_path)
+
+    taskkill_error = executor._unsafe_process_scope_error("taskkill /IM electron.exe /F")
+    assert taskkill_error is not None
+    assert taskkill_error["error_type"] == "unsafe_process_scope"
+    assert "kill_command" in taskkill_error["error"]
+
+    powershell_error = executor._unsafe_process_scope_error("Get-Process electron | Stop-Process -Force")
+    assert powershell_error is not None
+    assert powershell_error["error_type"] == "unsafe_process_scope"
+
+    assert executor._unsafe_process_scope_error("taskkill /PID 12345 /T /F") is None
+    assert executor._unsafe_process_scope_error("Stop-Process -Id 12345 -Force") is None
 
 
 def test_create_openai_completion_uses_responses_api_for_responses_models():
@@ -314,6 +581,153 @@ def test_build_tools_for_provider_respects_filtered_base_tool_set():
     assert "append_file" not in names
     assert "run_command" not in names
     assert "desktop_status_probe" in names
+
+
+def test_default_tool_packs_expose_canonical_tool_names_without_legacy_aliases():
+    names = tools_for_enabled_packs(
+        ["interactive_desktop", "browser_isolated", "workspace_write", "workspace_read"]
+    )
+
+    assert "browser_navigate" in names
+    assert "browser_snapshot" in names
+    assert "run_command" in names
+    assert "run_background_command" in names
+    assert "list_dir" in names
+    assert "find_files" in names
+
+    assert "open_app" not in names
+    assert "open_browser" not in names
+    assert "observe_browser" not in names
+    assert "switch_tab" not in names
+    assert "close_tab" not in names
+    assert "go_back" not in names
+    assert "go_forward" not in names
+    assert "execute_command" not in names
+    assert "change_directory" not in names
+    assert "list_files" not in names
+    assert "find_file" not in names
+
+
+def test_run_command_tools_include_shell_parameter():
+    by_name = {tool["name"]: tool for tool in CLI_AGENT_TOOLS}
+
+    assert "change_directory" not in by_name
+    for name in ["run_command", "run_background_command"]:
+        properties = by_name[name]["parameters"]["properties"]
+        shell_schema = properties["shell"]
+        visible_terminal_schema = properties["visible_terminal"]
+        assert shell_schema["enum"] == ["auto", "cmd", "powershell", "pwsh", "bash"]
+        assert visible_terminal_schema["type"] == "boolean"
+        assert visible_terminal_schema["default"] is False
+
+
+def test_command_creationflags_default_to_hidden_on_windows(tmp_path):
+    executor = ToolExecutor(tmp_path)
+
+    hidden_flags = executor._command_creationflags(visible_terminal=False)
+    visible_flags = executor._command_creationflags(visible_terminal=True)
+
+    if os.name == "nt":
+        assert hidden_flags == subprocess.CREATE_NO_WINDOW
+        assert visible_flags == subprocess.CREATE_NEW_CONSOLE
+    else:
+        assert hidden_flags == 0
+        assert visible_flags == 0
+
+
+def test_visible_background_command_input_reports_visible_terminal_boundary(tmp_path):
+    class DummyProcess:
+        returncode = None
+
+        def poll(self):
+            return None
+
+    executor = ToolExecutor(tmp_path)
+    executor._background_commands["abc123"] = {
+        "process": DummyProcess(),
+        "command": "npm run dev",
+        "visible_terminal": True,
+    }
+
+    result = executor.tool_send_input("abc123", "q")
+
+    assert result["error_type"] == "visible_terminal_input"
+    assert "visible terminal" in result["error"]
+
+
+def test_visible_background_command_records_visible_terminal_metadata(monkeypatch, tmp_path):
+    class DummyProcess:
+        pid = 12345
+        stdout = None
+
+        def poll(self):
+            return None
+
+    popen_calls = []
+
+    def fake_popen(*args, **kwargs):
+        popen_calls.append({"args": args, "kwargs": kwargs})
+        return DummyProcess()
+
+    executor = ToolExecutor(tmp_path)
+    monkeypatch.setattr(executor_module.os, "name", "nt")
+    monkeypatch.setattr(executor_module.subprocess, "CREATE_NEW_CONSOLE", 16, raising=False)
+    monkeypatch.setattr(executor_module.subprocess, "Popen", fake_popen)
+
+    result = executor.tool_run_background_command("echo hi", visible_terminal=True)
+
+    assert result["visible_terminal"] is True
+    assert result["output_capture"] == "visible_terminal"
+    assert result["message"].endswith("check process state.")
+    assert result["command_id"] in executor._background_commands
+    assert executor._background_commands[result["command_id"]]["visible_terminal"] is True
+    assert popen_calls[-1]["kwargs"]["creationflags"] == 16
+    assert "stdout" not in popen_calls[-1]["kwargs"]
+    assert "stdin" not in popen_calls[-1]["kwargs"]
+
+
+def test_kill_all_background_commands_terminates_running_entries(tmp_path, monkeypatch):
+    executor = ToolExecutor(tmp_path)
+    terminated = []
+
+    class FakeProcess:
+        pid = 12345
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    process = FakeProcess()
+    executor._background_commands["cmd-1"] = {
+        "process": process,
+        "command": "long-running",
+        "output_lines": [],
+        "visible_terminal": True,
+    }
+
+    def fake_terminate(proc):
+        terminated.append(proc.pid)
+        proc.returncode = -9
+
+    monkeypatch.setattr(executor, "_terminate_process_tree", fake_terminate)
+
+    result = executor.kill_all_background_commands()
+
+    assert terminated == [12345]
+    assert result["killed_count"] == 1
+    assert result["killed"][0]["command_id"] == "cmd-1"
+    assert result["killed"][0]["exit_code"] == -9
+
+
+@pytest.mark.skipif(os.name != "nt" or not shutil.which("powershell"), reason="Windows PowerShell required")
+def test_run_command_executes_powershell_syntax(tmp_path):
+    executor = ToolExecutor(tmp_path)
+
+    result = executor.execute("run_command", {"command": "Get-Location", "shell": "powershell"})
+
+    assert result["exit_code"] == 0
+    assert result["shell"] == "powershell"
+    assert str(tmp_path) in result["stdout"]
 
 
 def test_open_file_is_interactive_desktop_only():

@@ -103,6 +103,16 @@ class ModelSelectScreen(Screen):
             return "OpenAI"
         elif provider == "anthropic":
             return "Anthropic"
+        elif provider == "google":
+            return "Google Gemini"
+        elif provider == "xai":
+            return "xAI"
+        elif provider == "deepseek":
+            return "DeepSeek"
+        elif provider == "nvidia":
+            return "NVIDIA NIM"
+        elif provider == "openrouter":
+            return "OpenRouter"
         return provider.capitalize() if provider else ""
 
     def _format_model_display(self, model: str, is_selected: bool = False, is_favorite: bool = False) -> str:

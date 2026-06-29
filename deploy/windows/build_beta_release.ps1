@@ -1,5 +1,11 @@
 param(
-    [switch]$IncludeZip
+    [switch]$SkipBackendBuild,
+    [switch]$IncludeZip,
+    [switch]$SkipPublish,
+    [switch]$SkipPublishVerify,
+    [ValidateSet("Kraitos", "GitHub", "Both", "Local")]
+    [string]$PublishTarget = "Kraitos",
+    [string]$ReleaseNotes = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -9,6 +15,7 @@ $backendSpecPath = Join-Path $PSScriptRoot "EmploAIBackend.spec"
 $wxsPath = Join-Path $PSScriptRoot "EmploAI.wxs"
 $licenseRtfPath = Join-Path $PSScriptRoot "InstallerLicense.rtf"
 $releaseInfoPath = Join-Path $PSScriptRoot "release_info.json"
+$publishScriptPath = Join-Path $PSScriptRoot "publish_desktop_release.ps1"
 $distDir = Join-Path $repoRoot "dist"
 $desktopBuildDir = Join-Path $distDir "desktop"
 $releaseDir = Join-Path $desktopBuildDir "EmploAI-win32-x64"
@@ -34,8 +41,9 @@ $wixZip = Join-Path $toolsDir "wix314-binaries.zip"
 $wixUrl = "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip"
 $desktopAppDir = Join-Path $repoRoot "desktop_app"
 $desktopRendererDir = Join-Path $desktopAppDir "renderer"
+$desktopRendererClientDir = Join-Path $desktopAppDir "renderer_client"
 $desktopBackendDir = Join-Path $desktopAppDir "backend"
-$clientDistDir = Join-Path $repoRoot "mobile_app\\client\\dist"
+$desktopRendererDistDir = Join-Path $desktopRendererClientDir "dist"
 function Ensure-WixToolset {
     $candle = Join-Path $wixDir "candle.exe"
     $light = Join-Path $wixDir "light.exe"
@@ -346,7 +354,7 @@ function Prepare-DesktopPackageAssets {
     New-Item -ItemType Directory -Force -Path $desktopRendererDir | Out-Null
     New-Item -ItemType Directory -Force -Path $desktopBackendDir | Out-Null
 
-    Copy-Item (Join-Path $clientDistDir "*") $desktopRendererDir -Recurse -Force
+    Copy-Item (Join-Path $desktopRendererDistDir "*") $desktopRendererDir -Recurse -Force
     Copy-Item (Join-Path $backendDistDir "*") $desktopBackendDir -Recurse -Force
 }
 
@@ -369,46 +377,36 @@ function Assert-BackendBundleShape {
 Push-Location $repoRoot
 try {
     $pythonLauncher = Resolve-PythonLauncher
+    Invoke-PythonAndAssert -Launcher $pythonLauncher -PythonArgs @("scripts/check_release_hygiene.py") -CommandName "release hygiene check"
     Invoke-PythonAndAssert -Launcher $pythonLauncher -PythonArgs @("-m", "pip", "install", "setuptools<81", "pyinstaller>=6.14,<7") -CommandName "python -m pip install"
     Invoke-PythonAndAssert -Launcher $pythonLauncher -PythonArgs @("-m", "pip", "install", "-r", "requirements.txt") -CommandName "python -m pip install -r requirements.txt"
 
     $releaseInfo = Get-Content $releaseInfoPath | ConvertFrom-Json
-    if ($releaseInfo.primary_asset) {
-        $releaseMsiName = [string]$releaseInfo.primary_asset
-        $releaseMsi = Join-Path $distDir $releaseMsiName
-    }
+    $releaseMsiName = "EmploAI-$($releaseInfo.msi_version).msi"
+    $releaseMsi = Join-Path $distDir $releaseMsiName
     Prepare-TesseractBundle
     Remove-Item Env:EMPLOAI_WHISPER_BUNDLE -ErrorAction SilentlyContinue
     Write-Host "Voice packs are not bundled into the Windows release. English and Hebrew install on demand from the app."
 
-    npm --prefix mobile_app/client install | Out-Host
-    Assert-LastExitCode "npm --prefix mobile_app/client install"
-    npm --prefix mobile_app/client run export:web | Out-Host
-    Assert-LastExitCode "npm --prefix mobile_app/client run export:web"
+    npm --prefix desktop_app/renderer_client install | Out-Host
+    Assert-LastExitCode "npm --prefix desktop_app/renderer_client install"
+    npm --prefix desktop_app/renderer_client run export:web | Out-Host
+    Assert-LastExitCode "npm --prefix desktop_app/renderer_client run export:web"
     npm --prefix desktop_app install | Out-Host
     Assert-LastExitCode "npm --prefix desktop_app install"
 
-    if (Test-Path $backendDistDir) {
-        Remove-Item -Recurse -Force $backendDistDir
-    }
-    $legacyBackendExe = Join-Path $distDir "EmploAIBackend.exe"
-    if (Test-Path $legacyBackendExe) {
-        Remove-Item -Force $legacyBackendExe
-    }
-    $versionedReleaseMsi = Join-Path $distDir ("EmploAI-{0}.msi" -f $releaseInfo.msi_version)
-    if (Test-Path $releaseMsi) {
-        try {
-            Remove-Item -Force $releaseMsi -ErrorAction Stop
+    if (-not $SkipBackendBuild) {
+        if (Test-Path $backendDistDir) {
+            Remove-Item -Recurse -Force $backendDistDir
         }
-        catch {
-            if ($releaseMsi -ieq $versionedReleaseMsi) {
-                throw
-            }
-            Write-Warning "Primary MSI path is locked. Falling back to versioned MSI output: $versionedReleaseMsi"
-            $releaseMsi = $versionedReleaseMsi
-            if (Test-Path $releaseMsi) {
-                Remove-Item -Force $releaseMsi
-            }
+        $legacyBackendExe = Join-Path $distDir "EmploAIBackend.exe"
+        if (Test-Path $legacyBackendExe) {
+            Remove-Item -Force $legacyBackendExe
+        }
+    }
+    if (Test-Path $distDir) {
+        Get-ChildItem -Path $distDir -Filter "EmploAI*.msi" -File -ErrorAction SilentlyContinue | ForEach-Object {
+            Remove-Item -LiteralPath $_.FullName -Force
         }
     }
     if (Test-Path $portableZip) {
@@ -422,13 +420,36 @@ try {
         Remove-Item -Force $harvestWxsPath
     }
 
-    Invoke-PythonAndAssert -Launcher $pythonLauncher -PythonArgs @("-m", "PyInstaller", "--noconfirm", "--clean", $backendSpecPath) -CommandName "python -m PyInstaller"
+    if ($SkipBackendBuild) {
+        Write-Host "Skipping PyInstaller backend build and reusing: $backendDistDir"
+    }
+    else {
+        Invoke-PythonAndAssert -Launcher $pythonLauncher -PythonArgs @("-m", "PyInstaller", "--noconfirm", "--clean", $backendSpecPath) -CommandName "python -m PyInstaller"
+    }
 
     Assert-BackendBundleShape
-    & $backendExe validate-hebrew-runtime | Out-Host
-    Assert-LastExitCode "EmploAIBackend.exe validate-hebrew-runtime"
-    if (-not (Test-Path $clientDistDir)) {
-        throw "Expected renderer export output not found: $clientDistDir"
+    $validationRuntimeHome = Join-Path $distDir "build-validation-runtime-home"
+    if (Test-Path $validationRuntimeHome) {
+        Remove-Item -Recurse -Force $validationRuntimeHome
+    }
+    New-Item -ItemType Directory -Force -Path $validationRuntimeHome | Out-Null
+    $previousEmploaiHome = $env:EMPLOAI_HOME
+    try {
+        $env:EMPLOAI_HOME = $validationRuntimeHome
+        & $backendExe validate-hebrew-runtime | Out-Host
+        Assert-LastExitCode "EmploAIBackend.exe validate-hebrew-runtime"
+    }
+    finally {
+        if ($null -eq $previousEmploaiHome) {
+            Remove-Item Env:EMPLOAI_HOME -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:EMPLOAI_HOME = $previousEmploaiHome
+        }
+        Remove-Item -Recurse -Force $validationRuntimeHome -ErrorAction SilentlyContinue
+    }
+    if (-not (Test-Path $desktopRendererDistDir)) {
+        throw "Expected renderer export output not found: $desktopRendererDistDir"
     }
 
     Prepare-DesktopPackageAssets
@@ -475,9 +496,26 @@ try {
         Write-Host "  Portable Zip: $portableZip"
     }
     Write-Host ""
-    Write-Host "Upload $([System.IO.Path]::GetFileName($releaseMsi)) to the GitHub release page as the primary installer asset."
-    if ($IncludeZip) {
-        Write-Host "Upload EmploAI-portable.zip as the optional portable fallback asset."
+    if ($SkipPublish) {
+        Write-Host "Skipped desktop release publish. Run deploy/windows/publish_desktop_release.ps1 when this MSI should be advertised to updaters."
+    }
+    else {
+        if (-not (Test-Path -LiteralPath $publishScriptPath)) {
+            throw "Desktop release publisher was not found: $publishScriptPath"
+        }
+        Write-Host "Publishing desktop release to $PublishTarget..."
+        $publishArgs = @{
+            Target = $PublishTarget
+            ReleaseInfoPath = $releaseInfoPath
+            MsiPath = $releaseMsi
+        }
+        if ($SkipPublishVerify) {
+            $publishArgs.SkipVerify = $true
+        }
+        if ($ReleaseNotes.Trim()) {
+            $publishArgs.Notes = $ReleaseNotes
+        }
+        & $publishScriptPath @publishArgs
     }
     Write-Host "Configure pinned Hugging Face voice-pack sources in deploy/windows/release_info.json before shipping a public build."
 }

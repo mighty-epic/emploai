@@ -42,7 +42,6 @@ _PACKS: Dict[str, ToolPackDefinition] = {
             "ocr_screen",
             "observe_desktop",
             "open_file",
-            "open_app",
             "focus_window",
             "minimize_window",
             "maximize_window",
@@ -76,19 +75,15 @@ _PACKS: Dict[str, ToolPackDefinition] = {
             "browser_activate_tab",
             "browser_close_tab",
             "browser_stop",
-            "open_browser",
-            "observe_browser",
-            "switch_tab",
-            "close_tab",
-            "go_back",
-            "go_forward",
             "wait",
         },
         prompt_fragment=(
             "PACK: Interactive Desktop\n"
             "- You are operating directly on the user's live desktop and browser contexts.\n"
             "- Always observe before acting, then verify after every mutating action.\n"
-            "- open_app only submits a launch request. Verify the resulting window or error state before assuming the app opened.\n"
+            "- App launches use run_command or run_background_command when workspace write/command tools are enabled; otherwise use visible desktop navigation/search. Verify the resulting window or error state before assuming the app opened.\n"
+            "- For Windows app launches through run_command, choose the shell that matches the syntax: shell='powershell' for Start-Process, Get-Command, Resolve-Path, and Get-Location; shell='cmd' for start, where, and dir.\n"
+            "- Match command syntax to the actual platform. On macOS/Linux use native open/which/ps/find-style equivalents instead of Windows shell commands, and on Windows avoid Unix shell assumptions unless that shell is explicitly selected.\n"
             "- For exact local file opening, prefer open_file(path, app?) with a resolved absolute path over manipulating a host app's Open dialog.\n"
             "- If a launch attempt shows a Windows error dialog, the wrong app, or no target window, treat that as failure and recover.\n"
             "- Use the current-user Chrome/extension path only when that environment is actually available.\n"
@@ -102,6 +97,7 @@ _PACKS: Dict[str, ToolPackDefinition] = {
             "- Prefer keyboard-first desktop interaction when a reliable shortcut or tab path can do the job more safely than clicking.\n"
             "- Before using hotkeys, press_key, type_text, Enter, Escape, Tab, or any key combo that affects the visible UI, make sure the intended target window, dialog, or control is focused; if focus is uncertain or another window is active, re-observe and focus the correct target before sending keys.\n"
             "- Do not use broad close shortcuts such as Alt+F4 for ambiguous cleanup. Use close_window with an exact target title, Escape/Cancel for a visible modal, or another targeted route.\n"
+            "- Do not terminate broad process names to clean up a task. Prefer kill_command for agent-started background commands, an exact PID known to belong to this task, an exact window title, or a visible cancel/escape path.\n"
             "- Prefer broad visual observation before OCR, and use OCR mainly when exact text or coordinates are required.\n"
             "- describe_screen is the primary desktop verification and layout-understanding tool; use OCR after that when exact text or coordinates are needed.\n"
             "- When you call describe_screen for visual interpretation, ask a precise question about what changed, what should now be visible, what error or dialog might be present, or what control you need to identify.\n"
@@ -109,6 +105,7 @@ _PACKS: Dict[str, ToolPackDefinition] = {
             "- When you open an app or file visually, verify that the exact requested target actually appeared. Opening a host app alone is not proof that the requested file is open inside it, and a blank window, wrong document, wrong tab, wrong chat, or generic host UI is not success.\n"
             "- For desktop-visible opens and window changes, prefer describe_screen to confirm that the intended target actually appeared before you continue.\n"
             "- For isolated browser headings, static content, and exact rendered values, prefer browser_read_text over desktop OCR.\n"
+            "- Browser-native evidence proves browser state only. Native desktop apps, Electron apps, local file-open state, and physical focus require desktop/window/file evidence.\n"
             "- Treat browser_screenshot as proof/artifact capture, not as exact text extraction inside the same turn.\n"
             "- Do not use desktop vision/OCR to reason about a headless isolated browser page.\n"
             "- If an isolated Selenium window is intentionally headed, use desktop vision/OCR on it only after verifying that window is actually the visible desktop target.\n"
@@ -138,12 +135,6 @@ _PACKS: Dict[str, ToolPackDefinition] = {
             "browser_activate_tab",
             "browser_close_tab",
             "browser_stop",
-            "open_browser",
-            "observe_browser",
-            "switch_tab",
-            "close_tab",
-            "go_back",
-            "go_forward",
             "wait",
         },
         prompt_fragment=(
@@ -152,7 +143,7 @@ _PACKS: Dict[str, ToolPackDefinition] = {
             "- Prefer ref-based DOM interactions over synthetic keypresses.\n"
             "- Never assume control over the user's live Chrome unless the interactive desktop pack is also enabled.\n"
             "- If a task is naturally browser-first, stay in browser-native tools until they genuinely stop being sufficient.\n"
-            "- browser_snapshot and observe_browser are mainly for interactive structure and page state, not full page-text extraction.\n"
+            "- browser_snapshot is mainly for interactive structure and page state, not full page-text extraction.\n"
             "- Prefer browser_read_text or browser_wait_for(text_contains=...) for static page text, headings, and exact rendered values.\n"
             "- browser_read_text is the primary browser-native tool for visible page text, headings, labels, and exact rendered values.\n"
             "- browser_wait_for is for confirming that expected text, selectors, navigation, or load state appeared before you act or read.\n"
@@ -160,6 +151,7 @@ _PACKS: Dict[str, ToolPackDefinition] = {
             "- If you opened or navigated a browser page and the task depends on that visual result, verify the intended page state before assuming the page is ready.\n"
             "- If a browser page, browser-opened file, or browser window should now be visibly open and browser-native evidence is still inconclusive, use browser_screenshot as visual proof before assuming it appeared.\n"
             "- When the isolated Selenium browser is headless, desktop vision/OCR cannot inspect that page.\n"
+            "- Browser-native evidence proves this browser context only. It does not prove that a native desktop app, separate Electron app, local file window, or desktop focus state changed.\n"
             "- browser_screenshot is for proof/artifacts; do not treat it as exact text extraction inside the same turn.\n"
             "- If a browser snapshot or DOM result already answers the question, do not escalate to screenshots or desktop tools.\n"
             "- If one browser-native method is inconclusive, try another browser-native method before leaving the browser environment.\n"
@@ -179,14 +171,15 @@ _PACKS: Dict[str, ToolPackDefinition] = {
             "command_status",
             "send_input",
             "kill_command",
-            "execute_command",
-            "change_directory",
         },
         prompt_fragment=(
             "PACK: Workspace Write\n"
             "- You may change files and run mutating workspace commands.\n"
             "- Keep edits scoped, verify outputs, and do not assume exclusive write access outside your lock.\n"
             "- Prefer write_file, edit_file, and append_file over shell-generated file edits when those tools are available.\n"
+            "- run_command and run_background_command accept an optional shell parameter. On Windows, use shell='powershell' for PowerShell syntax such as Get-Location, Resolve-Path, Get-ChildItem, Get-Command, and Start-Process; use shell='cmd' for cmd.exe syntax such as dir, where, and start.\n"
+            "- Match command syntax to the actual platform and selected shell; inspect the OS/current directory/available commands if uncertain.\n"
+            "- To launch an app or open a file via command tools, use a direct full-path or app-specific command, then verify the visible result with desktop tools when available.\n"
             "- On Windows, prefer py before python3 and avoid Unix-specific shell patterns."
         ),
         workspace_write=True,
@@ -197,9 +190,7 @@ _PACKS: Dict[str, ToolPackDefinition] = {
         description="Read/search/diff/test and non-mutating workspace tools.",
         tool_names={
             "read_file",
-            "list_files",
             "list_dir",
-            "find_file",
             "find_files",
             "grep_search",
         },

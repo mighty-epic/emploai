@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import subprocess
@@ -22,6 +23,7 @@ DEFAULT_PORTABLE_ASSET = "EmploAI-portable.zip"
 DEFAULT_CHANNEL = "beta"
 DEFAULT_INTERVAL_HOURS = 12
 GITHUB_API_ROOT = "https://api.github.com"
+DEFAULT_UPDATE_MANIFEST_URL = ""
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,7 @@ class ReleaseInfo:
     primary_asset: str
     portable_asset: str
     update_check_interval_hours: int
+    update_manifest_url: str = DEFAULT_UPDATE_MANIFEST_URL
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,7 @@ class AvailableUpdate:
     asset_name: str
     asset_url: str
     published_at: str | None
+    sha256: str | None = None
 
 
 def serialize_available_update(update: AvailableUpdate | None) -> dict[str, Any] | None:
@@ -54,7 +58,61 @@ def serialize_available_update(update: AvailableUpdate | None) -> dict[str, Any]
         "assetName": update.asset_name,
         "assetUrl": update.asset_url,
         "publishedAt": update.published_at,
+        "sha256": update.sha256,
     }
+
+
+def _normalize_sha256(value: Any) -> str | None:
+    digest = str(value or "").strip().lower()
+    if not digest:
+        return None
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError("Invalid update asset SHA-256 digest")
+    return digest
+
+
+def _safe_update_asset_name(asset_name: str) -> str:
+    clean_name = str(asset_name or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", clean_name):
+        raise ValueError("Unsafe update asset name")
+    if not clean_name.lower().endswith((".msi", ".zip")):
+        raise ValueError("Unsupported update asset type")
+    return clean_name
+
+
+def _deserialize_cached_update(payload: Any, *, current_version: Version) -> AvailableUpdate | None:
+    if not isinstance(payload, dict):
+        return None
+    raw_version = str(payload.get("version") or payload.get("tagName") or payload.get("tag_name") or "").strip()
+    if not raw_version:
+        return None
+    try:
+        parsed_version = _normalize_release_version(raw_version)
+    except InvalidVersion:
+        return None
+    if parsed_version <= current_version:
+        return None
+
+    try:
+        asset_name = _safe_update_asset_name(str(payload.get("assetName") or payload.get("asset_name") or "").strip())
+        sha256 = _normalize_sha256(payload.get("sha256"))
+    except ValueError:
+        return None
+    asset_url = str(payload.get("assetUrl") or payload.get("asset_url") or "").strip()
+    if not asset_name or not asset_url:
+        return None
+
+    tag_name = str(payload.get("tagName") or payload.get("tag_name") or raw_version).strip()
+    if tag_name and not tag_name.lower().startswith("v"):
+        tag_name = f"v{tag_name}"
+    return AvailableUpdate(
+        version=raw_version,
+        tag_name=tag_name,
+        asset_name=asset_name,
+        asset_url=asset_url,
+        published_at=payload.get("publishedAt") or payload.get("published_at"),
+        sha256=sha256,
+    )
 
 
 def _default_release_info() -> ReleaseInfo:
@@ -67,6 +125,7 @@ def _default_release_info() -> ReleaseInfo:
         primary_asset=DEFAULT_PRIMARY_ASSET,
         portable_asset=DEFAULT_PORTABLE_ASSET,
         update_check_interval_hours=DEFAULT_INTERVAL_HOURS,
+        update_manifest_url=DEFAULT_UPDATE_MANIFEST_URL,
     )
 
 
@@ -96,6 +155,7 @@ def load_release_info(bundle_root: Path) -> ReleaseInfo:
         primary_asset=str(raw.get("primary_asset") or defaults.primary_asset),
         portable_asset=str(raw.get("portable_asset") or defaults.portable_asset),
         update_check_interval_hours=interval_hours,
+        update_manifest_url=str(raw.get("update_manifest_url") or defaults.update_manifest_url).strip(),
     )
 
 
@@ -123,9 +183,19 @@ def _normalize_release_version(raw: str) -> Version:
     candidate = raw.strip()
     if candidate.lower().startswith("v"):
         candidate = candidate[1:]
-    candidate = re.sub(r"(?i)-beta[.\-]?(\d+)", r"b\1", candidate)
-    candidate = re.sub(r"(?i)-alpha[.\-]?(\d+)", r"a\1", candidate)
-    candidate = re.sub(r"(?i)-rc[.\-]?(\d+)", r"rc\1", candidate)
+
+    def _pre_release_replacement(prefix: str):
+        def _replace(match: re.Match[str]) -> str:
+            suffix = f"{prefix}{match.group(1)}"
+            if match.group(2):
+                suffix = f"{suffix}.post{match.group(2)}"
+            return suffix
+
+        return _replace
+
+    candidate = re.sub(r"(?i)-beta[.\-]?(\d+)(?:[.\-](\d+))?", _pre_release_replacement("b"), candidate)
+    candidate = re.sub(r"(?i)-alpha[.\-]?(\d+)(?:[.\-](\d+))?", _pre_release_replacement("a"), candidate)
+    candidate = re.sub(r"(?i)-rc[.\-]?(\d+)(?:[.\-](\d+))?", _pre_release_replacement("rc"), candidate)
     return Version(candidate)
 
 
@@ -160,7 +230,116 @@ def _find_matching_asset(release: dict[str, Any], *, primary_asset: str, portabl
     return None
 
 
-def find_available_update(info: ReleaseInfo) -> Optional[AvailableUpdate]:
+def _manifest_releases(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    releases = payload.get("releases")
+    if isinstance(releases, list):
+        return [item for item in releases if isinstance(item, dict)]
+    latest = payload.get("latest") or payload.get("release") or payload.get("update")
+    return [latest] if isinstance(latest, dict) else []
+
+
+def _manifest_asset(release: dict[str, Any], *, primary_asset: str, portable_asset: str) -> Optional[dict[str, Any]]:
+    assets = release.get("assets")
+    if isinstance(assets, list):
+        asset = _find_matching_asset({"assets": assets}, primary_asset=primary_asset, portable_asset=portable_asset)
+        if asset is None:
+            return None
+        return {
+            "name": asset.get("name"),
+            "browser_download_url": asset.get("browser_download_url"),
+            "sha256": asset.get("sha256"),
+        }
+
+    asset_name = str(release.get("assetName") or release.get("asset_name") or primary_asset).strip()
+    asset_url = str(
+        release.get("assetUrl")
+        or release.get("asset_url")
+        or release.get("downloadUrl")
+        or release.get("download_url")
+        or ""
+    ).strip()
+    if not asset_url:
+        return None
+    if asset_name not in {primary_asset, portable_asset}:
+        lower_asset_name = asset_name.lower()
+        lower_asset_url = asset_url.lower()
+        if not (lower_asset_name.endswith(".msi") or lower_asset_url.endswith(".msi")):
+            return None
+    return {
+        "name": asset_name,
+        "browser_download_url": asset_url,
+        "sha256": release.get("sha256"),
+    }
+
+
+def find_available_update_from_manifest(info: ReleaseInfo) -> Optional[AvailableUpdate]:
+    if not info.update_manifest_url:
+        return None
+    response = requests.get(
+        info.update_manifest_url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "EmploAI-Updater",
+        },
+        timeout=12,
+    )
+    response.raise_for_status()
+    payload = response.json()
+
+    current_version = _normalize_release_version(info.version)
+    best: tuple[Version, AvailableUpdate] | None = None
+
+    for release in _manifest_releases(payload):
+        channel = str(release.get("channel") or payload.get("channel") or info.channel).strip()
+        if channel and channel != info.channel:
+            continue
+
+        tag_name = str(release.get("tagName") or release.get("tag_name") or release.get("releaseTag") or "").strip()
+        raw_version = str(release.get("version") or tag_name).strip()
+        if not tag_name and raw_version:
+            tag_name = raw_version if raw_version.lower().startswith("v") else f"v{raw_version}"
+        if not raw_version:
+            continue
+
+        try:
+            version = _normalize_release_version(raw_version)
+        except InvalidVersion:
+            continue
+
+        if version <= current_version:
+            continue
+
+        asset = _manifest_asset(
+            release,
+            primary_asset=info.primary_asset,
+            portable_asset=info.portable_asset,
+        )
+        if not asset:
+            continue
+
+        try:
+            asset_name = _safe_update_asset_name(str(asset["name"]))
+            sha256 = _normalize_sha256(asset.get("sha256"))
+        except ValueError:
+            continue
+
+        candidate = AvailableUpdate(
+            version=str(version),
+            tag_name=tag_name,
+            asset_name=asset_name,
+            asset_url=str(asset["browser_download_url"]),
+            published_at=release.get("publishedAt") or release.get("published_at"),
+            sha256=sha256,
+        )
+        if best is None or version > best[0]:
+            best = (version, candidate)
+
+    return best[1] if best else None
+
+
+def find_available_update_from_github(info: ReleaseInfo) -> Optional[AvailableUpdate]:
     response = requests.get(
         f"{GITHUB_API_ROOT}/repos/{info.github_repo}/releases",
         headers={
@@ -205,10 +384,15 @@ def find_available_update(info: ReleaseInfo) -> Optional[AvailableUpdate]:
         if not asset:
             continue
 
+        try:
+            asset_name = _safe_update_asset_name(str(asset["name"]))
+        except ValueError:
+            continue
+
         candidate = AvailableUpdate(
             version=str(version),
             tag_name=tag_name,
-            asset_name=str(asset["name"]),
+            asset_name=asset_name,
             asset_url=str(asset["browser_download_url"]),
             published_at=release.get("published_at"),
         )
@@ -218,10 +402,21 @@ def find_available_update(info: ReleaseInfo) -> Optional[AvailableUpdate]:
     return best[1] if best else None
 
 
+def find_available_update(info: ReleaseInfo) -> Optional[AvailableUpdate]:
+    if info.update_manifest_url:
+        try:
+            return find_available_update_from_manifest(info)
+        except Exception:
+            pass
+    return find_available_update_from_github(info)
+
+
 def _download_update_asset(home: Path, update: AvailableUpdate) -> Path:
     updates_dir = home / UPDATES_DIRNAME
     updates_dir.mkdir(parents=True, exist_ok=True)
-    target_path = updates_dir / update.asset_name
+    target_path = updates_dir / _safe_update_asset_name(update.asset_name)
+    expected_sha256 = _normalize_sha256(update.sha256)
+    hasher = hashlib.sha256()
 
     with requests.get(
         update.asset_url,
@@ -233,7 +428,14 @@ def _download_update_asset(home: Path, update: AvailableUpdate) -> Path:
         with open(target_path, "wb") as handle:
             for chunk in response.iter_content(chunk_size=1024 * 1024):
                 if chunk:
+                    hasher.update(chunk)
                     handle.write(chunk)
+    if expected_sha256 and hasher.hexdigest().lower() != expected_sha256:
+        try:
+            target_path.unlink()
+        except OSError:
+            pass
+        raise ValueError("Downloaded update asset SHA-256 did not match the release manifest")
     return target_path
 
 
@@ -273,10 +475,13 @@ def _write_update_script(home: Path, installer_path: Path, restart_executable: P
 def _launch_msi_update(home: Path, installer_path: Path, restart_executable: Path) -> None:
     script_path = _write_update_script(home, installer_path, restart_executable)
     creationflags = 0
-    for flag_name in ("DETACHED_PROCESS", "CREATE_NEW_PROCESS_GROUP"):
+    for flag_name in ("DETACHED_PROCESS", "CREATE_NEW_PROCESS_GROUP", "CREATE_NO_WINDOW"):
         creationflags |= int(getattr(subprocess, flag_name, 0))
     subprocess.Popen(
         ["cmd.exe", "/c", str(script_path)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         close_fds=True,
         creationflags=creationflags,
     )
@@ -285,12 +490,19 @@ def _launch_msi_update(home: Path, installer_path: Path, restart_executable: Pat
 def check_for_updates(home: Path, bundle_root: Path, *, force: bool = False) -> dict[str, Any]:
     info = load_release_info(bundle_root)
     state = load_release_state(home)
+    current_version = _normalize_release_version(info.version)
+    cached_update = _deserialize_cached_update(
+        state.get("last_available_update"),
+        current_version=current_version,
+    )
     result: dict[str, Any] = {
         "ok": True,
         "currentVersion": info.version,
         "releaseTag": info.release_tag,
         "channel": info.channel,
         "repo": info.github_repo,
+        "manifestUrl": info.update_manifest_url,
+        "source": "manifest" if info.update_manifest_url else "github",
         "intervalHours": info.update_check_interval_hours,
         "checked": False,
         "updateAvailable": False,
@@ -300,6 +512,9 @@ def check_for_updates(home: Path, bundle_root: Path, *, force: bool = False) -> 
     }
 
     if not should_check_for_updates(home, info.update_check_interval_hours, force=force):
+        if cached_update is not None:
+            result["updateAvailable"] = True
+            result["update"] = serialize_available_update(cached_update)
         return result
 
     state["last_checked_at"] = datetime.now(timezone.utc).isoformat()
@@ -316,6 +531,10 @@ def check_for_updates(home: Path, bundle_root: Path, *, force: bool = False) -> 
         return result
 
     state.pop("last_error", None)
+    if update is not None:
+        state["last_available_update"] = serialize_available_update(update)
+    else:
+        state.pop("last_available_update", None)
     save_release_state(home, state)
     result["lastError"] = None
     result["updateAvailable"] = update is not None

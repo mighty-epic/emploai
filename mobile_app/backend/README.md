@@ -28,11 +28,17 @@ The supported desktop voice flow is:
 renderer microphone capture -> /ws/app/voice -> VoiceDraftState -> shared session/chat flow
 ```
 
-English and Hebrew both use that same path. The active local engine is selected from runtime config:
+English and Hebrew both use that same path. The active local input engine is selected from runtime config:
 
 - `english_local`
 - `hebrew_local`
 - `none`
+
+Jarvis speech output is configured separately through the TTS backend:
+
+- `openai`
+- `kokoro_onnx`
+- `pocket`
 
 ## Voice packs
 
@@ -48,6 +54,8 @@ Pack ids:
 
 - `english_local`
 - `hebrew_local`
+- `kokoro_tts`
+- `kyutai_clone_tts`
 
 ## Hebrew runtime
 

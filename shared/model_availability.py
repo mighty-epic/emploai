@@ -10,6 +10,7 @@ PROVIDER_ORDER = [
     "google",
     "xai",
     "deepseek",
+    "nvidia",
     "openrouter",
     "unknown",
 ]
@@ -20,6 +21,7 @@ PROVIDER_ENV_VARS = {
     "google": "GOOGLE_API_KEY",
     "xai": "XAI_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
+    "nvidia": "NVIDIA_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
 }
 
@@ -39,6 +41,7 @@ def enabled_providers_from_clients(
     google_client: Any = None,
     xai_client: Any = None,
     deepseek_client: Any = None,
+    nvidia_client: Any = None,
     openrouter_client: Any = None,
 ) -> set[str]:
     enabled: set[str] = set()
@@ -52,6 +55,8 @@ def enabled_providers_from_clients(
         enabled.add("xai")
     if deepseek_client is not None:
         enabled.add("deepseek")
+    if nvidia_client is not None:
+        enabled.add("nvidia")
     if openrouter_client is not None:
         enabled.add("openrouter")
     return enabled

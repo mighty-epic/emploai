@@ -10,17 +10,27 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from shared.cloud_object_store import CloudObjectStore
 from shared.runtime_paths import user_state_root
 
 
-TEXT_PREVIEW_HEAD_CHARS = 900
-TEXT_PREVIEW_TAIL_CHARS = 900
-INDEX_SEGMENT_CHARS = 1800
+TEXT_PREVIEW_HEAD_CHARS = 650
+TEXT_PREVIEW_TAIL_CHARS = 450
+INDEX_SEGMENT_CHARS = 1200
 MAX_INLINE_TEXT_CHARS = 120_000
 MAX_INLINE_IMAGE_BYTES = 1_500_000
-MAX_ARTIFACT_INDEX_ITEMS = 10
-MAX_RETRIEVED_SEGMENTS = 4
+MAX_ARTIFACT_INDEX_ITEMS = 6
+MAX_RETRIEVED_SEGMENTS = 2
 _NON_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_CLOUD_SYNC_ARTIFACT_KINDS = {
+    "browser_observation",
+    "browser_screenshot",
+    "command_output",
+    "file_snapshot",
+    "ocr_text",
+    "screen_description",
+    "screenshot",
+}
 
 
 def _now_iso() -> str:
@@ -117,6 +127,18 @@ def _score_match(query: str, haystacks: List[str]) -> float:
             if token in text:
                 score += 1.0
     return score
+
+
+def _should_cloud_sync_artifact(*, source_kind: str, artifact_kind: str, metadata: Optional[Dict[str, Any]]) -> bool:
+    meta = dict(metadata or {})
+    policy = str(meta.get("cloud_mirror_policy") or "").strip().lower()
+    if policy in {"disabled", "local_only", "none"}:
+        return False
+    if policy in {"explicit_evidence", "evidence", "force"}:
+        return True
+    if str(source_kind or "").strip().lower() in {"user", "user_upload", "upload"}:
+        return False
+    return str(artifact_kind or "").strip().lower() in _CLOUD_SYNC_ARTIFACT_KINDS
 
 
 @dataclass
@@ -290,6 +312,47 @@ class ChatArtifactStore:
         absolute_payload = self.base_path / relative_payload
         absolute_payload.parent.mkdir(parents=True, exist_ok=True)
         absolute_payload.write_bytes(data)
+        metadata_payload = dict(metadata or {})
+        workspace_id = str(metadata_payload.get("workspace_id") or "").strip() or None
+        if _should_cloud_sync_artifact(source_kind=source_kind, artifact_kind=artifact_kind, metadata=metadata_payload):
+            try:
+                cloud_result = CloudObjectStore(user_id=self.user_id).put_bytes(
+                    data=data,
+                    file_name=payload_name,
+                    content_type=mime_type or "application/octet-stream",
+                    metadata={
+                        "session_id": self.session_id,
+                        "artifact_kind": artifact_kind,
+                        "source_kind": source_kind,
+                        "title": title,
+                        "file_path": file_path,
+                        "workspace": workspace,
+                        "workspace_id": workspace_id,
+                        "task_id": task_id,
+                        "source_policy": metadata_payload.get("source_policy") or "generated_or_evidence",
+                    },
+                )
+                metadata_payload.update(cloud_result.to_metadata())
+                metadata_payload.update(
+                    {
+                        "sync_status": cloud_result.status,
+                        "hash": cloud_result.sha256,
+                        "size": cloud_result.size_bytes,
+                        "source_policy": metadata_payload.get("source_policy") or "generated_or_evidence",
+                        "workspace_id": workspace_id,
+                        "last_synced_from_tool_use": _now_iso() if source_tool else None,
+                    }
+                )
+                metadata_payload.setdefault("cloud_mirror_policy", "generated_artifacts_and_evidence")
+            except Exception as exc:
+                metadata_payload.update(
+                    {
+                        "cloud_sync_status": "failed",
+                        "sync_status": "failed",
+                        "cloud_sync_error": str(exc)[:500],
+                        "cloud_storage_backend": "vps_object_store",
+                    }
+                )
         record = ArtifactRecord(
             artifact_id=artifact_id,
             session_id=self.session_id,
@@ -313,7 +376,7 @@ class ChatArtifactStore:
             workspace=workspace,
             task_id=task_id,
             sub_goal_id=sub_goal_id,
-            metadata=dict(metadata or {}),
+            metadata=metadata_payload,
         )
         return self._persist_record(record)
 

@@ -8,6 +8,7 @@ from cli.tui_constants import UNIFIED_AGENT_PROMPT
 from mobile_app.backend import runtime as app_runtime
 from shared import channel_runtime
 from shared.task_board import TASK_BOARD_INTERNAL_TOOL_NAME
+from shared.task_intent import request_requires_tool_evidence
 from shared.tool_packs import PACK_BROWSER_ISOLATED, PACK_INTERACTIVE_DESKTOP, PACK_WORKSPACE_READ
 from telegram_bot.telegram_unified_agent import build_unified_system_prompt
 
@@ -42,7 +43,7 @@ def test_current_task_contract_is_compact_and_restates_observable_goal():
     session = SimpleNamespace(
         last_user_message="Send 'running late' to Alex on WhatsApp",
         enabled_tool_packs=[PACK_INTERACTIVE_DESKTOP],
-        current_turn_allowed_tool_names={"open_app", "describe_screen", "type_text"},
+        current_turn_allowed_tool_names={"run_command", "describe_screen", "type_text"},
     )
 
     message = channel_runtime._task_contract_context_message(session)
@@ -54,6 +55,10 @@ def test_current_task_contract_is_compact_and_restates_observable_goal():
     assert "observable end state is true and verified" in content
     assert "prefer open_file or a direct OS/app file-open command" in content
     assert "switch method family/tool surface" in content
+    assert "Match proof to the surface" in content
+    assert "browser tools prove browser/DOM state" in content
+    assert "Match command syntax to the platform and shell" in content
+    assert "Do not terminate broad process names as a convenience" in content
     assert "WhatsApp, Gmail, Microsoft apps" in content
     assert "personal-account or communication context by itself is not a blocker" in content
 
@@ -92,6 +97,108 @@ def test_planner_retry_reinjects_user_request_and_method_switch(monkeypatch):
     assert "switch method family/tool surface" in instruction
 
 
+def test_planner_verifier_skips_answer_only_questions(monkeypatch):
+    def fake_planner_completion(_session, *, prompt_payload):
+        raise AssertionError("answer-only questions should not call the planner verifier")
+
+    monkeypatch.setattr(channel_runtime, "_planner_final_completion", fake_planner_completion)
+
+    verdict = channel_runtime._planner_final_verdict(
+        SimpleNamespace(chat_history=[]),
+        {
+            "user_request": "Can you explain how sleep mode works in one sentence?",
+            "assistant_final": "Sleep mode closes the desktop UI while the backend remains available through Telegram.",
+            "tool_trace": [],
+        },
+    )
+
+    assert verdict["action"] == "allow"
+    assert verdict["must_use_tool"] is False
+    assert verdict["reason"] == "planner_skipped_answer_only_turn"
+
+
+def test_tool_evidence_intent_is_narrower_than_task_like():
+    assert request_requires_tool_evidence("Can you explain how sleep mode works in one sentence?") is False
+    assert request_requires_tool_evidence("What is two plus two?") is False
+    assert request_requires_tool_evidence("How do we fix the desktop app behavior without overfitting?") is False
+    assert request_requires_tool_evidence("Can you explain how to open Chrome from PowerShell?") is False
+    assert request_requires_tool_evidence("What do you see on the screen now?") is True
+    assert request_requires_tool_evidence("What's in this current directory") is True
+    assert request_requires_tool_evidence("Open Spotify and play my liked songs") is True
+    assert request_requires_tool_evidence("Build and run a small Electron calculator app") is True
+
+
+def test_planner_verifier_uses_preserved_original_task_on_continue_turn(monkeypatch):
+    captured_payloads = []
+
+    def fake_planner_completion(_session, *, prompt_payload):
+        captured_payloads.append(prompt_payload)
+        return json.dumps({"action": "allow", "reason": "verified"})
+
+    monkeypatch.setattr(channel_runtime, "_planner_final_completion", fake_planner_completion)
+
+    session = SimpleNamespace(
+        chat_history=[
+            {"role": "user", "content": "Build and run a small Electron calculator app"},
+            {"role": "assistant", "content": "Working on it."},
+            {"role": "user", "content": "continue"},
+        ],
+    )
+
+    verdict = channel_runtime._planner_final_verdict(
+        session,
+        {
+            "user_request": "continue",
+            "assistant_final": "Done and verified.",
+            "tool_trace": [{"tool": "run_command", "output": {"exit_code": 0, "stdout": "started"}}],
+        },
+    )
+
+    assert verdict["action"] == "allow"
+    assert captured_payloads[-1]["original_user_request"] == "Build and run a small Electron calculator app"
+
+
+def test_planner_verifier_forces_retry_for_unverified_coding_runtime_final(monkeypatch):
+    def fake_planner_completion(_session, *, prompt_payload):
+        assert prompt_payload["original_user_request"] == "Build and run a small Electron calculator app"
+        return json.dumps({"action": "allow", "reason": "seems_fine"})
+
+    monkeypatch.setattr(channel_runtime, "_planner_final_completion", fake_planner_completion)
+
+    verdict = channel_runtime._planner_final_verdict(
+        SimpleNamespace(chat_history=[]),
+        {
+            "user_request": "Build and run a small Electron calculator app",
+            "assistant_final": "Node is missing. If you want, I can keep going.",
+            "tool_trace": [
+                {
+                    "tool": "run_command",
+                    "output": {
+                        "exit_code": 1,
+                        "stderr": "'node' is not recognized as an internal or external command",
+                    },
+                }
+            ],
+        },
+    )
+
+    assert verdict["action"] == "continue"
+    assert verdict["must_use_tool"] is True
+    assert "coding_task_premature_final" in verdict["reason"]
+    assert "Do not ask whether to continue" in verdict["continuation_instruction"]
+
+
+def test_planner_verifier_prompt_distinguishes_latest_state_and_evidence_source():
+    prompt = channel_runtime._planner_verifier_system_prompt()
+
+    assert "Judge the latest verified state" in prompt
+    assert "earlier failed tool call" in prompt
+    assert "Match evidence source to obligation" in prompt
+    assert "browser_snapshot, browser_read_text, browser_wait_for, and browser_screenshot prove browser context only" in prompt
+    assert "native desktop apps, local file-open state, active windows" in prompt
+    assert "Broad process cleanup by app/process name is not valid progress" in prompt
+
+
 def test_kickstart_and_contract_are_pack_aware_for_read_only_chat():
     prelude = app_runtime._kickstart_prelude([PACK_WORKSPACE_READ])
     user_kickstart = prelude[0]["content"]
@@ -123,7 +230,8 @@ def test_kickstart_and_contract_are_pack_aware_for_read_only_chat():
     assert "Choose tools by evidence source" in contract
     assert f"Current workspace/root directory: {Path.cwd()}" in contract
     assert "native desktop file pickers usually do not" in contract
-    assert "Get-Location or Resolve-Path" in contract
+    assert "shell='powershell' for Get-Location or Resolve-Path" in contract
+    assert "Match command syntax to the actual platform" in contract
     assert "bind it to 127.0.0.1 or localhost" in contract
     assert "do not final-answer while a safe next route exists" in contract
     assert "permission-sensitive identity confirmation" in contract
@@ -152,10 +260,11 @@ def test_kickstart_and_contract_add_browser_and_desktop_fallback_only_when_enabl
     assert "prefer browser_read_text or browser_wait_for(text_contains=...)" in user_kickstart
     assert "When you call describe_screen or browser_screenshot for visual interpretation, ask a precise question" in user_kickstart
     assert "Do not use describe_screen or ocr_screen to reason about a headless isolated browser page." in user_kickstart
-    assert "Treat open_app as a launch request, not proof." in user_kickstart
+    assert "Treat app launches as attempts, not proof." in user_kickstart
     assert "Do not final-answer while the task is incomplete and a safe next route exists" in user_kickstart
     assert "discover alternatives from current state and available surfaces" in user_kickstart
     assert "If one browser-native method is inconclusive, try another browser-native method" in user_kickstart
+    assert "Browser evidence proves browser state, not native desktop app state" in user_kickstart
     assert "browser_screenshot as visual proof" in user_kickstart
     assert "Prefer keyboard-first desktop interaction" in user_kickstart
     assert "make sure the intended target window, dialog, or control is focused" in user_kickstart
@@ -164,7 +273,7 @@ def test_kickstart_and_contract_add_browser_and_desktop_fallback_only_when_enabl
     assert "blank window, wrong document, wrong tab, wrong chat, or generic host UI is not success" in user_kickstart
     assert "use pull_skill before you improvise a long workflow" in user_kickstart
     assert "I will switch to live observation and atomic desktop actions" in assistant_kickstart
-    assert "I will treat open_app as a launch request" in assistant_kickstart
+    assert "I will treat app launches as attempts" in assistant_kickstart
     assert "I will not assume a visual action succeeded" in assistant_kickstart
     assert "If the user changes the screen state while I work" in assistant_kickstart
     assert "I will confirm the intended target window, dialog, or control is focused" in assistant_kickstart
@@ -179,9 +288,10 @@ def test_kickstart_and_contract_add_browser_and_desktop_fallback_only_when_enabl
     assert "When you call browser_screenshot for visual interpretation, ask a precise question" in contract
     assert "browser_read_text is the primary browser-native tool" in contract
     assert "browser_wait_for is for confirming that expected text" in contract
+    assert "Browser-native evidence proves the browser context only" in contract
     assert "headless, desktop vision/OCR cannot inspect that page" in contract
     assert "Do not chain clicks, typing, hotkeys, or other interactive GUI actions" in contract
-    assert "open_app only submits a launch request" in contract
+    assert "App launches are attempts until verified" in contract
     assert "Do not ask the user to try an obvious next route; try it yourself." in contract
     assert "Windows error dialog" in contract
     assert "The user may move focus, click, or type while you work." in contract
@@ -204,6 +314,7 @@ def test_kickstart_and_contract_add_browser_and_desktop_fallback_only_when_enabl
     assert f"Current workspace/root directory: {Path.cwd()}" in contract
     assert "do not guess Downloads, Public, or another user directory." in contract
     assert "bind it to 127.0.0.1 or localhost" in contract
+    assert "Do not terminate broad process names to clean up a task" in contract
     assert "Do not silently substitute a similar identifier." in contract
 
 
@@ -239,7 +350,7 @@ def test_unified_prompt_includes_desktop_verification_and_context_rules():
 
     prompt = build_unified_system_prompt(session)
 
-    assert "`open_app` does not prove an app opened" in prompt
+    assert "App launches do not prove an app opened" in prompt
     assert "Do not read MEMORY.md just to start a task." in prompt
     assert "Native desktop apps, including third-party apps, require interactive desktop tools" in prompt
     assert "Do not assume a visually presented action succeeded." in prompt
@@ -261,6 +372,7 @@ def test_unified_prompt_includes_desktop_verification_and_context_rules():
     assert "make sure the intended target window, dialog, or control is focused" in prompt
     assert "browser_read_text is the primary browser-native tool" in prompt
     assert "browser_screenshot as visual proof" in prompt
+    assert "Browser-native evidence proves browser state only" in prompt
     assert "Before final-answering with partial, failed, or blocked status" in prompt
     assert "use `pull_skill` before improvising a long workflow" in prompt
 
@@ -295,6 +407,27 @@ def test_unified_system_prompt_only_lists_enabled_tool_packs():
     assert "## Enabled Pack: Workspace Write" not in prompt
     assert "## Enabled Pack: Web Research" not in prompt
     assert "# MANAGED TASK BOARD RUNTIME" not in prompt
+
+
+def test_unified_system_prompt_appends_account_custom_instructions_after_core_prompt():
+    session = SimpleNamespace(
+        enabled_tool_packs=[PACK_WORKSPACE_READ],
+        system_info="Active Windows: EmploAI App",
+        context_loader=None,
+        live_config={"agent.custom_system_prompt_append": "Prefer concise answers for this account."},
+        session_context=None,
+        memory_manager=None,
+        workspace=Path.cwd(),
+        current_model="gpt-5.4-mini",
+        current_variant="standard",
+        _active_tool_packs_for_current_run=[],
+    )
+
+    prompt = build_unified_system_prompt(session)
+
+    assert "## CORE CONTRACT" in prompt
+    assert "## ACCOUNT CUSTOM INSTRUCTIONS\nPrefer concise answers for this account." in prompt
+    assert prompt.index("## CORE CONTRACT") < prompt.index("## ACCOUNT CUSTOM INSTRUCTIONS")
 
 
 def test_unified_system_prompt_includes_task_board_only_when_active():

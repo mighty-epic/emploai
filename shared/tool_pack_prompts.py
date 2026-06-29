@@ -32,6 +32,8 @@ def build_pack_aware_kickstart_prelude(enabled_packs: Sequence[str]) -> list[dic
         "Missing interpreters, missing PATH entries, missing packages, missing CLIs, and other safe local environment issues are not blockers when they can be solved locally without disrupting the user's existing setup.",
         "Prefer native file tools over shell-generated files whenever file tools are available.",
         "On Windows, prefer py before python3, avoid cat, pwd, heredocs, /tmp, /root, /workspace, and other Unix shell assumptions.",
+        "When using run_command or run_background_command, choose the shell that matches the command syntax: shell='powershell' for Get-Location, Resolve-Path, Get-ChildItem, Get-Command, and Start-Process; shell='cmd' for dir, where, and start. Commands are hidden by default; set visible_terminal=true only when the user explicitly wants to watch or type in a terminal.",
+        "Match command syntax to the actual platform: do not use Windows shell syntax on macOS/Linux, and do not use Unix shell patterns on Windows unless that shell is explicitly available.",
         "Try obvious equivalents first, such as py, python, python3, full executable paths, or the matching package manager.",
         "If that still fails, prefer local, reversible installs or configuration changes over global machine changes, and avoid broad system edits unless the task clearly requires them.",
         "The user may move focus, click, or type while you work. Re-observe, correct course, and continue instead of treating that as a blocker.",
@@ -46,13 +48,13 @@ def build_pack_aware_kickstart_prelude(enabled_packs: Sequence[str]) -> list[dic
             "Use browser DOM tools only when they are actually available for the current browser context."
         )
         user_lines.append(
-            "For browser-native state, prefer browser tools first, and use describe_screen only when the browser is headed and browser-native evidence is inconclusive."
+            "For browser-native state, prefer browser tools first, and use describe_screen only when the browser is headed and browser-native evidence is inconclusive. Browser evidence proves browser state, not native desktop app state."
         )
         user_lines.append(
             "For static page text, headings, and exact rendered values, prefer browser_read_text or browser_wait_for(text_contains=...) instead of OCR or screenshots."
         )
         user_lines.append(
-            "browser_snapshot and observe_browser are mainly for interactive structure and page state, not full page-text extraction."
+            "browser_snapshot is mainly for interactive structure and page state, not full page-text extraction."
         )
         user_lines.append(
             "browser_screenshot is a proof artifact, not a reliable same-turn text-reading method."
@@ -98,11 +100,12 @@ def build_pack_aware_kickstart_prelude(enabled_packs: Sequence[str]) -> list[dic
                 "Prefer keyboard-first desktop interaction when a reliable shortcut or tab path can do the job more safely than clicking.",
                 "Before using hotkeys, press_key, type_text, Enter, Escape, Tab, or any key combo that affects the visible UI, make sure the intended target window, dialog, or control is focused; if focus is uncertain or another window is active, re-observe and focus the correct target before sending keys.",
                 "For native desktop apps and third-party apps, there is no hidden app-specific control layer. Use interactive desktop tools and visual verification after each major action.",
-                "Treat open_app as a launch request, not proof. Immediately verify the resulting screen or window state before assuming the app opened.",
+                "Treat app launches as attempts, not proof. When command tools are available, launch apps with run_command or run_background_command using the appropriate shell, then verify the resulting screen or window state before assuming the app opened.",
                 "When you open an app or file visually, verify that the exact requested target actually appeared. Opening a host app like Notepad is not proof that the requested file opened inside it, and a blank window, wrong document, wrong tab, wrong chat, or generic host UI is not success.",
                 "For desktop-visible opens and window changes, prefer describe_screen to confirm that the intended target actually appeared before you continue.",
                 "If a launch attempt shows a Windows error dialog, the wrong window, or no target window at all, treat that as a failed launch and recover instead of pretending success.",
                 "Do not use broad close shortcuts such as Alt+F4 for ambiguous cleanup. Use close_window with an exact target title, Escape/Cancel for a visible modal, or another targeted route.",
+                "Do not terminate broad process names to clean up a task. Prefer kill_command for commands you started, an exact PID known to belong to the task, an exact window title, or a visible cancel/escape path.",
             ]
         )
         if has_browser_pack:
@@ -152,7 +155,7 @@ def build_pack_aware_kickstart_prelude(enabled_packs: Sequence[str]) -> list[dic
     if has_interactive_desktop:
         assistant_lines.extend(
             [
-                "I will treat open_app as a launch request that still needs visual confirmation before I assume success.",
+                "I will treat app launches as attempts that still need visual confirmation before I assume success.",
                 "If a desktop launch shows an error dialog, the wrong window, or no target window, I will treat that as failure and recover rather than pretending the app opened.",
                 "I will confirm the intended target window, dialog, or control is focused before sending hotkeys, key combos, or physical typing.",
                 "I will discover safe alternate routes and take them instead of asking whether I should try them.",
@@ -194,7 +197,8 @@ def build_pack_aware_task_execution_contract(
             else "- The current workspace/root directory is set by the runtime. If the exact root path matters, inspect it with available workspace or command tools before using a GUI file picker."
         ),
         "- Before opening a file through the desktop, resolve the target to an absolute path using available workspace, file, or command tools. Prefer open_file(path, app?) or an OS/app direct-open command with that exact path. Use a desktop Open/Save dialog only as a fallback; do not guess Downloads, Public, or another user directory.",
-        "- If directory context is uncertain, use available tools such as list_dir('.'), find_files, or on Windows a command like Get-Location or Resolve-Path to confirm where you are before acting.",
+        "- If directory context is uncertain, use available tools such as list_dir('.'), find_files, or a shell-specific command to confirm where you are before acting. With run_command on Windows, set shell='powershell' for Get-Location or Resolve-Path, and shell='cmd' for dir.",
+        "- Match command syntax to the actual platform and selected shell. On Windows, PowerShell cmdlets, cmd.exe built-ins, and Unix shells have different syntax; on macOS/Linux, use native open/which/ps/find-style equivalents instead of Windows commands. Command tools run hidden by default; use visible_terminal=true only when the user explicitly wants a visible terminal.",
         "- Safety means careful completion, not avoidance. User-directed work in communication/account apps is allowed, including WhatsApp, Gmail, Microsoft apps, email, messaging, calendar, and collaboration platforms. For user-facing or irreversible actions, verify recipient/account/target identity and intended content/action, then complete the requested action when confidence is sufficient.",
         "- For launched apps, dev servers, and background commands, keep one controlled lifecycle: check existing state, start only what is needed, verify it, and reuse or stop failed instances before retrying.",
         "- When starting a task-local dev server for local verification, bind it to 127.0.0.1 or localhost when the command supports it, unless the user requested LAN or public access.",
@@ -223,9 +227,10 @@ def build_pack_aware_task_execution_contract(
                 "- Prefer ref-based browser tools over focus-dependent typing or synthetic keypresses.",
                 "- Use browser_wait_for instead of blind delays when waiting for navigation or confirmation text.",
                 "- If the task is naturally browser-first, stay in browser-native tools until they genuinely stop being sufficient before falling back to desktop vision or interaction.",
-                "- browser_snapshot and observe_browser are mainly for interactive structure and page state. For static page text, headings, and exact rendered values, prefer browser_read_text.",
+                "- browser_snapshot is mainly for interactive structure and page state. For static page text, headings, and exact rendered values, prefer browser_read_text.",
                 "- browser_read_text is the primary browser-native tool for visible page text, headings, labels, and exact rendered values.",
                 "- browser_wait_for is for confirming that expected text, selectors, navigation, or load state appeared before you act or read.",
+                "- Browser-native evidence proves the browser context only. It does not prove that a native desktop app, separate Electron app, file window, or desktop focus state changed.",
                 "- Treat browser_screenshot as proof/artifact capture, not as exact text extraction inside the same turn.",
                 "- When you call browser_screenshot for visual interpretation, ask a precise question about what page, file, dialog, or error state you need verified instead of a vague screenshot request.",
                 "- If you opened or navigated a browser page and the task depends on that visual result, verify the intended page state before assuming the page is ready.",
@@ -243,7 +248,7 @@ def build_pack_aware_task_execution_contract(
                     "- For native desktop apps and third-party apps, there is no hidden app-specific control layer. Use interactive desktop tools and visual verification after each major action.",
                     "- Do not chain clicks, typing, hotkeys, or other interactive GUI actions without first verifying that the previous step landed correctly.",
                     "- Before using hotkeys, press_key, type_text, Enter, Escape, Tab, or any key combo that affects the visible UI, make sure the intended target window, dialog, or control is focused; if focus is uncertain or another window is active, re-observe and focus the correct target before sending keys.",
-                    "- open_app only submits a launch request. Verify the resulting screen or window state before assuming the app opened.",
+                    "- App launches are attempts until verified. When command tools are available, use run_command or run_background_command with the right shell and verify the resulting screen or window state before assuming the app opened.",
                     "- When you open an app, browser window, or file visually, verify that the exact requested target actually appeared. Opening a host app alone is not proof that the requested file is open inside it, and a blank window, wrong document, wrong tab, wrong chat, or generic host UI is not success.",
                     "- For desktop-visible opens and window changes, prefer describe_screen to confirm that the intended target actually appeared before you continue.",
                     "- If a launch attempt shows a Windows error dialog, the wrong window, or no target window, treat that as failure and recover instead of pretending the app opened.",
@@ -256,6 +261,7 @@ def build_pack_aware_task_execution_contract(
                     "- observe_desktop tells you which windows exist and which one is active. It does not replace visual verification of on-screen controls.",
                     "- Prefer keyboard-first desktop interaction when a reliable shortcut or tab path exists. Use hotkey, press_key, Enter, Escape, Tab, Shift+Tab, Ctrl+L, Ctrl+S, and similar keys before coordinate clicking when they accomplish the same task more safely.",
                     "- Do not use broad close shortcuts such as Alt+F4 for ambiguous cleanup. Use close_window with an exact target title, Escape/Cancel for a visible modal, or another targeted route.",
+                    "- Do not terminate broad process names to clean up a task. Prefer kill_command for agent-started background commands, an exact PID known to belong to the task, an exact window title, or a visible cancel/escape path.",
                 ]
             )
         else:
@@ -270,7 +276,7 @@ def build_pack_aware_task_execution_contract(
                 "- For native desktop apps and third-party apps, there is no hidden app-specific control layer. Use interactive desktop tools and visual verification after each major action.",
                 "- Do not chain clicks, typing, hotkeys, or other interactive GUI actions without first verifying that the previous step landed correctly.",
                 "- Before using hotkeys, press_key, type_text, Enter, Escape, Tab, or any key combo that affects the visible UI, make sure the intended target window, dialog, or control is focused; if focus is uncertain or another window is active, re-observe and focus the correct target before sending keys.",
-                "- open_app only submits a launch request. Verify the resulting screen or window state before assuming the app opened.",
+                "- App launches are attempts until verified. When command tools are available, use run_command or run_background_command with the right shell and verify the resulting screen or window state before assuming the app opened.",
                 "- When you open an app or file visually, verify that the exact requested target actually appeared. Opening a host app alone is not proof that the requested file is open inside it, and a blank window, wrong document, wrong tab, wrong chat, or generic host UI is not success.",
                 "- For desktop-visible opens and window changes, prefer describe_screen to confirm that the intended target actually appeared before you continue.",
                 "- If a launch attempt shows a Windows error dialog, the wrong window, or no target window, treat that as failure and recover instead of pretending the app opened.",
@@ -281,6 +287,7 @@ def build_pack_aware_task_execution_contract(
                 "- observe_desktop tells you which windows exist and which one is active. It does not replace visual verification of on-screen controls.",
                 "- Prefer keyboard-first desktop interaction when a reliable shortcut or tab path exists. Use hotkey, press_key, Enter, Escape, Tab, Shift+Tab, Ctrl+L, Ctrl+S, and similar keys before coordinate clicking when they accomplish the same task more safely.",
                 "- Do not use broad close shortcuts such as Alt+F4 for ambiguous cleanup. Use close_window with an exact target title, Escape/Cancel for a visible modal, or another targeted route.",
+                "- Do not terminate broad process names to clean up a task. Prefer kill_command for agent-started background commands, an exact PID known to belong to the task, an exact window title, or a visible cancel/escape path.",
             ]
         )
 
@@ -290,6 +297,8 @@ def build_pack_aware_task_execution_contract(
             "- If a local dependency, runtime, app launch path, file association, or other safely repairable environment detail is broken, repair it and continue instead of treating it as a blocker.",
             "- Prefer reversible, task-scoped repairs before broader machine changes. Avoid global installs, default-app changes, registry or PATH edits, deleting user data, killing unrelated processes, or closing the user's apps, tabs, or documents unless the task clearly requires it or the user asked for it.",
             "- When file tools are available, create and edit files with those tools first. Use shell-based file creation only as a fallback when the file tools are genuinely unavailable or clearly failing.",
+            "- For command tools, set shell deliberately when syntax matters. On Windows, use shell='powershell' for Get-Location, Resolve-Path, Get-ChildItem, Get-Command, and Start-Process; use shell='cmd' for dir, where, and start. Keep visible_terminal=false unless the user explicitly asks to see or interact with a terminal window.",
+            "- Match command syntax to the actual platform and selected shell; if uncertain, inspect the OS, current directory, and available commands before acting.",
             "- On Windows, prefer py before python3 and avoid Unix-only shell patterns such as cat, pwd, heredocs, /tmp, /root, or /workspace.",
             "- Ask the user only for true user-dependent blockers such as credentials, 2FA, or account choice. All other failures should continue autonomously.",
             "- AGENTS.md, SOUL.md, USER.md, TOOLS.md, and MEMORY.md are already loaded into prompt context when available. If the user asks about them, answer from injected context instead of using file-search or file-read tools on those filenames.",

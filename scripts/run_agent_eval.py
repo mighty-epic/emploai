@@ -25,6 +25,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", default="gpt-5.4-mini", help="Model to use for ad-hoc prompts.")
     parser.add_argument("--variant", default="standard", help="Model variant to use for ad-hoc prompts.")
     parser.add_argument("--planner-model", default=None, help="Optional planner model override.")
+    parser.add_argument(
+        "--final-quality-guard",
+        choices=["off", "nli", "planner"],
+        default=None,
+        help="Enable hidden final-answer retry verification for the run.",
+    )
+    parser.add_argument(
+        "--max-auto-continues",
+        type=int,
+        default=None,
+        help="Maximum hidden retry continuations allowed by the final-quality guard.",
+    )
     parser.add_argument("--tool-packs", default="", help="Comma-separated enabled tool packs for ad-hoc prompts.")
     parser.add_argument("--repeat", type=int, default=1, help="How many times to run each case.")
     parser.add_argument("--profile", default="", help="Stable profile name used for isolated runtime state.")
@@ -77,6 +89,12 @@ def _build_config_from_cli(args: argparse.Namespace, *, repo_root: Path) -> Eval
             model=str(args.model).strip() or "gpt-5.4-mini",
             variant=str(args.variant).strip() or "standard",
             planner_model=str(args.planner_model).strip() if args.planner_model else None,
+            final_quality_guard=(
+                str(args.final_quality_guard).strip().lower()
+                if args.final_quality_guard
+                else ("planner" if args.planner_model else None)
+            ),
+            final_quality_max_auto_continues=args.max_auto_continues,
             enabled_tool_packs=_tool_pack_list(args.tool_packs),
             repeat=max(1, int(args.repeat or 1)),
             fresh_runtime=bool(args.fresh_runtime),
@@ -99,6 +117,12 @@ def _build_config_from_cli(args: argparse.Namespace, *, repo_root: Path) -> Eval
         config.task_board_armed_next_turn = True
     if str(args.profile or "").strip():
         config.profile = str(args.profile).strip() or config.profile
+    if args.final_quality_guard:
+        config.final_quality_guard = str(args.final_quality_guard).strip().lower()
+    elif args.planner_model and config.final_quality_guard is None:
+        config.final_quality_guard = "planner"
+    if args.max_auto_continues is not None:
+        config.final_quality_max_auto_continues = int(args.max_auto_continues)
     return config
 
 
@@ -132,6 +156,11 @@ def main() -> int:
     report_path = Path(report["report_path"])
     markdown_path = Path(report["markdown_path"])
     print(f"Agent eval complete for profile '{config.profile}' (user_id {config.user_id or stable_eval_user_id(config.profile)}).")
+    print(
+        "Final quality guard: "
+        f"{report['config'].get('effective_final_quality_guard') or 'off'} "
+        f"(max auto-continues: {report['config'].get('effective_final_quality_max_auto_continues') or 'default'})"
+    )
     print(f"JSON report: {report_path}")
     print(f"Markdown report: {markdown_path}")
     for case_report in report["cases"]:

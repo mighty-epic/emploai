@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List
 
 
@@ -26,17 +27,65 @@ def final_quality_guard_enabled() -> bool:
 
 
 def final_quality_guard_mode() -> str:
-    return os.getenv("EMPLOAI_FINAL_QUALITY_GUARD", "").strip().lower()
+    raw = os.getenv("EMPLOAI_FINAL_QUALITY_GUARD", "").strip()
+    if raw:
+        return raw.lower()
+    return str(_live_config_value("agent.final_quality_guard", "") or "").strip().lower()
 
 
 def max_auto_continues() -> int:
     raw = os.getenv("EMPLOAI_FINAL_QUALITY_MAX_AUTO_CONTINUES", "").strip()
+    if not raw:
+        raw = str(_live_config_value("agent.final_quality_max_auto_continues", "") or "").strip()
     if not raw:
         return 1
     try:
         return max(0, int(raw))
     except ValueError:
         return 1
+
+
+def max_auto_continues_for_request(user_request: str) -> int:
+    base = max_auto_continues()
+    text = str(user_request or "").lower()
+    coding_markers = (
+        "code",
+        "coding",
+        "script",
+        "app",
+        "application",
+        "electron",
+        "website",
+        "web app",
+        "server",
+        "build",
+        "compile",
+        "run",
+        "launch",
+        "start",
+        "install",
+        "npm",
+        "node",
+        "package",
+        "test",
+        "debug",
+        "implement",
+        "fix",
+    )
+    if any(marker in text for marker in coding_markers):
+        return max(base, 5)
+    return base
+
+
+def _live_config_value(path: str, default: Any) -> Any:
+    try:
+        from shared.live_config import get_live_config
+
+        workspace = str(os.getenv("DEFAULT_WORKSPACE", "") or "").strip()
+        config_file = (Path(workspace) / "config.json") if workspace else Path("config.json")
+        return get_live_config(config_file).get(path, default)
+    except Exception:
+        return default
 
 
 def _float_env(name: str, default: float) -> float:

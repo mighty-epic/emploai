@@ -26,6 +26,37 @@ def test_default_app_user_id_ignores_allowed_user_ids(monkeypatch):
     assert release_backend._default_user_id() == release_backend.DEFAULT_APP_USER_ID
 
 
+def test_install_update_cli_accepts_restart_executable(monkeypatch, tmp_path: Path, capsys):
+    root = tmp_path / "bundle"
+    home = tmp_path / "home"
+    env_file = home / ".env"
+    restart_exe = tmp_path / "Programs" / "EmploAI" / "EmploAI.exe"
+    captured = {}
+
+    monkeypatch.setattr(release_backend, "_runtime_paths", lambda: (root, home, env_file))
+
+    def _fake_install_latest_update(home_arg, root_arg, *, restart_executable=None):
+        captured["home"] = home_arg
+        captured["root"] = root_arg
+        captured["restart_executable"] = restart_executable
+        return {
+            "ok": True,
+            "launched": True,
+            "restartExecutable": str(restart_executable),
+        }
+
+    monkeypatch.setattr(release_backend, "install_latest_update", _fake_install_latest_update)
+
+    assert release_backend.main(["install-update", "--restart-executable", str(restart_exe)]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["launched"] is True
+    assert captured["home"] == home
+    assert captured["root"] == root
+    assert captured["restart_executable"] == restart_exe.resolve()
+    assert payload["restartExecutable"] == str(restart_exe.resolve())
+
+
 def test_ensure_runtime_manual_start_ignores_auto_start(monkeypatch, tmp_path: Path):
     config = DesktopRuntimeConfig(
         enabled=True,
@@ -145,7 +176,7 @@ def test_stop_runtime_kills_detected_runtime_pids_without_pid_file(monkeypatch, 
     assert terminated == [222, 333]
 
 
-def test_daemon_mode_runs_telegram_when_configured_even_if_app_channel_disabled(monkeypatch, tmp_path: Path):
+def test_daemon_mode_defers_telegram_worker_until_bootstrap_when_configured(monkeypatch, tmp_path: Path):
     config = DesktopRuntimeConfig(
         enabled=True,
         host="127.0.0.1",
@@ -205,13 +236,13 @@ def test_daemon_mode_runs_telegram_when_configured_even_if_app_channel_disabled(
     result = release_backend._run_daemon(None, None)
 
     assert result == 0
-    assert recorded["telegram_worker"][0:2] == (True, True)
+    assert "telegram_worker" not in recorded
     assert "remote_worker" not in recorded
     assert recorded["remote_worker_stopped"] is True
     assert recorded["server"] == ("127.0.0.1", 8787)
 
 
-def test_daemon_mode_runs_remote_control_worker_when_configured(monkeypatch, tmp_path: Path):
+def test_daemon_mode_defers_remote_control_worker_until_bootstrap_when_configured(monkeypatch, tmp_path: Path):
     config = DesktopRuntimeConfig(
         enabled=True,
         host="127.0.0.1",
@@ -267,8 +298,264 @@ def test_daemon_mode_runs_remote_control_worker_when_configured(monkeypatch, tmp
     result = release_backend._run_daemon(None, None)
 
     assert result == 0
-    assert recorded["remote_worker"][0] is True
+    assert "remote_worker" not in recorded
     assert recorded["server"] == ("127.0.0.1", 8787)
+
+
+def test_bootstrap_payload_ensures_service_workers_after_runtime_ready(monkeypatch, tmp_path: Path):
+    config = DesktopRuntimeConfig(
+        enabled=True,
+        host="127.0.0.1",
+        port=8787,
+        auto_start=False,
+        attach_timeout_seconds=3,
+        restart_attach_timeout_seconds=3,
+        workspace=str(tmp_path),
+    )
+    existing = {
+        "TELEGRAM_BOT_TOKEN": "token",
+        "ALLOWED_USER_IDS": "42",
+        "EMPLOAI_REMOTE_CONTROL_BASE_URL": "https://example.com",
+        "EMPLOAI_REMOTE_CONTROL_EMAIL": "user@example.com",
+        "EMPLOAI_REMOTE_CONTROL_PASSWORD": "correct horse",
+    }
+    recorded = {}
+
+    monkeypatch.setattr(
+        release_backend,
+        "_prepare_environment",
+        lambda **_kwargs: (tmp_path, tmp_path, tmp_path / ".env", dict(existing)),
+    )
+    monkeypatch.setattr(release_backend, "apply_installer_voice_pack_preferences", lambda _home: {})
+    monkeypatch.setattr(
+        release_backend,
+        "build_setup_state",
+        lambda **_kwargs: {"required": False, "telegramConfigured": True, "validationIssues": []},
+    )
+    monkeypatch.setattr(
+        release_backend,
+        "_apply_cloud_account_runtime_overlay",
+        lambda _root, _home, values: values,
+    )
+    monkeypatch.setattr(
+        release_backend,
+        "_apply_runtime_secret_overlay",
+        lambda values: {**values, "NVIDIA_API_KEY": "nvidia-overlay"},
+    )
+    monkeypatch.setattr(
+        release_backend,
+        "_effective_release_env_values",
+        lambda _root, _home, values, **_kwargs: (values, False),
+    )
+    monkeypatch.setattr(
+        release_backend,
+        "_refresh_setup_model_catalog",
+        lambda _setup_state, values: recorded.update({"model_catalog_values": dict(values)}),
+    )
+    monkeypatch.setattr(release_backend, "_load_desktop_runtime_config", lambda: config)
+    monkeypatch.setattr(
+        release_backend,
+        "_get_runtime_status",
+        lambda: release_backend.DesktopRuntimeStatus(
+            ok=True,
+            state="running",
+            mode="attached",
+            api_base_url="http://127.0.0.1:8787",
+            process_id=1234,
+        ),
+    )
+    monkeypatch.setattr(release_backend, "_attached_runtime_requires_restart_checked", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(release_backend, "configure_channels_enabled", lambda channel_name: channel_name == "telegram")
+    monkeypatch.setattr(
+        release_backend,
+        "_ensure_telegram_worker",
+        lambda _home, enabled, configured, config_fingerprint="": recorded.update({"telegram_worker": (enabled, configured, config_fingerprint)}) or release_backend.TelegramServiceStatus(enabled=enabled, configured=configured, state="running"),
+    )
+    monkeypatch.setattr(
+        release_backend,
+        "_ensure_remote_control_worker",
+        lambda _home, configured, config_fingerprint="": recorded.update({"remote_worker": (configured, config_fingerprint)}) or release_backend.RemoteControlServiceStatus(configured=configured, state="running"),
+    )
+    monkeypatch.setattr(release_backend, "_managed_runtime_pids", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(release_backend, "_ensure_desktop_token", lambda: {"access_token": "token", "device_id": "device"})
+    monkeypatch.setattr(release_backend, "current_release_version", lambda _root: "0.0.0-test")
+
+    payload = release_backend._bootstrap_payload(resolve_current_session=False)
+
+    assert payload["runtimeStatus"]["ok"] is True
+    assert recorded["telegram_worker"][0:2] == (True, True)
+    assert recorded["remote_worker"][0] is True
+    assert recorded["model_catalog_values"]["NVIDIA_API_KEY"] == "nvidia-overlay"
+    assert payload["telegramStatus"]["state"] == "running"
+    assert payload["setupState"]["remoteControlStatus"]["state"] == "running"
+
+
+def test_cloud_account_runtime_overlay_hydrates_secrets_and_bot_parenting(monkeypatch, tmp_path: Path):
+    home = tmp_path / "runtime"
+    home.mkdir()
+    (home / "remote-account-session.json").write_text(
+        json.dumps({"apiBaseUrl": "https://api.kraitos.app", "sessionToken": "session-token"}),
+        encoding="utf-8",
+    )
+    restored: list[dict] = []
+
+    def fake_request(_session, path, **_kwargs):
+        assert _session["sessionToken"] == "session-token"
+        if path == "/api/remote/account/me":
+            return {
+                "profile": {
+                    "preferences": {
+                        "default_workspace": str(tmp_path / "workspace"),
+                        "planner_model": "gpt-5.4-mini",
+                    },
+                    "integrations": {
+                        "telegram": {
+                            "allowed_user_ids": ["42"],
+                        },
+                    },
+                },
+                "shared_state": {
+                    "session_details": {
+                        "sess-1": {"telegram_bot_config_id": "bot-a"},
+                    },
+                },
+            }
+        if path.startswith("/api/remote/account/secrets?namespace=telegram_bots"):
+            return {
+                "items": [
+                    {
+                        "name": "bot-a",
+                        "metadata": {"label": "Bot A", "bot_config_id": "bot-a", "is_default": True},
+                    }
+                ]
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(release_backend, "_remote_account_request_json", fake_request)
+    monkeypatch.setattr(
+        release_backend,
+        "_remote_account_reveal_secrets",
+        lambda _session, namespace: (
+            {"OPENAI_API_KEY": "sk-cloud"} if namespace == "setup" else {"bot-a": "123456:cloud-bot"}
+        ),
+    )
+    monkeypatch.setattr(
+        release_backend,
+        "_restore_cloud_telegram_bots",
+        lambda **kwargs: restored.append(kwargs) or {"telegram_bot_count": 1, "restored_parenting": {"updated": 1}},
+    )
+
+    effective = release_backend._apply_cloud_account_runtime_overlay(
+        tmp_path,
+        home,
+        {"DEFAULT_WORKSPACE": "C:/Old", "OPENAI_API_KEY": "sk-local"},
+    )
+
+    assert effective["OPENAI_API_KEY"] == "sk-cloud"
+    assert effective["TELEGRAM_BOT_TOKEN"] == "123456:cloud-bot"
+    assert effective["ALLOWED_USER_IDS"] == "42"
+    assert effective["PLANNER_MODEL"] == "gpt-5.4-mini"
+    assert restored[0]["telegram_bot_secrets"] == {"bot-a": "123456:cloud-bot"}
+    assert restored[0]["shared_state"]["session_details"]["sess-1"]["telegram_bot_config_id"] == "bot-a"
+    assert os.environ["OPENAI_API_KEY"] == "sk-cloud"
+
+
+def test_cloud_account_runtime_overlay_uses_overlay_for_encrypted_remote_session(monkeypatch, tmp_path: Path):
+    home = tmp_path / "runtime"
+    home.mkdir()
+    (home / "remote-account-session.json").write_text(
+        json.dumps({"version": 2, "storage": "electron_safe_storage", "ciphertext": "opaque"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        release_backend.RUNTIME_SECRET_OVERLAY_ENV,
+        json.dumps(
+            {
+                "EMPLOAI_REMOTE_CONTROL_BASE_URL": "https://api.kraitos.app",
+                "EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN": "session-token",
+                "EMPLOAI_REMOTE_CONTROL_USER_ID": "77",
+                "EMPLOAI_REMOTE_CONTROL_DESKTOP_ID": "desktop-abc",
+            }
+        ),
+    )
+    captured: dict[str, dict] = {}
+
+    def fake_request(session, path, **_kwargs):
+        captured["session"] = dict(session)
+        assert session["apiBaseUrl"] == "https://api.kraitos.app"
+        assert session["sessionToken"] == "session-token"
+        if path == "/api/remote/account/me":
+            return {
+                "profile": {
+                    "preferences": {
+                        "default_workspace": str(tmp_path / "workspace"),
+                    },
+                },
+                "shared_state": {},
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(release_backend, "_remote_account_request_json", fake_request)
+    monkeypatch.setattr(release_backend, "_remote_account_reveal_secrets", lambda _session, _namespace: {})
+    monkeypatch.setattr(release_backend, "_remote_account_list_secrets", lambda _session, _namespace: [])
+    monkeypatch.setattr(
+        release_backend,
+        "_restore_cloud_telegram_bots",
+        lambda **_kwargs: {"telegram_bot_count": 0, "restored_parenting": {"updated": 0}},
+    )
+
+    effective = release_backend._apply_cloud_account_runtime_overlay(tmp_path, home, {})
+
+    assert captured["session"]["user"]["user_id"] == "77"
+    assert captured["session"]["desktop"]["desktop_id"] == "desktop-abc"
+    assert effective["DEFAULT_WORKSPACE"] == str(tmp_path / "workspace")
+    assert release_backend._remote_account_user_id(home) == 77
+    assert release_backend._remote_account_session_config_fingerprint(
+        home,
+        release_backend._runtime_secret_overlay_values(),
+    )
+
+
+def test_runtime_secret_overlay_restores_stripped_provider_keys(monkeypatch):
+    monkeypatch.setenv(
+        release_backend.RUNTIME_SECRET_OVERLAY_ENV,
+        json.dumps(
+            {
+                "OPENAI_API_KEY": "sk-overlay",
+                "GOOGLE_API_KEY": "gemini-overlay",
+                "NVIDIA_API_KEY": "nvidia-overlay",
+                "EMPLOAI_REMOTE_CONTROL_BASE_URL": "https://api.kraitos.app",
+                "EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN": "session-token",
+                "EMPLOAI_REMOTE_CONTROL_USER_ID": "77",
+                "EMPLOAI_REMOTE_CONTROL_DESKTOP_ID": "desktop-abc",
+                "IGNORED_SECRET": "nope",
+            }
+        ),
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+    monkeypatch.delenv("EMPLOAI_REMOTE_CONTROL_BASE_URL", raising=False)
+    monkeypatch.delenv("EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN", raising=False)
+    monkeypatch.delenv("EMPLOAI_REMOTE_CONTROL_USER_ID", raising=False)
+    monkeypatch.delenv("EMPLOAI_REMOTE_CONTROL_DESKTOP_ID", raising=False)
+
+    effective = release_backend._apply_runtime_secret_overlay({"DEFAULT_WORKSPACE": "C:/Work"})
+
+    assert effective["OPENAI_API_KEY"] == "sk-overlay"
+    assert effective["GOOGLE_API_KEY"] == "gemini-overlay"
+    assert effective["GEMINI_API_KEY"] == "gemini-overlay"
+    assert effective["NVIDIA_API_KEY"] == "nvidia-overlay"
+    assert effective["EMPLOAI_REMOTE_CONTROL_BASE_URL"] == "https://api.kraitos.app"
+    assert effective["EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN"] == "session-token"
+    assert effective["EMPLOAI_REMOTE_CONTROL_USER_ID"] == "77"
+    assert effective["EMPLOAI_REMOTE_CONTROL_DESKTOP_ID"] == "desktop-abc"
+    assert "IGNORED_SECRET" not in effective
+    assert os.environ["OPENAI_API_KEY"] == "sk-overlay"
+    assert os.environ["GEMINI_API_KEY"] == "gemini-overlay"
+    assert os.environ["NVIDIA_API_KEY"] == "nvidia-overlay"
+    assert os.environ["EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN"] == "session-token"
 
 
 def test_ensure_telegram_worker_cleans_duplicate_local_workers(monkeypatch, tmp_path: Path):
@@ -293,6 +580,30 @@ def test_ensure_telegram_worker_cleans_duplicate_local_workers(monkeypatch, tmp_
     )
 
     assert terminated == [101, 202]
+    assert launched == [tmp_path]
+
+
+def test_ensure_remote_control_worker_cleans_duplicate_local_workers(monkeypatch, tmp_path: Path):
+    live_pids = {303, 404}
+    terminated: list[int] = []
+    launched: list[Path] = []
+
+    monkeypatch.setattr(release_backend, "_managed_remote_control_worker_pids", lambda _home: sorted(live_pids))
+    monkeypatch.setattr(release_backend, "_terminate_pid", lambda pid: terminated.append(pid) or live_pids.discard(pid))
+    monkeypatch.setattr(release_backend.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(release_backend, "_read_remote_control_pid_record", lambda _home: None)
+    monkeypatch.setattr(release_backend, "_read_remote_control_status_record", lambda _home: None)
+    monkeypatch.setattr(release_backend, "_write_remote_control_status_record", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(release_backend, "_clear_remote_control_status_record", lambda _home: None)
+    monkeypatch.setattr(release_backend, "_launch_detached_remote_control_worker", lambda home: launched.append(home))
+
+    release_backend._ensure_remote_control_worker(
+        tmp_path,
+        configured=True,
+        config_fingerprint="remote:account",
+    )
+
+    assert terminated == [303, 404]
     assert launched == [tmp_path]
 
 
@@ -395,7 +706,7 @@ def test_force_launch_reports_launch_failure_detail(monkeypatch, tmp_path: Path)
         process_id=None,
     )
 
-    monkeypatch.setattr(release_backend, "_prepare_environment", lambda: (tmp_path, tmp_path, tmp_path / ".env", {}))
+    monkeypatch.setattr(release_backend, "_prepare_environment", lambda **_kwargs: (tmp_path, tmp_path, tmp_path / ".env", {}))
     monkeypatch.setattr(release_backend, "build_setup_state", lambda **_kwargs: {"required": False})
     monkeypatch.setattr(release_backend, "_load_desktop_runtime_config", lambda: config)
     monkeypatch.setattr(release_backend, "_get_runtime_status", lambda: status)

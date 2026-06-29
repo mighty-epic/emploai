@@ -258,6 +258,8 @@ class EvalConfig:
     model: str
     variant: str = "standard"
     planner_model: Optional[str] = None
+    final_quality_guard: Optional[str] = None
+    final_quality_max_auto_continues: Optional[int] = None
     enabled_tool_packs: Optional[List[str]] = None
     repeat: int = 1
     fresh_runtime: bool = False
@@ -286,6 +288,8 @@ class EvalConfig:
             model=model,
             variant=str(payload.get("variant") or "standard").strip() or "standard",
             planner_model=str(payload.get("planner_model")).strip() if payload.get("planner_model") is not None else None,
+            final_quality_guard=_normalize_final_quality_guard(payload.get("final_quality_guard")),
+            final_quality_max_auto_continues=_coerce_optional_int(payload.get("final_quality_max_auto_continues")),
             enabled_tool_packs=[str(item) for item in enabled_tool_packs] if enabled_tool_packs is not None else None,
             repeat=max(1, int(payload.get("repeat", 1) or 1)),
             fresh_runtime=bool(payload.get("fresh_runtime", False)),
@@ -314,6 +318,17 @@ def _coerce_optional_int(value: Any) -> Optional[int]:
         return int(value)
     except Exception:
         return None
+
+
+def _normalize_final_quality_guard(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if raw in {"", "off", "none", "false", "disabled", "disable"}:
+        return ""
+    if raw in {"planner", "nli"}:
+        return raw
+    raise ValueError("final_quality_guard must be one of: planner, nli, off")
 
 
 class EventRecorder:
@@ -1098,6 +1113,13 @@ def build_markdown_report(report: Dict[str, Any]) -> str:
     lines.append(f"- Runtime home: `{report['runtime_home']}`")
     lines.append(f"- Workspace: `{report['config']['workspace']}`")
     lines.append(f"- Model default: `{report['config']['model']}` / `{report['config']['variant']}`")
+    lines.append(f"- Planner default: `{report['config'].get('planner_model') or 'automatic'}`")
+    lines.append(
+        "- Final quality guard: `{mode}` / max auto-continues `{limit}`".format(
+            mode=report["config"].get("effective_final_quality_guard") or "off",
+            limit=report["config"].get("effective_final_quality_max_auto_continues") or "default",
+        )
+    )
     lines.append(f"- Repeat count: `{report['config']['repeat']}`")
     lines.append("")
     lines.append("## Case Summary")
@@ -1248,7 +1270,19 @@ class AgentEvalHarness:
             load_dotenv(self.repo_root / ".env", override=False)
         except Exception:
             pass
+        self._configure_final_quality_guard_env()
         self._configure_isolated_scheduler()
+
+    def _configure_final_quality_guard_env(self) -> None:
+        if self.config.final_quality_guard is not None:
+            if self.config.final_quality_guard:
+                os.environ["EMPLOAI_FINAL_QUALITY_GUARD"] = self.config.final_quality_guard
+            else:
+                os.environ.pop("EMPLOAI_FINAL_QUALITY_GUARD", None)
+        if self.config.final_quality_max_auto_continues is not None:
+            os.environ["EMPLOAI_FINAL_QUALITY_MAX_AUTO_CONTINUES"] = str(
+                max(0, int(self.config.final_quality_max_auto_continues))
+            )
 
     def _configure_isolated_scheduler(self) -> None:
         try:
@@ -1273,7 +1307,11 @@ class AgentEvalHarness:
         from mobile_app.backend.session_bridge import AppSessionBridge
         from shared.channel_runtime import _memory_context
         from shared.multi_chat_orchestrator import _ORCHESTRATORS
-        from shared.task_intent import is_screen_observation_message, is_task_like_message
+        from shared.task_intent import (
+            is_screen_observation_message,
+            is_task_like_message,
+            request_requires_tool_evidence,
+        )
         from shared.tool_packs import (
             default_enabled_tool_packs,
             normalize_enabled_tool_packs,
@@ -1290,6 +1328,7 @@ class AgentEvalHarness:
             "tools_for_enabled_packs": tools_for_enabled_packs,
             "is_screen_observation_message": is_screen_observation_message,
             "is_task_like_message": is_task_like_message,
+            "request_requires_tool_evidence": request_requires_tool_evidence,
             "_memory_context": _memory_context,
             "_kickstart_prelude": _kickstart_prelude,
             "_task_execution_contract": _task_execution_contract,
@@ -1563,14 +1602,16 @@ class AgentEvalHarness:
             return {}
         screen_observation_turn = self._mods["is_screen_observation_message"](user_message)
         task_like_turn = screen_observation_turn or self._mods["is_task_like_message"](user_message)
+        tool_evidence_turn = self._mods["request_requires_tool_evidence"](user_message)
         prelude_messages: List[Dict[str, Any]] = []
-        if task_like_turn and len(getattr(runtime, "chat_history", []) or []) <= 3:
+        if tool_evidence_turn and len(getattr(runtime, "chat_history", []) or []) <= 3:
             prelude_messages.extend(self._mods["_kickstart_prelude"](active_tool_packs))
         system_messages: List[Dict[str, Any]] = []
         if screen_observation_turn:
             system_messages.append(self._mods["_screen_observation_contract"](active_tool_packs))
-        system_messages.append(self._mods["_task_execution_contract"](runtime, active_tool_packs))
-        if not task_like_turn:
+        if tool_evidence_turn:
+            system_messages.append(self._mods["_task_execution_contract"](runtime, active_tool_packs))
+        if not tool_evidence_turn or not task_like_turn:
             system_messages.append(self._mods["_conversational_turn_guard"]())
         skills_index = ""
         active_skills_context = ""
@@ -1592,6 +1633,7 @@ class AgentEvalHarness:
         return {
             "task_like_turn": bool(task_like_turn),
             "screen_observation_turn": bool(screen_observation_turn),
+            "tool_evidence_turn": bool(tool_evidence_turn),
             "active_tool_packs": list(active_tool_packs),
             "allowed_tool_names": allowed_tool_names,
             "system_messages": system_messages,
@@ -1611,7 +1653,7 @@ class AgentEvalHarness:
         session_id = str(getattr(getattr(runtime, "session", None), "id", "") or "").strip()
         if not session_id:
             raise RuntimeError("Runtime session is missing an active session id.")
-        lease = await bridge.orchestrator.prepare_turn(session_id)
+        lease = await bridge.orchestrator.prepare_turn(session_id, origin_channel="app")
         if lease.busy:
             raise RuntimeError(lease.error or "Session is already busy.")
         runtime._active_tool_packs_for_current_run = list(lease.active_tool_packs)
@@ -1733,6 +1775,12 @@ class AgentEvalHarness:
                 "model": self.config.model,
                 "variant": self.config.variant,
                 "planner_model": self.config.planner_model,
+                "final_quality_guard": self.config.final_quality_guard,
+                "final_quality_max_auto_continues": self.config.final_quality_max_auto_continues,
+                "effective_final_quality_guard": os.getenv("EMPLOAI_FINAL_QUALITY_GUARD", "").strip(),
+                "effective_final_quality_max_auto_continues": os.getenv(
+                    "EMPLOAI_FINAL_QUALITY_MAX_AUTO_CONTINUES", ""
+                ).strip(),
                 "enabled_tool_packs": list(self._normalize_enabled_tool_packs(self.config.enabled_tool_packs)),
                 "repeat": self.config.repeat,
                 "fresh_runtime": self.config.fresh_runtime,
@@ -1773,6 +1821,9 @@ def sample_config_payload() -> Dict[str, Any]:
         "workspace": ".",
         "model": "gpt-5.4-mini",
         "variant": "standard",
+        "planner_model": "gpt-5.4-mini",
+        "final_quality_guard": "planner",
+        "final_quality_max_auto_continues": 2,
         "enabled_tool_packs": [
             "interactive_desktop",
             "browser_isolated",
@@ -1800,18 +1851,16 @@ def sample_config_payload() -> Dict[str, Any]:
                 "name": "workspace-list-current-dir",
                 "prompt": "Inspect the current workspace and list the top-level files and folders. Do not change anything.",
                 "expectations": {
-                    "required_tools_any": ["list_dir", "list_files", "find_files"],
+                    "required_tools_any": ["list_dir", "find_files"],
                     "forbidden_tools": [
                         "web_search",
                         "fetch_url",
                         "browser_navigate",
-                        "open_browser",
                         "describe_screen",
                         "observe_desktop",
                         "write_file",
                         "edit_file",
                         "append_file",
-                        "execute_command",
                         "run_command",
                     ],
                     "max_unsupported_tool_attempts": 0,
@@ -1831,7 +1880,6 @@ def sample_config_payload() -> Dict[str, Any]:
                         "web_search",
                         "fetch_url",
                         "browser_navigate",
-                        "open_browser",
                     ],
                     "max_unsupported_tool_attempts": 0,
                 },
@@ -1841,8 +1889,8 @@ def sample_config_payload() -> Dict[str, Any]:
                 "prompt": "Open https://example.com, capture the main heading, write it to example_heading.txt, then verify the saved file.",
                 "expectations": {
                     "required_tool_sequence": [
-                        ["browser_navigate", "open_browser"],
-                        ["browser_snapshot", "observe_browser", "browser_read_text"],
+                        ["browser_navigate"],
+                        ["browser_snapshot", "browser_read_text"],
                         "write_file",
                         "read_file",
                     ],

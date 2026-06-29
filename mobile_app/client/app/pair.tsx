@@ -1,359 +1,542 @@
 import { useEffect, useState } from 'react';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Link, useRouter } from 'expo-router';
-import { Platform, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { CameraView, useCameraPermissions, type BarcodeScanningResult } from 'expo-camera';
 
 import {
-  fetchRemoteAccountProfile,
   fetchRemoteDesktops,
   remoteCompletePairing,
-  remoteLogin,
-  remoteRegisterAccount,
   type RemoteDesktop,
+  type RemoteAccountProfile,
 } from '../src/lib/appApi';
-import { describeError } from '../lib/diagnostics';
-import { isSupportedApiBaseUrl, loadAppConfig, normalizeApiBaseUrl, saveAppConfig } from '../lib/appConfig';
+import { loadAppConfig, saveAppConfig } from '../lib/appConfig';
+import { reconcileRemoteAccountConfig } from '../lib/accountSession';
+import { PageHeader } from '../src/components/PageHeader';
+import { shortStatusText, userFacingError } from '../lib/diagnostics';
+import { InfoHint } from '../src/components/InfoHint';
+import { extractPairingTokenFromInput } from '../src/lib/pairingQr';
+
+type StepState = 'idle' | 'working' | 'done' | 'error';
+
+type PairStep = {
+  key: string;
+  label: string;
+  detail: string;
+  state: StepState;
+};
 
 export default function PairScreen() {
   const router = useRouter();
   const [apiBaseUrl, setApiBaseUrl] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [token, setToken] = useState('');
   const [pairingToken, setPairingToken] = useState('');
-  const [deviceName, setDeviceName] = useState('My EmploAI Phone');
-  const [accountToken, setAccountToken] = useState('');
-  const [pairedDesktopId, setPairedDesktopId] = useState('');
+  const [profile, setProfile] = useState<RemoteAccountProfile | null>(null);
   const [desktops, setDesktops] = useState<RemoteDesktop[]>([]);
-  const [status, setStatus] = useState('idle');
-  const [isBusy, setIsBusy] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scanLocked, setScanLocked] = useState(false);
+  const [scannerStatus, setScannerStatus] = useState('');
+  const [status, setStatus] = useState('checking account');
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [steps, setSteps] = useState<PairStep[]>([
+    { key: 'cloud', label: 'Account', detail: 'Waiting for account check.', state: 'idle' },
+    { key: 'desktop', label: 'Desktop bridge', detail: 'Waiting for desktop presence.', state: 'idle' },
+    { key: 'token', label: 'Pairing QR', detail: 'Scan the desktop QR, or paste its fallback code.', state: 'idle' },
+    { key: 'sync', label: 'Shared state', detail: 'Waiting for first sync.', state: 'idle' },
+  ]);
 
-  useEffect(() => {
-    let active = true;
-    loadAppConfig()
-      .then((config) => {
-        if (!active) return;
-        setApiBaseUrl(config.apiBaseUrl);
-        setAccountToken(config.accountToken || config.accessToken);
-        setPairedDesktopId(config.pairedDesktopId);
-        setStatus('ready');
-      })
-      .catch(() => {
-        if (!active) return;
-        setStatus('load error');
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!apiBaseUrl || !accountToken) return;
-    let active = true;
-    fetchRemoteDesktops(apiBaseUrl, accountToken)
-      .then((items) => {
-        if (!active) return;
-        setDesktops(Array.isArray(items) ? items : []);
-      })
-      .catch(() => {
-        if (!active) return;
-        setDesktops([]);
-      });
-    return () => {
-      active = false;
-    };
-  }, [apiBaseUrl, accountToken]);
-
-  const normalizeBaseUrlOrStatus = () => {
-    const normalizedBaseUrl = normalizeApiBaseUrl(apiBaseUrl);
-    if (!normalizedBaseUrl) {
-      setStatus('missing service URL');
-      return null;
-    }
-    if (!isSupportedApiBaseUrl(normalizedBaseUrl)) {
-      setStatus('service URL must start with http:// or https://');
-      return null;
-    }
-    return normalizedBaseUrl;
+  const setStep = (key: string, state: StepState, detail: string) => {
+    setSteps((prev) => prev.map((step) => step.key === key ? { ...step, state, detail } : step));
   };
 
-  const persistRemoteConfig = async (next: { baseUrl: string; token: string; pairedDesktopId?: string | null }) => {
-    const normalized = await saveAppConfig({
-      apiBaseUrl: next.baseUrl,
-      accessToken: next.token,
-      accountToken: next.token,
-      pairedDesktopId: (next.pairedDesktopId || '').trim(),
-      connectionMode: 'remote_cloud',
-    });
-    setApiBaseUrl(normalized.apiBaseUrl);
-    setAccountToken(normalized.accountToken);
-    setPairedDesktopId(normalized.pairedDesktopId);
-  };
-
-  const signIn = async () => {
-    const normalizedBaseUrl = normalizeBaseUrlOrStatus();
-    if (!normalizedBaseUrl) return;
-    if (!email.trim() || !password.trim()) {
-      setStatus('email and password required');
-      return;
-    }
-    setIsBusy(true);
-    setStatus('signing in');
+  const refresh = async () => {
+    setBusy(true);
+    setStatus('checking account');
+    setStep('cloud', 'working', 'Checking saved session.');
     try {
-      const result = await remoteLogin(normalizedBaseUrl, {
-        email: email.trim(),
-        password,
-        actor_kind: 'mobile',
-        device_name: deviceName.trim() || 'My EmploAI Phone',
-        device_platform: Platform.OS,
-      });
-      await persistRemoteConfig({
-        baseUrl: normalizedBaseUrl,
-        token: result.session_token,
-        pairedDesktopId: result.mobile?.paired_desktop_id || '',
-      });
-      const desktopItems = await fetchRemoteDesktops(normalizedBaseUrl, result.session_token).catch(() => []);
-      setDesktops(Array.isArray(desktopItems) ? desktopItems : []);
-      setStatus(result.mobile?.paired_desktop_id ? 'signed in and paired' : 'signed in');
-      if (result.mobile?.paired_desktop_id) {
-        router.replace('/chat');
+      const { config, profile: reconciledProfile } = await reconcileRemoteAccountConfig(await loadAppConfig());
+      const accountToken = config.accountToken || config.accessToken;
+      setApiBaseUrl(config.apiBaseUrl);
+      setToken(accountToken);
+      if (!accountToken) {
+        setStep('cloud', 'error', 'Sign in before pairing this phone.');
+        setStatus('not signed in');
+        router.replace('/auth');
+        return;
+      }
+      const [nextProfile, nextDesktops] = await Promise.all([
+        reconciledProfile ? Promise.resolve(reconciledProfile) : reconcileRemoteAccountConfig(config).then((result) => result.profile),
+        fetchRemoteDesktops(config.apiBaseUrl, accountToken).catch(() => []),
+      ]);
+      if (!nextProfile) {
+        throw new Error('Account session expired. Sign in again.');
+      }
+      setProfile(nextProfile);
+      setDesktops(Array.isArray(nextDesktops) ? nextDesktops : []);
+      setStep('cloud', 'done', 'Signed in.');
+      const connectedDesktop = nextDesktops.find((desktop) => desktop.status === 'connected');
+      if (connectedDesktop) {
+        setStep('desktop', 'done', 'Desktop online.');
+      } else if (nextDesktops.length) {
+        setStep('desktop', 'error', 'A desktop exists, but it is not online yet.');
+      } else {
+        setStep('desktop', 'error', 'Sign in on the desktop app, then create a pairing QR.');
+      }
+      if (nextProfile.mobile?.paired_desktop_id) {
+        setStep('token', 'done', 'This phone is already paired.');
+        setStep('sync', 'done', 'Shared state is available.');
+        setStatus('phone paired');
+      } else {
+        setStatus('ready for desktop pairing QR');
       }
     } catch (error) {
-      setStatus(describeError(error));
+      const message = userFacingError(error, 'Account check failed.');
+      setStep('cloud', 'error', message);
+      setStatus(message);
     } finally {
-      setIsBusy(false);
+      setBusy(false);
     }
   };
 
-  const registerAndSignIn = async () => {
-    const normalizedBaseUrl = normalizeBaseUrlOrStatus();
-    if (!normalizedBaseUrl) return;
-    if (!email.trim() || !password.trim()) {
-      setStatus('email and password required');
+  const completePairing = async (rawPairingInput: string, source: 'manual' | 'qr') => {
+    const cleanToken = extractPairingTokenFromInput(rawPairingInput, { allowRawToken: true });
+    if (!apiBaseUrl || !token) {
+      router.replace('/auth');
       return;
     }
-    setIsBusy(true);
-    setStatus('creating account');
-    try {
-      await remoteRegisterAccount(normalizedBaseUrl, {
-        email: email.trim(),
-        password,
-        display_name: email.trim().split('@', 1)[0],
-      });
-      setStatus('account created');
-      await signIn();
-    } catch (error) {
-      setStatus(describeError(error));
-      setIsBusy(false);
+    if (!cleanToken) {
+      const message = source === 'qr'
+        ? 'Scan the pairing QR shown on the desktop app.'
+        : 'Paste the one-time code shown on desktop.';
+      setStep('token', 'error', message);
+      setStatus(source === 'qr' ? 'pairing QR required' : 'pairing code required');
+      return;
     }
-  };
 
-  const completePairing = async () => {
-    const normalizedBaseUrl = normalizeBaseUrlOrStatus();
-    if (!normalizedBaseUrl) return;
-    if (!accountToken.trim()) {
-      setStatus('sign in first');
-      return;
-    }
-    if (!pairingToken.trim()) {
-      setStatus('missing pairing token');
-      return;
-    }
-    setIsBusy(true);
-    setStatus('pairing phone with desktop');
+    setBusy(true);
+    setStatus(source === 'qr' ? 'pairing from QR' : 'pairing with desktop');
+    setStep('token', 'working', source === 'qr' ? 'Checking scanned pairing QR.' : 'Checking one-time pairing code.');
+    setStep('sync', 'idle', 'Waiting for desktop sync.');
     try {
-      const result = await remoteCompletePairing(normalizedBaseUrl, accountToken, pairingToken.trim());
-      await persistRemoteConfig({
-        baseUrl: normalizedBaseUrl,
-        token: accountToken,
+      setPairingToken(cleanToken);
+      const result = await remoteCompletePairing(apiBaseUrl, token, cleanToken);
+      const currentConfig = await loadAppConfig();
+      await saveAppConfig({
+        ...currentConfig,
+        apiBaseUrl,
+        accessToken: token,
+        accountToken: token,
         pairedDesktopId: result.desktop.desktop_id,
+        connectionMode: 'remote_cloud',
       });
-      setPairingToken('');
-      setStatus(`paired to ${result.desktop.display_name || result.desktop.desktop_id}`);
+      setStep('token', 'done', 'Code accepted.');
+      setStep('sync', 'working', 'Refreshing shared desktop state.');
+      const { profile: nextProfile } = await reconcileRemoteAccountConfig(await loadAppConfig());
+      if (!nextProfile) {
+        throw new Error('Pairing completed, but account refresh failed. Reopen this screen.');
+      }
+      setProfile(nextProfile);
+      setStep('sync', 'done', 'Chat and sidebar state are synced.');
+      setStatus('paired and ready');
       router.replace('/chat');
     } catch (error) {
-      setStatus(describeError(error));
+      const message = userFacingError(error, 'Pairing failed.');
+      setStep('token', 'error', message);
+      setStatus(message);
     } finally {
-      setIsBusy(false);
+      setBusy(false);
+      setScanLocked(false);
     }
   };
 
-  const refreshAccount = async () => {
-    const normalizedBaseUrl = normalizeBaseUrlOrStatus();
-    if (!normalizedBaseUrl || !accountToken.trim()) {
-      setStatus('sign in first');
+  const pair = async () => {
+    await completePairing(pairingToken, 'manual');
+  };
+
+  const openScanner = async () => {
+    if (!apiBaseUrl || !token) {
+      router.replace('/auth');
       return;
     }
-    setStatus('refreshing account');
-    try {
-      const profile = await fetchRemoteAccountProfile(normalizedBaseUrl, accountToken);
-      setPairedDesktopId(profile.mobile?.paired_desktop_id || '');
-      const desktopItems = await fetchRemoteDesktops(normalizedBaseUrl, accountToken).catch(() => []);
-      setDesktops(Array.isArray(desktopItems) ? desktopItems : []);
-      setStatus(profile.mobile?.paired_desktop_id ? 'account ready' : 'signed in, not yet paired');
-    } catch (error) {
-      setStatus(describeError(error));
+    setScannerStatus('Preparing camera.');
+    if (!cameraPermission?.granted) {
+      const nextPermission = await requestCameraPermission();
+      if (!nextPermission.granted) {
+        const message = 'Camera permission is needed to scan the pairing QR. You can still paste the code.';
+        setScannerStatus(message);
+        setStep('token', 'error', message);
+        setStatus('camera permission needed');
+        return;
+      }
     }
+    setScanLocked(false);
+    setScannerStatus('Point the camera at the QR code on the desktop app.');
+    setScannerOpen(true);
   };
+
+  const handleQrScanned = (result: BarcodeScanningResult) => {
+    if (scanLocked || busy) {
+      return;
+    }
+    const cleanToken = extractPairingTokenFromInput(result.data, { allowRawToken: true });
+    if (!cleanToken) {
+      setScannerStatus('That QR code does not contain a Kraitos pairing token.');
+      return;
+    }
+    setScanLocked(true);
+    setScannerStatus('QR accepted. Pairing this phone.');
+    setScannerOpen(false);
+    void completePairing(cleanToken, 'qr');
+  };
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  const pairedDesktop = profile?.mobile?.paired_desktop_id || '';
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.card}>
-        <Text style={styles.title}>Connect Phone</Text>
-        <Text style={styles.help}>
-          Sign in to your EmploAI cloud account, then paste the short-lived pairing token shown by your desktop. The phone
-          stays linked through the VPS, so it can reach your computer from any network while that desktop stays online.
-        </Text>
-
-        <Text style={styles.text}>Service URL</Text>
-        <TextInput
-          style={styles.input}
-          value={apiBaseUrl}
-          onChangeText={setApiBaseUrl}
-          autoCapitalize="none"
-          autoCorrect={false}
-          placeholder="https://your-emploai-domain"
-          placeholderTextColor="#7f8aa3"
+      <ScrollView contentContainerStyle={styles.content}>
+        <PageHeader
+          eyebrow="Pair phone"
+          title="Connect to your desktop"
+          subtitle="Scan the one-time QR shown on the desktop app while signed into this same account."
         />
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Account</Text>
-          <TextInput
-            style={styles.input}
-            value={email}
-            onChangeText={setEmail}
-            autoCapitalize="none"
-            autoCorrect={false}
-            placeholder="you@example.com"
-            placeholderTextColor="#7f8aa3"
-          />
-          <TextInput
-            style={styles.input}
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            autoCapitalize="none"
-            autoCorrect={false}
-            placeholder="password"
-            placeholderTextColor="#7f8aa3"
-          />
-          <TextInput
-            style={styles.input}
-            value={deviceName}
-            onChangeText={setDeviceName}
-            autoCorrect={false}
-            placeholder="Pixel 9 / Work phone"
-            placeholderTextColor="#7f8aa3"
-          />
-          <View style={styles.actions}>
-            <Pressable style={[styles.button, isBusy ? styles.buttonDisabled : null]} onPress={() => void signIn()} disabled={isBusy}>
-              <Text style={styles.buttonText}>{isBusy ? 'Working...' : 'Sign In'}</Text>
-            </Pressable>
-            <Pressable style={styles.secondaryButton} onPress={() => void registerAndSignIn()} disabled={isBusy}>
-              <Text style={styles.buttonText}>Register</Text>
-            </Pressable>
-            <Pressable style={styles.ghostButton} onPress={() => void refreshAccount()} disabled={isBusy}>
-              <Text style={styles.ghostButtonText}>Refresh</Text>
-            </Pressable>
+        <Modal transparent visible={scannerOpen} animationType="slide" onRequestClose={() => setScannerOpen(false)}>
+          <View style={styles.scannerOverlay}>
+            <SafeAreaView style={styles.scannerShell}>
+              <View style={styles.scannerHeader}>
+                <View style={styles.scannerCopy}>
+                  <Text style={styles.scannerTitle}>Scan pairing QR</Text>
+                  <Text style={styles.scannerText}>{scannerStatus || 'Point the camera at the QR code on desktop.'}</Text>
+                </View>
+                <Pressable style={styles.scannerCloseButton} onPress={() => setScannerOpen(false)}>
+                  <Text style={styles.scannerCloseText}>Close</Text>
+                </Pressable>
+              </View>
+              <View style={styles.cameraFrame}>
+                <CameraView
+                  style={styles.camera}
+                  facing="back"
+                  mode="picture"
+                  mute
+                  barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+                  onBarcodeScanned={scanLocked || busy ? undefined : handleQrScanned}
+                />
+                <View pointerEvents="none" style={styles.scanTarget} />
+              </View>
+              <Text style={styles.scannerFooter}>The QR expires quickly and only works for your signed-in account.</Text>
+            </SafeAreaView>
           </View>
+        </Modal>
+
+        <View style={styles.steps}>
+          {steps.map((step, index) => (
+            <View key={step.key} style={styles.stepRow}>
+              <View style={[styles.stepIndex, step.state === 'done' ? styles.stepDone : step.state === 'error' ? styles.stepError : step.state === 'working' ? styles.stepWorking : null]}>
+                <Text style={styles.stepIndexText}>{index + 1}</Text>
+              </View>
+              <View style={styles.stepCopy}>
+                <Text style={styles.stepTitle}>{step.label}</Text>
+                <Text style={styles.stepDetail}>{step.detail}</Text>
+              </View>
+            </View>
+          ))}
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Pair With Desktop</Text>
-          <TextInput
-            style={[styles.input, styles.tokenInput]}
-            value={pairingToken}
-            onChangeText={setPairingToken}
-            autoCapitalize="none"
-            autoCorrect={false}
-            multiline
-            placeholder="Paste the one-time desktop pairing token or QR payload here"
-            placeholderTextColor="#7f8aa3"
-          />
-          <Pressable style={[styles.button, isBusy ? styles.buttonDisabled : null]} onPress={() => void completePairing()} disabled={isBusy}>
-            <Text style={styles.buttonText}>Complete Pairing</Text>
-          </Pressable>
-          <Text style={styles.meta}>Status: {status}</Text>
-          <Text style={styles.meta}>Paired desktop: {pairedDesktopId || 'not paired yet'}</Text>
+          <Text style={styles.sectionTitle}>Desktops</Text>
           {desktops.length ? (
-            <View style={styles.stepsCard}>
-              <Text style={styles.stepsTitle}>Desktops on this account</Text>
-              {desktops.map((desktop) => (
-                <Text key={desktop.desktop_id} style={styles.step}>
-                  {desktop.display_name || desktop.desktop_id} · {desktop.status}
-                </Text>
-              ))}
-            </View>
-          ) : null}
+            desktops.map((desktop) => (
+              <View key={desktop.desktop_id} style={styles.desktopRow}>
+                <Text style={styles.desktopTitle}>{desktop.display_name || desktop.desktop_id}</Text>
+                <View style={styles.desktopMetaRow}>
+                  <Text style={styles.desktopMeta}>{shortStatusText(desktop.status || 'registered')}</Text>
+                  {desktop.detail ? <InfoHint text={desktop.detail} /> : null}
+                </View>
+              </View>
+            ))
+          ) : (
+            <Text style={styles.helper}>No desktop is signed into this account yet.</Text>
+          )}
         </View>
 
-        <View style={styles.stepsCard}>
-          <Text style={styles.stepsTitle}>What happens next</Text>
-          <Text style={styles.step}>1. Desktop signs into the same cloud account and creates a short-lived pairing token.</Text>
-          <Text style={styles.step}>2. Phone signs in here, pastes that token, and binds to the desktop.</Text>
-          <Text style={styles.step}>3. After pairing, chat and live state come through the VPS while the desktop remains the execution machine.</Text>
-        </View>
+        {!pairedDesktop ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Pairing QR</Text>
+            <Pressable style={[styles.primaryButton, busy ? styles.disabled : null]} onPress={openScanner} disabled={busy}>
+              <Text style={styles.primaryText}>{busy ? 'Working...' : 'Scan desktop QR'}</Text>
+            </Pressable>
+            <Text style={styles.helper}>Or paste the one-time code shown below the QR on desktop.</Text>
+            <TextInput
+              style={styles.input}
+              value={pairingToken}
+              onChangeText={setPairingToken}
+              placeholder="Paste desktop pairing token"
+              placeholderTextColor="#7f93b5"
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!busy}
+            />
+            <Pressable style={[styles.secondaryButton, busy ? styles.disabled : null]} onPress={pair} disabled={busy}>
+              <Text style={styles.secondaryText}>{busy ? 'Working...' : 'Pair with pasted code'}</Text>
+            </Pressable>
+            {scannerStatus ? <Text style={styles.helper}>{shortStatusText(scannerStatus)}</Text> : null}
+          </View>
+        ) : (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Paired desktop</Text>
+            <Text style={styles.helper}>{pairedDesktop}</Text>
+            <Link href="/chat" style={styles.link}>Open chat</Link>
+          </View>
+        )}
+
+        <Text style={styles.status}>{shortStatusText(status)}</Text>
 
         <View style={styles.actions}>
-          <Link href="/settings" style={styles.link}>Open Settings</Link>
-          <Link href="/diagnostics" style={styles.link}>Open Diagnostics</Link>
+          <Pressable style={[styles.secondaryButton, busy ? styles.disabled : null]} onPress={refresh} disabled={busy}>
+            <Text style={styles.secondaryText}>Refresh status</Text>
+          </Pressable>
+          <Link href="/settings" style={styles.link}>Account settings</Link>
         </View>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0b1020', padding: 20 },
-  card: { backgroundColor: '#141c33', borderRadius: 16, padding: 16, gap: 12 },
-  title: { color: '#fff', fontSize: 24, fontWeight: '700' },
-  text: { color: '#d7def0', fontSize: 16 },
-  meta: { color: '#9aa9c7', fontSize: 14 },
-  help: { color: '#b5c2dd', fontSize: 14, lineHeight: 20 },
-  section: { gap: 10 },
-  sectionTitle: { color: '#fff', fontWeight: '700', fontSize: 15 },
-  link: { color: '#7cc7ff', fontSize: 15, fontWeight: '600' },
+  container: {
+    flex: 1,
+    backgroundColor: '#0b1020',
+  },
+  content: {
+    padding: 20,
+    gap: 16,
+  },
+  header: {
+    gap: 7,
+  },
+  eyebrow: {
+    color: '#7cc7ff',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  title: {
+    color: '#ffffff',
+    fontSize: 26,
+    fontWeight: '800',
+  },
+  subtitle: {
+    color: '#b8c7e6',
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  steps: {
+    backgroundColor: '#111a31',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#223252',
+    padding: 14,
+    gap: 14,
+  },
+  stepRow: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'flex-start',
+  },
+  stepIndex: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#263659',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepDone: {
+    backgroundColor: '#047857',
+  },
+  stepWorking: {
+    backgroundColor: '#2563eb',
+  },
+  stepError: {
+    backgroundColor: '#b91c1c',
+  },
+  stepIndexText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  stepCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  stepTitle: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  stepDetail: {
+    color: '#b8c7e6',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  section: {
+    backgroundColor: '#111a31',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#223252',
+    padding: 14,
+    gap: 10,
+  },
+  sectionTitle: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  desktopRow: {
+    gap: 3,
+  },
+  desktopTitle: {
+    color: '#e8f0ff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  desktopMeta: {
+    color: '#8fa3c8',
+    fontSize: 13,
+  },
+  desktopMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  helper: {
+    color: '#b8c7e6',
+    fontSize: 14,
+    lineHeight: 20,
+  },
   input: {
-    backgroundColor: '#0f1730',
-    color: '#fff',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  tokenInput: {
-    minHeight: 100,
-    textAlignVertical: 'top',
-  },
-  actions: { flexDirection: 'row', gap: 12, flexWrap: 'wrap', alignItems: 'center' },
-  button: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#3b82f6',
-    borderRadius: 10,
+    minHeight: 48,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#263659',
+    backgroundColor: '#0b1020',
+    color: '#ffffff',
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: 12,
+    fontSize: 16,
+  },
+  primaryButton: {
+    minHeight: 48,
+    borderRadius: 8,
+    backgroundColor: '#3b82f6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  primaryText: {
+    color: '#ffffff',
+    fontWeight: '800',
   },
   secondaryButton: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#223153',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    minHeight: 48,
+    borderRadius: 8,
+    backgroundColor: '#1b2745',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  ghostButton: {
-    alignSelf: 'flex-start',
-    borderRadius: 10,
+  secondaryText: {
+    color: '#dce8ff',
+    fontWeight: '800',
+  },
+  disabled: {
+    opacity: 0.55,
+  },
+  status: {
+    color: '#b8c7e6',
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  actions: {
+    gap: 10,
+  },
+  link: {
+    color: '#7cc7ff',
+    fontWeight: '800',
+    minHeight: 44,
+    paddingTop: 12,
+  },
+  scannerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(4, 7, 14, 0.92)',
+  },
+  scannerShell: {
+    flex: 1,
+    padding: 18,
+    gap: 14,
+  },
+  scannerHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  scannerCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  scannerTitle: {
+    color: '#ffffff',
+    fontSize: 22,
+    fontWeight: '900',
+  },
+  scannerText: {
+    color: '#b8c7e6',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  scannerCloseButton: {
+    minHeight: 40,
+    borderRadius: 8,
+    paddingHorizontal: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1b2745',
+  },
+  scannerCloseText: {
+    color: '#dce8ff',
+    fontWeight: '800',
+  },
+  cameraFrame: {
+    flex: 1,
+    minHeight: 360,
+    borderRadius: 18,
+    overflow: 'hidden',
     borderWidth: 1,
-    borderColor: '#31518e',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    borderColor: '#35527e',
+    backgroundColor: '#050914',
   },
-  ghostButtonText: { color: '#c5d4f2', fontWeight: '700' },
-  buttonDisabled: { opacity: 0.65 },
-  buttonText: { color: '#fff', fontWeight: '700' },
-  stepsCard: {
-    backgroundColor: '#0f1730',
-    borderRadius: 12,
-    padding: 12,
-    gap: 6,
+  camera: {
+    flex: 1,
   },
-  stepsTitle: { color: '#fff', fontWeight: '700', fontSize: 14 },
-  step: { color: '#c6d2ec', fontSize: 13, lineHeight: 18 },
+  scanTarget: {
+    position: 'absolute',
+    left: '14%',
+    right: '14%',
+    top: '24%',
+    bottom: '24%',
+    borderRadius: 18,
+    borderWidth: 3,
+    borderColor: '#7cc7ff',
+    backgroundColor: 'transparent',
+  },
+  scannerFooter: {
+    color: '#8fa3c8',
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
 });

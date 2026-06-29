@@ -12,6 +12,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
+from shared.security_policy import redact_json, redact_text
 
 
 def _resolve_logs_dir() -> Path:
@@ -78,7 +79,7 @@ def _truncate_value(value: Any, max_len: int = 200) -> str:
     if value is None:
         return "None"
     
-    s = str(value)
+    s = redact_text(str(value))
     if len(s) > max_len:
         return s[:max_len] + f"... [{len(s)} chars]"
     return s
@@ -86,6 +87,7 @@ def _truncate_value(value: Any, max_len: int = 200) -> str:
 
 def _strip_base64(data: Any) -> Any:
     """Recursively strip base64 data from dicts/lists for logging."""
+    data = redact_json(data)
     if isinstance(data, dict):
         cleaned = {}
         for k, v in data.items():
@@ -196,6 +198,7 @@ def log_conversation_turn(turn_num: int, provider: str, model: str):
 
 def log_model_response(response_text: str, tokens: Dict[str, int] = None):
     """Log model response summary."""
+    response_text = redact_text(response_text)
     # Terminal - truncated
     preview = response_text[:300] + "..." if len(response_text) > 300 else response_text
     preview = preview.replace('\n', ' ')

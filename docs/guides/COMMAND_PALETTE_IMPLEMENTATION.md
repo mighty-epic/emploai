@@ -264,6 +264,18 @@ class SessionSwitchScreen(Screen):
         "xai": {
             "api_key": "...",
             "enabled": false
+        },
+        "deepseek": {
+            "api_key": "sk-...",
+            "enabled": false
+        },
+        "nvidia": {
+            "api_key": "...",
+            "enabled": false
+        },
+        "openrouter": {
+            "api_key": "sk-or-...",
+            "enabled": false
         }
     },
     "default_model": "claude-haiku-4.5",
@@ -283,6 +295,9 @@ class ProviderConfigScreen(Screen):
         {"id": "anthropic", "name": "Anthropic", "key_prefix": "sk-ant-"},
         {"id": "google", "name": "Google (Gemini)", "key_prefix": ""},
         {"id": "xai", "name": "xAI (Grok)", "key_prefix": ""},
+        {"id": "deepseek", "name": "DeepSeek", "key_prefix": "sk-"},
+        {"id": "nvidia", "name": "NVIDIA NIM", "key_prefix": ""},
+        {"id": "openrouter", "name": "OpenRouter", "key_prefix": "sk-or-"},
     ]
     
     def compose(self) -> ComposeResult:
@@ -341,6 +356,9 @@ class ConfigManager:
             "anthropic": "ANTHROPIC_API_KEY",
             "google": "GOOGLE_API_KEY",
             "xai": "XAI_API_KEY",
+            "deepseek": "DEEPSEEK_API_KEY",
+            "nvidia": "NVIDIA_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
         }
         return os.getenv(env_vars.get(provider, ""))
     
@@ -549,6 +567,9 @@ def get_api_key_secure(provider: str) -> Optional[str]:
 │ ☑ Anthropic    [sk-ant-••••••••••••]    ✓ OK   │
 │ ☐ Google       [                    ]          │
 │ ☐ xAI          [                    ]          │
+│ ☐ DeepSeek     [                    ]          │
+│ ☐ NVIDIA NIM   [                    ]          │
+│ ☐ OpenRouter   [                    ]          │
 ├─────────────────────────────────────────────────┤
 │              [Save]     [Cancel]               │
 └─────────────────────────────────────────────────┘

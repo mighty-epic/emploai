@@ -6,6 +6,7 @@ from pathlib import Path
 from shared.agent_eval_harness import (
     AgentEvalHarness,
     ArtifactCheck,
+    EvalCase,
     EvalConfig,
     EvalExpectations,
     ToolContentCheck,
@@ -22,6 +23,49 @@ from shared.agent_eval_harness import (
 def test_stable_eval_user_id_is_deterministic() -> None:
     assert stable_eval_user_id("smoke") == stable_eval_user_id("smoke")
     assert stable_eval_user_id("smoke") != stable_eval_user_id("other")
+
+
+def test_eval_config_parses_planner_final_quality_guard(tmp_path: Path) -> None:
+    config = EvalConfig.from_dict(
+        {
+            "name": "planner-smoke",
+            "workspace": ".",
+            "model": "gpt-5.4-mini",
+            "planner_model": "gpt-5.4-mini",
+            "final_quality_guard": "planner",
+            "final_quality_max_auto_continues": 2,
+            "cases": [{"name": "case", "prompt": "Create and verify a file."}],
+        },
+        repo_root=tmp_path,
+    )
+
+    assert config.final_quality_guard == "planner"
+    assert config.final_quality_max_auto_continues == 2
+
+
+def test_eval_harness_applies_planner_final_quality_guard_env(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("EMPLOAI_FINAL_QUALITY_GUARD", raising=False)
+    monkeypatch.delenv("EMPLOAI_FINAL_QUALITY_MAX_AUTO_CONTINUES", raising=False)
+    config = EvalConfig(
+        name="planner-smoke",
+        workspace=tmp_path,
+        model="gpt-5.4-mini",
+        planner_model="gpt-5.4-mini",
+        final_quality_guard="planner",
+        final_quality_max_auto_continues=2,
+        cases=[EvalCase(name="case", prompt="Create and verify a file.")],
+    )
+    harness = AgentEvalHarness(
+        repo_root=tmp_path,
+        config=config,
+        runtime_home=tmp_path / "runtime",
+        output_root=tmp_path / "runs",
+    )
+
+    harness.prepare_environment()
+
+    assert os.environ["EMPLOAI_FINAL_QUALITY_GUARD"] == "planner"
+    assert os.environ["EMPLOAI_FINAL_QUALITY_MAX_AUTO_CONTINUES"] == "2"
 
 
 def test_normalize_phrase_handles_smart_quotes() -> None:

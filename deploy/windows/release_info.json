@@ -1,16 +1,21 @@
 {
-  "version": "0.1.0-beta.12",
-  "release_tag": "v0.1.0-beta.12",
-  "msi_version": "0.1.12",
+  "version": "0.1.0-beta.14.6",
+  "release_tag": "v0.1.0-beta.14.6",
+  "msi_version": "0.1.20",
   "channel": "beta",
   "github_repo": "mighty-epic/emploai-releases",
   "primary_asset": "EmploAI.msi",
   "portable_asset": "EmploAI-portable.zip",
+  "update_manifest_url": "https://api.kraitos.app/api/releases/desktop/windows/latest",
   "english_voice_pack_repo": "Mighty1234/emploai-english-voice-pack",
   "english_voice_pack_revision": "main",
   "hebrew_voice_pack_repo": "Mighty1234/whisper-small-3rd-pass-knesset",
   "hebrew_voice_pack_revision": "main",
   "hebrew_voice_pack_asset": "hebrew-whisper-small-pass3-knesset-runtime-ready.zip",
   "hebrew_voice_pack_release_tag": "v0.1.0-beta.12",
-  "update_check_interval_hours": 0
+  "kokoro_tts_voice_pack_repo": "Mighty1234/emploai-kokoro-tts-pack",
+  "kokoro_tts_voice_pack_revision": "main",
+  "kyutai_tts_voice_pack_repo": "Mighty1234/emploai-kyutai-clone-tts-pack",
+  "kyutai_tts_voice_pack_revision": "main",
+  "update_check_interval_hours": 6
 }

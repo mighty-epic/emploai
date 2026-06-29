@@ -35,20 +35,17 @@
       "expectations": {
         "required_tools_any": [
           "list_dir",
-          "list_files",
           "find_files"
         ],
         "forbidden_tools": [
           "web_search",
           "fetch_url",
           "browser_navigate",
-          "open_browser",
           "describe_screen",
           "observe_desktop",
           "write_file",
           "edit_file",
           "append_file",
-          "execute_command",
           "run_command"
         ],
         "max_unsupported_tool_attempts": 0,
@@ -71,8 +68,7 @@
           "write_file",
           "web_search",
           "fetch_url",
-          "browser_navigate",
-          "open_browser"
+          "browser_navigate"
         ],
         "max_unsupported_tool_attempts": 0
       }
@@ -83,12 +79,10 @@
       "expectations": {
         "required_tool_sequence": [
           [
-            "browser_navigate",
-            "open_browser"
+            "browser_navigate"
           ],
           [
             "browser_snapshot",
-            "observe_browser",
             "browser_read_text"
           ],
           "write_file",

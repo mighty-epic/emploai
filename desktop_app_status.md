@@ -142,7 +142,7 @@ Relevant files:
 - [desktop_app/main.js](desktop_app/main.js)
 - [mobile_app/backend/whisper_cpp_live.py](mobile_app/backend/whisper_cpp_live.py)
 - [mobile_app/backend/standalone_voice_engine.py](mobile_app/backend/standalone_voice_engine.py)
-- [mobile_app/client/src/desktop/DesktopConversationView.tsx](mobile_app/client/src/desktop/DesktopConversationView.tsx)
+- [desktop_app/renderer_client/src/desktop/DesktopConversationView.tsx](desktop_app/renderer_client/src/desktop/DesktopConversationView.tsx)
 
 ### 6. The two-tab desktop model now exists
 
@@ -154,8 +154,8 @@ The desktop renderer now has:
 Relevant files:
 
 - [mobile_app/client/app/desktop.web.tsx](mobile_app/client/app/desktop.web.tsx)
-- [mobile_app/client/src/desktop/DesktopAppShell.tsx](mobile_app/client/src/desktop/DesktopAppShell.tsx)
-- [mobile_app/client/src/desktop/models.ts](mobile_app/client/src/desktop/models.ts)
+- [desktop_app/renderer_client/src/desktop/DesktopAppShell.tsx](desktop_app/renderer_client/src/desktop/DesktopAppShell.tsx)
+- [desktop_app/renderer_client/src/desktop/models.ts](desktop_app/renderer_client/src/desktop/models.ts)
 
 ## What Is Implemented Right Now
 
@@ -202,9 +202,9 @@ Relevant files:
 - [mobile_app/client/app/index.web.tsx](mobile_app/client/app/index.web.tsx)
 - [mobile_app/client/app/chat.web.tsx](mobile_app/client/app/chat.web.tsx)
 - [mobile_app/client/app/desktop.web.tsx](mobile_app/client/app/desktop.web.tsx)
-- [mobile_app/client/src/desktop/DesktopAppShell.tsx](mobile_app/client/src/desktop/DesktopAppShell.tsx)
-- [mobile_app/client/src/desktop/DesktopConversationView.tsx](mobile_app/client/src/desktop/DesktopConversationView.tsx)
-- [mobile_app/client/src/desktop/models.ts](mobile_app/client/src/desktop/models.ts)
+- [desktop_app/renderer_client/src/desktop/DesktopAppShell.tsx](desktop_app/renderer_client/src/desktop/DesktopAppShell.tsx)
+- [desktop_app/renderer_client/src/desktop/DesktopConversationView.tsx](desktop_app/renderer_client/src/desktop/DesktopConversationView.tsx)
+- [desktop_app/renderer_client/src/desktop/models.ts](desktop_app/renderer_client/src/desktop/models.ts)
 
 ### Shared current-session switching
 
@@ -236,7 +236,7 @@ Relevant files:
 - [shared/live_config.py](shared/live_config.py)
 - [desktop_app/main.js](desktop_app/main.js)
 - [mobile_app/backend/app_server.py](mobile_app/backend/app_server.py)
-- [mobile_app/client/src/desktop/DesktopConversationView.tsx](mobile_app/client/src/desktop/DesktopConversationView.tsx)
+- [desktop_app/renderer_client/src/desktop/DesktopConversationView.tsx](desktop_app/renderer_client/src/desktop/DesktopConversationView.tsx)
 
 ### Desktop UI gating
 
@@ -252,7 +252,7 @@ Relevant files:
 - [mobile_app/client/src/components/AppDrawer.tsx](mobile_app/client/src/components/AppDrawer.tsx)
 - [mobile_app/client/app/pair.web.tsx](mobile_app/client/app/pair.web.tsx)
 - [mobile_app/client/app/settings.web.tsx](mobile_app/client/app/settings.web.tsx)
-- [mobile_app/client/src/desktop/DesktopConversationView.tsx](mobile_app/client/src/desktop/DesktopConversationView.tsx)
+- [desktop_app/renderer_client/src/desktop/DesktopConversationView.tsx](desktop_app/renderer_client/src/desktop/DesktopConversationView.tsx)
 
 ### Plan mirroring / handoff
 
@@ -431,9 +431,9 @@ The main desktop-related additions / updates are:
 - [mobile_app/client/app/desktop.web.tsx](mobile_app/client/app/desktop.web.tsx)
 - [mobile_app/client/app/pair.web.tsx](mobile_app/client/app/pair.web.tsx)
 - [mobile_app/client/app/settings.web.tsx](mobile_app/client/app/settings.web.tsx)
-- [mobile_app/client/src/desktop/DesktopAppShell.tsx](mobile_app/client/src/desktop/DesktopAppShell.tsx)
-- [mobile_app/client/src/desktop/DesktopConversationView.tsx](mobile_app/client/src/desktop/DesktopConversationView.tsx)
-- [mobile_app/client/src/desktop/models.ts](mobile_app/client/src/desktop/models.ts)
+- [desktop_app/renderer_client/src/desktop/DesktopAppShell.tsx](desktop_app/renderer_client/src/desktop/DesktopAppShell.tsx)
+- [desktop_app/renderer_client/src/desktop/DesktopConversationView.tsx](desktop_app/renderer_client/src/desktop/DesktopConversationView.tsx)
+- [desktop_app/renderer_client/src/desktop/models.ts](desktop_app/renderer_client/src/desktop/models.ts)
 
 ## Verification Already Performed
 

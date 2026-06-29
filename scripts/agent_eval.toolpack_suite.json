@@ -66,9 +66,7 @@
           "browser_navigate"
         ],
         "required_tools_any": [
-          "browser_snapshot",
-          "open_browser",
-          "observe_browser"
+          "browser_snapshot"
         ],
         "forbidden_tools": [
           "describe_screen",
@@ -83,7 +81,6 @@
       "expectations": {
         "required_tools_any": [
           "list_dir",
-          "list_files",
           "find_files"
         ],
         "forbidden_tools": [
@@ -102,8 +99,7 @@
           "write_file"
         ],
         "required_tools_any": [
-          "run_command",
-          "execute_command"
+          "run_command"
         ],
         "forbidden_tools": [
           "web_search",

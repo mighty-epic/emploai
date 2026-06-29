@@ -2,11 +2,11 @@
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product
     Id="*"
-    Name="EmploAI"
+    Name="EmploAI Beta"
     Language="1033"
     Version="$(var.ProductVersion)"
     Manufacturer="Mighty Epic"
-    UpgradeCode="B58E512E-2800-460C-BA8F-8F6921A72B7F">
+    UpgradeCode="E03A6CC4-9829-4221-96C0-B7EA33155A46">
     <Package
       InstallerVersion="500"
       Compressed="yes"
@@ -50,11 +50,11 @@
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="LocalAppDataFolder">
         <Directory Id="ProgramsFolderDir" Name="Programs">
-          <Directory Id="INSTALLDIR" Name="EmploAI" />
+          <Directory Id="INSTALLDIR" Name="EmploAI Beta" />
         </Directory>
       </Directory>
       <Directory Id="ProgramMenuFolder">
-        <Directory Id="ApplicationProgramsFolder" Name="EmploAI" />
+        <Directory Id="ApplicationProgramsFolder" Name="EmploAI Beta" />
       </Directory>
     </Directory>
 
@@ -95,7 +95,7 @@
     <Component Id="VoicePackSelectionSchemaComponent" Guid="938D57F0-E1E2-48E4-B893-14C1D44AE44A" Directory="INSTALLDIR">
       <RegistryValue
         Root="HKCU"
-        Key="Software\MightyEpic\EmploAI\VoicePacks"
+        Key="Software\MightyEpic\EmploAIBeta\VoicePacks"
         Name="SelectionSchemaVersion"
         Type="integer"
         Value="1"
@@ -104,14 +104,14 @@
 
     <Component Id="InstallMetadataComponent" Guid="D55E8A77-2EE1-4FC9-B927-AACACB541C03" Directory="INSTALLDIR">
       <RemoveFolder Id="RemoveInstallDir" On="uninstall" />
-      <RegistryValue Root="HKCU" Key="Software\MightyEpic\EmploAI" Name="InstallPath" Type="string" Value="[INSTALLDIR]" KeyPath="yes" />
+      <RegistryValue Root="HKCU" Key="Software\MightyEpic\EmploAIBeta" Name="InstallPath" Type="string" Value="[INSTALLDIR]" KeyPath="yes" />
     </Component>
 
     <Component Id="InstallRootCleanupComponent" Guid="04E762B7-23D8-4680-9007-CFA5E8024030" Directory="ProgramsFolderDir">
       <RemoveFolder Id="RemoveProgramsFolderDir" On="uninstall" />
       <RegistryValue
         Root="HKCU"
-        Key="Software\MightyEpic\EmploAI"
+        Key="Software\MightyEpic\EmploAIBeta"
         Name="ProgramsFolderCreated"
         Type="integer"
         Value="1"
@@ -121,12 +121,12 @@
     <Component Id="StartMenuShortcutComponent" Guid="7F1438A4-CA77-4B18-8690-28A40AC8DDE4" Directory="ApplicationProgramsFolder">
       <Shortcut
         Id="EmploAIStartMenuShortcut"
-        Name="EmploAI"
-        Description="Launch EmploAI"
+        Name="EmploAI Beta"
+        Description="Launch EmploAI Beta"
         Target="[INSTALLDIR]EmploAI.exe"
         WorkingDirectory="INSTALLDIR" />
       <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
-      <RegistryValue Root="HKCU" Key="Software\MightyEpic\EmploAI" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+      <RegistryValue Root="HKCU" Key="Software\MightyEpic\EmploAIBeta" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
     </Component>
   </Fragment>
 </Wix>

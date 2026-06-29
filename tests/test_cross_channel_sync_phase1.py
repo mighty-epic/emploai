@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 from mobile_app.backend import app_server
@@ -8,6 +9,8 @@ from mobile_app.backend import runtime as app_runtime
 from mobile_app.backend.models import SessionDetailView
 from shared import channel_runtime
 from shared.task_intent import is_screen_observation_message, is_task_like_message
+from telegram_bot import telegram_message_handlers
+from telegram_bot import telegram_session_state
 from telegram_bot.telegram_session_state import TelegramSession
 
 
@@ -17,6 +20,147 @@ class _CaptureHub:
 
     def publish(self, *, user_id: int, event: dict) -> None:
         self.events.append((user_id, event))
+
+
+def _use_runtime_test_bot(runtime: TelegramSession) -> None:
+    runtime._resolved_telegram_bot = lambda: getattr(runtime._app, "bot", None)
+    runtime._mark_last_emitting_session = lambda: None
+
+
+def test_telegram_inbound_app_worker_uses_real_telegram_chat_id(monkeypatch):
+    real_telegram_user_id = 8562474049
+    shared_app_user_id = 0
+    target_session_id = "desktop-chat-1"
+    bot_token = "telegram-token"
+
+    initial_session = SimpleNamespace(
+        sync_user_id=shared_app_user_id,
+        workspace=Path.cwd(),
+        shared_current_session_id=target_session_id,
+    )
+    worker = SimpleNamespace(
+        user_id=shared_app_user_id,
+        sync_user_id=shared_app_user_id,
+        workspace=Path.cwd(),
+        lock=asyncio.Lock(),
+        session_context=SimpleNamespace(update_activity=lambda: None),
+        auto_reply_enabled=True,
+        auto_reply_notice_sent=False,
+        analytics_tracker=None,
+        hook_manager=None,
+        is_processing=False,
+        current_task_id=0,
+        single_agent=None,
+        refined_agent=None,
+    )
+    lease = SimpleNamespace(busy=False, worker=worker, acquired=True, error=None)
+
+    class FakeSecurityManager:
+        def is_user_authorized(self, _user_id):
+            return True
+
+        def check_rate_limit(self, _user_id, _kind):
+            return True, None
+
+        def sanitize_input(self, text):
+            return text
+
+    class FakeSessionManager:
+        def __init__(self):
+            self.current_id = target_session_id
+
+        def get_current_session_id(self):
+            return self.current_id
+
+        def set_current_session(self, session_id):
+            self.current_id = session_id
+
+    class FakeOrchestrator:
+        def __init__(self):
+            self.prepared_session_id = None
+            self.completed_lease = None
+
+        def resolve_session_for_inbound_bot(self, *, bot_config_id, focused_session_id):
+            assert bot_config_id == "bot-1"
+            assert focused_session_id == target_session_id
+            return target_session_id
+
+        def get_worker(self, session_id):
+            assert session_id == target_session_id
+            return worker
+
+        async def prepare_turn(self, session_id, **_kwargs):
+            self.prepared_session_id = session_id
+            return lease
+
+        async def complete_turn(self, completed):
+            self.completed_lease = completed
+
+    fake_orchestrator = FakeOrchestrator()
+
+    class FakeBridge:
+        def __init__(self, *, user_id, workspace):
+            assert user_id == shared_app_user_id
+            self.session_manager = FakeSessionManager()
+            self.orchestrator = fake_orchestrator
+
+    class FakeBotConfigStore:
+        def __init__(self, *, user_id):
+            assert user_id == shared_app_user_id
+
+        def ensure_default_from_env(self, *, bot_token: str):
+            return None
+
+        def list_configs(self):
+            return [{"id": "bot-1", "bot_token": bot_token}]
+
+    captured: dict[str, object] = {}
+    published_focus: list[dict] = []
+
+    async def fake_safe_reply(*_args, **_kwargs):
+        return None
+
+    async def fake_run_chat_flow(_update, _context, session, user_message):
+        captured["session"] = session
+        captured["user_message"] = user_message
+
+    monkeypatch.setattr(telegram_message_handlers, "AppSessionBridge", FakeBridge)
+    monkeypatch.setattr(telegram_message_handlers, "TelegramBotConfigStore", FakeBotConfigStore)
+    monkeypatch.setattr(
+        telegram_message_handlers,
+        "publish_current_session_changed",
+        lambda **kwargs: published_focus.append(kwargs),
+    )
+
+    handlers = telegram_message_handlers.build_message_handlers(
+        security_manager=FakeSecurityManager(),
+        safe_reply=fake_safe_reply,
+        get_session=lambda _user_id: initial_session,
+        run_chat_flow=fake_run_chat_flow,
+        logger=SimpleNamespace(info=lambda *_args, **_kwargs: None),
+        HookType=SimpleNamespace(MESSAGE_RECEIVED="message_received", MESSAGE_PREPROCESS="message_preprocess"),
+        HookEvent=SimpleNamespace(create=lambda *_args, **_kwargs: None),
+        MessageFormatter=SimpleNamespace(),
+    )
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=real_telegram_user_id),
+        effective_message=SimpleNamespace(text="hello from telegram", message_id=42),
+    )
+    context = SimpleNamespace(
+        bot=SimpleNamespace(token=bot_token),
+        application=SimpleNamespace(),
+    )
+
+    asyncio.run(handlers["handle_message"](update, context))
+
+    assert captured["user_message"] == "hello from telegram"
+    assert captured["session"] is worker
+    assert worker.user_id == real_telegram_user_id
+    assert worker.sync_user_id == shared_app_user_id
+    assert fake_orchestrator.prepared_session_id == target_session_id
+    assert fake_orchestrator.completed_lease is lease
+    assert published_focus[0]["user_id"] == shared_app_user_id
+    assert published_focus[0]["origin_channel"] == "telegram"
 
 
 def test_begin_chat_turn_publishes_user_message_with_channel_metadata(monkeypatch):
@@ -74,6 +218,43 @@ def test_begin_chat_turn_publishes_user_message_with_channel_metadata(monkeypatc
             },
         )
     ]
+
+
+def test_begin_chat_turn_publishes_with_sync_user_id_when_present(monkeypatch):
+    hub = _CaptureHub()
+    monkeypatch.setattr(channel_runtime, "get_channel_sync_hub", lambda: hub)
+
+    runtime = SimpleNamespace(
+        lock=asyncio.Lock(),
+        is_processing=False,
+        current_task_id=0,
+        should_interrupt=False,
+        chat_history=[],
+        last_user_message=None,
+        current_model="gpt-5.2",
+        context_manager=None,
+        user_id=8562474049,
+        sync_user_id=0,
+        session_manager=SimpleNamespace(get_current_session_id=lambda: "sess-shared"),
+        start_browser_task=lambda *_args, **_kwargs: None,
+        refresh_system_info=lambda: None,
+        save_session=lambda: None,
+    )
+
+    asyncio.run(
+        channel_runtime.begin_chat_turn(
+            runtime,
+            user_message="hello from telegram",
+            user_message_payload={
+                "channel": "telegram",
+                "source_format": "telegram_text",
+                "display_label": "Telegram",
+            },
+        )
+    )
+
+    assert hub.events[0][0] == 0
+    assert hub.events[0][1]["session_id"] == "sess-shared"
 
 
 def test_run_reserved_chat_turn_publishes_live_events(monkeypatch):
@@ -144,8 +325,6 @@ def test_run_reserved_chat_turn_publishes_live_events(monkeypatch):
     assert result.assistant_text == "Hello"
     assert [event["type"] for _, event in hub.events] == [
         "status",
-        "assistant_delta",
-        "assistant_delta",
         "assistant_final",
         "status",
     ]
@@ -179,6 +358,72 @@ def test_sync_event_to_realtime_event_filters_same_client():
     assert translated is not None
     assert translated.type == "assistant_final"
     assert translated.payload["text"] == "done"
+
+
+def test_run_reserved_chat_turn_falls_back_to_tool_result_when_final_is_empty(monkeypatch):
+    hub = _CaptureHub()
+    monkeypatch.setattr(channel_runtime, "get_channel_sync_hub", lambda: hub)
+
+    def fake_run_tool_loop(**kwargs):
+        callbacks = kwargs["callbacks"]
+        callbacks["on_tool_use"](
+            "list_dir",
+            {"path": "."},
+            {"items": [{"name": "alpha.txt"}, {"name": "beta.md"}]},
+            10.0,
+        )
+        return SimpleNamespace(content="", input_tokens=12, output_tokens=0, total_tokens=12)
+
+    monkeypatch.setattr(channel_runtime, "run_tool_loop", fake_run_tool_loop)
+
+    saved_sessions: list[list[dict]] = []
+    runtime = SimpleNamespace(
+        lock=asyncio.Lock(),
+        user_id=42,
+        current_task_id=1,
+        is_processing=True,
+        current_model="gpt-5.2",
+        current_variant="standard",
+        chat_history=[{"role": "user", "content": "what is in the directory?"}],
+        pending_files=[],
+        skill_registry=None,
+        active_skills=[],
+        session_context=None,
+        memory_manager=None,
+        config_manager=SimpleNamespace(get_api_key=lambda _provider: None),
+        session_manager=SimpleNamespace(get_current_session_id=lambda: "sess-tool-final"),
+        get_client_for_model=lambda: (object(), "openai"),
+        single_agent=object(),
+        tool_executor=SimpleNamespace(),
+        save_session=lambda: saved_sessions.append(list(runtime.chat_history)),
+        last_user_message="what is in the directory?",
+        hook_manager=None,
+        analytics_tracker=None,
+        auto_rename_session=lambda: None,
+    )
+
+    reservation = channel_runtime.TurnReservation(
+        busy=False,
+        task_id=1,
+        session_id="sess-tool-final",
+        event_meta={"channel": "app", "source_format": "app_text"},
+    )
+
+    result = asyncio.run(
+        channel_runtime.run_reserved_chat_turn(
+            runtime,
+            reservation,
+            prompt_builder=lambda *_args, **_kwargs: "system prompt",
+        )
+    )
+
+    assert result.assistant_text == "I ran `list_dir`. Items: alpha.txt, beta.md."
+    assistant_events = [event for _, event in hub.events if event.get("type") == "assistant_final"]
+    assert assistant_events
+    assert assistant_events[-1]["payload"]["text"] == result.assistant_text
+    assert runtime.chat_history[-1]["role"] == "assistant"
+    assert runtime.chat_history[-1]["metadata"]["generated_from_tool_result"] is True
+    assert saved_sessions
 
 
 def test_sync_event_to_realtime_event_translates_task_board():
@@ -398,6 +643,7 @@ def test_telegram_session_mirrors_non_telegram_events():
     runtime = object.__new__(TelegramSession)
     runtime.user_id = 99
     runtime._app = SimpleNamespace(bot=DummyBot())
+    _use_runtime_test_bot(runtime)
     runtime.session_manager = SimpleNamespace(get_current_session_id=lambda: "sess-9")
 
     asyncio.run(
@@ -454,6 +700,7 @@ def test_app_runtime_user_zero_does_not_send_telegram_mirror():
     runtime = object.__new__(TelegramSession)
     runtime.user_id = 0
     runtime._app = SimpleNamespace(bot=DummyBot())
+    _use_runtime_test_bot(runtime)
     runtime.session_manager = SimpleNamespace(get_current_session_id=lambda: "sess-9")
 
     asyncio.run(
@@ -488,6 +735,7 @@ def test_telegram_session_refreshes_same_shared_session_before_mirroring_app_eve
     runtime = object.__new__(TelegramSession)
     runtime.user_id = 99
     runtime._app = SimpleNamespace(bot=DummyBot())
+    _use_runtime_test_bot(runtime)
     runtime.session_manager = SimpleNamespace(get_current_session_id=lambda: "sess-9")
     runtime.shared_current_session_id = "sess-9"
     runtime.is_processing = False
@@ -519,6 +767,7 @@ def test_telegram_session_follows_explicit_current_session_change():
     runtime = object.__new__(TelegramSession)
     runtime.user_id = 99
     runtime._app = SimpleNamespace(bot=SimpleNamespace())
+    _use_runtime_test_bot(runtime)
     runtime.session_manager = SimpleNamespace(get_current_session_id=lambda: "sess-old")
     runtime.load_session_by_id = lambda session_id: switched_to.append(session_id)
 
@@ -552,6 +801,7 @@ def test_telegram_session_follows_app_message_session_before_mirroring():
     runtime = object.__new__(TelegramSession)
     runtime.user_id = 99
     runtime._app = SimpleNamespace(bot=DummyBot())
+    _use_runtime_test_bot(runtime)
 
     def load_session_by_id(session_id: str) -> None:
         nonlocal current_session_id
@@ -595,6 +845,7 @@ def test_telegram_session_mirrors_verbose_tool_events():
     runtime = object.__new__(TelegramSession)
     runtime.user_id = 99
     runtime._app = SimpleNamespace(bot=DummyBot())
+    _use_runtime_test_bot(runtime)
     runtime.session_manager = SimpleNamespace(get_current_session_id=lambda: "sess-9")
     runtime.verbose_mode = True
 
@@ -618,3 +869,49 @@ def test_telegram_session_mirrors_verbose_tool_events():
     assert "Command" in sent_messages[0]
     assert "describe_screen" in sent_messages[0]
     assert "Command Result" in sent_messages[0]
+
+
+def test_telegram_session_send_log_uses_resolved_bot():
+    sent_messages: list[str] = []
+
+    class DummyBot:
+        async def send_message(self, *, chat_id: int, text: str, parse_mode=None):
+            assert chat_id == 99
+            sent_messages.append(text)
+
+    runtime = object.__new__(TelegramSession)
+    runtime.user_id = 99
+    runtime._app = SimpleNamespace(bot=DummyBot())
+    _use_runtime_test_bot(runtime)
+
+    asyncio.run(runtime._send_log("[TOOL] run_command"))
+
+    assert len(sent_messages) == 1
+    assert "[TOOL] run_command" in sent_messages[0]
+
+
+def test_telegram_session_uses_sync_user_id_for_bot_config_store(monkeypatch):
+    captured_user_ids: list[int] = []
+
+    class DummyStore:
+        def __init__(self, *, user_id: int):
+            captured_user_ids.append(user_id)
+
+        def ensure_default_from_env(self, *, bot_token: str):
+            return None
+
+    monkeypatch.setattr(telegram_session_state, "TelegramBotConfigStore", DummyStore)
+
+    runtime = object.__new__(TelegramSession)
+    runtime.user_id = 8562474049
+    runtime.sync_user_id = 0
+
+    runtime._telegram_bot_store()
+
+    assert captured_user_ids == [0]
+
+
+def test_telegram_state_user_id_can_be_forced_by_desktop_env(monkeypatch):
+    monkeypatch.setenv(telegram_session_state.TELEGRAM_STATE_USER_ID_ENV, "0")
+
+    assert telegram_session_state.resolve_telegram_state_user_id(8562474049) == 0

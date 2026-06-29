@@ -4,7 +4,8 @@ import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'rea
 
 import { loadAppConfig } from '../lib/appConfig';
 import { requestJson } from '../lib/appHttp';
-import { clearDiagnostics, listDiagnostics, subscribeDiagnostics, type DiagnosticEntry } from '../lib/diagnostics';
+import { clearDiagnostics, listDiagnostics, shortStatusText, subscribeDiagnostics, type DiagnosticEntry, userFacingError } from '../lib/diagnostics';
+import { PageHeader } from '../src/components/PageHeader';
 
 export default function DiagnosticsScreen() {
   const [entries, setEntries] = useState<DiagnosticEntry[]>(() => listDiagnostics());
@@ -17,7 +18,7 @@ export default function DiagnosticsScreen() {
         setApiBaseUrl(config.apiBaseUrl);
       })
       .catch(() => {
-        setStatus('config error');
+        setStatus('Setup needs attention.');
       });
   }, []);
 
@@ -29,7 +30,7 @@ export default function DiagnosticsScreen() {
 
   const runHealthProbe = async () => {
     if (!apiBaseUrl) {
-      setStatus('missing backend');
+      setStatus('Connect backend first.');
       return;
     }
 
@@ -41,7 +42,7 @@ export default function DiagnosticsScreen() {
       });
       setStatus('health ok');
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'probe failed');
+      setStatus(userFacingError(error, 'Health probe failed.'));
     }
   };
 
@@ -53,9 +54,7 @@ export default function DiagnosticsScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Diagnostics</Text>
-        <Text style={styles.meta}>Status: {status}</Text>
-        <Text style={styles.meta}>Backend: {apiBaseUrl || 'not set'}</Text>
+        <PageHeader title="Diagnostics" subtitle={`Status: ${shortStatusText(status)} · Backend: ${apiBaseUrl || 'not set'}`} fallbackHref="/settings" />
         <View style={styles.actions}>
           <Pressable style={styles.button} onPress={() => void runHealthProbe()}>
             <Text style={styles.buttonText}>Run Health Probe</Text>

@@ -17,7 +17,7 @@ TOOL_COMMAND_STATUS = "command_status"
 TOOL_SEND_INPUT = "send_input"
 TOOL_KILL_COMMAND = "kill_command"
 TOOL_WEB_SEARCH = "web_search"
-TOOL_CHANGE_DIRECTORY = "change_directory"
+TOOL_FETCH_URL = "fetch_url"
 TOOL_PULL_SKILL = "pull_skill"
 
 # =============================================================================
@@ -125,24 +125,73 @@ CLI_AGENT_TOOLS = [
     },
     {
         "name": TOOL_RUN_COMMAND,
-        "description": "Execute a SHORT terminal command synchronously. The command runs and you get the full output when it finishes. Use this for quick commands (ls, cat, grep, pip install, etc.) that complete in under 30 seconds. For long-running commands (servers, builds, tests, watches), use run_background_command instead.",
+        "description": "Execute a SHORT terminal command synchronously. Commands are hidden by default and return captured output. Use visible_terminal=true only when the user explicitly wants to see or interact with a terminal window. Use this for quick commands that complete in under 30 seconds. Choose shell='powershell' for PowerShell commands such as Get-Location, Resolve-Path, Get-ChildItem, or Start-Process; choose shell='cmd' for cmd commands such as dir, where, or start. For long-running commands (servers, builds, tests, watches), use run_background_command instead.",
         "parameters": {
             "type": "object",
             "properties": {
                 "command": {"type": "string", "description": "The full shell command to execute."},
-                "cwd": {"type": "string", "description": "Working directory to execute the command in. Defaults to workspace root."}
+                "cwd": {"type": "string", "description": "Working directory to execute the command in. Defaults to workspace root."},
+                "shell": {
+                    "type": "string",
+                    "enum": ["auto", "cmd", "powershell", "pwsh", "bash"],
+                    "description": "Shell to use. Defaults to auto (current platform default). On Windows, use powershell for PowerShell syntax and cmd for cmd.exe syntax."
+                },
+                "visible_terminal": {
+                    "type": "boolean",
+                    "description": "Default false. Keep false for hidden captured command execution. Set true only when the user explicitly wants a visible terminal window.",
+                    "default": False
+                }
             },
             "required": ["command"]
         }
     },
     {
         "name": TOOL_RUN_BACKGROUND_COMMAND,
-        "description": "Start a command in the BACKGROUND. Returns a command_id immediately so you can continue working. Use this for long-running commands (dev servers, builds, npm install, test suites, file watchers, or any command that may take more than 30 seconds). After starting, use command_status to check output/progress, send_input to interact, or kill_command to stop it.",
+        "description": "Start a command in the BACKGROUND. Background commands are hidden by default and return captured output through command_status. Use visible_terminal=true only when the user explicitly wants to see or interact with a terminal window. Use this for long-running commands (dev servers, builds, npm install, test suites, file watchers, app launches, or any command that may take more than 30 seconds). Choose shell='powershell' for PowerShell commands and shell='cmd' for cmd.exe commands. The runtime will proactively resume the task when a task-owned command exits unless persistent=true or resume_policy='manual'. After starting, use command_status to check output/progress, send_input to interact with hidden commands, or kill_command to stop it.",
         "parameters": {
             "type": "object",
             "properties": {
                 "command": {"type": "string", "description": "The full shell command to run in the background."},
-                "cwd": {"type": "string", "description": "Working directory. Defaults to workspace root."}
+                "cwd": {"type": "string", "description": "Working directory. Defaults to workspace root."},
+                "shell": {
+                    "type": "string",
+                    "enum": ["auto", "cmd", "powershell", "pwsh", "bash"],
+                    "description": "Shell to use. Defaults to auto (current platform default). On Windows, use powershell for PowerShell syntax and cmd for cmd.exe syntax."
+                },
+                "visible_terminal": {
+                    "type": "boolean",
+                    "description": "Default false. Keep false for hidden captured background execution. Set true only when the user explicitly wants a visible terminal window; command_status can track process state but terminal output/input belongs to that visible window.",
+                    "default": False
+                },
+                "resume_policy": {
+                    "type": "string",
+                    "enum": ["on_exit", "on_ready", "on_meaningful_output", "manual", "none", "off"],
+                    "description": "Default on_exit. Use on_ready for servers/dev apps that should wake the agent as soon as useful output says they are ready. Use on_meaningful_output for watchers/tests that should wake on useful output. Use manual/none/off only when this process should not wake the agent.",
+                    "default": "on_exit"
+                },
+                "persistent": {
+                    "type": "boolean",
+                    "description": "Default false. Set true only for dev servers/watchers that should remain alive after the immediate task.",
+                    "default": False
+                },
+                "ready_patterns": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional regex or text patterns that mean a long-lived process is ready, such as a localhost URL or 'server running'. Used with resume_policy='on_ready'.",
+                    "default": []
+                },
+                "meaningful_output_patterns": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional regex or text patterns that mean a watcher/build/test produced a useful milestone. Used with resume_policy='on_meaningful_output'.",
+                    "default": []
+                },
+                "failure_patterns": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional regex or text patterns that mean a long-lived process hit an error and the agent should resume to diagnose.",
+                    "default": []
+                }
             },
             "required": ["command"]
         }
@@ -193,14 +242,14 @@ CLI_AGENT_TOOLS = [
         }
     },
     {
-        "name": TOOL_CHANGE_DIRECTORY,
-        "description": "Change the base working directory (workspace) for all subsequent operations. This allows you to 'move' into a subfolder without having to provide a 'cwd' or use 'cd' in every command.",
+        "name": TOOL_FETCH_URL,
+        "description": "Fetch the text content of a specific HTTP or HTTPS URL. Use after web_search when you need to inspect a known source directly.",
         "parameters": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "The path to switch to. Can be absolute or relative to the current workspace root."}
+                "url": {"type": "string", "description": "The full http:// or https:// URL to fetch."}
             },
-            "required": ["path"]
+            "required": ["url"]
         }
     },
     {

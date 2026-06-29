@@ -64,10 +64,6 @@
           "browser_navigate",
           "browser_snapshot"
         ],
-        "accepted_tool_names_any": [
-          "open_browser",
-          "observe_browser"
-        ],
         "forbidden_tools": [
           "describe_screen",
           "click",
@@ -84,7 +80,6 @@
       "expectations": {
         "required_tools_any": [
           "list_dir",
-          "list_files",
           "find_files"
         ],
         "forbidden_tools": [
@@ -103,8 +98,7 @@
           "write_file"
         ],
         "required_tools_any": [
-          "run_command",
-          "execute_command"
+          "run_command"
         ],
         "artifact_checks": [
           {
@@ -130,8 +124,7 @@
           "write_file"
         ],
         "required_tools_any": [
-          "run_command",
-          "execute_command"
+          "run_command"
         ],
         "artifact_checks": [
           {
@@ -216,10 +209,6 @@
           "browser_navigate",
           "browser_snapshot"
         ],
-        "accepted_tool_names_any": [
-          "open_browser",
-          "observe_browser"
-        ],
         "artifact_checks": [
           {
             "path": "eval_rng_page.html",
@@ -240,10 +229,6 @@
         "required_tools_any": [
           "browser_navigate",
           "browser_snapshot"
-        ],
-        "accepted_tool_names_any": [
-          "open_browser",
-          "observe_browser"
         ],
         "required_tools_all": [
           "write_file"
@@ -278,10 +263,6 @@
         "required_tools_any": [
           "browser_navigate",
           "browser_snapshot"
-        ],
-        "accepted_tool_names_any": [
-          "open_browser",
-          "observe_browser"
         ],
         "artifact_checks": [
           {

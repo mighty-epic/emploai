@@ -10,11 +10,6 @@ from typing import Any, List, Optional
 
 from anthropic import Anthropic
 from openai import OpenAI
-try:
-    import google.generativeai as genai
-    HAS_GEMINI = True
-except ImportError:
-    HAS_GEMINI = False
 
 from cli.config_manager import get_config_manager
 from cli.models.session import Session
@@ -31,7 +26,16 @@ from single_agent.agent import SingleAgent
 from cli.agent_tools.executor import ToolExecutor
 from skills import get_skill_registry
 from shared.tool_packs import default_enabled_tool_packs
+from cli.agent_tools.gemini_client import create_gemini_openai_client
 from telegram_bot.telegram_unified_agent import build_unified_system_prompt
+
+
+OPENAI_COMPATIBLE_PROVIDER_BASE_URLS = {
+    "xai": "https://api.x.ai/v1",
+    "deepseek": "https://api.deepseek.com",
+    "nvidia": "https://integrate.api.nvidia.com/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+}
 
 
 class _PromptConfig(dict):
@@ -155,29 +159,7 @@ def initialize(
     processor._cli_context_summary = ""
     processor._task_context_summary = ""
 
-    # LLM clients - load from config manager with env var fallback
-    openai_key = processor.config_manager.get_api_key("openai") or os.getenv("OPENAI_API_KEY")
-    anthropic_key = processor.config_manager.get_api_key("anthropic") or os.getenv("ANTHROPIC_API_KEY")
-    
-    # New providers
-    google_key = processor.config_manager.get_api_key("google") or os.getenv("GOOGLE_API_KEY")
-    xai_key = processor.config_manager.get_api_key("xai") or os.getenv("XAI_API_KEY")
-    deepseek_key = processor.config_manager.get_api_key("deepseek") or os.getenv("DEEPSEEK_API_KEY")
-    openrouter_key = processor.config_manager.get_api_key("openrouter") or os.getenv("OPENROUTER_API_KEY")
-
-    processor.client = OpenAI(api_key=openai_key) if openai_key else None
-    processor.anthropic = Anthropic(api_key=anthropic_key) if anthropic_key else None
-    
-    # Configure Gemini
-    processor.genai = None
-    if HAS_GEMINI and google_key:
-        genai.configure(api_key=google_key)
-        processor.genai = genai
-
-    # Create clients for OpenAI-compatible providers
-    processor.xai_client = OpenAI(api_key=xai_key, base_url="https://api.x.ai/v1") if xai_key else None
-    processor.deepseek_client = OpenAI(api_key=deepseek_key, base_url="https://api.deepseek.com") if deepseek_key else None
-    processor.openrouter_client = OpenAI(api_key=openrouter_key, base_url="https://openrouter.ai/api/v1") if openrouter_key else None
+    refresh_llm_clients(processor)
 
     # Streaming state
     processor._stream_buffer = ""
@@ -196,6 +178,51 @@ def initialize(
         single_agent=processor.single_agent,
         skill_registry=processor.skill_registry,
         active_skills=processor.active_skills
+    )
+    workspace_for_security = str(getattr(processor, "cwd", base_path))
+    processor.tool_executor.security_context_provider = lambda: {
+        "permission_mode": getattr(processor.session, "security_permission_mode", "standard"),
+        "workspace_path": workspace_for_security,
+        "workspace_binding_status": getattr(processor.session, "workspace_binding_status", None),
+        "workspace_write_enabled": (
+            None
+            if not workspace_for_security
+            else Path(workspace_for_security).expanduser().exists()
+        ),
+        "surface": "cli",
+        "session_id": getattr(processor.session, "id", None),
+    }
+
+
+def refresh_llm_clients(processor) -> None:
+    """Refresh all provider clients from secure config/env without requiring restart."""
+    openai_key = processor.config_manager.get_api_key("openai") or os.getenv("OPENAI_API_KEY")
+    anthropic_key = processor.config_manager.get_api_key("anthropic") or os.getenv("ANTHROPIC_API_KEY")
+    google_key = processor.config_manager.get_api_key("google") or os.getenv("GOOGLE_API_KEY")
+    xai_key = processor.config_manager.get_api_key("xai") or os.getenv("XAI_API_KEY")
+    deepseek_key = processor.config_manager.get_api_key("deepseek") or os.getenv("DEEPSEEK_API_KEY")
+    nvidia_key = processor.config_manager.get_api_key("nvidia") or os.getenv("NVIDIA_API_KEY")
+    openrouter_key = processor.config_manager.get_api_key("openrouter") or os.getenv("OPENROUTER_API_KEY")
+
+    processor.client = OpenAI(api_key=openai_key) if openai_key else None
+    processor.anthropic = Anthropic(api_key=anthropic_key) if anthropic_key else None
+    processor.genai = None
+    processor.gemini_openai_client = create_gemini_openai_client(google_key) if google_key else None
+    processor.xai_client = (
+        OpenAI(api_key=xai_key, base_url=OPENAI_COMPATIBLE_PROVIDER_BASE_URLS["xai"]) if xai_key else None
+    )
+    processor.deepseek_client = (
+        OpenAI(api_key=deepseek_key, base_url=OPENAI_COMPATIBLE_PROVIDER_BASE_URLS["deepseek"])
+        if deepseek_key
+        else None
+    )
+    processor.nvidia_client = (
+        OpenAI(api_key=nvidia_key, base_url=OPENAI_COMPATIBLE_PROVIDER_BASE_URLS["nvidia"]) if nvidia_key else None
+    )
+    processor.openrouter_client = (
+        OpenAI(api_key=openrouter_key, base_url=OPENAI_COMPATIBLE_PROVIDER_BASE_URLS["openrouter"])
+        if openrouter_key
+        else None
     )
 
 

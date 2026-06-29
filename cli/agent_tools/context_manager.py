@@ -31,6 +31,7 @@ DEFAULT_CONTEXT_SIZES = {
     "claude": 200000,    # Claude models: 200K tokens
     "grok": 2000000,     # Grok models: 2M tokens
     "deepseek": 64000,   # DeepSeek models: 64K tokens
+    "nvidia": 128000,    # NVIDIA-hosted NIM chat models
 }
 
 
@@ -97,7 +98,7 @@ class ContextManager:
         self,
         model_context_sizes: Dict[str, int],
         compression_client: Any = None,
-        compression_model: str = "gemini-2.0-flash",
+        compression_model: str = "gemini-3.1-flash-lite",
         provider_clients: Optional[Dict[str, Any]] = None,
     ):
         """
@@ -336,7 +337,7 @@ class ContextManager:
                 except Exception:
                     continue
 
-        if tokenizer_family in {"openai", "xai", "deepseek"} and tiktoken is not None:
+        if tokenizer_family in {"openai", "xai", "deepseek", "nvidia"} and tiktoken is not None:
             count = self._count_tokens_with_tiktoken(messages, model_id)
             if count is not None:
                 return count, "tiktoken"

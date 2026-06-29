@@ -44,6 +44,10 @@ class CronFeedStore:
         telegram_bot_label: Optional[str] = None,
         status: Optional[str] = None,
         timestamp: Optional[str] = None,
+        event_type: Optional[str] = None,
+        event_source: Optional[str] = None,
+        importance: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         payload = self._read()
         item = {
@@ -58,6 +62,10 @@ class CronFeedStore:
             "telegram_bot_config_id": telegram_bot_config_id,
             "telegram_bot_label": telegram_bot_label,
             "status": status,
+            "event_type": event_type,
+            "event_source": event_source,
+            "importance": importance,
+            "metadata": metadata or {},
         }
         items = list(payload.get("items", []))
         items.append(item)

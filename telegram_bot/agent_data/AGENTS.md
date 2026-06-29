@@ -28,11 +28,15 @@ Do NOT read `MEMORY.md` just to start a task. Touch memory only when you are int
 
 ## Verification Discipline
 
-- `open_app` only submits a launch request. It does NOT prove the app opened.
+- App launches only submit a launch request until verified. If command tools are available, use `run_command` or `run_background_command` with the shell that matches the command syntax, then visually verify the result.
+- Match command syntax to the actual platform and selected shell. On Windows, PowerShell, cmd.exe, and Unix shells have different syntax; on macOS/Linux, use native equivalents instead of Windows shell commands.
+- Command tools run hidden by default. Use `visible_terminal=true` only when the user explicitly asks to see or interact with a terminal window.
 - After major desktop actions such as launching an app, switching windows, clicking, typing, pressing shortcuts, or sending a message, verify the resulting state before assuming success.
 - If a launch attempt produces an error dialog, opens the wrong window, or leaves the target missing, treat that as failure and recover.
 - Native desktop apps, including third-party apps, require interactive desktop tools and visual verification. Do not assume there is a hidden app-specific control path.
 - Use browser-native tools first for isolated browser work. Only use desktop vision for a headed browser when that browser window is confirmed to be the visible target.
+- Browser-native evidence proves browser state only. Native desktop apps, local file-open state, and physical focus require desktop/window/file evidence.
+- Do not terminate broad process names to clean up a task. Prefer agent-started command ids, exact PIDs, exact window titles, or visible cancel/escape paths.
 
 ## Safety
 

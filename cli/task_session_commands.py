@@ -166,11 +166,14 @@ def providers(context, args, result_cls):
     """Show and manage provider configuration."""
     lines = ["Provider Configuration:"]
 
-    for provider_id in ["openai", "anthropic", "google", "xai"]:
+    for provider_id in ["openai", "anthropic", "google", "xai", "deepseek", "nvidia", "openrouter"]:
         has_key = context.config_manager.get_api_key(provider_id) is not None
         status = "[green]✓ Configured[/green]" if has_key else "[dim]Not configured[/dim]"
         lines.append(f"  {provider_id}: {status}")
 
     lines.append("\nTo configure providers, use ctrl+p → Configure providers")
-    lines.append("Or set environment variables: OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.")
+    lines.append(
+        "Or set environment variables: OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY, "
+        "XAI_API_KEY, DEEPSEEK_API_KEY, NVIDIA_API_KEY, or OPENROUTER_API_KEY."
+    )
     return result_cls(True, "\n".join(lines))

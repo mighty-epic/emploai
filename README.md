@@ -18,7 +18,7 @@ The result is not a chat bot with a few commands. It is a multi-layer execution 
 EmploAI can:
 
 - receive tasks through a Telegram bot
-- select from multiple LLM providers, including OpenAI, Anthropic, and Gemini
+- select from multiple LLM providers, including OpenAI, Anthropic, Gemini, xAI, DeepSeek, NVIDIA NIM, and OpenRouter
 - read and edit files inside a workspace
 - run shell commands
 - search the web and fetch pages headlessly

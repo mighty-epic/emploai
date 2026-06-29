@@ -596,13 +596,15 @@ MODEL_CONFIGS = {
     "claude-sonnet-4": {"provider": "anthropic", "id": "claude-sonnet-4-20250514", "context": 200000},
     "claude-opus-4": {"provider": "anthropic", "id": "claude-opus-4-20250514", "context": 200000},
     "claude-haiku-4": {"provider": "anthropic", "id": "claude-haiku-4-5-20251001", "context": 200000},
-    # Gemini
-    "gemini-3-pro": {"provider": "google", "id": "gemini-3-pro", "context": 1048576},
-    "gemini-3-flash": {"provider": "google", "id": "gemini-3-flash", "context": 1048576},
+    # Gemini text/tool models. Deprecated and shut-down models are intentionally omitted.
+    "gemini-3.5-flash": {"provider": "google", "id": "gemini-3.5-flash", "context": 1048576, "reasoning": True},
+    "gemini-3.1-pro-preview": {"provider": "google", "id": "gemini-3.1-pro-preview", "context": 1048576, "reasoning": True},
+    "gemini-3.1-pro-preview-customtools": {"provider": "google", "id": "gemini-3.1-pro-preview-customtools", "context": 1048576, "reasoning": True},
+    "gemini-3-flash-preview": {"provider": "google", "id": "gemini-3-flash-preview", "context": 1048576, "reasoning": True},
+    "gemini-3.1-flash-lite": {"provider": "google", "id": "gemini-3.1-flash-lite", "context": 1048576, "reasoning": True},
     "gemini-2.5-pro": {"provider": "google", "id": "gemini-2.5-pro", "context": 1048576},
     "gemini-2.5-flash": {"provider": "google", "id": "gemini-2.5-flash", "context": 1048576},
-    "gemini-2.0-flash": {"provider": "google", "id": "gemini-2.0-flash", "context": 1048576},
-    "gemini-1.5-pro": {"provider": "google", "id": "gemini-1.5-pro", "context": 2097152},
+    "gemini-2.5-flash-lite": {"provider": "google", "id": "gemini-2.5-flash-lite", "context": 1048576},
     # xAI
     # xAI
     "grok-4.1-fast-reasoning": {"provider": "xai", "id": "grok-4-1-fast-reasoning", "context": 2000000, "reasoning": True},
@@ -623,6 +625,181 @@ MODEL_CONFIGS = {
     "orb-gpt-4o": {"provider": "openrouter", "id": "openai/gpt-4o", "context": 128000},
     "orb-claude-3.5-sonnet": {"provider": "openrouter", "id": "anthropic/claude-3.5-sonnet", "context": 200000},
 }
+
+_NVIDIA_CANDIDATE_MODEL_IDS = (
+    "01-ai/yi-large",
+    "abacusai/dracarys-llama-3.1-70b-instruct",
+    "ai21labs/jamba-1.5-large-instruct",
+    "aisingapore/sea-lion-7b-instruct",
+    "bigcode/starcoder2-15b",
+    "bytedance/seed-oss-36b-instruct",
+    "databricks/dbrx-instruct",
+    "deepseek-ai/deepseek-coder-6.7b-instruct",
+    "deepseek-ai/deepseek-v4-flash",
+    "deepseek-ai/deepseek-v4-pro",
+    "google/codegemma-1.1-7b",
+    "google/codegemma-7b",
+    "google/diffusiongemma-26b-a4b-it",
+    "google/gemma-2-2b-it",
+    "google/gemma-3-12b-it",
+    "google/gemma-3-4b-it",
+    "google/gemma-3n-e2b-it",
+    "google/gemma-3n-e4b-it",
+    "google/gemma-4-31b-it",
+    "ibm/granite-3.0-3b-a800m-instruct",
+    "ibm/granite-3.0-8b-instruct",
+    "ibm/granite-34b-code-instruct",
+    "ibm/granite-8b-code-instruct",
+    "meta/codellama-70b",
+    "meta/llama-3.1-70b-instruct",
+    "meta/llama-3.1-8b-instruct",
+    "meta/llama-3.2-11b-vision-instruct",
+    "meta/llama-3.2-1b-instruct",
+    "meta/llama-3.2-3b-instruct",
+    "meta/llama-3.2-90b-vision-instruct",
+    "meta/llama-3.3-70b-instruct",
+    "meta/llama-4-maverick-17b-128e-instruct",
+    "microsoft/phi-3-vision-128k-instruct",
+    "microsoft/phi-3.5-moe-instruct",
+    "microsoft/phi-4-mini-instruct",
+    "microsoft/phi-4-multimodal-instruct",
+    "minimaxai/minimax-m2.7",
+    "minimaxai/minimax-m3",
+    "mistralai/codestral-22b-instruct-v0.1",
+    "mistralai/ministral-14b-instruct-2512",
+    "mistralai/mistral-7b-instruct-v0.3",
+    "mistralai/mistral-large",
+    "mistralai/mistral-large-2-instruct",
+    "mistralai/mistral-large-3-675b-instruct-2512",
+    "mistralai/mistral-medium-3.5-128b",
+    "mistralai/mistral-nemotron",
+    "mistralai/mistral-small-4-119b-2603",
+    "mistralai/mixtral-8x22b-v0.1",
+    "mistralai/mixtral-8x7b-instruct-v0.1",
+    "moonshotai/kimi-k2.6",
+    "nv-mistralai/mistral-nemo-12b-instruct",
+    "nvidia/llama-3.1-nemotron-51b-instruct",
+    "nvidia/llama-3.1-nemotron-70b-instruct",
+    "nvidia/llama-3.1-nemotron-nano-8b-v1",
+    "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
+    "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+    "nvidia/llama-3.3-nemotron-super-49b-v1",
+    "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+    "nvidia/llama3-chatqa-1.5-70b",
+    "nvidia/mistral-nemo-minitron-8b-8k-instruct",
+    "nvidia/nemotron-3-nano-30b-a3b",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+    "nvidia/nemotron-3-super-120b-a12b",
+    "nvidia/nemotron-3-ultra-550b-a55b",
+    "nvidia/nemotron-4-340b-instruct",
+    "nvidia/nemotron-mini-4b-instruct",
+    "nvidia/nemotron-nano-12b-v2-vl",
+    "nvidia/nemotron-nano-3-30b-a3b",
+    "nvidia/nvidia-nemotron-nano-9b-v2",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3-next-80b-a3b-instruct",
+    "qwen/qwen3.5-122b-a10b",
+    "qwen/qwen3.5-397b-a17b",
+    "sarvamai/sarvam-m",
+    "stepfun-ai/step-3.5-flash",
+    "stepfun-ai/step-3.7-flash",
+    "stockmark/stockmark-2-100b-instruct",
+    "upstage/solar-10.7b-instruct",
+    "writer/palmyra-creative-122b",
+    "z-ai/glm-5.1",
+    "zyphra/zamba2-7b-instruct",
+)
+
+NVIDIA_EXCLUDED_MODEL_FRAGMENTS = (
+    "audio",
+    "bge",
+    "deplot",
+    "detector",
+    "embed",
+    "fuyu",
+    "gliner",
+    "guard",
+    "kosmos",
+    "neva",
+    "nvclip",
+    "palmyra-fin",
+    "palmyra-med",
+    "parse",
+    "rerank",
+    "retriever",
+    "reward",
+    "safety",
+    "translate",
+    "video",
+    "vila",
+)
+
+NVIDIA_EXCLUDED_MODEL_IDS = frozenset(
+    {
+        # Image-input chat/coding models are allowed because describe_screen
+        # sends screenshots through the selected model. These catalog entries
+        # are kept out because they failed live image/tool forcing or are too
+        # specialized for the general/coding chooser.
+        "google/gemma-3-12b-it",
+        "google/gemma-3-4b-it",
+        "google/gemma-3n-e4b-it",
+        "google/gemma-4-31b-it",
+        "meta/llama-3.2-90b-vision-instruct",
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+        "moonshotai/kimi-k2.6",
+        "qwen/qwen3.5-122b-a10b",
+        "qwen/qwen3.5-397b-a17b",
+        "stepfun-ai/step-3.7-flash",
+        # Domain/special-purpose endpoints that are not general/coding chat LLMs.
+        "nvidia/cosmos-reason2-8b",
+        "nvidia/ising-calibration-1-35b-a3b",
+    }
+)
+
+NVIDIA_VERIFIED_CHAT_COMPLETION_MODEL_IDS = frozenset(
+    {
+        # Verified against NVIDIA's OpenAI-compatible streaming chat completions
+        # endpoint, image input payloads, and the app's tool loop on 2026-06-29.
+        # NVIDIA's public /v1/models catalog includes model IDs that are
+        # unavailable to normal accounts, time out before yielding content,
+        # reject tools, ignore tool calls, reject image input, or stream only
+        # reasoning with no visible answer.
+        "google/diffusiongemma-26b-a4b-it",
+        "google/gemma-3n-e2b-it",
+        "meta/llama-3.2-11b-vision-instruct",
+        "meta/llama-4-maverick-17b-128e-instruct",
+        "minimaxai/minimax-m3",
+        "mistralai/ministral-14b-instruct-2512",
+        "mistralai/mistral-large-3-675b-instruct-2512",
+        "mistralai/mistral-medium-3.5-128b",
+        "mistralai/mistral-small-4-119b-2603",
+        "nvidia/nemotron-nano-12b-v2-vl",
+    }
+)
+
+
+def is_supported_nvidia_chat_or_code_model_id(model_id: str) -> bool:
+    normalized = str(model_id or "").strip().lower()
+    if not normalized or normalized in NVIDIA_EXCLUDED_MODEL_IDS:
+        return False
+    if normalized not in NVIDIA_VERIFIED_CHAT_COMPLETION_MODEL_IDS:
+        return False
+    return not any(fragment in normalized for fragment in NVIDIA_EXCLUDED_MODEL_FRAGMENTS)
+
+
+NVIDIA_MODEL_IDS = tuple(
+    model_id
+    for model_id in _NVIDIA_CANDIDATE_MODEL_IDS
+    if is_supported_nvidia_chat_or_code_model_id(model_id)
+)
+
+MODEL_CONFIGS.update(
+    {
+        model_id: {"provider": "nvidia", "id": model_id, "context": 128000}
+        for model_id in NVIDIA_MODEL_IDS
+    }
+)
 
 # =============================================================================
 # AGENT MODE SYSTEM
@@ -677,12 +854,14 @@ MODEL_VARIANTS = {
     "gpt-4o": {"variants": ["standard"], "default": "standard"},
     "gpt-4o-mini": {"variants": ["standard"], "default": "standard"},
     # Gemini
-    "gemini-3-pro": {"variants": ["standard"], "default": "standard"},
-    "gemini-3-flash": {"variants": ["standard"], "default": "standard"},
-    "gemini-2.5-pro": {"variants": ["standard"], "default": "standard"},
-    "gemini-2.5-flash": {"variants": ["standard"], "default": "standard"},
-    "gemini-2.0-flash": {"variants": ["standard"], "default": "standard"},
-    "gemini-1.5-pro": {"variants": ["standard"], "default": "standard"},
+    "gemini-3.5-flash": {"variants": ["standard", "low", "medium", "high"], "default": "standard"},
+    "gemini-3.1-pro-preview": {"variants": ["standard", "low", "medium", "high"], "default": "standard"},
+    "gemini-3.1-pro-preview-customtools": {"variants": ["standard", "low", "medium", "high"], "default": "standard"},
+    "gemini-3-flash-preview": {"variants": ["standard", "low", "medium", "high"], "default": "standard"},
+    "gemini-3.1-flash-lite": {"variants": ["standard", "low", "medium", "high"], "default": "standard"},
+    "gemini-2.5-pro": {"variants": ["standard", "low", "medium", "high"], "default": "standard"},
+    "gemini-2.5-flash": {"variants": ["standard", "low", "medium", "high"], "default": "standard"},
+    "gemini-2.5-flash-lite": {"variants": ["standard", "low", "medium", "high"], "default": "standard"},
     # xAI
     "grok-4.1-fast-reasoning": {"variants": ["low", "medium", "high"], "default": "medium"},
     "grok-4.1-fast-non-reasoning": {"variants": ["standard"], "default": "standard"},
@@ -703,9 +882,16 @@ MODEL_VARIANTS = {
     "orb-claude-3.5-sonnet": {"variants": ["standard"], "default": "standard"},
 }
 
+MODEL_VARIANTS.update(
+    {
+        model_id: {"variants": ["standard"], "default": "standard"}
+        for model_id in NVIDIA_MODEL_IDS
+    }
+)
+
 # Dedicated Task Agent model (Legacy - now unified)
-# TASK_AGENT_MODEL = "gemini-3-pro"  # Will be added when Gemini API keys are configured
-# TASK_AGENT_CONTEXT = 1000000  # 1M context for Gemini 3 Pro
+# TASK_AGENT_MODEL = "gemini-3.5-flash"  # Current Gemini agent model option.
+# TASK_AGENT_CONTEXT = 1000000  # 1M context for Gemini models.
 
 
 AVAILABLE_MODELS = list(MODEL_CONFIGS.keys())

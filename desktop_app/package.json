@@ -1,13 +1,15 @@
 {
   "name": "emploai-desktop-shell",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.14.6",
   "private": true,
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "build:renderer": "npm --prefix ../mobile_app/client run export:web",
+    "build:renderer": "npm --prefix renderer_client run export:web",
     "smoke:chat": "py -3.13 ..\\scripts\\smoke_desktop_chat.py",
+    "release:check": "python ../scripts/check_release_hygiene.py",
+    "prepackage:win": "npm run release:check",
     "package:win": "powershell -ExecutionPolicy Bypass -File ../deploy/windows/build_beta_release.ps1"
   },
   "devDependencies": {

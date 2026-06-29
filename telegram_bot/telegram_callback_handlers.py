@@ -14,6 +14,29 @@ from shared.channel_sync import get_channel_sync_hub
 logger = logging.getLogger(__name__)
 
 
+def _session_sync_user_id(session, fallback_user_id: int) -> int:
+    raw = getattr(session, "sync_user_id", None)
+    return int(raw) if raw is not None else int(fallback_user_id)
+
+
+def _confirmation_store():
+    from mobile_app.backend.remote_control_store import RemoteControlPlaneStore
+
+    return RemoteControlPlaneStore()
+
+
+def _publish_confirmation_sync(user_id: int, confirmation: dict) -> None:
+    get_channel_sync_hub().publish(
+        user_id=int(user_id),
+        event={
+            "type": "confirmation_changed",
+            "session_id": confirmation.get("origin_chat_id"),
+            "origin_channel": "telegram",
+            "payload": {"confirmation": confirmation},
+        },
+    )
+
+
 def _publish_session_config_sync(session, setting: str) -> None:
     """Persist Telegram-side control changes and notify app clients."""
     try:
@@ -22,7 +45,7 @@ def _publish_session_config_sync(session, setting: str) -> None:
         if not session_id:
             return
         get_channel_sync_hub().publish(
-            user_id=session.user_id,
+            user_id=_session_sync_user_id(session, session.user_id),
             event={
                 "type": "session_config",
                 "session_id": session_id,
@@ -65,6 +88,30 @@ def build_callback_handlers(
         session = get_session(user.id)
         data = query.data
 
+        if data.startswith("confirm:"):
+            parts = data.split(":", 2)
+            action = parts[1] if len(parts) > 1 else ""
+            confirmation_id = parts[2] if len(parts) > 2 else ""
+            if action not in {"approve", "deny"} or not confirmation_id:
+                await safe_edit(query, "Confirmation action is invalid.")
+                return
+            sync_user_id = _session_sync_user_id(session, user.id)
+            try:
+                confirmation = _confirmation_store().decide_confirmation(
+                    user_id=sync_user_id,
+                    confirmation_id=confirmation_id,
+                    approved=action == "approve",
+                    decided_by_surface="telegram",
+                    decided_by_actor=str(user.id),
+                )
+                _publish_confirmation_sync(sync_user_id, confirmation)
+            except KeyError:
+                await safe_edit(query, f"Confirmation `{confirmation_id}` was not found.")
+                return
+            label = "approved" if action == "approve" else "denied"
+            await safe_edit(query, f"Confirmation `{confirmation_id}` {label}.")
+            return
+
         if data.startswith("monitor:"):
             setting = data.split(":")[1]
             async with session.lock:
@@ -91,6 +138,42 @@ def build_callback_handlers(
             _publish_session_config_sync(session, "bridge_enabled")
             status = "✅ ENABLED" if enable else "⛔ DISABLED"
             await safe_edit(query, f"Browser bridge set to {status}.")
+            return
+
+        if data.startswith("automation:"):
+            parts = data.split(":", 2)
+            action = parts[1] if len(parts) > 1 else ""
+            automation_id = parts[2] if len(parts) > 2 else ""
+            if not automation_id or action not in {"run", "pause", "resume", "delete", "confirm_delete"}:
+                await safe_edit(query, "Automation action is invalid.")
+                return
+            if not getattr(session, "cron_scheduler", None):
+                await safe_edit(query, "Scheduler is not initialized.")
+                return
+            if action == "delete":
+                reply_markup = InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton("Confirm delete", callback_data=f"automation:confirm_delete:{automation_id}"),
+                            InlineKeyboardButton("Cancel", callback_data="close"),
+                        ]
+                    ]
+                )
+                await safe_edit(query, f"Delete automation `{automation_id}`?", reply_markup=reply_markup)
+                return
+            if action == "run":
+                ok = session.cron_scheduler.run_job_now(automation_id)
+            elif action == "pause":
+                ok = session.cron_scheduler.disable_job(automation_id)
+            elif action == "resume":
+                ok = session.cron_scheduler.enable_job(automation_id)
+            else:
+                ok = session.cron_scheduler.remove_job(automation_id)
+            if not ok:
+                await safe_edit(query, f"Automation `{automation_id}` was not found.")
+                return
+            label = "delete" if action == "confirm_delete" else action
+            await safe_edit(query, f"Automation `{automation_id}` {label} requested.")
             return
 
         if data.startswith("verbose:"):
@@ -365,7 +448,7 @@ def build_callback_handlers(
                 )
                 session.load_session_by_id(new_sess.id)
                 publish_current_session_changed(
-                    user_id=user.id,
+                    user_id=_session_sync_user_id(session, user.id),
                     session_id=new_sess.id,
                     previous_session_id=previous_id,
                     origin_channel="telegram",
@@ -388,7 +471,7 @@ def build_callback_handlers(
                     # Load the requested one
                     session.load_session_by_id(session_id)
                     publish_current_session_changed(
-                        user_id=user.id,
+                        user_id=_session_sync_user_id(session, user.id),
                         session_id=session_id,
                         previous_session_id=previous_id,
                         origin_channel="telegram",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import secrets
 import threading
 import time
@@ -16,6 +17,15 @@ AUTH_STORE_FILENAME = "app_auth_store.json"
 LAST_USED_WRITE_INTERVAL_SECONDS = 30.0
 SAVE_REPLACE_RETRIES = 5
 SAVE_REPLACE_RETRY_DELAY_SECONDS = 0.05
+MAX_ACTIVE_TOKENS_PER_DEVICE = 20
+
+
+def _secure_chmod(path: Path, mode: int) -> None:
+    try:
+        if path.exists():
+            os.chmod(path, mode)
+    except Exception:
+        pass
 
 
 def _utc_iso(timestamp: Optional[float]) -> Optional[str]:
@@ -34,7 +44,12 @@ class AppAuthStore:
         self.file_path = self.root_path / AUTH_STORE_FILENAME
         self._lock = threading.RLock()
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        _secure_chmod(self.file_path.parent, 0o700)
         self._data = self._load()
+        if self._cleanup(self._data):
+            self._save()
+        else:
+            _secure_chmod(self.file_path, 0o600)
 
     def _default_data(self) -> Dict[str, Any]:
         return {
@@ -58,19 +73,32 @@ class AppAuthStore:
         loaded.setdefault("pairings", {})
         loaded.setdefault("devices", {})
         loaded.setdefault("tokens", {})
-        self._cleanup(loaded)
         return loaded
 
     def _save(self) -> None:
         temp_path = self.file_path.with_name(
             f"{self.file_path.name}.{threading.get_ident()}.{secrets.token_hex(6)}.tmp"
         )
-        temp_path.write_text(json.dumps(self._data, indent=2, sort_keys=True), encoding="utf-8")
+        previous_umask: Optional[int] = None
+        try:
+            previous_umask = os.umask(0o077)
+        except Exception:
+            previous_umask = None
+        try:
+            temp_path.write_text(json.dumps(self._data, indent=2, sort_keys=True), encoding="utf-8")
+        finally:
+            if previous_umask is not None:
+                try:
+                    os.umask(previous_umask)
+                except Exception:
+                    pass
+        _secure_chmod(temp_path, 0o600)
         last_error: Optional[PermissionError] = None
         try:
             for attempt in range(SAVE_REPLACE_RETRIES):
                 try:
                     temp_path.replace(self.file_path)
+                    _secure_chmod(self.file_path, 0o600)
                     return
                 except PermissionError as exc:
                     last_error = exc
@@ -89,9 +117,10 @@ class AppAuthStore:
             # briefly contend over the same JSON store during startup fan-out.
             return
 
-    def _cleanup(self, data: Optional[Dict[str, Any]] = None) -> None:
+    def _cleanup(self, data: Optional[Dict[str, Any]] = None) -> bool:
         target = data or self._data
         now = time.time()
+        changed = False
 
         pairings = target.setdefault("pairings", {})
         for pairing_id, pairing in list(pairings.items()):
@@ -99,21 +128,47 @@ class AppAuthStore:
             used_at = pairing.get("used_at")
             if used_at or expires_at < now:
                 pairings.pop(pairing_id, None)
+                changed = True
 
         devices = target.setdefault("devices", {})
         tokens = target.setdefault("tokens", {})
         for token_hash, token_data in list(tokens.items()):
+            if "token_value" in token_data:
+                token_data.pop("token_value", None)
+                changed = True
             if token_data.get("revoked_at"):
                 tokens.pop(token_hash, None)
+                changed = True
                 continue
             expires_at = float(token_data.get("expires_at", 0))
             if expires_at and expires_at < now:
                 tokens.pop(token_hash, None)
+                changed = True
                 continue
             device_id = str(token_data.get("device_id", ""))
             device = devices.get(device_id)
             if not device or device.get("revoked_at"):
                 tokens.pop(token_hash, None)
+                changed = True
+        return changed
+
+    def _trim_active_tokens_for_device(self, device_id: str) -> None:
+        clean_device_id = str(device_id or "").strip()
+        if not clean_device_id:
+            return
+        active_tokens = [
+            (token_hash, token_data)
+            for token_hash, token_data in self._data.get("tokens", {}).items()
+            if str(token_data.get("device_id") or "") == clean_device_id and not token_data.get("revoked_at")
+        ]
+        if len(active_tokens) <= MAX_ACTIVE_TOKENS_PER_DEVICE:
+            return
+        active_tokens.sort(
+            key=lambda item: float(item[1].get("last_used_at") or item[1].get("created_at") or 0),
+            reverse=True,
+        )
+        for token_hash, _token_data in active_tokens[MAX_ACTIVE_TOKENS_PER_DEVICE:]:
+            self._data["tokens"].pop(token_hash, None)
 
     def create_pairing(
         self,
@@ -185,7 +240,6 @@ class AppAuthStore:
             token_record = {
                 "device_id": device_id,
                 "user_id": user_id,
-                "token_value": access_token,
                 "created_at": now,
                 "last_used_at": now,
                 "expires_at": now + token_ttl_seconds,
@@ -213,7 +267,14 @@ class AppAuthStore:
             token_hash = _hash_token(access_token)
             token_record = self._data["tokens"].get(token_hash)
             if not token_record:
-                return None
+                loaded = self._load()
+                loaded_changed = self._cleanup(loaded)
+                token_record = loaded.get("tokens", {}).get(token_hash)
+                if not token_record:
+                    return None
+                self._data = loaded
+                if loaded_changed:
+                    self._save()
 
             if token_record.get("revoked_at"):
                 self._data["tokens"].pop(token_hash, None)
@@ -337,49 +398,17 @@ class AppAuthStore:
                 if normalized_key:
                     existing_device["device_key"] = normalized_key
 
-            reusable_token_value: Optional[str] = None
-            reusable_expires_at: Optional[float] = None
-            if existing_device_id:
-                for token_data in self._data["tokens"].values():
-                    if token_data.get("device_id") != existing_device_id:
-                        continue
-                    if token_data.get("revoked_at"):
-                        continue
-                    expires_at = float(token_data.get("expires_at", 0) or 0)
-                    if expires_at and expires_at < now:
-                        continue
-                    token_value = str(token_data.get("token_value") or "").strip()
-                    if not token_value:
-                        continue
-                    token_data["last_used_at"] = now
-                    reusable_token_value = token_value
-                    reusable_expires_at = expires_at
-                    break
-
-            if reusable_token_value:
-                self._save()
-                return {
-                    "device_id": existing_device_id,
-                    "access_token": reusable_token_value,
-                    "expires_at": reusable_expires_at,
-                    "device": dict(existing_device),
-                }
-
-            for token_data in self._data["tokens"].values():
-                if token_data.get("device_id") == existing_device_id and not token_data.get("revoked_at"):
-                    token_data["revoked_at"] = now
-
             access_token = secrets.token_urlsafe(32)
             token_record = {
                 "device_id": existing_device_id,
                 "user_id": int(user_id),
-                "token_value": access_token,
                 "created_at": now,
                 "last_used_at": now,
                 "expires_at": now + token_ttl_seconds,
                 "revoked_at": None,
             }
             self._data["tokens"][_hash_token(access_token)] = token_record
+            self._trim_active_tokens_for_device(str(existing_device_id or ""))
             self._save()
             return {
                 "device_id": existing_device_id,

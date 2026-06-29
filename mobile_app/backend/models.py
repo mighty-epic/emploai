@@ -87,10 +87,18 @@ class SessionSummaryView(BaseModel):
     is_running: bool = False
     run_state: Literal["idle", "running"] = "idle"
     enabled_tool_packs: List[str] = Field(default_factory=list)
+    security_permission_mode: str = "standard"
     available_tool_packs: List[str] = Field(default_factory=list)
     lock_status: Dict[str, Any] = Field(default_factory=dict)
     telegram_bot_config_id: Optional[str] = None
     headless_eligible: bool = False
+    workspace_id: Optional[str] = None
+    workspace_binding_status: Optional[str] = None
+    fleet_identity_id: Optional[str] = None
+    fleet_identity_role: Optional[str] = None
+    fleet_worker_id: Optional[str] = None
+    account_user_id: Optional[int] = None
+    account_email: Optional[str] = None
     artifact_count: int = 0
     latest_artifact_at: Optional[str] = None
 
@@ -113,10 +121,18 @@ class SessionDetailView(BaseModel):
     is_running: bool = False
     run_state: Literal["idle", "running"] = "idle"
     enabled_tool_packs: List[str] = Field(default_factory=list)
+    security_permission_mode: str = "standard"
     available_tool_packs: List[str] = Field(default_factory=list)
     lock_status: Dict[str, Any] = Field(default_factory=dict)
     telegram_bot_config_id: Optional[str] = None
     headless_eligible: bool = False
+    workspace_id: Optional[str] = None
+    workspace_binding_status: Optional[str] = None
+    fleet_identity_id: Optional[str] = None
+    fleet_identity_role: Optional[str] = None
+    fleet_worker_id: Optional[str] = None
+    account_user_id: Optional[int] = None
+    account_email: Optional[str] = None
     artifact_count: int = 0
     latest_artifact_at: Optional[str] = None
 
@@ -150,7 +166,13 @@ class CreateSessionRequest(BaseModel):
     workspace: Optional[str] = None
     telegram_bot_config_id: Optional[str] = None
     enabled_tool_packs: List[str] = Field(default_factory=list)
+    security_permission_mode: Optional[str] = None
     headless_eligible: bool = False
+    workspace_id: Optional[str] = Field(default=None, max_length=256)
+    workspace_binding_status: Optional[str] = Field(default=None, max_length=80)
+    fleet_identity_id: Optional[str] = Field(default=None, max_length=128)
+    fleet_identity_role: Optional[str] = Field(default=None, max_length=40)
+    fleet_worker_id: Optional[str] = Field(default=None, max_length=128)
 
 
 class CreateSessionResponse(BaseModel):
@@ -199,6 +221,8 @@ class ChatSendRequest(BaseModel):
     text: str
     source_format: SourceFormat = "app_text"
     interrupt_policy: InterruptPolicy = "none"
+    channel: Optional[ChannelType] = "app"
+    source_client_id: Optional[str] = None
 
 
 class UploadDescriptor(BaseModel):
@@ -229,18 +253,43 @@ class JobCreateRequest(BaseModel):
     prompt: str
     schedule: str
     session_id: Optional[str] = None
+    target_kind: Optional[str] = None
+    target_identity_id: Optional[str] = None
+    target_group_id: Optional[str] = None
+    target_chat_id: Optional[str] = None
+    chat_target: Optional[str] = None
+    permission_mode: Optional[str] = None
+    tool_packs: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    requires_confirmation: bool = False
+    confirmation_status: Optional[str] = None
 
 
 class JobDetailView(BaseModel):
     id: str
+    automation_id: Optional[str] = None
     name: str
     prompt: str
     schedule: Optional[str] = None
+    schedule_mode: Optional[str] = None
     enabled: bool = True
+    status: Optional[str] = None
     run_count: Optional[int] = None
     error_count: Optional[int] = None
     next_run_at: Optional[str] = None
     last_run_at: Optional[str] = None
+    one_time: bool = False
+    target_kind: Optional[str] = None
+    target_identity_id: Optional[str] = None
+    target_group_id: Optional[str] = None
+    target_chat_id: Optional[str] = None
+    chat_target: Optional[str] = None
+    permission_mode: Optional[str] = None
+    tool_packs: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    requires_confirmation: bool = False
+    confirmation_status: Optional[str] = None
+    confirmation_expires_at: Optional[str] = None
 
 
 class VoiceCommitRequest(BaseModel):
@@ -250,16 +299,31 @@ class VoiceCommitRequest(BaseModel):
 
 class ScheduledJobView(BaseModel):
     id: str
+    automation_id: Optional[str] = None
     name: str
     prompt: str
     schedule: Optional[str] = None
+    schedule_mode: Optional[str] = None
     enabled: bool = True
+    status: Optional[str] = None
     run_count: Optional[int] = None
     error_count: Optional[int] = None
     next_run_at: Optional[str] = None
     last_run_at: Optional[str] = None
+    one_time: bool = False
     interval_seconds: Optional[int] = None
     due: bool = False
+    target_kind: Optional[str] = None
+    target_identity_id: Optional[str] = None
+    target_group_id: Optional[str] = None
+    target_chat_id: Optional[str] = None
+    chat_target: Optional[str] = None
+    permission_mode: Optional[str] = None
+    tool_packs: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    requires_confirmation: bool = False
+    confirmation_status: Optional[str] = None
+    confirmation_expires_at: Optional[str] = None
     owner_user_id: Optional[int] = None
     origin_session_id: Optional[str] = None
     origin_telegram_bot_config_id: Optional[str] = None
@@ -271,7 +335,7 @@ class ScheduledJobView(BaseModel):
 class CronFeedItemView(BaseModel):
     id: str
     timestamp: Optional[str] = None
-    kind: Literal["announcement", "result"]
+    kind: str
     content: str
     session_id: Optional[str] = None
     session_name: Optional[str] = None
@@ -280,6 +344,167 @@ class CronFeedItemView(BaseModel):
     telegram_bot_config_id: Optional[str] = None
     telegram_bot_label: Optional[str] = None
     status: Optional[str] = None
+    event_type: Optional[str] = None
+    event_source: Optional[str] = None
+    importance: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    automation_id: Optional[str] = None
+    target_identity_id: Optional[str] = None
+    target_chat_id: Optional[str] = None
+    dedupe_key: Optional[str] = None
+    scheduled_for: Optional[str] = None
+    acknowledged_at: Optional[str] = None
+
+
+class AutomationEventRunView(BaseModel):
+    event_run_id: str
+    user_id: int
+    event_id: Optional[str] = None
+    automation_id: Optional[str] = None
+    status: str
+    target_identity_id: Optional[str] = None
+    target_chat_id: Optional[str] = None
+    attempt: int = 1
+    max_attempts: int = 3
+    next_attempt_at: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    error: Optional[str] = None
+    result: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ProcessWaitView(BaseModel):
+    process_wait_id: str
+    user_id: int
+    session_id: Optional[str] = None
+    command_id: str
+    pid: Optional[int] = None
+    command: Optional[str] = None
+    cwd: Optional[str] = None
+    shell: Optional[str] = None
+    status: str
+    resume_policy: Optional[str] = None
+    persistent: bool = False
+    ready_patterns: List[str] = Field(default_factory=list)
+    meaningful_output_patterns: List[str] = Field(default_factory=list)
+    failure_patterns: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    started_at: Optional[str] = None
+    last_event_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+class PlannerContractView(BaseModel):
+    contract_id: str
+    user_id: int
+    session_id: Optional[str] = None
+    turn_id: Optional[str] = None
+    status: str
+    action: Optional[str] = None
+    contract: Dict[str, Any] = Field(default_factory=dict)
+    corrections: List[Dict[str, Any]] = Field(default_factory=list)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    injected_at: Optional[str] = None
+
+
+class RecoveryArchiveItemView(BaseModel):
+    archive_id: str
+    user_id: int
+    object_kind: str
+    object_id: str
+    display_name: Optional[str] = None
+    status: str
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    archived_at: Optional[str] = None
+    expires_at: Optional[str] = None
+    restored_at: Optional[str] = None
+    purged_at: Optional[str] = None
+
+
+class RecoveryListResponse(BaseModel):
+    items: List[RecoveryArchiveItemView] = Field(default_factory=list)
+
+
+class RecoveryActionResponse(BaseModel):
+    ok: bool = True
+    action: str
+    item: Optional[RecoveryArchiveItemView] = None
+    purged: Optional[int] = None
+
+
+class ConfirmationView(BaseModel):
+    confirmation_id: str
+    user_id: int
+    action_kind: str
+    title: str
+    message: str
+    risk_tier: str
+    status: str
+    origin_surface: Optional[str] = None
+    origin_identity_id: Optional[str] = None
+    origin_chat_id: Optional[str] = None
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    expires_at: Optional[str] = None
+    decided_at: Optional[str] = None
+    decided_by_surface: Optional[str] = None
+    decided_by_actor: Optional[str] = None
+
+
+class ConfirmationListResponse(BaseModel):
+    items: List[ConfirmationView] = Field(default_factory=list)
+
+
+class ConfirmationCreateRequest(BaseModel):
+    action_kind: str = Field(min_length=1, max_length=120)
+    title: str = Field(min_length=1, max_length=240)
+    message: str = Field(min_length=1, max_length=2000)
+    risk_tier: str = Field(default="danger", max_length=80)
+    origin_surface: Optional[str] = Field(default=None, max_length=80)
+    origin_identity_id: Optional[str] = Field(default=None, max_length=256)
+    origin_chat_id: Optional[str] = Field(default=None, max_length=256)
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    ttl_seconds: int = Field(default=300, ge=30, le=1800)
+
+
+class ConfirmationDecisionRequest(BaseModel):
+    decided_by_surface: str = Field(default="app", max_length=80)
+    decided_by_actor: Optional[str] = Field(default=None, max_length=256)
+
+
+class WorkspaceRestoreRequest(BaseModel):
+    workspace_id: Optional[str] = Field(default=None, max_length=256)
+    local_path: Optional[str] = Field(default=None, max_length=2000)
+    machine_id: Optional[str] = Field(default=None, max_length=256)
+
+
+class WorkspaceRestoreResponse(BaseModel):
+    ok: bool = True
+    restored_path: str
+    restored_files: List[Dict[str, Any]] = Field(default_factory=list)
+    missing_original_files: List[Dict[str, Any]] = Field(default_factory=list)
+    conflict_count: int = 0
+
+
+class RuntimeActionRequest(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=1000)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ProcessWaitUpdateRequest(BaseModel):
+    persistent: Optional[bool] = None
+    reason: Optional[str] = Field(default=None, max_length=1000)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PlannerContractStatusRequest(BaseModel):
+    status: str = Field(min_length=1, max_length=80)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class JobActionResponse(BaseModel):
@@ -504,26 +729,45 @@ class TelegramBotConfigView(BaseModel):
 
 
 class TelegramBotConfigCreateRequest(BaseModel):
-    label: str
-    bot_token: str
+    label: str = Field(min_length=1, max_length=128)
+    bot_token: str = Field(min_length=10, max_length=2000)
 
 
 class TelegramBotConfigUpdateRequest(BaseModel):
-    label: Optional[str] = None
-    bot_token: Optional[str] = None
+    label: Optional[str] = Field(default=None, max_length=128)
+    bot_token: Optional[str] = Field(default=None, min_length=10, max_length=2000)
     is_default: Optional[bool] = None
 
 
 class ToolPackUpdateRequest(BaseModel):
-    enabled_tool_packs: List[str] = Field(default_factory=list)
+    enabled_tool_packs: List[str] = Field(default_factory=list, max_length=64)
 
 
 class SessionBotAssignmentRequest(BaseModel):
-    telegram_bot_config_id: Optional[str] = None
+    telegram_bot_config_id: Optional[str] = Field(default=None, max_length=128)
 
 
 class SessionHeadlessEligibilityRequest(BaseModel):
     headless_eligible: bool = False
+
+
+class SessionSecurityPermissionRequest(BaseModel):
+    security_permission_mode: Literal["low", "standard", "full_permissions"] = "standard"
+
+
+class WorkspaceGitStateView(BaseModel):
+    requestedPath: Optional[str] = None
+    resolvedPath: Optional[str] = None
+    repoRoot: Optional[str] = None
+    isGitRepo: bool = False
+    currentBranch: Optional[str] = None
+    branches: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
+class WorkspaceGitCheckoutRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=4096)
+    branch: str = Field(min_length=1, max_length=512)
 
 
 class RuntimeWorkerLockView(BaseModel):
@@ -597,6 +841,27 @@ class ConfigUpdateRequest(BaseModel):
     value: Any
 
 
+class VoiceTtsConfigureRequest(BaseModel):
+    backend: Literal["openai", "kokoro", "kokoro_onnx", "kokoro-onnx", "kyutai", "kyutai_clone", "pocket", "pocket_tts"]
+
+
+class VoiceSttConfigureRequest(BaseModel):
+    backend: Literal[
+        "local",
+        "local_whisper",
+        "local-whisper",
+        "whisper",
+        "whisper_cpp",
+        "whisper-cpp",
+        "openai",
+        "openai_realtime",
+        "openai-realtime",
+        "realtime",
+        "realtime_api",
+        "realtime-api",
+    ]
+
+
 class SkillSummaryView(BaseModel):
     name: str
     description: str
@@ -667,6 +932,10 @@ class VoiceClientEvent(BaseModel):
     sequence: Optional[int] = None
     interrupt_policy: Optional[InterruptPolicy] = None
     auto_send: Optional[bool] = None
+    surface_mode: Optional[str] = None
+    utterance_id: Optional[str] = None
+    barge_in_candidate: Optional[bool] = None
+    barge_in_reference_text: Optional[str] = None
 
 
 class RealtimeServerEvent(BaseModel):
@@ -677,18 +946,68 @@ class RealtimeServerEvent(BaseModel):
 
 
 class RemoteAuthRegisterRequest(BaseModel):
-    email: str
-    password: str
-    display_name: Optional[str] = None
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=12, max_length=256)
+    display_name: Optional[str] = Field(default=None, max_length=160)
+    actor_kind: Literal["mobile", "desktop"] = "mobile"
+    device_name: Optional[str] = Field(default=None, max_length=160)
+    device_platform: Optional[str] = Field(default=None, max_length=80)
+    device_key: Optional[str] = Field(default=None, max_length=256)
+    remember_me: bool = False
 
 
 class RemoteAuthLoginRequest(BaseModel):
-    email: str
-    password: str
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=256)
     actor_kind: Literal["mobile", "desktop"]
-    device_name: Optional[str] = None
-    device_platform: Optional[str] = None
-    device_key: Optional[str] = None
+    device_name: Optional[str] = Field(default=None, max_length=160)
+    device_platform: Optional[str] = Field(default=None, max_length=80)
+    device_key: Optional[str] = Field(default=None, max_length=256)
+    remember_me: bool = False
+
+
+class RemoteAuthOtpChallengeResponse(BaseModel):
+    status: Literal["otp_required"] = "otp_required"
+    challenge_id: str
+    email: str
+    purpose: Literal["signup_verify", "login_verify"]
+    expires_in_seconds: int
+    resend_available_in_seconds: int = 0
+
+
+class RemoteAuthOtpVerifyRequest(BaseModel):
+    challenge_id: str = Field(min_length=8, max_length=256)
+    code: str = Field(min_length=4, max_length=32)
+
+
+class RemoteAuthOtpResendRequest(BaseModel):
+    challenge_id: str = Field(min_length=8, max_length=256)
+
+
+class RemoteAuthLogoutResponse(BaseModel):
+    ok: bool = True
+    revoked: bool = False
+    disconnected_desktop: bool = False
+
+
+class RemoteGoogleAuthStartRequest(BaseModel):
+    actor_kind: Literal["mobile", "desktop"]
+    device_name: Optional[str] = Field(default=None, max_length=160)
+    device_platform: Optional[str] = Field(default=None, max_length=80)
+    device_key: Optional[str] = Field(default=None, max_length=256)
+    remember_me: bool = False
+
+
+class RemoteGoogleAuthStartResponse(BaseModel):
+    auth_url: str
+    request_id: str
+    poll_token: str
+    expires_in_seconds: int
+
+
+class RemoteGoogleAuthPollRequest(BaseModel):
+    request_id: str = Field(min_length=8, max_length=128)
+    poll_token: str = Field(min_length=16, max_length=256)
 
 
 class RemoteUserView(BaseModel):
@@ -697,6 +1016,7 @@ class RemoteUserView(BaseModel):
     display_name: Optional[str] = None
     created_at: Optional[str] = None
     last_login_at: Optional[str] = None
+    email_verified_at: Optional[str] = None
 
 
 class RemoteDesktopView(BaseModel):
@@ -727,6 +1047,19 @@ class RemoteAuthLoginResponse(BaseModel):
     user: RemoteUserView
     desktop: Optional[RemoteDesktopView] = None
     mobile: Optional[RemoteMobileView] = None
+    remember_me: bool = False
+
+
+class RemoteGoogleAuthPollResponse(BaseModel):
+    status: Literal["pending", "complete", "error", "expired"]
+    error: Optional[str] = None
+    session_token: Optional[str] = None
+    expires_in_seconds: Optional[int] = None
+    actor_kind: Optional[Literal["mobile", "desktop"]] = None
+    user: Optional[RemoteUserView] = None
+    desktop: Optional[RemoteDesktopView] = None
+    mobile: Optional[RemoteMobileView] = None
+    remember_me: Optional[bool] = None
 
 
 class RemoteAccountProfile(BaseModel):
@@ -734,11 +1067,67 @@ class RemoteAccountProfile(BaseModel):
     actor_kind: Literal["mobile", "desktop"]
     desktop: Optional[RemoteDesktopView] = None
     mobile: Optional[RemoteMobileView] = None
+    profile: Dict[str, Any] = Field(default_factory=dict)
     shared_state: Dict[str, Any] = Field(default_factory=dict)
 
 
+class RemoteAccountCloudProfileRequest(BaseModel):
+    profile: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RemoteAccountCloudProfileResponse(BaseModel):
+    profile: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RemoteAccountSecretItem(BaseModel):
+    namespace: str
+    name: str
+    redacted_value: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class RemoteAccountSecretsListResponse(BaseModel):
+    items: List[RemoteAccountSecretItem] = Field(default_factory=list)
+
+
+class RemoteAccountSecretsUpsertRequest(BaseModel):
+    namespace: str = Field(default="setup", max_length=64)
+    secrets: Dict[str, str] = Field(default_factory=dict, max_length=100)
+    metadata: Dict[str, Any] = Field(default_factory=dict, max_length=100)
+
+
+class RemoteAccountSecretsRevealRequest(BaseModel):
+    namespace: str = Field(default="setup", max_length=64)
+    names: List[str] = Field(default_factory=list, max_length=100)
+
+
+class RemoteAccountSecretsRevealResponse(BaseModel):
+    namespace: str = "setup"
+    secrets: Dict[str, str] = Field(default_factory=dict)
+
+
+class RemoteAccountSecretDeleteResponse(BaseModel):
+    ok: bool = True
+    deleted: bool = False
+
+
+class RemoteAccountDataDeleteResponse(BaseModel):
+    ok: bool = True
+    deleted_secrets: int = 0
+    revoked_sessions: int = 0
+    revoked_pairings: int = 0
+    unpaired_mobiles: int = 0
+    reset_desktops: int = 0
+    disconnected_desktops: int = 0
+    profile_reset: bool = False
+    shared_state_reset: bool = False
+    profile: Dict[str, Any] = Field(default_factory=dict)
+
+
 class RemotePairStartRequest(BaseModel):
-    desktop_id: Optional[str] = None
+    desktop_id: Optional[str] = Field(default=None, max_length=128)
 
 
 class RemotePairStartResponse(BaseModel):
@@ -751,13 +1140,297 @@ class RemotePairStartResponse(BaseModel):
 
 
 class RemotePairCompleteRequest(BaseModel):
-    pairing_token: str
+    pairing_token: str = Field(min_length=16, max_length=256)
 
 
 class RemotePairCompleteResponse(BaseModel):
     desktop: RemoteDesktopView
     mobile: RemoteMobileView
     shared_state: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FleetInstanceView(BaseModel):
+    instance_id: str
+    user_id: int
+    role: Literal["manager", "worker"]
+    desktop_id: Optional[str] = None
+    worker_id: Optional[str] = None
+    display_name: Optional[str] = None
+    status: str = "active"
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    reset_at: Optional[str] = None
+
+
+class FleetIdentityView(BaseModel):
+    identity_id: str
+    role: Literal["manager", "worker"]
+    display_name: str
+    instance_id: str
+    desktop_id: Optional[str] = None
+    worker_id: Optional[str] = None
+    status: str = "active"
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class FleetWorkerView(BaseModel):
+    worker_id: str
+    user_id: int
+    kind: Literal["local", "remote"]
+    machine_desktop_id: Optional[str] = None
+    instance_id: Optional[str] = None
+    display_name: str
+    status: str = "idle"
+    detail: Optional[str] = None
+    group_id: Optional[str] = None
+    active_task_id: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    last_seen_at: Optional[str] = None
+
+
+class FleetTaskView(BaseModel):
+    task_id: str
+    user_id: int
+    worker_id: str
+    status: Literal["queued", "running", "paused", "blocked", "needs_review", "completed", "failed", "stopped", "canceled"]
+    prompt: str
+    source: Optional[str] = None
+    queue_position: int = 0
+    report_id: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    canceled_at: Optional[str] = None
+
+
+class FleetReportView(BaseModel):
+    report_id: str
+    user_id: int
+    worker_id: str
+    task_id: str
+    status: str
+    summary: str
+    evidence: List[Any] = Field(default_factory=list)
+    artifacts: List[Any] = Field(default_factory=list)
+    blockers: List[Any] = Field(default_factory=list)
+    confidence: Optional[str] = None
+    next_suggested_action: Optional[str] = None
+    raw: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+
+
+class FleetWorkspaceBindingView(BaseModel):
+    binding_id: str
+    workspace_id: str
+    machine_id: str
+    local_path: str
+    label: Optional[str] = None
+    status: str = "active"
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class FleetToolGrantView(BaseModel):
+    grant_id: str
+    target_kind: str
+    target_id: str
+    tool_pack_id: str
+    status: str
+    reason: Optional[str] = None
+    task_id: Optional[str] = None
+    requested_turns: int = 1
+    approved_turns: Optional[int] = None
+    remaining_turns: Optional[int] = None
+    requested_by: Optional[str] = None
+    approved_by: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    expires_at: Optional[str] = None
+
+
+class FleetSnapshotResponse(BaseModel):
+    schema_version: int = 1
+    user_id: int
+    identities: List[FleetIdentityView] = Field(default_factory=list)
+    active_identity_id: Optional[str] = None
+    active_identity: Optional[FleetIdentityView] = None
+    selected_chat_by_identity: Dict[str, Optional[str]] = Field(default_factory=dict)
+    active_identity_version: int = 0
+    active_identity_updated_at: Optional[str] = None
+    instances: List[FleetInstanceView] = Field(default_factory=list)
+    manager: Optional[FleetInstanceView] = None
+    workers: List[FleetWorkerView] = Field(default_factory=list)
+    groups: List[Dict[str, Any]] = Field(default_factory=list)
+    tasks: List[FleetTaskView] = Field(default_factory=list)
+    reports: List[FleetReportView] = Field(default_factory=list)
+    workspace_bindings: List[FleetWorkspaceBindingView] = Field(default_factory=list)
+    tool_grants: List[FleetToolGrantView] = Field(default_factory=list)
+    audit_events: List[Dict[str, Any]] = Field(default_factory=list)
+    locks: List[Dict[str, Any]] = Field(default_factory=list)
+    feature_gated: bool = True
+
+
+class FleetSetActiveIdentityRequest(BaseModel):
+    identity_id: str = Field(min_length=1, max_length=128)
+    selected_chat_id: Optional[str] = Field(default=None, max_length=128)
+    source: Optional[str] = Field(default=None, max_length=80)
+
+
+class FleetSetActiveChatRequest(BaseModel):
+    chat_id: Optional[str] = Field(default=None, max_length=128)
+    source: Optional[str] = Field(default=None, max_length=80)
+
+
+class FleetActiveIdentityResponse(BaseModel):
+    active_identity_id: Optional[str] = None
+    active_identity: Optional[FleetIdentityView] = None
+    selected_chat_by_identity: Dict[str, Optional[str]] = Field(default_factory=dict)
+    active_identity_version: int = 0
+    active_identity_updated_at: Optional[str] = None
+
+
+class FleetGroupRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=160)
+    description: Optional[str] = Field(default=None, max_length=1000)
+    worker_ids: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FleetGroupMembershipRequest(BaseModel):
+    worker_ids: List[str] = Field(default_factory=list)
+
+
+class FleetCreateLocalWorkerRequest(BaseModel):
+    display_name: Optional[str] = Field(default=None, max_length=160)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FleetCreateEnrollmentRequest(BaseModel):
+    display_name: Optional[str] = Field(default=None, max_length=160)
+    expires_in_seconds: Optional[int] = Field(default=None, ge=60, le=86400)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FleetCreateEnrollmentResponse(BaseModel):
+    enrollment_id: str
+    enrollment_token: str
+    expires_in_seconds: int
+    display_name: Optional[str] = None
+
+
+class FleetWorkerUpdateRequest(BaseModel):
+    display_name: Optional[str] = Field(default=None, min_length=1, max_length=160)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FleetStopWorkerRequest(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=1000)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FleetContinueWorkerQueueRequest(BaseModel):
+    reviewed_report_id: Optional[str] = Field(default=None, max_length=128)
+    source: str = Field(default="manager", max_length=80)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FleetCompleteEnrollmentRequest(BaseModel):
+    enrollment_token: str = Field(min_length=16, max_length=256)
+    device_name: Optional[str] = Field(default=None, max_length=160)
+    device_platform: Optional[str] = Field(default=None, max_length=80)
+    device_key: Optional[str] = Field(default=None, max_length=256)
+
+
+class FleetCompleteEnrollmentResponse(BaseModel):
+    session_token: str
+    expires_in_seconds: int
+    user: RemoteUserView
+    desktop: RemoteDesktopView
+    worker: FleetWorkerView
+
+
+class FleetAssignTaskRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=20000)
+    source: str = Field(default="manager", max_length=80)
+    target_session_id: Optional[str] = Field(default=None, max_length=128)
+    target_mode: str = Field(default="auto", max_length=40)
+    workspace_id: Optional[str] = Field(default=None, max_length=256)
+    requires_workspace_write: bool = False
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FleetTaskReorderRequest(BaseModel):
+    worker_id: str = Field(min_length=1, max_length=128)
+    task_ids: List[str] = Field(default_factory=list)
+
+
+class FleetTaskRedirectRequest(BaseModel):
+    direction: str = Field(min_length=1, max_length=20000)
+    source: str = Field(default="manager", max_length=80)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FleetReportSearchRequest(BaseModel):
+    query: Optional[str] = Field(default=None, max_length=1000)
+    worker: Optional[str] = Field(default=None, max_length=160)
+    status: Optional[str] = Field(default=None, max_length=80)
+    limit: int = Field(default=20, ge=1, le=200)
+
+
+class FleetTaskStatusRequest(BaseModel):
+    status: Literal["queued", "running", "paused", "blocked", "needs_review", "completed", "failed", "stopped", "canceled"]
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FleetReportRequest(BaseModel):
+    status: str = Field(default="completed", max_length=80)
+    summary: str = Field(min_length=1, max_length=20000)
+    evidence: List[Any] = Field(default_factory=list)
+    artifacts: List[Any] = Field(default_factory=list)
+    blockers: List[Any] = Field(default_factory=list)
+    confidence: Optional[str] = Field(default=None, max_length=80)
+    next_suggested_action: Optional[str] = Field(default=None, max_length=4000)
+    raw: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FleetWorkspaceBindingRequest(BaseModel):
+    workspace_id: str = Field(min_length=1, max_length=256)
+    machine_id: str = Field(min_length=1, max_length=256)
+    local_path: str = Field(min_length=1, max_length=2000)
+    label: Optional[str] = Field(default=None, max_length=256)
+    status: str = Field(default="active", max_length=80)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FleetToolGrantRequest(BaseModel):
+    target_kind: str = Field(default="worker", max_length=40)
+    target_id: str = Field(min_length=1, max_length=128)
+    tool_pack_id: str = Field(min_length=1, max_length=128)
+    reason: str = Field(default="", max_length=1000)
+    task_id: Optional[str] = Field(default=None, max_length=128)
+    requested_turns: int = Field(default=10, ge=1, le=10)
+    requested_by: Optional[str] = Field(default=None, max_length=128)
+
+
+class FleetToolGrantDecisionRequest(BaseModel):
+    approved: bool
+    approved_turns: Optional[int] = Field(default=None, ge=1, le=10)
+    approved_by: Optional[str] = Field(default=None, max_length=128)
+
+
+class FleetDeleteWorkerResponse(BaseModel):
+    ok: bool = True
+    deleted: bool = False
+    worker_id: str
+    wipe_state: bool = True
 
 
 class RemoteDesktopSyncEnvelope(BaseModel):
@@ -771,6 +1444,7 @@ class RemoteDesktopSyncEnvelope(BaseModel):
     session_details: Dict[str, Any] = Field(default_factory=dict)
     jobs: List[Dict[str, Any]] = Field(default_factory=list)
     project_groups: List[Dict[str, Any]] = Field(default_factory=list)
+    sidebar_state: Dict[str, Any] = Field(default_factory=dict)
 
 
 class RemoteDesktopSocketMessage(BaseModel):
@@ -783,3 +1457,12 @@ class RemoteMobileSocketMessage(BaseModel):
     type: str
     session_id: Optional[str] = None
     payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SidebarStateRequest(BaseModel):
+    state: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SidebarStateResponse(BaseModel):
+    state: Dict[str, Any] = Field(default_factory=dict)
+    shared_state: Dict[str, Any] = Field(default_factory=dict)

@@ -186,6 +186,20 @@ class SpawnTool:
             return True
         
         return False
+
+    def stop_all_tasks(self) -> int:
+        """Stop all running sub-agent tasks."""
+        stopped = 0
+        for task_id, task in list(self.tasks.items()):
+            if task.status != SubAgentStatus.RUNNING:
+                continue
+            task.status = SubAgentStatus.STOPPED
+            task.completed_at = time.time()
+            running_task = self._running_tasks.get(task_id)
+            if running_task:
+                running_task.cancel()
+            stopped += 1
+        return stopped
     
     def cleanup_completed(self, max_age_hours: float = 24) -> int:
         """Remove old completed tasks."""

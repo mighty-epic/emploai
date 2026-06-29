@@ -36,7 +36,7 @@ EmploAI is not just a chat bot. It is an agent that can take actions across your
 - Run scheduled work through the same live unified tool path used by the main Telegram agent
 
 ### 🧠 AI, Memory, and Skills
-- Multi-provider LLM support (OpenAI, Anthropic, Google Gemini, xAI, DeepSeek, OpenRouter)
+- Multi-provider LLM support (OpenAI, Anthropic, Google Gemini, xAI, DeepSeek, NVIDIA NIM, OpenRouter)
 - Persistent memory across sessions
 - Context-aware conversations with smart summarization / compression
 - Loadable skills for specialized workflows
@@ -85,9 +85,11 @@ A Textual-based terminal UI for local use.
 | **Google** | Gemini 3 Pro, Gemini 3 Flash, Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.0 Flash, Gemini 1.5 Pro |
 | **xAI** | Grok 4.1 Fast, Grok Code Fast, Grok 4, Grok 3, Grok 2 |
 | **DeepSeek** | DeepSeek Chat, DeepSeek Reasoner |
+| **NVIDIA NIM** | Image-input and forced-tool verified NVIDIA-hosted chat/coding endpoints such as Ministral, Mistral, Llama Vision, Llama 4, MiniMax, Gemma, DiffusionGemma, and Nemotron VL |
 | **OpenRouter** | Any model routed through OpenRouter |
 
 > **Note:** OpenAI and Anthropic models are fully production-tested across all agent modes. Other providers are available but may have limited mode support.
+> Run `python scripts/verify_nvidia_provider.py --skip-chat` to compare the NVIDIA chooser registry with the live catalog, or set `NVIDIA_API_KEY` and omit `--skip-chat` for an authenticated chat smoke.
 
 ---
 

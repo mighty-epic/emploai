@@ -69,7 +69,12 @@ try:
     from telegram_bot.telegram_message_handlers import build_message_handlers
     from telegram_bot.telegram_messaging import safe_edit, safe_reply
     from telegram_bot.restart_runtime import exec_current_process
-    from telegram_bot.telegram_session_state import get_session, set_telegram_application, track_command_usage
+    from telegram_bot.telegram_session_state import (
+        get_session,
+        resolve_telegram_state_user_id,
+        set_telegram_application,
+        track_command_usage,
+    )
 except ImportError:
     from telegram_callback_handlers import build_callback_handlers
     from telegram_chat_flow import run_chat_flow
@@ -81,7 +86,7 @@ except ImportError:
     from telegram_message_handlers import build_message_handlers
     from telegram_messaging import safe_edit, safe_reply
     from restart_runtime import exec_current_process
-    from telegram_session_state import get_session, set_telegram_application, track_command_usage
+    from telegram_session_state import get_session, resolve_telegram_state_user_id, set_telegram_application, track_command_usage
 
 # ======================================================================================
 # 🔒 CONFIGURATION
@@ -195,9 +200,14 @@ async def _safe_start_cron_scheduler() -> None:
 def _extra_bot_tokens_provider() -> list[str]:
     seen = {str(BOT_TOKEN or "").strip()}
     tokens: list[str] = []
+    visited_state_user_ids: set[int] = set()
     for user_id in sorted(security_manager.allowed_user_ids):
+        state_user_id = resolve_telegram_state_user_id(user_id)
+        if state_user_id in visited_state_user_ids:
+            continue
+        visited_state_user_ids.add(state_user_id)
         try:
-            store = TelegramBotConfigStore(user_id=user_id)
+            store = TelegramBotConfigStore(user_id=state_user_id)
             store.ensure_default_from_env(bot_token=BOT_TOKEN)
             for item in store.list_configs():
                 token = str(item.get("bot_token") or "").strip()
@@ -206,7 +216,7 @@ def _extra_bot_tokens_provider() -> list[str]:
                 seen.add(token)
                 tokens.append(token)
         except Exception:
-            logger.exception("Failed to load Telegram bot configs for user %s", user_id)
+            logger.exception("Failed to load Telegram bot configs for state user %s", state_user_id)
     return tokens
 
 
@@ -231,6 +241,9 @@ variant_command = _core_command_handlers["variant_command"]
 model_command = _core_command_handlers["model_command"]
 models_command = _core_command_handlers["models_command"]
 planner_command = _core_command_handlers["planner_command"]
+identity_command = _core_command_handlers["identity_command"]
+manager_command = _core_command_handlers["manager_command"]
+workers_command = _core_command_handlers["workers_command"]
 settings_command = _core_command_handlers["settings_command"]
 workspace_command = _core_command_handlers["workspace_command"]
 
@@ -251,6 +264,13 @@ reassess_command = _task_command_handlers["reassess_command"]
 spawn_command = _task_command_handlers["spawn_command"]
 subagents_command = _task_command_handlers["subagents_command"]
 schedule_command = _task_command_handlers["schedule_command"]
+automations_command = _task_command_handlers["automations_command"]
+automation_run_command = _task_command_handlers["automation_run_command"]
+automation_pause_command = _task_command_handlers["automation_pause_command"]
+automation_resume_command = _task_command_handlers["automation_resume_command"]
+automation_delete_command = _task_command_handlers["automation_delete_command"]
+confirm_command = _task_command_handlers["confirm_command"]
+deny_command = _task_command_handlers["deny_command"]
 jobs_command = _task_command_handlers["jobs_command"]
 job_remove_command = _task_command_handlers["job_remove_command"]
 headless_command = _task_command_handlers["headless_command"]
@@ -358,6 +378,9 @@ command_handlers = {
     "model": model_command,
     "models": models_command,
     "planner": planner_command,
+    "identity": identity_command,
+    "manager": manager_command,
+    "workers": workers_command,
     "settings": settings_command,
     "workspace": workspace_command,
     "continue": continue_command,
@@ -373,6 +396,13 @@ command_handlers = {
     "spawn": spawn_command,
     "subagents": subagents_command,
     "schedule": schedule_command,
+    "automations": automations_command,
+    "automation_run": automation_run_command,
+    "automation_pause": automation_pause_command,
+    "automation_resume": automation_resume_command,
+    "automation_delete": automation_delete_command,
+    "confirm": confirm_command,
+    "deny": deny_command,
     "jobs": jobs_command,
     "job_remove": job_remove_command,
     "headless": headless_command,

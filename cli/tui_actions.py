@@ -17,6 +17,7 @@ from cli.tui_constants import (
     SLASH_SUGGESTION_LIMIT,
     COMMAND_PRIORITIES,
 )
+from shared.model_availability import filter_models_by_provider_access
 
 
 class AgentShellActionsMixin:
@@ -32,7 +33,15 @@ class AgentShellActionsMixin:
         """Get the provider name for a model."""
         config = MODEL_CONFIGS.get(model, {})
         provider = config.get("provider", "unknown")
-        return provider.capitalize()
+        return {
+            "openai": "OpenAI",
+            "anthropic": "Anthropic",
+            "google": "Google Gemini",
+            "xai": "xAI",
+            "deepseek": "DeepSeek",
+            "nvidia": "NVIDIA NIM",
+            "openrouter": "OpenRouter",
+        }.get(provider, provider.capitalize())
 
     def _update_status(self) -> None:
         def do_update():
@@ -172,7 +181,9 @@ class AgentShellActionsMixin:
 
             self._update_status()
 
-        self.push_screen(ModelSelectScreen(AVAILABLE_MODELS, self.processor.current_model, on_select, MODEL_CONFIGS))
+        enabled_providers = set(self.processor.config_manager.get_enabled_providers())
+        available_models = filter_models_by_provider_access(AVAILABLE_MODELS, MODEL_CONFIGS, enabled_providers)
+        self.push_screen(ModelSelectScreen(available_models, self.processor.current_model, on_select, MODEL_CONFIGS))
 
     def action_open_model_picker(self) -> None:
         """Action handler for ctrl+m keybinding."""
@@ -340,17 +351,9 @@ class AgentShellActionsMixin:
             return
 
         def on_save() -> None:
-            # Reload API clients
-            openai_key = self.processor.config_manager.get_api_key("openai")
-            anthropic_key = self.processor.config_manager.get_api_key("anthropic")
+            from cli.chat_processor_core import refresh_llm_clients
 
-            if openai_key:
-                from openai import OpenAI
-                self.processor.client = OpenAI(api_key=openai_key)
-            if anthropic_key:
-                from anthropic import Anthropic
-                self.processor.anthropic = Anthropic(api_key=anthropic_key)
-
+            refresh_llm_clients(self.processor)
             self.notify("Provider configuration saved", timeout=2)
 
         self.push_screen(ProviderConfigScreen(

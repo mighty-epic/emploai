@@ -42,6 +42,18 @@ This document tracks all models supported by the Unified Agent and their configu
 | **DeepSeek** | | | | |
 | `deepseek-chat` | DeepSeek | `deepseek-chat` | 64k | No |
 | `deepseek-reasoner`| DeepSeek | `deepseek-reasoner` | 64k | Yes |
+| **NVIDIA NIM** | | | | |
+| `google/diffusiongemma-26b-a4b-it` | NVIDIA NIM | `google/diffusiongemma-26b-a4b-it` | 128k | No |
+| `google/gemma-3n-e2b-it` | NVIDIA NIM | `google/gemma-3n-e2b-it` | 128k | No |
+| `meta/llama-3.2-11b-vision-instruct` | NVIDIA NIM | `meta/llama-3.2-11b-vision-instruct` | 128k | No |
+| `meta/llama-4-maverick-17b-128e-instruct` | NVIDIA NIM | `meta/llama-4-maverick-17b-128e-instruct` | 128k | No |
+| `minimaxai/minimax-m3` | NVIDIA NIM | `minimaxai/minimax-m3` | 128k | No |
+| `mistralai/ministral-14b-instruct-2512` | NVIDIA NIM | `mistralai/ministral-14b-instruct-2512` | 128k | No |
+| `mistralai/mistral-large-3-675b-instruct-2512` | NVIDIA NIM | `mistralai/mistral-large-3-675b-instruct-2512` | 128k | No |
+| `mistralai/mistral-medium-3.5-128b` | NVIDIA NIM | `mistralai/mistral-medium-3.5-128b` | 128k | No |
+| `mistralai/mistral-small-4-119b-2603` | NVIDIA NIM | `mistralai/mistral-small-4-119b-2603` | 128k | No |
+| `nvidia/nemotron-nano-12b-v2-vl` | NVIDIA NIM | `nvidia/nemotron-nano-12b-v2-vl` | 128k | No |
+| `NVIDIA_MODEL_IDS` | NVIDIA NIM | See `cli/tui_constants.py` for the 10-model image-input and forced-tool verified chooser list filtered from NVIDIA's broader catalog | 128k | No |
 | **OpenRouter / Orb**| | | | |
 | `orb-gpt-4o` | OpenRouter| `openai/gpt-4o` | 128k | No |
 | `orb-claude-3.5-sonnet`| OpenRouter| `anthropic/claude-3.5-sonnet` | 200k | No |

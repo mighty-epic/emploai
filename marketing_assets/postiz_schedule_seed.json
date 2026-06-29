@@ -1,0 +1,508 @@
+{
+  "campaign": "kraitos-rename-launch",
+  "createdAt": "2026-06-09T00:00:00.000Z",
+  "notes": [
+    "Do not POST these payloads until POSTIZ_API_KEY, integration IDs, and uploaded media IDs are confirmed.",
+    "Use GET /public/v1/integrations to replace POSTIZ_*_INTEGRATION_ID placeholders.",
+    "Use POST /public/v1/upload for rendered HyperFrames assets, then replace POSTIZ_KRAITOS_SHORT_MEDIA_ID and POSTIZ_KRAITOS_SHORT_MEDIA_PATH.",
+    "Schedule refreshed on 2026-06-10 so every seeded Postiz date is in the future."
+  ],
+  "tracking": {
+    "campaign": "kraitos_rename_launch",
+    "domainUrls": {
+      "x-rename-thread": "https://kraitos.app/?utm_source=x&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=rename_thread",
+      "linkedin-architecture-post": "https://kraitos.app/?utm_source=linkedin&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=architecture_post",
+      "instagram-launch-reel": "https://kraitos.app/?utm_source=instagram&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=launch_reel",
+      "facebook-launch-reel": "https://kraitos.app/?utm_source=facebook&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=launch_reel",
+      "tiktok-launch-short": "https://kraitos.app/?utm_source=tiktok&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=launch_short",
+      "youtube-launch-short": "https://kraitos.app/?utm_source=youtube&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=launch_short",
+      "x-demo-follow-up": "https://kraitos.app/?utm_source=x&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=demo_follow_up",
+      "linkedin-selfhosted-ops": "https://kraitos.app/?utm_source=linkedin&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=selfhosted_ops"
+    },
+    "projectUrls": {
+      "x-rename-thread": "https://kraitos.app/?utm_source=x&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=rename_thread_project",
+      "linkedin-architecture-post": "https://kraitos.app/?utm_source=linkedin&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=architecture_post_project",
+      "linkedin-selfhosted-ops": "https://kraitos.app/?utm_source=linkedin&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=selfhosted_ops_project",
+      "x-contributor-call": "https://kraitos.app/?utm_source=x&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=contributor_call_feedback"
+    }
+  },
+  "mediaAssets": [
+    {
+      "label": "kraitos-launch-short",
+      "localPath": "C:\\Users\\Magsihim_AI\\Downloads\\hyperframes\\projects\\kraitos-launch-short\\renders\\kraitos_launch_short.mp4",
+      "posterPath": "C:\\Users\\Magsihim_AI\\Downloads\\hyperframes\\projects\\kraitos-launch-short\\renders\\kraitos_launch_short_poster.jpg",
+      "durationSeconds": 20,
+      "resolution": "1080x1920",
+      "status": "rendered-draft",
+      "postizUploadPlaceholders": {
+        "id": "POSTIZ_KRAITOS_SHORT_MEDIA_ID",
+        "path": "POSTIZ_KRAITOS_SHORT_MEDIA_PATH"
+      }
+    }
+  ],
+  "payloads": [
+    {
+      "label": "x-rename-thread",
+      "endpoint": "/public/v1/posts",
+      "method": "POST",
+      "body": {
+        "type": "schedule",
+        "shortLink": false,
+        "date": "2026-06-11T13:00:00.000Z",
+        "tags": [
+          {
+            "value": "kraitos-launch",
+            "label": "Kraitos launch"
+          }
+        ],
+        "posts": [
+          {
+            "integration": {
+              "id": "POSTIZ_X_INTEGRATION_ID"
+            },
+            "value": [
+              {
+                "content": "Kraitos is the new name for EmploAI.\n\nSelf-hosted AI operator layer for real computer tasks across browser, desktop, terminal, memory, and scheduled jobs.\n\nhttps://kraitos.app/?utm_source=x&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=rename_thread",
+                "image": []
+              },
+              {
+                "content": "The core bet: agentic systems need observable control surfaces.\n\nKraitos gives the loop structured tools: file operations, shell commands, browser snapshots, OCR, screenshots, and desktop input.",
+                "image": []
+              },
+              {
+                "content": "Browser automation is layered.\n\nKraitos can use Selenium, but it can also connect to a real Chrome session through a WebSocket extension bridge when tasks depend on active tabs or logged-in state.",
+                "image": []
+              },
+              {
+                "content": "When DOM control is not enough, the system can fall back to desktop observation.\n\nScreenshots plus OCR make failures visible, then the loop can recover through controlled keyboard, mouse, and window tools.",
+                "image": []
+              },
+              {
+                "content": "Trust model: self-host it, inspect it, constrain it.\n\nMemory is Markdown. Logs and screenshots are visible. Authorization is explicit.\n\nProject page:\nhttps://kraitos.app/?utm_source=x&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=rename_thread_project",
+                "image": []
+              }
+            ],
+            "settings": {
+              "__type": "x",
+              "who_can_reply_post": "everyone"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "label": "linkedin-architecture-post",
+      "endpoint": "/public/v1/posts",
+      "method": "POST",
+      "body": {
+        "type": "schedule",
+        "shortLink": false,
+        "date": "2026-06-11T16:00:00.000Z",
+        "tags": [
+          {
+            "value": "kraitos-launch",
+            "label": "Kraitos launch"
+          }
+        ],
+        "posts": [
+          {
+            "integration": {
+              "id": "POSTIZ_LINKEDIN_INTEGRATION_ID"
+            },
+            "value": [
+              {
+                "content": "Kraitos is the new public name for EmploAI.\n\nThe product direction is sharper now: Kraitos is a self-hosted AI operator layer for real computer tasks.\n\nMost agent demos stop at chat or a clean browser sandbox. Kraitos is built around the messier systems problem: how do you let an LLM-driven loop act on a live machine while keeping the work observable, constrained, and recoverable?\n\nThe architecture is intentionally layered:\n\n1. Browser snapshots expose stable element references instead of raw coordinate guessing.\n2. A Chrome extension bridge can connect to a real user session when standard automation is too brittle.\n3. OCR and screenshot fallback keep the loop grounded when DOM-level control fails.\n4. Telegram, desktop, and CLI surfaces route tasks into the same tool-oriented runtime.\n5. Memory and logs stay inspectable in plain files.\n\nDomain:\nhttps://kraitos.app/?utm_source=linkedin&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=architecture_post\n\nProject page during the migration:\nhttps://kraitos.app/?utm_source=linkedin&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=architecture_post_project\n\n#AI #OpenSource #SelfHosted #DevOps #Automation #AgenticAI",
+                "image": []
+              }
+            ],
+            "settings": {
+              "__type": "linkedin"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "label": "instagram-launch-reel",
+      "endpoint": "/public/v1/posts",
+      "method": "POST",
+      "body": {
+        "type": "schedule",
+        "shortLink": false,
+        "date": "2026-06-11T14:00:00.000Z",
+        "tags": [
+          {
+            "value": "kraitos-launch",
+            "label": "Kraitos launch"
+          },
+          {
+            "value": "vertical-video",
+            "label": "Vertical video"
+          }
+        ],
+        "posts": [
+          {
+            "integration": {
+              "id": "POSTIZ_INSTAGRAM_INTEGRATION_ID"
+            },
+            "value": [
+              {
+                "content": "Kraitos, formerly EmploAI.\n\nA desktop AI agent that can operate your computer with you in control: browser, desktop, terminal, memory, and scheduled jobs.\n\nDownload the Windows MSI:\nhttps://kraitos.app/?utm_source=instagram&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=launch_reel\n\n#Kraitos #AIAgent #Automation #SelfHosted #DesktopAI",
+                "image": [
+                  {
+                    "id": "POSTIZ_KRAITOS_SHORT_MEDIA_ID",
+                    "path": "POSTIZ_KRAITOS_SHORT_MEDIA_PATH",
+                    "alt": "Kraitos launch short showing a self-hosted AI operator layer for real computer tasks."
+                  }
+                ]
+              }
+            ],
+            "settings": {
+              "__type": "instagram",
+              "post_type": "post"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "label": "facebook-launch-reel",
+      "endpoint": "/public/v1/posts",
+      "method": "POST",
+      "body": {
+        "type": "schedule",
+        "shortLink": false,
+        "date": "2026-06-11T14:15:00.000Z",
+        "tags": [
+          {
+            "value": "kraitos-launch",
+            "label": "Kraitos launch"
+          },
+          {
+            "value": "vertical-video",
+            "label": "Vertical video"
+          }
+        ],
+        "posts": [
+          {
+            "integration": {
+              "id": "POSTIZ_FACEBOOK_INTEGRATION_ID"
+            },
+            "value": [
+              {
+                "content": "Kraitos is the new name for EmploAI.\n\nIt is a desktop AI agent for real computer work: browser state, desktop input, terminal commands, memory, logs, and scheduled jobs, with the human still in control.\n\nDownload the Windows MSI:\nhttps://kraitos.app/?utm_source=facebook&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=launch_reel",
+                "image": [
+                  {
+                    "id": "POSTIZ_KRAITOS_SHORT_MEDIA_ID",
+                    "path": "POSTIZ_KRAITOS_SHORT_MEDIA_PATH",
+                    "alt": "Kraitos launch short showing a self-hosted AI operator layer for real computer tasks."
+                  }
+                ]
+              }
+            ],
+            "settings": {
+              "__type": "facebook",
+              "post_type": "post"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "label": "tiktok-launch-short",
+      "endpoint": "/public/v1/posts",
+      "method": "POST",
+      "body": {
+        "type": "schedule",
+        "shortLink": false,
+        "date": "2026-06-11T14:30:00.000Z",
+        "tags": [
+          {
+            "value": "kraitos-launch",
+            "label": "Kraitos launch"
+          },
+          {
+            "value": "vertical-video",
+            "label": "Vertical video"
+          }
+        ],
+        "posts": [
+          {
+            "integration": {
+              "id": "POSTIZ_TIKTOK_INTEGRATION_ID"
+            },
+            "value": [
+              {
+                "content": "Kraitos is a desktop AI agent that can operate your computer with you in control. Download the Windows MSI: https://kraitos.app/?utm_source=tiktok&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=launch_short #Kraitos #AIAgent #Automation",
+                "image": [
+                  {
+                    "id": "POSTIZ_KRAITOS_SHORT_MEDIA_ID",
+                    "path": "POSTIZ_KRAITOS_SHORT_MEDIA_PATH",
+                    "alt": "Kraitos launch short showing a self-hosted AI operator layer for real computer tasks."
+                  }
+                ]
+              }
+            ],
+            "settings": {
+              "__type": "tiktok",
+              "title": "Kraitos: desktop AI operator",
+              "privacy_level": "PUBLIC_TO_EVERYONE",
+              "duet": true,
+              "stitch": true,
+              "comment": true,
+              "autoAddMusic": "no",
+              "brand_content_toggle": false,
+              "brand_organic_toggle": false,
+              "content_posting_method": "DIRECT_POST"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "label": "youtube-launch-short",
+      "endpoint": "/public/v1/posts",
+      "method": "POST",
+      "body": {
+        "type": "schedule",
+        "shortLink": false,
+        "date": "2026-06-11T14:45:00.000Z",
+        "tags": [
+          {
+            "value": "kraitos-launch",
+            "label": "Kraitos launch"
+          },
+          {
+            "value": "vertical-video",
+            "label": "Vertical video"
+          }
+        ],
+        "posts": [
+          {
+            "integration": {
+              "id": "POSTIZ_YOUTUBE_INTEGRATION_ID"
+            },
+            "value": [
+              {
+                "content": "Kraitos is the new name for EmploAI: a desktop AI agent that can operate your computer with you in control.\n\nIt connects model reasoning to browser state, desktop input, terminal commands, files, logs, memory, and scheduled jobs.\n\nDownload the Windows MSI:\nhttps://kraitos.app/?utm_source=youtube&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=launch_short\n\n#Shorts #Kraitos #AIAgent #Automation",
+                "image": [
+                  {
+                    "id": "POSTIZ_KRAITOS_SHORT_MEDIA_ID",
+                    "path": "POSTIZ_KRAITOS_SHORT_MEDIA_PATH",
+                    "alt": "Kraitos launch short showing a self-hosted AI operator layer for real computer tasks."
+                  }
+                ]
+              }
+            ],
+            "settings": {
+              "__type": "youtube",
+              "title": "Kraitos: desktop AI operator #Shorts",
+              "type": "public",
+              "selfDeclaredMadeForKids": "no",
+              "tags": [
+                {
+                  "value": "kraitos",
+                  "label": "kraitos"
+                },
+                {
+                  "value": "ai agent",
+                  "label": "ai agent"
+                },
+                {
+                  "value": "desktop automation",
+                  "label": "desktop automation"
+                },
+                {
+                  "value": "self hosted",
+                  "label": "self hosted"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "label": "x-browser-bridge-proof",
+      "endpoint": "/public/v1/posts",
+      "method": "POST",
+      "body": {
+        "type": "schedule",
+        "shortLink": false,
+        "date": "2026-06-12T13:00:00.000Z",
+        "tags": [
+          {
+            "value": "kraitos-launch",
+            "label": "Kraitos launch"
+          }
+        ],
+        "posts": [
+          {
+            "integration": {
+              "id": "POSTIZ_X_INTEGRATION_ID"
+            },
+            "value": [
+              {
+                "content": "Browser automation breaks when the model has to guess.\n\nKraitos builds inspectable browser snapshots with stable refs, then acts on those refs instead of raw coordinates.\n\nThat gives the loop evidence before every click.",
+                "image": []
+              },
+              {
+                "content": "When standard automation is too brittle, Kraitos can use a Chrome extension bridge to talk to a real user session.\n\nActive tabs. Logged-in state. Fewer auth dances.\n\nStill self-hosted. Still inspectable.",
+                "image": []
+              },
+              {
+                "content": "This is the difference between a demo agent and an operator layer:\n\nobserve -> choose a tool -> act -> observe again\n\nThe loop is only useful if every step leaves evidence.",
+                "image": []
+              }
+            ],
+            "settings": {
+              "__type": "x",
+              "who_can_reply_post": "everyone"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "label": "x-observability-security",
+      "endpoint": "/public/v1/posts",
+      "method": "POST",
+      "body": {
+        "type": "schedule",
+        "shortLink": false,
+        "date": "2026-06-15T13:00:00.000Z",
+        "tags": [
+          {
+            "value": "kraitos-launch",
+            "label": "Kraitos launch"
+          }
+        ],
+        "posts": [
+          {
+            "integration": {
+              "id": "POSTIZ_X_INTEGRATION_ID"
+            },
+            "value": [
+              {
+                "content": "A computer-use agent should not be a black box.\n\nKraitos keeps the trust boundary visible:\n\n- self-hosted runtime\n- explicit authorized users\n- plain Markdown memory\n- screenshots and logs\n- fallback paths when tools fail",
+                "image": []
+              }
+            ],
+            "settings": {
+              "__type": "x",
+              "who_can_reply_post": "everyone"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "label": "x-demo-follow-up",
+      "endpoint": "/public/v1/posts",
+      "method": "POST",
+      "body": {
+        "type": "schedule",
+        "shortLink": false,
+        "date": "2026-06-16T13:00:00.000Z",
+        "tags": [
+          {
+            "value": "kraitos-launch",
+            "label": "Kraitos launch"
+          }
+        ],
+        "posts": [
+          {
+            "integration": {
+              "id": "POSTIZ_X_INTEGRATION_ID"
+            },
+            "value": [
+              {
+                "content": "HyperFrames-built launch short.\n\nNext demo: a real browser task with refs, action logs, OCR fallback, and final result.\n\nhttps://kraitos.app/?utm_source=x&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=demo_follow_up",
+                "image": [
+                  {
+                    "id": "POSTIZ_KRAITOS_SHORT_MEDIA_ID",
+                    "path": "POSTIZ_KRAITOS_SHORT_MEDIA_PATH",
+                    "alt": "Kraitos launch short showing a self-hosted AI operator layer for real computer tasks."
+                  }
+                ]
+              }
+            ],
+            "settings": {
+              "__type": "x",
+              "who_can_reply_post": "everyone"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "label": "linkedin-selfhosted-ops",
+      "endpoint": "/public/v1/posts",
+      "method": "POST",
+      "body": {
+        "type": "schedule",
+        "shortLink": false,
+        "date": "2026-06-17T16:00:00.000Z",
+        "tags": [
+          {
+            "value": "kraitos-launch",
+            "label": "Kraitos launch"
+          }
+        ],
+        "posts": [
+          {
+            "integration": {
+              "id": "POSTIZ_LINKEDIN_INTEGRATION_ID"
+            },
+            "value": [
+              {
+                "content": "The most interesting part of Kraitos is not the prompt. It is the operating model.\n\nA useful computer-use system needs more than a model call:\n\n- a controlled tool registry\n- browser and desktop observations\n- recovery paths when automation fails\n- remote control surfaces such as Telegram\n- scheduled workers for recurring tasks\n- logs and memory that humans can inspect\n\nThat is why Kraitos is being positioned as a self-hosted operator layer, not as a chatbot. The model reasons, but the system owns the loop: observe, choose, act, verify, and persist evidence.\n\nDomain: https://kraitos.app/?utm_source=linkedin&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=selfhosted_ops\nProject page during migration: https://kraitos.app/?utm_source=linkedin&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=selfhosted_ops_project",
+                "image": []
+              }
+            ],
+            "settings": {
+              "__type": "linkedin"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "label": "x-contributor-call",
+      "endpoint": "/public/v1/posts",
+      "method": "POST",
+      "body": {
+        "type": "schedule",
+        "shortLink": false,
+        "date": "2026-06-19T13:00:00.000Z",
+        "tags": [
+          {
+            "value": "kraitos-launch",
+            "label": "Kraitos launch"
+          }
+        ],
+        "posts": [
+          {
+            "integration": {
+              "id": "POSTIZ_X_INTEGRATION_ID"
+            },
+            "value": [
+              {
+                "content": "If you're testing self-hosted agents, I want hard feedback on Kraitos.\n\nWhat would make you trust a local operator loop with browser, desktop, terminal, memory, and scheduled jobs?",
+                "image": []
+              },
+              {
+                "content": "Useful feedback:\n\n- bridge safety\n- install docs\n- approval boundaries\n- log retention\n- real-task demos\n\nProject page:\nhttps://kraitos.app/?utm_source=x&utm_medium=social&utm_campaign=kraitos_rename_launch&utm_content=contributor_call_feedback",
+                "image": []
+              }
+            ],
+            "settings": {
+              "__type": "x",
+              "who_can_reply_post": "everyone"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

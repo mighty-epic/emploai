@@ -12,8 +12,11 @@ from cli.session_manager import SessionManager
 from shared.artifact_store import ChatArtifactStore
 from shared.cron_feed_store import CronFeedStore
 from shared.multi_chat_orchestrator import get_user_orchestrator
+from shared.model_availability import enabled_providers_from_env
+from shared.model_defaults import default_model_pair_for_enabled_providers
 from shared.session_timeline import append_timeline_event, create_timeline_event
 from shared.runtime_paths import user_state_root
+from shared.security_policy import normalize_permission_mode
 from shared.tool_packs import default_enabled_tool_packs, normalize_enabled_tool_packs
 
 if TYPE_CHECKING:
@@ -21,6 +24,41 @@ if TYPE_CHECKING:
 
 
 user_sessions: dict[int, Any] | None = None
+EMPTY_SESSION_PRUNE_GRACE_SECONDS = 10.0
+
+
+def is_user_visible_timeline_event(event: Dict[str, Any]) -> bool:
+    metadata = dict(event.get("metadata") or {})
+    visibility = str(metadata.get("visibility") or "").strip().lower()
+    title = str(event.get("title") or "").strip().casefold()
+    kind = str(event.get("kind") or "").strip().casefold()
+    content = str(event.get("content") or "").strip().casefold()
+    source_format = str(event.get("source_format") or "").strip().casefold()
+    if visibility in {"internal", "debug"} or metadata.get("internal") is True:
+        return False
+    if source_format in {"app_internal", "internal"}:
+        return False
+    planner_markers = {
+        "candidate_final_preview",
+        "auto_continue_count",
+        "auto_continue_limit",
+        "continuation_instruction",
+        "retry_instruction",
+        "failed_obligation",
+        "evidence_gap",
+        "must_use_tool",
+    }
+    if planner_markers.intersection(metadata.keys()):
+        return False
+    if "planner verifier" in title or "final quality guard" in title:
+        return False
+    if "planner verifier" in content or "final quality guard" in content:
+        return False
+    if "candidate final:" in content and kind == "runtime":
+        return False
+    if kind in {"planner", "planner_verdict", "auto_continue"}:
+        return False
+    return True
 
 
 def _telegram_session_state_module():
@@ -57,11 +95,115 @@ class AppSessionBridge:
 
     def _load_session(self, session_id: str, *, set_current: bool) -> Session:
         try:
-            return self.session_manager.load_session(session_id, set_current=set_current)
+            session = self.session_manager.load_session(session_id, set_current=set_current)
         except TypeError:
-            return self.session_manager.load_session(session_id)
+            session = self.session_manager.load_session(session_id)
+        changed = False
+        if getattr(session, "account_user_id", None) is None:
+            try:
+                session.account_user_id = int(self.user_id)
+                changed = True
+            except Exception:
+                pass
+        if changed:
+            try:
+                self.session_manager.save_session(session)
+            except Exception:
+                pass
+        return session
+
+    def _session_age_seconds(self, session: Session) -> float:
+        raw_value = str(getattr(session, "updated_at", "") or getattr(session, "created_at", "") or "").strip()
+        if not raw_value:
+            return EMPTY_SESSION_PRUNE_GRACE_SECONDS + 1.0
+        try:
+            parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+        except ValueError:
+            return EMPTY_SESSION_PRUNE_GRACE_SECONDS + 1.0
+        now = datetime.now(parsed.tzinfo) if parsed.tzinfo else datetime.now()
+        return max(0.0, (now - parsed).total_seconds())
+
+    def _session_has_user_visible_content(self, session: Session) -> bool:
+        if getattr(session, "chat_history", None):
+            return True
+        if getattr(session, "event_timeline", None):
+            return True
+        if getattr(session, "task_history", None):
+            return True
+        if getattr(session, "active_task_id", None):
+            return True
+        if bool(getattr(session, "task_board_armed_next_turn", False)):
+            return True
+        if getattr(session, "active_skills", None):
+            return True
+        return self._existing_artifact_count(session.id) > 0
+
+    def _existing_artifact_count(self, session_id: str) -> int:
+        index_path = user_state_root(self.user_id) / "artifacts" / "chats" / str(session_id or "") / "index.json"
+        if not index_path.exists():
+            return 0
+        try:
+            payload = json.loads(index_path.read_text(encoding="utf-8"))
+        except Exception:
+            return 0
+        if not isinstance(payload, dict):
+            return 0
+        items = payload.get("items", [])
+        return len(items) if isinstance(items, list) else 0
+
+    def _should_prune_empty_session(self, session: Session) -> bool:
+        session_id = str(getattr(session, "id", "") or "")
+        if not session_id:
+            return False
+        if session_id in self.orchestrator._running:
+            return False
+        runtime = self._runtime()
+        if runtime and getattr(runtime, "is_processing", False):
+            current_id = None
+            if getattr(runtime, "session_manager", None):
+                current_id = runtime.session_manager.get_current_session_id()
+            if str(current_id or "") == session_id:
+                return False
+        if self._session_has_user_visible_content(session):
+            return False
+        return self._session_age_seconds(session) >= EMPTY_SESSION_PRUNE_GRACE_SECONDS
+
+    def prune_empty_sessions(self) -> List[str]:
+        pruned: List[str] = []
+        runtime = self._runtime()
+        runtime_session_id = str(getattr(getattr(runtime, "session", None), "id", "") or "")
+
+        for summary in list(self.session_manager.list_sessions()):
+            try:
+                session = self._load_session(summary.id, set_current=False)
+            except Exception:
+                continue
+            if not self._should_prune_empty_session(session):
+                continue
+            self.session_manager.delete_session(session.id)
+            self.orchestrator._workers.pop(session.id, None)
+            pruned.append(session.id)
+
+        if runtime and runtime_session_id in pruned and not getattr(runtime, "is_processing", False):
+            next_current_id = self.session_manager.get_current_session_id()
+            if next_current_id:
+                try:
+                    runtime.load_session_by_id(next_current_id)
+                except Exception:
+                    next_current_id = None
+            if not next_current_id:
+                runtime.session = None
+                runtime.chat_history = []
+                runtime.task_history = []
+                runtime.active_task_id = None
+                runtime.task_board_armed_next_turn = False
+                runtime.active_skills = []
+                runtime.last_context_compaction = None
+
+        return pruned
 
     def list_sessions(self) -> List[Session]:
+        self.prune_empty_sessions()
         sessions = []
         for summary in self.session_manager.list_sessions():
             try:
@@ -72,6 +214,7 @@ class AppSessionBridge:
         return sessions
 
     def list_session_summaries(self) -> List[SessionSummary]:
+        self.prune_empty_sessions()
         return list(self.session_manager.list_sessions())
 
     def _artifact_store(self, session_id: str) -> ChatArtifactStore:
@@ -101,6 +244,7 @@ class AppSessionBridge:
         return disk_session if self._session_sort_key(disk_session) >= self._session_sort_key(runtime_session) else runtime_session
 
     def get_current_session(self) -> Optional[Session]:
+        self.prune_empty_sessions()
         current_id = self.session_manager.get_current_session_id()
         disk_session: Optional[Session] = None
         if current_id:
@@ -218,9 +362,17 @@ class AppSessionBridge:
                 if configured is not None and runtime_home is not None and resolved_candidate == runtime_home:
                     return configured
                 return resolved_candidate
-        return configured or self.workspace
+        if configured is not None and runtime_home is not None:
+            try:
+                bridge_workspace = self.workspace.expanduser().resolve()
+            except Exception:
+                bridge_workspace = self.workspace
+            if bridge_workspace == runtime_home:
+                return configured
+        return self.workspace
 
     def _session_defaults(self, runtime: Optional["TelegramSession"]) -> Dict[str, Any]:
+        provider_defaults = default_model_pair_for_enabled_providers(enabled_providers_from_env(os.environ))
         if runtime:
             planner_model = getattr(runtime, "planner_model", None)
             if planner_model is None:
@@ -234,6 +386,7 @@ class AppSessionBridge:
                 "enabled_tool_packs": normalize_enabled_tool_packs(
                     getattr(runtime, "enabled_tool_packs", []) or default_enabled_tool_packs()
                 ) or default_enabled_tool_packs(),
+                "security_permission_mode": getattr(getattr(runtime, "session", None), "security_permission_mode", "standard"),
                 "telegram_bot_config_id": getattr(runtime, "telegram_bot_config_id", None),
                 "headless_eligible": bool(getattr(runtime, "headless_eligible", False)),
             }
@@ -249,20 +402,46 @@ class AppSessionBridge:
                 "enabled_tool_packs": normalize_enabled_tool_packs(
                     getattr(current, "enabled_tool_packs", []) or default_enabled_tool_packs()
                 ) or default_enabled_tool_packs(),
+                "security_permission_mode": getattr(current, "security_permission_mode", "standard"),
                 "telegram_bot_config_id": getattr(current, "telegram_bot_config_id", None),
                 "headless_eligible": bool(getattr(current, "headless_eligible", False)),
             }
 
         return {
             "workspace": self._preferred_workspace(None),
-            "model": "claude-haiku-4.5",
+            "model": provider_defaults.model,
             "variant": "standard",
             "agent_mode": "auto",
-            "planner_model": None,
+            "planner_model": provider_defaults.planner_model,
             "enabled_tool_packs": default_enabled_tool_packs(),
+            "security_permission_mode": "standard",
             "telegram_bot_config_id": self.orchestrator._default_bot_config_id(),
             "headless_eligible": False,
         }
+
+    def _workspace_key(self, workspace: Path | str | None) -> str:
+        if workspace is None:
+            return ""
+        try:
+            return str(Path(workspace).expanduser().resolve()).casefold()
+        except Exception:
+            return str(workspace or "").strip().casefold()
+
+    def _permission_mode_for_workspace(self, workspace: Path) -> Optional[str]:
+        target_key = self._workspace_key(workspace)
+        if not target_key:
+            return None
+        try:
+            summaries = self.session_manager.list_sessions()
+        except Exception:
+            return None
+        for summary in summaries:
+            if self._workspace_key(getattr(summary, "workspace", "")) != target_key:
+                continue
+            permission_mode = str(getattr(summary, "security_permission_mode", "") or "").strip()
+            if permission_mode:
+                return normalize_permission_mode(permission_mode)
+        return None
 
     def create_session(
         self,
@@ -271,24 +450,50 @@ class AppSessionBridge:
         *,
         telegram_bot_config_id: Optional[str] = None,
         enabled_tool_packs: Optional[List[str]] = None,
+        security_permission_mode: Optional[str] = None,
         headless_eligible: bool = False,
+        workspace_id: Optional[str] = None,
+        workspace_binding_status: Optional[str] = None,
+        fleet_identity_id: Optional[str] = None,
+        fleet_identity_role: Optional[str] = None,
+        fleet_worker_id: Optional[str] = None,
     ) -> Session:
         runtime = self._runtime()
         self._persist_runtime_before_switch(runtime)
 
         defaults = self._session_defaults(runtime)
         target_workspace = Path(workspace).expanduser().resolve() if workspace else defaults["workspace"]
-        session = self.session_manager.create_session(
-            name=name,
-            workspace=target_workspace,
-            model=defaults["model"],
-            variant=defaults["variant"],
-            agent_mode=defaults["agent_mode"],
-            planner_model=defaults["planner_model"],
-            enabled_tool_packs=normalize_enabled_tool_packs(enabled_tool_packs or defaults["enabled_tool_packs"]) or default_enabled_tool_packs(),
-            telegram_bot_config_id=telegram_bot_config_id if telegram_bot_config_id is not None else defaults["telegram_bot_config_id"],
-            headless_eligible=bool(headless_eligible if headless_eligible is not None else defaults["headless_eligible"]),
+        inherited_permission_mode = (
+            normalize_permission_mode(security_permission_mode)
+            if security_permission_mode is not None
+            else self._permission_mode_for_workspace(target_workspace) or normalize_permission_mode(defaults["security_permission_mode"])
         )
+        create_kwargs = {
+            "name": name,
+            "workspace": target_workspace,
+            "model": defaults["model"],
+            "variant": defaults["variant"],
+            "agent_mode": defaults["agent_mode"],
+            "planner_model": defaults["planner_model"],
+            "enabled_tool_packs": normalize_enabled_tool_packs(enabled_tool_packs or defaults["enabled_tool_packs"]) or default_enabled_tool_packs(),
+            "security_permission_mode": inherited_permission_mode,
+            "telegram_bot_config_id": telegram_bot_config_id if telegram_bot_config_id is not None else defaults["telegram_bot_config_id"],
+            "headless_eligible": bool(headless_eligible if headless_eligible is not None else defaults["headless_eligible"]),
+        }
+        if workspace_id is not None:
+            create_kwargs["workspace_id"] = workspace_id
+        if workspace_binding_status is not None:
+            create_kwargs["workspace_binding_status"] = workspace_binding_status
+        session = self.session_manager.create_session(**create_kwargs)
+        try:
+            session.account_user_id = int(self.user_id)
+        except Exception:
+            session.account_user_id = None
+        session.fleet_identity_id = str(fleet_identity_id or "").strip() or None
+        session.fleet_identity_role = str(fleet_identity_role or "").strip() or None
+        session.fleet_worker_id = str(fleet_worker_id or "").strip() or None
+        if session.account_user_id is not None or session.fleet_identity_id or session.fleet_identity_role or session.fleet_worker_id:
+            self.session_manager.save_session(session)
 
         self.session_manager.set_current_session(session.id)
         if runtime and not getattr(runtime, "is_processing", False):
@@ -453,6 +658,14 @@ class AppSessionBridge:
             "workspace": session.workspace,
             "latest_preview": latest_preview,
             "origin_channels": origin_channels,
+            "security_permission_mode": getattr(session, "security_permission_mode", "standard"),
+            "workspace_id": getattr(session, "workspace_id", None),
+            "workspace_binding_status": getattr(session, "workspace_binding_status", None),
+            "fleet_identity_id": getattr(session, "fleet_identity_id", None),
+            "fleet_identity_role": getattr(session, "fleet_identity_role", None),
+            "fleet_worker_id": getattr(session, "fleet_worker_id", None),
+            "account_user_id": getattr(session, "account_user_id", None),
+            "account_email": getattr(session, "account_email", None),
             **self._artifact_meta(session.id),
             **self.orchestrator._session_summary_live_fields(session),
         }
@@ -468,6 +681,14 @@ class AppSessionBridge:
             "workspace": session.workspace,
             "latest_preview": getattr(session, "latest_preview", None),
             "origin_channels": list(getattr(session, "origin_channels", []) or []),
+            "security_permission_mode": getattr(session, "security_permission_mode", "standard"),
+            "workspace_id": getattr(session, "workspace_id", None),
+            "workspace_binding_status": getattr(session, "workspace_binding_status", None),
+            "fleet_identity_id": getattr(session, "fleet_identity_id", None),
+            "fleet_identity_role": getattr(session, "fleet_identity_role", None),
+            "fleet_worker_id": getattr(session, "fleet_worker_id", None),
+            "account_user_id": getattr(session, "account_user_id", None),
+            "account_email": getattr(session, "account_email", None),
             **self._artifact_meta(session.id),
             **self.orchestrator._session_summary_live_fields(session),
         }
@@ -486,12 +707,24 @@ class AppSessionBridge:
             "variant": session.variant,
             "planner_model": session.planner_model,
             "agent_mode": session.agent_mode,
+            "security_permission_mode": getattr(session, "security_permission_mode", "standard"),
             "workspace": session.workspace,
+            "workspace_id": getattr(session, "workspace_id", None),
+            "workspace_binding_status": getattr(session, "workspace_binding_status", None),
             "messages": [self.build_message_view(m) for m in session.chat_history],
-            "timeline_events": [self.build_timeline_event_view(item) for item in session.event_timeline],
+            "timeline_events": [
+                self.build_timeline_event_view(item)
+                for item in session.event_timeline
+                if is_user_visible_timeline_event(item)
+            ],
             "task_board": self.task_board_view(session),
             "completed_task_boards": self.completed_task_boards_view(session),
             "task_board_armed_next_turn": bool(getattr(session, "task_board_armed_next_turn", False)),
+            "fleet_identity_id": getattr(session, "fleet_identity_id", None),
+            "fleet_identity_role": getattr(session, "fleet_identity_role", None),
+            "fleet_worker_id": getattr(session, "fleet_worker_id", None),
+            "account_user_id": getattr(session, "account_user_id", None),
+            "account_email": getattr(session, "account_email", None),
             **self._artifact_meta(session.id),
             **self.orchestrator._session_summary_live_fields(session),
         }
@@ -588,8 +821,11 @@ class AppSessionBridge:
 
     def create_telegram_bot_config(self, *, label: str, bot_token: str) -> Dict[str, Any]:
         created = self.orchestrator.telegram_bots.create_config(label=label, bot_token=bot_token)
+        for item in self.orchestrator.telegram_bots.list_public_configs():
+            if item["id"] == created["id"]:
+                return item
         public = dict(created)
-        public["bot_token"] = self.orchestrator.telegram_bots.list_public_configs()[-1]["bot_token"]
+        public["bot_token"] = ""
         return public
 
     def update_telegram_bot_config(
@@ -629,8 +865,40 @@ class AppSessionBridge:
         self._reload_current_runtime_session_if_idle(session_id)
         return session
 
+    def restore_telegram_bot_parenting(self, assignments: Dict[str, str]) -> Dict[str, Any]:
+        valid_bot_ids = {
+            str(item.get("id") or "").strip()
+            for item in self.orchestrator.telegram_bots.list_configs()
+            if str(item.get("id") or "").strip()
+        }
+        if not valid_bot_ids:
+            return {"updated": 0, "skipped": len(assignments or {})}
+
+        updated = 0
+        skipped = 0
+        for session in self.list_sessions():
+            session_id = str(getattr(session, "id", "") or "").strip()
+            if not session_id:
+                continue
+            bot_config_id = str(dict(assignments or {}).get(session_id) or "").strip()
+            if not bot_config_id or bot_config_id not in valid_bot_ids:
+                skipped += 1
+                continue
+            if str(getattr(session, "telegram_bot_config_id", "") or "") == bot_config_id:
+                continue
+            session.telegram_bot_config_id = bot_config_id
+            self.session_manager.save_session(session)
+            self._reload_current_runtime_session_if_idle(session_id)
+            updated += 1
+        return {"updated": updated, "skipped": skipped}
+
     def update_session_headless_eligible(self, session_id: str, headless_eligible: bool) -> Session:
         session = self.orchestrator.update_session_headless_eligible(session_id, headless_eligible)
+        self._reload_current_runtime_session_if_idle(session_id)
+        return session
+
+    def update_session_security_permission_mode(self, session_id: str, security_permission_mode: str) -> Session:
+        session = self.orchestrator.update_session_security_permission_mode(session_id, security_permission_mode)
         self._reload_current_runtime_session_if_idle(session_id)
         return session
 
@@ -679,6 +947,7 @@ class AppSessionBridge:
                 "origin_workspace": getattr(job, "origin_workspace", None),
                 "origin_model": getattr(job, "origin_model", None),
                 "origin_enabled_tool_packs": list(getattr(job, "origin_enabled_tool_packs", []) or []),
+                "one_time": bool(getattr(job, "one_time", False)),
             })
         jobs.sort(key=lambda item: (item.get("next_run_at") is None, item.get("next_run_at") or ""))
         return jobs

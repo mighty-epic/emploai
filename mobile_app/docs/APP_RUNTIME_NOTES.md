@@ -1,77 +1,49 @@
-# EmploAI App Runtime Notes
+# Kraitos App Runtime Notes
 
-## Newly confirmed decisions
-- Android package id is confirmed as `com.emploai.app`.
-- Voice input is required in v1.
-- For voice transcription, optimize for responsiveness, but prefer VPS-side handling in v1 if it is significantly easier and more reliable to ship.
-- File intake in v1 should support:
-  - camera capture
-  - gallery/media selection
-  - document picking
-- Telegram should visibly label app-originated sessions/content when shown in Telegram UX.
-- Operational preference: running `telegram_agent.py` should remain the main entrypoint for the whole EmploAI runtime.
+This document reflects the current code. Older notes that describe a
+Telegram-launched app backend or mobile voice-first v1 should be treated as
+history unless they match `ARCHITECTURE.md` and `REMOTE_CONTROL_PLANE.md`.
 
-## Recommended implementation decisions
-### Voice path
-Updated requirement:
-- voice input must feel immediate and live
-- user should see transcription appear while speaking
-- final send should happen on pause or explicit send, not only after a fully uploaded recording is processed
+## Current runtime decisions
+- Android package id: `app.kraitos.mobile`.
+- App display name: `Kraitos`.
+- Release API base URL: `https://api.kraitos.app`.
+- Mobile v1 is text-first in `remote_cloud` mode.
+- Mobile voice capture is intentionally disabled in remote-cloud mode for v1.
+- The desktop app owns actual execution on the user's machine.
+- The public control plane owns account auth, pairing, shared mirrored state,
+  fleet metadata, and realtime fan-out.
+- The desktop connects outward to the control plane through the remote desktop
+  bridge instead of requiring the phone to reach a LAN-local backend.
 
-Recommended v1 path:
-- capture microphone audio in the app continuously while press-to-talk or live-mic mode is active
-- stream audio frames to the VPS over a dedicated WebSocket
-- run streaming STT on the VPS
-- emit partial transcript events back to the app in real time
-- finalize the current utterance on pause or send
-- inject the finalized transcript into the shared session as the actual user message
+## File/media path
+The mobile client supports three intake paths:
+- camera capture
+- gallery/media selection
+- document picking
 
-Why this is now the best fit:
-- preserves the fast "phone-call-like" experience you want
-- keeps heavy STT infra centralized on the VPS
-- avoids having to ship and tune an on-device Android STT stack immediately
-- supports future interruption/queueing semantics more naturally than batch-upload transcription
+The backend normalizes uploads into chat/session artifacts so mobile, desktop,
+and Telegram-era surfaces can represent the same underlying content.
 
-Future upgrade path:
-- optionally add on-device interim STT later if we want even lower perceived latency
-- keep the same chat/session contract so the app can use local or VPS streaming STT behind the same UI
+## Voice path
+Current v1 behavior:
+- Mobile remote-cloud voice is disabled by design.
+- Desktop voice uses the Electron renderer microphone path:
+  `renderer getUserMedia -> /ws/app/voice -> local backend voice runtime`.
+- Managed voice input/output packs are installed and selected from the desktop
+  app, not bundled into the mobile APK.
 
-### File/media path
-The app client should support three entry paths:
-- take photo with camera
-- pick image/video from gallery where allowed
-- pick general documents/files
+Future mobile voice work should preserve the same chat/session contract, but it
+is not part of the current remote-cloud v1 behavior.
 
-The backend should normalize uploads into a shared attachment model so Telegram and app can both represent them.
+## Runtime/deployment direction
+Current public mobile deployment:
+- FastAPI control plane runs on the VPS behind HTTPS/WSS.
+- Desktop signs into the same account and keeps a persistent outbound websocket.
+- Mobile signs into the account, completes pairing, and sends actions through
+  the control plane to the paired desktop.
 
-### Telegram labeling behavior
-When Telegram displays app-originated content, show a visible origin label such as:
-- `[App]`
-- `from app`
-- `voice from app`
-- `file uploaded from app`
-
-Exact wording can be finalized later, but origin labeling is required.
-
-### Runtime/deployment direction
-Recommended v1 operational model:
-- keep a single primary launch path via `telegram_agent.py`
-- if `channels.app.enabled` is true, start a lightweight embedded FastAPI/uvicorn service alongside the Telegram runtime
-- do not implement on-demand lazy boot first
-
-Why:
-- much simpler and more reliable than demand-detection startup
-- avoids missed wakeups, race conditions, and pairing failures
-- app backend idle cost should be small if implemented as a lightweight HTTP/WS service
-- can be refactored later if actual resource usage proves meaningful
-
-## Important warning on lazy-start idea
-Starting the app backend only when an external detector notices app usage sounds attractive, but creates problems:
-- the phone cannot contact a backend that is not already listening
-- QR pairing and websocket reconnects become more fragile
-- wake-on-demand usually requires another always-on component anyway
-
-So for v1, the practical version of `telegram_agent.py runs everything` is:
-- Telegram runtime starts as now
-- app backend also starts only when the app flag is enabled
-- both remain additive
+Current local/legacy compatibility:
+- Local app APIs, Telegram runtime paths, and direct backend modes still exist
+  for development and backward compatibility.
+- They are not the primary mobile product architecture.

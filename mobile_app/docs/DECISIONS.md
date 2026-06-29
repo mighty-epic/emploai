@@ -1,35 +1,38 @@
-# EmploAI App Decisions
+# Kraitos App Decisions
 
 ## Confirmed product decisions
-- Scope: personal app; each person would connect only to their own EmploAI instance.
+- Scope: account-owned remote companion and fleet control for the user's own
+  desktop/workers.
 - Platform priority: Android first.
-- Connectivity target: remote access early, connecting to EmploAI on the VPS.
+- Connectivity target: public HTTPS/WSS control plane at the configured API
+  base, currently `https://api.kraitos.app` for release builds.
 - Push notifications: not required for v1, but architecture must leave room for them.
 - Must-have v1 features:
+  - account sign-in/signup
+  - desktop pairing
   - live chat
   - streamed tool logs
   - jobs/scheduler interface
   - file upload
-  - voice input
   - session history
+  - fleet/task visibility
 - Session relationship: app should share the same underlying sessions/history as Telegram, while handling channel-format mismatch cleanly.
-- Pairing/auth UX: QR code preferred, but it must still be secure.
-- App naming direction: "EmploAI App" or similar descriptive name.
+- Pairing/auth UX: short-lived desktop pairing token under a signed-in account.
+- App naming/package defaults are now code-backed:
+  - display name: `Kraitos`
+  - Android package: `app.kraitos.mobile`
+  - Expo slug: `emploai-app`
 
 ## Architectural implications
 - The app backend should be treated as a second delivery channel, not a second agent core.
 - Shared sessions mean the backend must add channel metadata rather than splitting history stores.
 - Telegram and app rendering should diverge at presentation time, not storage time.
-- Remote access early means HTTPS, token-based auth, secure WebSocket auth, and VPS-friendly deployment need to be first-class from the start.
-- QR pairing should issue a short-lived signed pairing token, not embed a long-lived secret directly.
-- Voice input must feel live and low-latency, not like delayed file upload followed by blocking transcription.
-- The voice path should support partial/interim transcription while the user is still speaking, then finalize and send on pause or explicit send.
+- Remote access means HTTPS, token-based auth, secure WebSocket auth, and VPS-friendly deployment are first-class.
+- Pairing should issue a short-lived token, not embed a long-lived secret directly.
+- Mobile remote-cloud v1 is text-first. Voice capture remains intentionally disabled on mobile until the architecture is expanded for it.
+- Desktop remains the execution authority for local files, tools, screen/vision, browser/desktop control, and agent turns.
+- The control plane remains the shared-state authority for account identity, device pairing, mirrored session state, fleet metadata, and realtime fan-out.
 - Future conversational interruption and continuation should be planned into the event model even if not fully implemented in v1.
-
-## Recommended naming/package defaults
-- App display name: `EmploAI App`
-- Android package: `com.emploai.app`
-- Expo/EAS slug suggestion: `emploai-app`
 
 ## Session compatibility model
 Use one shared session store per user, but store message metadata with fields like:

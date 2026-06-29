@@ -172,8 +172,11 @@ async def run_chat_flow(update, context, session, user_message: str, is_retry: b
     if is_retry and session.analytics_tracker:
         session.analytics_tracker.track_message(session.user_id, len(user_message), has_attachment=False)
 
-    await context.bot.send_chat_action(chat_id=session.user_id, action=ChatAction.TYPING)
-    await context.bot.send_chat_action(chat_id=session.user_id, action=ChatAction.TYPING)
+    try:
+        await context.bot.send_chat_action(chat_id=session.user_id, action=ChatAction.TYPING)
+        await context.bot.send_chat_action(chat_id=session.user_id, action=ChatAction.TYPING)
+    except Exception:
+        logger.debug("Unable to send Telegram typing action before turn", exc_info=True)
 
     screen_observation_turn = is_screen_observation_message(user_message)
     task_like_turn = screen_observation_turn or is_task_like_message(user_message)

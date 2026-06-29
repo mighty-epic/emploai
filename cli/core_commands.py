@@ -6,8 +6,10 @@ from cli.tui_constants import (
     AGENT_MODE_LABELS,
     AGENT_MODES,
     AVAILABLE_MODELS,
+    MODEL_CONFIGS,
     MODEL_CONTEXT_SIZES,
 )
+from shared.model_availability import filter_models_by_provider_access
 
 
 def help(context, args, result_cls):
@@ -99,10 +101,16 @@ def history(context, args, result_cls):
 
 
 def model(context, args, result_cls):
+    enabled_providers = set(context.config_manager.get_enabled_providers())
+    available_models = filter_models_by_provider_access(AVAILABLE_MODELS, MODEL_CONFIGS, enabled_providers)
+
     if args:
         new_model = args[0]
-        if new_model not in AVAILABLE_MODELS:
+        if new_model not in MODEL_CONFIGS:
             return result_cls(False, f"Unknown model: {new_model}.")
+        if new_model not in available_models:
+            provider = MODEL_CONFIGS.get(new_model, {}).get("provider", "unknown")
+            return result_cls(False, f"{provider} API key is not configured for model: {new_model}.")
         context.current_model = new_model
         context.max_tokens = MODEL_CONTEXT_SIZES.get(new_model, 128000)
         # Sync variant when model changes

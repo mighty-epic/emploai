@@ -252,7 +252,8 @@ class ProviderConfigScreen(Screen):
     def _test_key(self, provider_id: str, key: str) -> tuple[bool, str]:
         """Test an API key.
         
-        For now, just does basic validation. Full test would require API calls.
+        Providers with a live validation path use it; otherwise this falls back
+        to the same basic checks as the existing setup flow.
         """
         provider_info = next((p for p in PROVIDERS if p["id"] == provider_id), None)
         if not provider_info:
@@ -267,6 +268,9 @@ class ProviderConfigScreen(Screen):
         # Minimum length check
         if len(key) < 10:
             return False, "Key too short"
+
+        if provider_id in {"openai", "google", "nvidia"}:
+            return self.config_manager.test_api_key(provider_id, key_override=key)
         
         return True, "OK"
     

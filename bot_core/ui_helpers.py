@@ -3,10 +3,13 @@ Thinking Mode Support for Telegram Agent
 Visualizes the model's reasoning process
 """
 
+from __future__ import annotations
+
 import re
-from typing import Optional, List, Dict, Any
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ParseMode
+from typing import TYPE_CHECKING, Optional, List, Dict, Any
+
+if TYPE_CHECKING:
+    from telegram import InlineKeyboardMarkup, Update
 
 
 class ThinkingModeVisualizer:
@@ -177,6 +180,8 @@ class InlineKeyboardHelper:
         Args:
             actions: List of dicts with 'text', 'callback_data', and optionally 'url'
         """
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
         keyboard = []
         row = []
         
@@ -272,6 +277,8 @@ class SkillTriggerFeedback:
         if ephemeral and update.effective_message:
             # Send as separate small notification
             try:
+                from telegram.constants import ParseMode
+
                 await update.effective_message.reply_text(
                     notification,
                     parse_mode=ParseMode.MARKDOWN

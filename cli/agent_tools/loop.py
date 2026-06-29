@@ -10,6 +10,7 @@ from cli.tui_constants import ChatMessage, SYSTEM_PROMPT, RESPONSE_MAX_TOKENS
 from .adapters import (
     build_tools_for_provider,
     canonical_tool_names,
+    get_tool_names,
     normalize_provider,
     validate_provider_tool_names,
 )
@@ -21,6 +22,14 @@ from .final_quality_guard import (
     judge_final_quality_with_nli,
     max_auto_continues,
 )
+from cli.agent_tools.gemini_client import is_openai_compatible_client
+from shared.provider_errors import (
+    PROVIDER_INPUT_REJECTED,
+    PROVIDER_SAFETY_REJECTION,
+    normalize_provider_error,
+    provider_blocker_message,
+)
+from shared.security_policy import redact_json, redact_text
 
 # Try to import verbose tool logger (only available in telegram_bot context)
 VERBOSE_LOGGING = False
@@ -150,6 +159,25 @@ def _analyze_image_sidecar(
             if text:
                 return text
         elif provider == "google":
+            if is_openai_compatible_client(client):
+                response = client.chat.completions.create(
+                    model=model_id,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_data}"}},
+                            ],
+                        }
+                    ],
+                    max_tokens=300,
+                )
+                choice = response.choices[0].message if getattr(response, "choices", None) else None
+                text = str(getattr(choice, "content", "") or "").strip()
+                if text:
+                    return text
+                return "Vision analysis unavailable for this image."
             from PIL import Image
 
             image = Image.open(io.BytesIO(base64.b64decode(image_data)))
@@ -195,7 +223,14 @@ def _analyze_image_sidecar(
                 if text:
                     return text
     except Exception as exc:
-        log(f"  ↪ Vision sidecar failed for {tool_name}: {exc}")
+        info = normalize_provider_error(exc, payload_kind="image")
+        log(f"  ↪ Vision sidecar failed for {tool_name}: {info.error_type}")
+        if info.error_type in {PROVIDER_SAFETY_REJECTION, PROVIDER_INPUT_REJECTED}:
+            return (
+                "Vision analysis was rejected by the provider. "
+                "The screenshot/image was not sent back into model context; use OCR, DOM text, "
+                "or another non-image observation route if more verification is needed."
+            )
 
     return (
         "Vision analysis unavailable for this image. "
@@ -268,6 +303,11 @@ def _responses_input_from_messages(messages: List[Dict[str, Any]]) -> tuple[str,
     return "\n\n".join(part for part in instructions_parts if part), input_items
 
 
+def _joined_system_text(system_parts: List[str]) -> Optional[str]:
+    joined = "\n\n".join(part for part in system_parts if str(part or "").strip()).strip()
+    return joined or None
+
+
 def _response_item_to_dict(item: Any) -> Any:
     if item is None:
         return None
@@ -301,7 +341,7 @@ def _truncate_lines(value: str, *, max_lines: int, max_chars: int) -> str:
 
 def _summarize_tool_result_for_model(tool_name: str, result: Any) -> str:
     if isinstance(result, dict):
-        safe = dict(result)
+        safe = redact_json(dict(result))
         for key in ("image_base64", "base64", "image_data", "data"):
             if key in safe and isinstance(safe[key], str) and len(safe[key]) > 500:
                 safe[key] = f"[IMAGE_DATA elided: {len(safe[key])} chars]"
@@ -359,6 +399,7 @@ def _summarize_tool_result_for_model(tool_name: str, result: Any) -> str:
         return _truncate_text(json.dumps(safe, ensure_ascii=False, default=str), max_chars=5000)
 
     if isinstance(result, str):
+        result = redact_text(result)
         if tool_name == "ocr_screen":
             return _truncate_lines(result, max_lines=60, max_chars=3500)
         if tool_name in {"browser_snapshot", "observe_browser"}:
@@ -367,24 +408,218 @@ def _summarize_tool_result_for_model(tool_name: str, result: Any) -> str:
             return _truncate_lines(result, max_lines=30, max_chars=2500)
         return _truncate_text(result, max_chars=4000)
 
-    return _truncate_text(json.dumps(result, ensure_ascii=False, default=str), max_chars=4000)
+    return _truncate_text(json.dumps(redact_json(result), ensure_ascii=False, default=str), max_chars=4000)
+
+
+def _fallback_final_from_tool_trace(tool_trace: List[Dict[str, Any]]) -> str:
+    if not tool_trace:
+        return ""
+    last = tool_trace[-1]
+    tool_name = str(last.get("tool") or "tool").strip() or "tool"
+    result = last.get("result")
+    result_text = ""
+    if isinstance(result, str):
+        raw = result.strip()
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            for key in ("vision_summary", "description", "summary", "text", "message", "output", "error"):
+                value = str(parsed.get(key) or "").strip()
+                if value:
+                    result_text = value
+                    break
+        if not result_text:
+            result_text = raw
+    elif isinstance(result, dict):
+        for key in ("vision_summary", "description", "summary", "text", "message", "output", "error"):
+            value = str(result.get(key) or "").strip()
+            if value:
+                result_text = value
+                break
+        if not result_text:
+            result_text = json.dumps(result, ensure_ascii=False, default=str)
+    else:
+        result_text = str(result or "").strip()
+
+    if result_text:
+        if tool_name == "describe_screen":
+            return f"I looked at the screen. {_truncate_text(result_text, max_chars=900)}"
+        return f"I used `{tool_name}`. {_truncate_text(result_text, max_chars=900)}"
+    return f"I used `{tool_name}`, but it did not return any displayable output."
+
+
+_RUNTIME_EPHEMERAL_SYSTEM_PREFIXES = (
+    "# MANAGED TASK BOARD RUNTIME",
+    "# ACTIVE MANAGED TASK BOARD",
+    "TASK BOARD BLOCKED WAITING USER:",
+    "CURRENT TASK CONTRACT (fresh before this model turn):",
+    "LIVE DESKTOP WINDOW SNAPSHOT (fresh before this model turn):",
+    "CHAT ARTIFACT INDEX (current chat only):",
+    "RELEVANT CHAT ARTIFACT EXCERPTS:",
+)
+
+
+def _max_auto_continues_for_request(user_request: str) -> int:
+    base = max_auto_continues()
+    text = str(user_request or "").lower()
+    coding_markers = (
+        "code",
+        "coding",
+        "script",
+        "app",
+        "application",
+        "electron",
+        "website",
+        "web app",
+        "server",
+        "build",
+        "compile",
+        "run",
+        "launch",
+        "start",
+        "install",
+        "npm",
+        "node",
+        "package",
+        "test",
+        "debug",
+        "implement",
+        "fix",
+    )
+    if any(marker in text for marker in coding_markers):
+        return max(base, 5)
+    return base
+
+
+def _is_continuation_request_text(text: str) -> bool:
+    normalized = " ".join(
+        str(text or "")
+        .strip()
+        .lower()
+        .replace(".", " ")
+        .replace("!", " ")
+        .replace("?", " ")
+        .split()
+    )
+    return normalized in {
+        "continue",
+        "keep going",
+        "go on",
+        "carry on",
+        "resume",
+        "proceed",
+        "try again",
+        "continue please",
+        "keep going please",
+    }
+
+
+def _is_ephemeral_runtime_context(message: Dict[str, Any]) -> bool:
+    if message.get("role") != "system":
+        return False
+    content = message.get("content")
+    if not isinstance(content, str):
+        return False
+    stripped = content.lstrip()
+    return any(stripped.startswith(prefix) for prefix in _RUNTIME_EPHEMERAL_SYSTEM_PREFIXES)
+
+
+def _drop_prior_ephemeral_runtime_context(messages: List[Dict[str, Any]]) -> None:
+    if not messages:
+        return
+    retained: List[Dict[str, Any]] = []
+    for index, message in enumerate(messages):
+        if index > 0 and _is_ephemeral_runtime_context(message):
+            continue
+        retained.append(message)
+    if len(retained) != len(messages):
+        messages[:] = retained
+
+
+def _message_text(message: Dict[str, Any]) -> str:
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [
+            str(part.get("text", ""))
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        ]
+        return " ".join(part for part in parts if part).strip()
+    return ""
 
 
 def _latest_user_text(messages: List[Dict[str, Any]]) -> str:
     for message in reversed(messages):
         if message.get("role") != "user":
             continue
-        content = message.get("content", "")
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            parts = [
-                str(part.get("text", ""))
-                for part in content
-                if isinstance(part, dict) and part.get("type") == "text"
-            ]
-            return " ".join(part for part in parts if part).strip()
+        text = _message_text(message)
+        if text:
+            return text
     return ""
+
+
+def _quality_guard_objective_from_messages(messages: List[Dict[str, Any]]) -> str:
+    latest = _latest_user_text(messages)
+    if latest and not _is_continuation_request_text(latest):
+        return latest
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+        text = _message_text(message).strip()
+        if text and not _is_continuation_request_text(text):
+            return text
+    return latest
+
+
+def _quality_guard_should_verify_request(user_request: str) -> bool:
+    from shared.task_intent import request_requires_tool_evidence
+
+    return request_requires_tool_evidence(user_request)
+
+
+def _nvidia_forced_tool_choice(
+    *,
+    provider: str,
+    user_request: str,
+    provider_tool_names: set[str],
+    tool_trace: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Force explicitly named NVIDIA tools without changing normal auto tool use."""
+    if provider != "nvidia" or not str(user_request or "").strip():
+        return None
+
+    request_text = f" {str(user_request).lower()} "
+    requested: List[Tuple[int, str]] = []
+    for name in sorted(provider_tool_names):
+        normalized_name = str(name or "").strip()
+        if not normalized_name:
+            continue
+        aliases = {
+            normalized_name.lower(),
+            normalized_name.replace("_", " ").lower(),
+            normalized_name.replace("_", "-").lower(),
+        }
+        positions = [request_text.find(f" {alias} ") for alias in aliases if alias]
+        positions = [position for position in positions if position >= 0]
+        if positions:
+            requested.append((min(positions), normalized_name))
+
+    if not requested:
+        return None
+
+    completed_tools = {
+        str(entry.get("tool") or "").strip()
+        for entry in tool_trace
+        if isinstance(entry, dict)
+    }
+    for _position, name in sorted(requested):
+        if name not in completed_tools:
+            return {"type": "function", "function": {"name": name}}
+    return None
 
 
 def _coerce_final_quality_verdict(value: Any) -> FinalQualityVerdict:
@@ -428,17 +663,23 @@ def run_tool_loop(
     begin_stream = callbacks.get("begin_stream", lambda *args: None)
     finish_stream = callbacks.get("finish_stream", lambda *args: None)
     provider = normalize_provider(provider)
+    google_uses_openai_compat = provider == "google" and is_openai_compatible_client(client)
+    tool_provider = "openai" if google_uses_openai_compat else provider
     
     max_turns = 100
     total_usage = {"input": 0, "output": 0}
     final_response = ""
     assistant_text = ""
-    original_user_request = _latest_user_text(messages)
+    original_user_request = _quality_guard_objective_from_messages(messages)
     tool_trace: List[Dict[str, Any]] = []
     auto_continue_count = 0
+    empty_post_tool_continue_count = 0
+    empty_post_tool_continue_limit = 1
     quality_guard_enabled = final_quality_guard_enabled()
     quality_guard_mode = final_quality_guard_mode()
-    auto_continue_limit = max_auto_continues() if quality_guard_enabled else 0
+    if quality_guard_enabled and not _quality_guard_should_verify_request(original_user_request):
+        quality_guard_enabled = False
+    auto_continue_limit = _max_auto_continues_for_request(original_user_request) if quality_guard_enabled else 0
     must_use_tool_after_retry = False
     retry_tool_trace_len = 0
     
@@ -453,6 +694,7 @@ def run_tool_loop(
         messages.append({"role": "system", "content": effective_system})
 
     for turn in range(max_turns):
+        _drop_prior_ephemeral_runtime_context(messages)
         before_model_turn_cb = callbacks.get("before_model_turn")
         if before_model_turn_cb:
             injected_messages = before_model_turn_cb(turn, messages)
@@ -481,7 +723,14 @@ def run_tool_loop(
                 final_response = assistant_text + "\n\n[Interrupted by user]"
                 break
             
-        tools = build_tools_for_provider(provider, extra_tools, base_tools=base_tools)
+        tools = build_tools_for_provider(tool_provider, extra_tools, base_tools=base_tools)
+        provider_tool_names = set(get_tool_names(tools))
+        forced_tool_choice = _nvidia_forced_tool_choice(
+            provider=provider,
+            user_request=original_user_request,
+            provider_tool_names=provider_tool_names,
+            tool_trace=tool_trace,
+        )
         canonical_source_tools = list(base_tools) if base_tools is not None else list(CLI_AGENT_TOOLS)
         canonical_names = canonical_tool_names(canonical_source_tools)
         canonical_names.update(canonical_tool_names(extra_tools or []))
@@ -546,7 +795,7 @@ def run_tool_loop(
         try:
             if provider == "anthropic":
                 # Convert ALL messages in history to Anthropic format
-                system_text = ""
+                system_parts = []
                 anthropic_messages = []
                 
                 for m in messages:
@@ -554,9 +803,8 @@ def run_tool_loop(
                     content = m.get("content")
                     
                     if role == "system":
-                        # Anthropic handles system separately, but we only take the LAST one
-                        # found or more likely the first one from the header
-                        system_text = content
+                        if content:
+                            system_parts.append(str(content))
                         continue
                     
                     if role == "tool":
@@ -597,7 +845,7 @@ def run_tool_loop(
                 with client.messages.stream(
                     model=model_id,
                     max_tokens=4096,
-                    system=system_text,
+                    system=_joined_system_text(system_parts),
                     messages=anthropic_messages,
                     tools=tools if tools else None
                 ) as stream:
@@ -632,18 +880,19 @@ def run_tool_loop(
                         elif event.type == "content_block_stop":
                             # Content block finished
                             pass
-            elif provider == "google":
+            elif provider == "google" and not google_uses_openai_compat:
                 # Google Gemini Branch
                 import google.generativeai as genai
                 
                 # Convert history for Gemini
                 gemini_history = []
-                system_text = ""
+                system_parts = []
                 for m in messages[:-1]:
                     role = m.get("role")
                     content = m.get("content")
                     if role == "system":
-                        system_text = content
+                        if content:
+                            system_parts.append(str(content))
                         continue
                     
                     # Gemini roles are 'user' and 'model'
@@ -661,7 +910,7 @@ def run_tool_loop(
                 # Create model
                 model = client.GenerativeModel(
                     model_name=model_id,
-                    system_instruction=system_text if system_text else None,
+                    system_instruction=_joined_system_text(system_parts),
                     tools=tools if tools else None
                 )
                 
@@ -772,15 +1021,17 @@ def run_tool_loop(
                             assistant_text = str(output_text)
                             _emit_stream(assistant_text)
             else:
-                # OpenAI Streaming Logic
+                # OpenAI-compatible streaming logic, including Gemini's official
+                # OpenAI-compatible endpoint.
                 kwargs = {
                     "model": model_id,
                     "messages": messages,
                     "tools": tools,
-                    "tool_choice": "auto",
+                    "tool_choice": forced_tool_choice or "auto",
                     "stream": True,
-                    "stream_options": {"include_usage": True}
                 }
+                if provider not in {"google", "nvidia"}:
+                    kwargs["stream_options"] = {"include_usage": True}
                 
                 if (
                     variant in ["low", "medium", "high", "xhigh"]
@@ -788,6 +1039,8 @@ def run_tool_loop(
                     and api_type != "responses"
                 ):
                     kwargs["reasoning_effort"] = variant if variant != "xhigh" else "high"
+                elif provider == "google" and variant in {"low", "medium", "high"}:
+                    kwargs["reasoning_effort"] = variant
 
                 response_stream = client.chat.completions.create(**kwargs)
                 
@@ -834,7 +1087,10 @@ def run_tool_loop(
 
         except Exception as e:
             _finish_visible_stream()
-            return LoopResult(content=f"Error in model generation: {str(e)}")
+            info = normalize_provider_error(e, payload_kind="text")
+            return LoopResult(
+                content=provider_blocker_message(info),
+            )
         
         # Format tool calls for history
         formatted_tc = []
@@ -873,10 +1129,11 @@ def run_tool_loop(
                 messages.append({"role": "assistant", "content": assistant_text})
         else:
             # OpenAI / Generic
-            msg_obj = {"role": "assistant", "content": assistant_text or None}
-            if formatted_tc:
-                msg_obj["tool_calls"] = formatted_tc
-            messages.append(msg_obj)
+            if assistant_text or formatted_tc:
+                msg_obj = {"role": "assistant", "content": assistant_text or None}
+                if formatted_tc:
+                    msg_obj["tool_calls"] = formatted_tc
+                messages.append(msg_obj)
 
         if not formatted_tc:
             final_response = assistant_text
@@ -895,6 +1152,44 @@ def run_tool_loop(
                 _discard_buffered_stream_events()
                 _finish_visible_stream()
                 continue 
+            if not assistant_text.strip() and tool_trace:
+                if empty_post_tool_continue_count < empty_post_tool_continue_limit:
+                    empty_post_tool_continue_count += 1
+                    final_response = ""
+                    _discard_buffered_stream_events()
+                    _finish_visible_stream()
+                    latest_tool = tool_trace[-1]
+                    instruction = (
+                        "[Hidden runtime continuation: your previous turn ended with no user-visible assistant reply after tool use.] "
+                        "Answer the user's original request now using the latest tool result. "
+                        "Do not call another tool unless the latest tool result is genuinely insufficient. "
+                        f"Latest tool: {latest_tool.get('tool')}. "
+                        f"Latest result summary: {_truncate_text(str(latest_tool.get('result') or ''), max_chars=2000)}"
+                    )
+                    messages.append({"role": "user", "content": instruction})
+                    on_auto_continue_cb = callbacks.get("on_auto_continue")
+                    if on_auto_continue_cb:
+                        try:
+                            on_auto_continue_cb(
+                                {
+                                    "reason": "empty_post_tool_final",
+                                    "action": "continue",
+                                    "scores": {},
+                                    "auto_continue_count": empty_post_tool_continue_count,
+                                    "auto_continue_limit": empty_post_tool_continue_limit,
+                                }
+                            )
+                        except Exception:
+                            pass
+                    log(
+                        "  ↪ Empty post-tool answer forced continuation "
+                        f"({empty_post_tool_continue_count}/{empty_post_tool_continue_limit})."
+                    )
+                    continue
+                final_response = _fallback_final_from_tool_trace(tool_trace)
+                _flush_buffered_stream_events()
+                _finish_visible_stream()
+                break
             if (
                 must_use_tool_after_retry
                 and len(tool_trace) <= retry_tool_trace_len
@@ -1027,6 +1322,48 @@ def run_tool_loop(
                     "content": json.dumps({"error": "Operation cancelled by user interrupt.", "interrupted": True})
                 })
                 continue
+
+            if name not in provider_tool_names:
+                result = {
+                    "error": (
+                        f"Model requested undeclared tool '{name}'. "
+                        "This tool was not in the callable provider inventory for this turn, "
+                        "so it was not executed. Choose one of the actually available tools."
+                    ),
+                    "error_type": "invalid_provider_tool_call",
+                    "tool_name": name,
+                    "available_tools": sorted(provider_tool_names),
+                    "retry": True,
+                }
+                log(f"  [TOOL BLOCKED] {name} is not in the provider tool inventory.")
+                tool_trace.append(
+                    {
+                        "tool": name,
+                        "args": {},
+                        "result": _summarize_tool_result_for_model(name, result),
+                    }
+                )
+                tool_trace = tool_trace[-32:]
+                on_tool_use_cb = callbacks.get("on_tool_use")
+                if on_tool_use_cb:
+                    try:
+                        tool_messages = on_tool_use_cb(name, {}, result, 0.0)
+                        if isinstance(tool_messages, dict):
+                            post_tool_messages.append(tool_messages)
+                        elif isinstance(tool_messages, list):
+                            for item in tool_messages:
+                                if isinstance(item, dict):
+                                    post_tool_messages.append(item)
+                    except Exception:
+                        pass
+                batch_results.append({
+                    "id": tc["id"],
+                    "name": name,
+                    "raw_result": result,
+                    "content": json.dumps(result),
+                    "image_data": None,
+                })
+                continue
             
             try:
                 args = json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
@@ -1057,26 +1394,6 @@ def run_tool_loop(
             if VERBOSE_LOGGING:
                 log_tool_result(name, result, duration_ms)
 
-            tool_trace.append(
-                {
-                    "tool": name,
-                    "args": args,
-                    "result": _summarize_tool_result_for_model(name, result),
-                }
-            )
-            tool_trace = tool_trace[-32:]
-
-            # Notify external callback (e.g. Telegram verbose mode)
-            on_tool_use_cb = callbacks.get("on_tool_use")
-            if on_tool_use_cb:
-                tool_messages = on_tool_use_cb(name, args, result, duration_ms)
-                if isinstance(tool_messages, dict):
-                    post_tool_messages.append(tool_messages)
-                elif isinstance(tool_messages, list):
-                    for item in tool_messages:
-                        if isinstance(item, dict):
-                            post_tool_messages.append(item)
-
             model_ready_result = result
             image_payload = _extract_image_payload(result)
             if image_payload and isinstance(result, dict):
@@ -1094,6 +1411,26 @@ def run_tool_loop(
                 model_ready_result = dict(result)
                 model_ready_result["vision_question"] = vision_question
                 model_ready_result["vision_summary"] = vision_summary
+
+            tool_trace.append(
+                {
+                    "tool": name,
+                    "args": args,
+                    "result": _summarize_tool_result_for_model(name, model_ready_result),
+                }
+            )
+            tool_trace = tool_trace[-32:]
+
+            # Notify external callback (e.g. Telegram verbose mode)
+            on_tool_use_cb = callbacks.get("on_tool_use")
+            if on_tool_use_cb:
+                tool_messages = on_tool_use_cb(name, args, model_ready_result, duration_ms)
+                if isinstance(tool_messages, dict):
+                    post_tool_messages.append(tool_messages)
+                elif isinstance(tool_messages, list):
+                    for item in tool_messages:
+                        if isinstance(item, dict):
+                            post_tool_messages.append(item)
 
             # Group result
             batch_results.append({
