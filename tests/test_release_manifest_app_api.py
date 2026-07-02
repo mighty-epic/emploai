@@ -2,7 +2,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-from mobile_app.backend import app_server
+from app_backend import app_server
 
 
 _VALID_SHA256 = "a" * 64

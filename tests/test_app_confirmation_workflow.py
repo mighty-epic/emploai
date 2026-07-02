@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from mobile_app.backend.app_confirmation_workflow import (
+from app_backend.app_confirmation_workflow import (
     consume_approved_confirmation,
     publish_confirmation_delta,
 )

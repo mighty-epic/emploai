@@ -1450,7 +1450,7 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
                         <View style={styles.modelProviderBlock}>
                           <Text style={styles.modelProviderTitle}>Sleep Mode</Text>
                           <Text style={styles.modelProviderCaption}>
-                            Telegram uses designated sleep chats while the desktop UI is asleep. The mobile app can still dispatch through the paired desktop.
+                            Telegram uses designated sleep chats while the desktop UI is asleep. Local automations can still dispatch through the desktop runtime.
                           </Text>
                           <View style={styles.modelList}>
                             <Pressable

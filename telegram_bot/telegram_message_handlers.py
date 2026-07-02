@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from mobile_app.backend.session_bridge import AppSessionBridge
+from app_backend.session_bridge import AppSessionBridge
 from shared.channel_events import publish_current_session_changed
 from shared.telegram_bot_config_store import TelegramBotConfigStore
 
@@ -66,7 +66,7 @@ def build_message_handlers(
 
         def _fleet_active_session_id() -> str | None:
             try:
-                from mobile_app.backend.app_server import _get_remote_control_store
+                from app_backend.app_server import _get_remote_control_store
 
                 snapshot = _get_remote_control_store().get_fleet_snapshot(user_id=state_user_id)
                 active_identity_id = str(snapshot.get("active_identity_id") or "").strip()

@@ -1,9 +1,10 @@
 import type { ModelProviderGroup } from '@/lib/appApi';
 
-export const MODEL_PROVIDER_PRIORITY = ['openai', 'anthropic', 'google', 'xai', 'deepseek', 'nvidia', 'openrouter'];
+export const MODEL_PROVIDER_PRIORITY = ['openai', 'openai-codex', 'anthropic', 'google', 'xai', 'deepseek', 'nvidia', 'openrouter'];
 
 export const MODEL_PROVIDER_DEFAULTS: Record<string, string[]> = {
   openai: ['gpt-5.4-mini'],
+  'openai-codex': ['chatgpt/gpt-5.5', 'chatgpt/gpt-5.4-mini'],
   anthropic: ['claude-sonnet-4.5'],
   google: ['gemini-3.5-flash'],
   nvidia: ['mistralai/ministral-14b-instruct-2512'],
@@ -138,6 +139,7 @@ export function providerForModelName(model: string, modelGroups: ModelProviderGr
 
   const lower = model.toLowerCase();
   if (lower.includes('claude')) return 'anthropic';
+  if (lower.startsWith('chatgpt/')) return 'openai-codex';
   if (lower.includes('gemini')) return 'google';
   if (lower.includes('grok')) return 'xai';
   if (

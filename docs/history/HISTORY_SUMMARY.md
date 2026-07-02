@@ -7,7 +7,7 @@ This document explains what has been successfully added to the EmploAI project, 
 ## 1. App Channel & FastAPI Backend
 * **What was added**: A remote, dedicated mobile client channel alongside the original Telegram channel.
 * **How it was implemented**:
-  * **Backend (`mobile_app/backend/`)**: Developed a FastAPI server ([app_server.py](mobile_app/backend/app_server.py)) running a WebSocket route (`/ws/chat` and `/ws/app/voice`) and session management logic.
+  * **Backend (`app_backend/`)**: Developed a FastAPI server ([app_server.py](app_backend/app_server.py)) running a WebSocket route (`/ws/chat` and `/ws/app/voice`) and session management logic.
   * **Frontend Client (`mobile_app/client/`)**: Built an Expo/React Native cross-platform app (Android priority) utilizing Expo Router with dedicated screens for Chat, Pair/Login, Sessions, Jobs, and Settings.
   * **Shared Session System**: Preserved current session boundaries. The mobile app hooks directly into the database/session logs, allowing identical state mirroring on both Telegram and the Mobile UI.
 

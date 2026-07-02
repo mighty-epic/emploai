@@ -8,7 +8,7 @@ import os
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from single_agent.cron_scheduler import parse_schedule
+from local_agent_runtime.cron_scheduler import parse_schedule
 from shared.channel_events import publish_status_update
 from shared.channel_sync import get_channel_sync_hub
 from shared.task_board import (
@@ -23,7 +23,7 @@ from shared.task_board import (
 
 
 def _confirmation_store():
-    from mobile_app.backend.remote_control_store import RemoteControlPlaneStore
+    from app_backend.remote_control_store import RemoteControlPlaneStore
 
     return RemoteControlPlaneStore()
 

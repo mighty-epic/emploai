@@ -124,24 +124,24 @@ function resolveDevBackendCommand() {
   if (configuredPythonCommand) {
     candidates.push({
       command: configuredPythonCommand,
-      prefixArgs: ['-m', 'deploy.windows.release_backend'],
+      prefixArgs: ['-m', 'desktop_runtime.backend'],
       probeArgs: ['--version'],
     });
   }
   candidates.push(
     {
       command: 'python',
-      prefixArgs: ['-m', 'deploy.windows.release_backend'],
+      prefixArgs: ['-m', 'desktop_runtime.backend'],
       probeArgs: ['--version'],
     },
     {
       command: 'py',
-      prefixArgs: ['-3', '-m', 'deploy.windows.release_backend'],
+      prefixArgs: ['-3', '-m', 'desktop_runtime.backend'],
       probeArgs: ['-3', '--version'],
     },
     {
       command: 'py',
-      prefixArgs: ['-m', 'deploy.windows.release_backend'],
+      prefixArgs: ['-m', 'desktop_runtime.backend'],
       probeArgs: ['--version'],
     },
   );
@@ -149,7 +149,7 @@ function resolveDevBackendCommand() {
   const resolved = candidates.find((candidate) => commandAvailable(candidate.command, candidate.probeArgs));
   resolvedDevBackendCommand = resolved || {
     command: configuredPythonCommand || 'python',
-    prefixArgs: ['-m', 'deploy.windows.release_backend'],
+    prefixArgs: ['-m', 'desktop_runtime.backend'],
   };
   return resolvedDevBackendCommand;
 }
@@ -523,6 +523,27 @@ async function saveSetup(payload) {
     payload: next,
   });
   return next;
+}
+
+async function getCodexAuthStatus() {
+  return runBackendJson(['codex-auth-status']);
+}
+
+async function startCodexAuthDeviceLogin() {
+  const result = await runBackendJson(['codex-auth-start-device']);
+  const authUrl = String(result?.verificationUri || result?.verification_uri || '').trim();
+  if (authUrl) {
+    await shell.openExternal(authUrl);
+  }
+  return result;
+}
+
+async function pollCodexAuthDeviceLogin() {
+  return runBackendJson(['codex-auth-poll-device']);
+}
+
+async function logoutCodexAuth() {
+  return runBackendJson(['codex-auth-logout']);
 }
 
 async function installVoicePack(packId) {
@@ -1409,6 +1430,10 @@ app.whenReady().then(async () => {
   ipcMain.handle('emploai:runtime:stop', async () => stopLocalRuntime());
   ipcMain.handle('emploai:setup:save', async (_event, payload) => saveSetup(payload || {}));
   ipcMain.handle('emploai:setup:validate-field', async (_event, payload) => validateSetupField(payload?.field, payload?.value));
+  ipcMain.handle('emploai:codex-auth:status', async () => getCodexAuthStatus());
+  ipcMain.handle('emploai:codex-auth:start-device', async () => startCodexAuthDeviceLogin());
+  ipcMain.handle('emploai:codex-auth:poll-device', async () => pollCodexAuthDeviceLogin());
+  ipcMain.handle('emploai:codex-auth:logout', async () => logoutCodexAuth());
   ipcMain.handle('emploai:remote-auth:status', async () => remoteControlServices().remoteAuthStatus());
   ipcMain.handle('emploai:remote-auth:login', async (_event, payload) => remoteControlServices().remoteAuthLogin(payload || {}));
   ipcMain.handle('emploai:remote-auth:google-login', async (_event, payload) => remoteControlServices().remoteAuthGoogleLogin(payload || {}));

@@ -1,7 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from mobile_app.backend import cron_runtime
+from app_backend import cron_runtime
 from telegram_bot import cron_runner
 
 

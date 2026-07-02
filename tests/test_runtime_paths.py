@@ -2,7 +2,7 @@ from pathlib import Path
 
 from cli.config_manager import ConfigManager
 from cli.session_manager import SessionManager
-from mobile_app.backend.auth_store import AppAuthStore
+from app_backend.auth_store import AppAuthStore
 from shared.channel_sync import ChannelSyncHub
 
 

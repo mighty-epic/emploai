@@ -1,0 +1,24 @@
+{
+  "name": "emploai",
+  "version": "0.1.0-beta.14.6",
+  "private": true,
+  "description": "Local-first EmploAI desktop app launcher and repo scripts.",
+  "scripts": {
+    "start": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/desktop/start.ps1",
+    "start:fast": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/desktop/start.ps1 -Fast",
+    "setup": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/desktop/setup.ps1",
+    "check": "npm run desktop:check",
+    "typecheck": "npm run desktop:typecheck",
+    "desktop:start": "npm run start",
+    "desktop:start:fast": "npm run start:fast",
+    "desktop:setup": "npm run setup",
+    "desktop:check": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/desktop/start.ps1 -CheckOnly",
+    "desktop:typecheck": "npm --prefix desktop_app/renderer_client run typecheck",
+    "desktop:build-renderer": "npm --prefix desktop_app/renderer_client run export:web",
+    "desktop:smoke-chat": "python scripts/smoke_desktop_chat.py",
+    "fleet:yggdrasil:status": "npm --prefix desktop_app run fleet:yggdrasil:status",
+    "fleet:yggdrasil:bootstrap": "npm --prefix desktop_app run fleet:yggdrasil:bootstrap",
+    "fleet:yggdrasil:pair": "npm --prefix desktop_app run fleet:yggdrasil:pair",
+    "fleet:yggdrasil:join": "npm --prefix desktop_app run fleet:yggdrasil:join --"
+  }
+}

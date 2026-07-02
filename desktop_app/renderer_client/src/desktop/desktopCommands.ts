@@ -2,6 +2,7 @@ import {
   actOnJob,
   activateAgentSkill,
   activateSession,
+  addAgentMemoryFact,
   appendAgentMemoryNote,
   configureAgent,
   controlAgentRun,
@@ -9,8 +10,11 @@ import {
   createPendingConfirmation,
   createSession,
   compactAgentContext,
+  deleteAgentMemoryFact,
   fetchAgentConfig,
+  fetchAgentSkillDetail,
   fetchAgentOverview,
+  fetchAgentMemoryFacts,
   fetchAgentSkills,
   fetchBridgeStatus,
   fetchJobs,
@@ -19,6 +23,7 @@ import {
   forceTaskBoardReassess,
   fetchSubAgents,
   forgetLastAgentMessage,
+  learnAgentSkill,
   approvePendingConfirmation,
   resetAgentContext,
   searchAgentMemory,
@@ -65,12 +70,17 @@ const SESSION_REQUIRED_COMMANDS = new Set([
   'headless',
   'skills',
   'skill',
+  'skillview',
+  'learn_skill',
   'skilltest',
   'files',
   'monitor',
   'analytics',
   'forget',
   'memory',
+  'memory_facts',
+  'memory_fact',
+  'memory_fact_delete',
   'memory_update',
   'config',
   'heartbeat',
@@ -128,6 +138,8 @@ const COMMAND_HELP: Record<string, string> = {
   heartbeat: 'Toggle or inspect the heartbeat: `/heartbeat on|off|status`.',
   skills: 'List skill availability.',
   skill: 'Activate a skill for the next messages: `/skill <name>`.',
+  skillview: 'View full local skill instructions without activating: `/skillview <name>`.',
+  learn_skill: 'Save a reusable local skill: `/learn_skill <name> | <workflow>`.',
   skilltest: 'Validate a skill: `/skilltest <name>`.',
   files: 'List pending uploaded files.',
   analytics: 'Show analytics summary: `/analytics [days]`.',
@@ -135,6 +147,9 @@ const COMMAND_HELP: Record<string, string> = {
   forget: 'Remove the last user message from the current session context.',
   security: 'Show security summary.',
   memory: 'Show memory summary or search memory: `/memory [query]`.',
+  memory_facts: 'List structured local facts: `/memory_facts [category]`.',
+  memory_fact: 'Save a structured local fact: `/memory_fact <fact>` or `/memory_fact <category> | <fact>`.',
+  memory_fact_delete: 'Delete a structured local fact: `/memory_fact_delete <id> confirm`.',
   memory_update: 'Append a note to memory: `/memory_update <note>`.',
   config: 'View or edit config: `/config`, `/config <key>`, `/config <key> <value>`.',
 };
@@ -190,6 +205,9 @@ const HELP_SECTIONS = [
       '/task - Show the active task board',
       '/reassess - Force a task reassessment',
       '/memory [query] - Search memory',
+      '/memory_facts [category] - List structured local facts',
+      '/memory_fact <fact> - Add structured local fact',
+      '/memory_fact_delete <id> confirm - Delete a local fact',
       '/memory_update <note> - Add note to memory',
     ],
   },
@@ -209,7 +227,9 @@ const HELP_SECTIONS = [
     title: 'Skills',
     items: [
       '/skills - List available skills',
+      '/skillview <name> - View full skill details',
       '/skill <name> - Activate a specific skill',
+      '/learn_skill <name> | <workflow> - Save a local skill',
       '/skilltest <name> - Validate a skill',
     ],
   },
@@ -269,6 +289,13 @@ function tokenizeArgs(raw: string) {
     parts.push(match[1] ?? match[2] ?? match[3] ?? '');
   }
   return parts;
+}
+
+function splitPipeArgs(raw: string) {
+  return raw
+    .split('|')
+    .map((part) => part.trim())
+    .filter(Boolean);
 }
 
 function parseCommand(input: string) {
@@ -523,9 +550,41 @@ function formatSkills(items: Awaited<ReturnType<typeof fetchAgentSkills>>['items
   return items
     .map((item) => {
       const state = item.available ? (item.active ? 'active' : 'available') : `unavailable: ${item.unavailable_reason || 'gated'}`;
-      return `- ${item.name} · ${state}`;
+      const resources = item.resources?.length ? ` · resources ${item.resources.length}` : '';
+      const body = item.body_loaded ? ' · loaded' : '';
+      return `- ${item.name} · ${state}${body}${resources}`;
     })
     .join('\n');
+}
+
+function formatSkillDetail(skill: Awaited<ReturnType<typeof fetchAgentSkillDetail>>) {
+  const lines = [
+    `${skill.name} · ${skill.available ? (skill.active ? 'active' : 'available') : `unavailable: ${skill.unavailable_reason || 'gated'}`}`,
+    skill.description,
+  ];
+  if (skill.path) {
+    lines.push(`Path: ${skill.path}`);
+  }
+  if (skill.resources.length) {
+    lines.push(`Resources: ${skill.resources.map((item) => `${item.name} (${item.type})`).join(', ')}`);
+  }
+  const body = skill.body.trim();
+  if (body) {
+    lines.push('', body.length > 2400 ? `${body.slice(0, 2400).trim()}\n... (truncated)` : body);
+  }
+  return lines.join('\n');
+}
+
+function formatMemoryFacts(items: Awaited<ReturnType<typeof fetchAgentMemoryFacts>>['items']) {
+  if (!items.length) {
+    return 'No structured local facts are saved yet.';
+  }
+  return items
+    .map((item) => {
+      const tags = item.tags?.length ? ` · ${item.tags.join(', ')}` : '';
+      return `#${item.id} · ${item.category} · trust ${item.trust.toFixed(2)}${tags}\n${item.content}`;
+    })
+    .join('\n\n');
 }
 
 function formatSubagents(status: Awaited<ReturnType<typeof fetchSubAgents>>) {
@@ -1050,6 +1109,14 @@ export async function runDesktopSlashCommand(input: string, context: CommandCont
       return { handled: true, output: formatSkills(skills.items) };
     }
 
+    case 'skillview': {
+      if (!command.args.length) {
+        return { handled: true, output: 'Usage: /skillview <name>' };
+      }
+      const detail = await fetchAgentSkillDetail(apiBaseUrl, token, command.args[0], sessionId);
+      return { handled: true, output: formatSkillDetail(detail) };
+    }
+
     case 'skill': {
       if (!command.args.length) {
         return { handled: true, output: 'Usage: /skill <name>' };
@@ -1059,6 +1126,36 @@ export async function runDesktopSlashCommand(input: string, context: CommandCont
         handled: true,
         output: result.message || `${command.args[0]} will be active for your next messages.`,
         status: 'skill activated',
+        refresh: true,
+      };
+    }
+
+    case 'learn_skill': {
+      const parts = splitPipeArgs(command.rawArgs);
+      const name = parts[0] || command.args[0] || '';
+      const workflow = parts.length >= 2
+        ? parts.slice(1).join('\n\n')
+        : command.rawArgs.slice(name.length).trim();
+      if (!name || !workflow) {
+        return {
+          handled: true,
+          output: 'Usage: /learn_skill <name> | <workflow instructions>',
+        };
+      }
+      const result = await learnAgentSkill(
+        apiBaseUrl,
+        token,
+        {
+          name,
+          workflow,
+          activate: true,
+        },
+        sessionId
+      );
+      return {
+        handled: true,
+        output: `${result.message}\n\n${formatSkillDetail(result.skill)}`,
+        status: 'skill learned',
         refresh: true,
       };
     }
@@ -1164,6 +1261,56 @@ export async function runDesktopSlashCommand(input: string, context: CommandCont
       return {
         handled: true,
         output: result.results.map((item) => `- ${item.source}${item.line ? `:${item.line}` : ''} · ${item.content}`).join('\n'),
+      };
+    }
+
+    case 'memory_facts': {
+      const category = command.rawArgs.trim() || undefined;
+      const result = await fetchAgentMemoryFacts(apiBaseUrl, token, sessionId, { category, limit: 60 });
+      return { handled: true, output: formatMemoryFacts(result.items) };
+    }
+
+    case 'memory_fact': {
+      if (!command.rawArgs) {
+        return { handled: true, output: 'Usage: /memory_fact <fact> or /memory_fact <category> | <fact>' };
+      }
+      const parts = splitPipeArgs(command.rawArgs);
+      const category = parts.length >= 2 ? parts[0] : 'general';
+      const content = parts.length >= 2 ? parts.slice(1).join(' | ') : command.rawArgs;
+      const fact = await addAgentMemoryFact(
+        apiBaseUrl,
+        token,
+        {
+          category,
+          content,
+          trust: 0.7,
+        },
+        sessionId
+      );
+      return {
+        handled: true,
+        output: `Saved local fact #${fact.id} (${fact.category}, trust ${fact.trust.toFixed(2)}): ${fact.content}`,
+        status: 'fact saved',
+      };
+    }
+
+    case 'memory_fact_delete': {
+      const factId = Number.parseInt(command.args[0] || '', 10);
+      if (!Number.isFinite(factId)) {
+        return { handled: true, output: 'Usage: /memory_fact_delete <id> confirm' };
+      }
+      if (!['confirm', 'yes'].includes(normalize(command.args[1] || ''))) {
+        return {
+          handled: true,
+          output: `Deleting local fact #${factId} requires confirmation. Run \`/memory_fact_delete ${factId} confirm\` to continue.`,
+          status: 'confirmation needed',
+        };
+      }
+      const result = await deleteAgentMemoryFact(apiBaseUrl, token, factId, sessionId);
+      return {
+        handled: true,
+        output: result.message || `Deleted local fact #${factId}.`,
+        status: 'fact deleted',
       };
     }
 

@@ -573,6 +573,21 @@ const isBusySessionSwitchError = (error: unknown) => (
     return created.session.id;
   };
 
+  const activateResolvedSessionForOutgoingMessage = async (targetSessionId: string) => {
+    const normalizedTargetSessionId = String(targetSessionId || '').trim();
+    if (!normalizedTargetSessionId || normalizedTargetSessionId === sessionIdRef.current) {
+      return normalizedTargetSessionId || null;
+    }
+    setStatus('switching shared session');
+    const detail = await activateSessionWithRecovery(normalizedTargetSessionId);
+    applySessionDetail(detail);
+    await Promise.all([
+      refreshSidebarCollections(normalizedTargetSessionId, true),
+      refreshOverviewState(normalizedTargetSessionId, { quiet: true }),
+    ]);
+    return normalizedTargetSessionId;
+  };
+
   const ensureSessionForOutgoingMessage = async () => {
     if (draftChatRef.current) {
       return materializeDraftSession(draftChatRef.current.projectPath);
@@ -596,7 +611,7 @@ const isBusySessionSwitchError = (error: unknown) => (
       }
       const selectedChatId = String(fleetSnapshot?.selected_chat_by_identity?.[scope.activeFleetIdentity.identity_id] || '').trim();
       if (selectedChatId && sessions.some((item: any) => item.id === selectedChatId)) {
-        return selectedChatId;
+        return activateResolvedSessionForOutgoingMessage(selectedChatId);
       }
       const fallbackProject = preferredProjectPath || currentSummary?.workspace || '';
       if (fallbackProject) {
@@ -608,7 +623,7 @@ const isBusySessionSwitchError = (error: unknown) => (
     if (scope.activeFleetIdentity) {
       const selectedChatId = String(fleetSnapshot?.selected_chat_by_identity?.[scope.activeFleetIdentity.identity_id] || '').trim();
       if (selectedChatId && sessions.some((item: any) => item.id === selectedChatId)) {
-        return selectedChatId;
+        return activateResolvedSessionForOutgoingMessage(selectedChatId);
       }
     }
 

@@ -303,7 +303,7 @@ def test_single_agent_click_integration():
     print("="*70)
     
     try:
-        from single_agent.agent import SingleAgent
+        from local_agent_runtime.agent import SingleAgent
     except ImportError as e:
         print(f"❌ FAILED: Could not import SingleAgent - {e}")
         return False

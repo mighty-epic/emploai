@@ -29,6 +29,18 @@ def test_enabled_providers_from_env_detects_configured_keys():
     assert enabled == {"openai", "google", "nvidia"}
 
 
+def test_enabled_providers_from_env_only_reads_codex_auth_when_requested(tmp_path, monkeypatch):
+    auth_path = tmp_path / "openai-codex-auth.json"
+    auth_path.write_text(
+        '{"tokens":{"access_token":"access","refresh_token":"refresh","expires_at":4102444800}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("EMPLOAI_CODEX_AUTH_PATH", str(auth_path))
+
+    assert enabled_providers_from_env({}) == set()
+    assert enabled_providers_from_env({}, include_local_codex_auth=True) == {"openai-codex"}
+
+
 def test_filter_models_by_provider_access_keeps_only_configured_providers():
     models = list(MODEL_CONFIGS.keys())
     filtered = filter_models_by_provider_access(models, MODEL_CONFIGS, {"openai"})

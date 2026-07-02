@@ -5,13 +5,13 @@ import json
 import shutil
 from pathlib import Path
 
-from mobile_app.backend.voice_pack_manager import (
+from app_backend.voice_pack_manager import (
     DEFAULT_ENGLISH_PACK_ENGINE,
     DEFAULT_ENGLISH_PACK_ID,
     DEFAULT_ENGLISH_PACK_TUNING_PRESET,
     VOICE_PACK_MANIFEST_FILENAME,
 )
-from mobile_app.backend.whisper_cpp_runtime import (
+from app_backend.whisper_cpp_runtime import (
     DEFAULT_BINARY_FLAVOR,
     DEFAULT_RELEASE_TAG,
     ensure_ggml_model,

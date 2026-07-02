@@ -149,33 +149,33 @@ def check_release_branding_contract(repo_root: Path = REPO_ROOT) -> CheckResult:
 def check_remote_control_deployment_defaults(repo_root: Path = REPO_ROOT) -> CheckResult:
     errors: list[str] = []
     warnings: list[str] = []
-    env_path = repo_root / "deploy" / "vps" / "linux" / "remote_control.env.example"
+    env_path = repo_root / "deploy" / "legacy_vps" / "linux" / "remote_control.env.example"
     values = _load_env_file(env_path)
 
     routing_mode = values.get("EMPLOAI_REMOTE_CONTROL_ROUTING_MODE")
     if routing_mode not in SUPPORTED_REMOTE_CONTROL_ROUTING_MODES:
         errors.append(
-            "deploy/vps/linux/remote_control.env.example sets an unsupported "
+            "deploy/legacy_vps/linux/remote_control.env.example sets an unsupported "
             f"EMPLOAI_REMOTE_CONTROL_ROUTING_MODE={routing_mode!r}; expected one of "
             f"{sorted(SUPPORTED_REMOTE_CONTROL_ROUTING_MODES)}."
         )
     if routing_mode != "sqlite_broker":
         errors.append(
-            "deploy/vps/linux/remote_control.env.example must default "
+            "deploy/legacy_vps/linux/remote_control.env.example must default "
             "EMPLOAI_REMOTE_CONTROL_ROUTING_MODE to 'sqlite_broker' so public deployments are broker-ready."
         )
 
     unsafe_bypass = str(values.get("EMPLOAI_REMOTE_CONTROL_ALLOW_UNSAFE_MULTIPROCESS") or "").lower()
     if unsafe_bypass not in {"", "0", "false", "no", "off"}:
         errors.append(
-            "deploy/vps/linux/remote_control.env.example must not enable "
+            "deploy/legacy_vps/linux/remote_control.env.example must not enable "
             "EMPLOAI_REMOTE_CONTROL_ALLOW_UNSAFE_MULTIPROCESS for public release deployments."
         )
 
     missing_provider_keys = sorted(key for key in REMOTE_CONTROL_PROVIDER_ENV_VARS if key not in values)
     if missing_provider_keys:
         errors.append(
-            "deploy/vps/linux/remote_control.env.example is missing provider env vars: "
+            "deploy/legacy_vps/linux/remote_control.env.example is missing provider env vars: "
             + ", ".join(missing_provider_keys)
         )
 

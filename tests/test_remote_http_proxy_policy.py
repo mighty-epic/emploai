@@ -5,7 +5,7 @@ import base64
 import pytest
 from fastapi import HTTPException
 
-from mobile_app.backend.remote_http_proxy_policy import (
+from app_backend.remote_http_proxy_policy import (
     filter_remote_http_proxy_headers,
     max_base64_chars_for_bytes,
     remote_http_proxy_body_bytes,

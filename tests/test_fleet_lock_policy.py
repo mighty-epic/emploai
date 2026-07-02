@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from mobile_app.backend.fleet_lock_policy import (
+from app_backend.fleet_lock_policy import (
     DEFAULT_FLEET_LOCK_TTL_SECONDS,
     FLEET_LOCK_RELEASE_REQUIRED_ERROR,
     FLEET_LOCK_REQUIRED_ERROR,

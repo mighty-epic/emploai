@@ -19,16 +19,16 @@ from cli.config_manager import get_config_manager
 from cli.session_manager import SessionManager
 from cli.agent_tools.executor import ToolExecutor
 from cli.tui_constants import MODEL_CONFIGS, MODEL_VARIANTS
-from single_agent.agent import SingleAgent
-from single_agent.refined_agent import RefinedAgent, create_refined_agent
-from single_agent.cron_scheduler import get_scheduler
-from single_agent.spawn_tool import get_spawn_tool
+from local_agent_runtime.agent import SingleAgent
+from local_agent_runtime.refined_agent import RefinedAgent, create_refined_agent
+from local_agent_runtime.cron_scheduler import get_scheduler
+from local_agent_runtime.spawn_tool import get_spawn_tool
 from telegram_bot.cron_runner import run_cron_job_via_unified_flow
 
-from bot_core.analytics import get_analytics_tracker, AnalyticsTracker
-from bot_core.file_processor import get_file_processor, FileProcessor
-from bot_core.hooks import get_hook_manager, HookManager
-from bot_core.system_info import get_system_info
+from runtime_support.analytics import get_analytics_tracker, AnalyticsTracker
+from runtime_support.file_processor import get_file_processor, FileProcessor
+from runtime_support.hooks import get_hook_manager, HookManager
+from runtime_support.system_info import get_system_info
 from skills import get_skill_registry, SkillRegistry
 
 from shared import (
@@ -50,6 +50,7 @@ from shared.model_availability import (
 from shared.model_defaults import (
     ANTHROPIC_DEFAULT_PLANNER_MODEL,
     GOOGLE_DEFAULT_PLANNER_MODEL,
+    OPENAI_CODEX_DEFAULT_PLANNER_MODEL,
     OPENAI_DEFAULT_MODEL,
     OPENAI_DEFAULT_PLANNER_MODEL,
     default_model_pair_for_enabled_providers,
@@ -58,6 +59,7 @@ from shared.model_defaults import (
     provider_for_model,
 )
 from cli.agent_tools.gemini_client import create_gemini_openai_client
+from shared.openai_codex_auth import create_codex_client, is_codex_auth_configured
 from shared.runtime_paths import normalize_legacy_workspace_path, user_state_root
 from shared.telegram_bot_config_store import TelegramBotConfigStore
 from shared.tool_packs import default_enabled_tool_packs
@@ -241,6 +243,7 @@ class TelegramSession:
     deepseek_client: Optional[OpenAI] = None
     openrouter_client: Optional[OpenAI] = None
     nvidia_client: Optional[OpenAI] = None
+    openai_codex_client: Optional[Any] = None
 
     # Telegram context
     _app: Optional[Application] = None
@@ -291,7 +294,7 @@ class TelegramSession:
 
     def refresh_system_info(self):
         """Update system info string with current windows and hardware state."""
-        from bot_core.system_info import get_system_info
+        from runtime_support.system_info import get_system_info
         self.system_info = get_system_info()
 
     def _live_config_string(self, path: str) -> str:
@@ -322,6 +325,8 @@ class TelegramSession:
                     configured = ""
             if configured or str(os.getenv(env_var, "") or "").strip():
                 enabled.add(provider)
+        if is_codex_auth_configured():
+            enabled.add("openai-codex")
         return enabled
 
     def _provider_default_model_pair(self):
@@ -418,6 +423,7 @@ class TelegramSession:
             compression_model="gemini-3.1-flash-lite",
             provider_clients={
                 "openai": self.openai_client,
+                "openai-codex": self.openai_codex_client,
                 "anthropic": self.anthropic_client,
                 "google": self.gemini_openai_client or self.google_client,
                 "xai": self.xai_client,
@@ -485,7 +491,7 @@ class TelegramSession:
         else:
             workspace = Path(__file__).resolve().parent.parent
         try:
-            from mobile_app.backend.session_bridge import AppSessionBridge
+            from app_backend.session_bridge import AppSessionBridge
 
             bridge = AppSessionBridge(user_id=self._sync_state_user_id(), workspace=workspace)
             current = bridge.get_current_session()
@@ -733,6 +739,7 @@ class TelegramSession:
         self.deepseek_client = OpenAI(api_key=deepseek_key, base_url="https://api.deepseek.com") if deepseek_key else None
         self.openrouter_client = OpenAI(api_key=openrouter_key, base_url="https://openrouter.ai/api/v1") if openrouter_key else None
         self.nvidia_client = OpenAI(api_key=nvidia_key, base_url="https://integrate.api.nvidia.com/v1") if nvidia_key else None
+        self.openai_codex_client = create_codex_client() if is_codex_auth_configured() else None
         
         if google_key:
             self.google_client = None
@@ -756,6 +763,7 @@ class TelegramSession:
             deepseek_client=self.deepseek_client,
             openrouter_client=self.openrouter_client,
             nvidia_client=self.nvidia_client,
+            openai_codex_client=self.openai_codex_client,
         )
 
     def get_available_models(self, candidate_models: Optional[List[str]] = None) -> List[str]:
@@ -778,7 +786,7 @@ class TelegramSession:
                 if self.gemini_openai_client is not None:
                     supported.append(model)
                 continue
-            if provider in {"openai", "anthropic", "xai", "deepseek", "openrouter", "nvidia"}:
+            if provider in {"openai", "openai-codex", "anthropic", "xai", "deepseek", "openrouter", "nvidia"}:
                 supported.append(model)
         default_planner = self._configured_default_planner_model(self.current_model)
         if default_planner in supported:
@@ -793,6 +801,7 @@ class TelegramSession:
         planner_provider = provider_for_model(self.planner_model or "")
         known_default_planners = {
             OPENAI_DEFAULT_PLANNER_MODEL,
+            OPENAI_CODEX_DEFAULT_PLANNER_MODEL,
             ANTHROPIC_DEFAULT_PLANNER_MODEL,
             GOOGLE_DEFAULT_PLANNER_MODEL,
         }
@@ -804,7 +813,7 @@ class TelegramSession:
             planner_unavailable = self.planner_model not in supported
             stale_default_provider = (
                 self.planner_model in known_default_planners
-                and current_provider in {"openai", "anthropic"}
+                and current_provider in {"openai", "openai-codex", "anthropic"}
                 and planner_provider
                 and planner_provider != current_provider
             )
@@ -858,6 +867,8 @@ class TelegramSession:
 
         if provider == "openai":
             return self.openai_client, provider
+        if provider == "openai-codex":
+            return self.openai_codex_client, provider
         if provider == "anthropic":
             return self.anthropic_client, provider
         if provider == "xai":
@@ -879,6 +890,8 @@ class TelegramSession:
 
         if provider == "openai":
             return self.openai_client, provider
+        if provider == "openai-codex":
+            return self.openai_codex_client, provider
         if provider == "anthropic":
             return self.anthropic_client, provider
         if provider == "xai":

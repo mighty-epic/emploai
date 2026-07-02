@@ -7,9 +7,18 @@ import json
 import os
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Optional, Tuple
+from typing import Any, List, Dict, Optional, Tuple
 from dataclasses import dataclass
 import logging
+
+from shared.local_fact_memory import LocalFactStore
+from shared.memory_safety import (
+    MemorySafetyError,
+    assert_safe_memory_text,
+    atomic_write_text,
+    backup_file,
+    strip_placeholder_lines,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +62,8 @@ class MemoryManager:
         self.workspace = resolve_memory_root(Path(workspace))
         self.memory_dir = self.workspace / "memory"
         self.memory_file = self.workspace / "MEMORY.md"
+        self.backup_dir = self.memory_dir / "backups"
+        self.fact_store = LocalFactStore(self.memory_dir / "facts.sqlite")
         
         # Create directories if needed
         self.memory_dir.mkdir(parents=True, exist_ok=True)
@@ -81,7 +92,7 @@ class MemoryManager:
 
 *(General context about the user, projects, etc.)*
 """
-        self.memory_file.write_text(template, encoding='utf-8')
+        atomic_write_text(self.memory_file, template)
         logger.info(f"Initialized MEMORY.md at {self.memory_file}")
     
     def get_daily_log_path(self, date: Optional[datetime] = None) -> Path:
@@ -117,8 +128,73 @@ class MemoryManager:
     
     def update_memory(self, content: str):
         """Update the long-term memory file."""
-        self.memory_file.write_text(content, encoding='utf-8')
+        assert_safe_memory_text(content, context="MEMORY.md")
+        backup_file(self.memory_file, self.backup_dir, label="memory")
+        atomic_write_text(self.memory_file, content)
         logger.info("Updated MEMORY.md")
+
+    def apply_operations(self, operations: List[Dict[str, Any]], *, max_chars: int = 120_000) -> Dict[str, Any]:
+        """Apply add/replace/remove operations to MEMORY.md as one safe write.
+
+        Supported operation shapes:
+        - {"action": "add", "section": "Context", "content": "- Durable fact"}
+        - {"action": "replace", "old_text": "...", "new_text": "..."}
+        - {"action": "remove", "content": "..."}
+        """
+        if not operations:
+            return {"changed": False, "operations": [], "message": "No memory operations supplied"}
+
+        current = self.read_memory()
+        next_content = current
+        results: list[dict[str, Any]] = []
+
+        for index, raw in enumerate(operations):
+            if not isinstance(raw, dict):
+                raise ValueError(f"Memory operation {index + 1} must be an object")
+            action = str(raw.get("action") or "").strip().lower()
+            if action == "add":
+                section = str(raw.get("section") or "Context").strip() or "Context"
+                content = str(raw.get("content") or "").strip()
+                if not content:
+                    raise ValueError(f"Memory operation {index + 1} add content is required")
+                assert_safe_memory_text(content, context="memory add operation")
+                updated, added = self._append_to_memory_content(next_content, section, content)
+                next_content = updated
+                results.append({"action": "add", "section": section, "changed": added})
+            elif action == "replace":
+                old_text = str(raw.get("old_text") or "")
+                new_text = str(raw.get("new_text") or "")
+                if not old_text:
+                    raise ValueError(f"Memory operation {index + 1} old_text is required")
+                assert_safe_memory_text(new_text, context="memory replace operation")
+                if old_text not in next_content:
+                    raise ValueError(f"Memory operation {index + 1} could not find old_text")
+                next_content = next_content.replace(old_text, new_text, 1)
+                results.append({"action": "replace", "changed": True})
+            elif action == "remove":
+                content = str(raw.get("content") or "")
+                if not content:
+                    raise ValueError(f"Memory operation {index + 1} remove content is required")
+                if content not in next_content:
+                    results.append({"action": "remove", "changed": False})
+                    continue
+                next_content = next_content.replace(content, "", 1)
+                results.append({"action": "remove", "changed": True})
+            else:
+                raise ValueError(f"Unsupported memory operation action: {action or '<missing>'}")
+
+        if len(next_content) > max_chars:
+            raise ValueError(f"MEMORY.md would exceed the local memory budget of {max_chars} characters")
+
+        changed = next_content != current
+        if changed:
+            self.update_memory(next_content)
+
+        return {
+            "changed": changed,
+            "operations": results,
+            "memory_file": str(self.memory_file),
+        }
 
     def append_to_memory(self, section: str, content: str) -> bool:
         """
@@ -130,8 +206,22 @@ class MemoryManager:
             return False
 
         current = self.read_memory()
-        
-        # Find section
+        new_content, changed = self._append_to_memory_content(current, section, content)
+        if not changed:
+            return False
+
+        self.update_memory(new_content)
+        try:
+            self.fact_store.add_fact(content.lstrip("- ").strip(), category=section, source="memory_md")
+        except (MemorySafetyError, ValueError):
+            raise
+        except Exception:
+            logger.debug("Failed to mirror MEMORY.md entry into local fact store", exc_info=True)
+        return True
+
+    @staticmethod
+    def _append_to_memory_content(current: str, section: str, content: str) -> tuple[str, bool]:
+        """Return updated MEMORY.md content for a section append."""
         section_header = f"## {section}"
         if section_header in current:
             # Append to existing section
@@ -143,15 +233,14 @@ class MemoryManager:
 
             if content in section_content:
                 logger.debug("Skipped duplicate memory entry for section %s", section)
-                return False
+                return current, False
             
             new_content = before + section_content + f"\n{content}\n" + rest
         else:
             # Add new section at end
             new_content = current.rstrip() + f"\n\n## {section}\n\n{content}\n"
-        
-        self.update_memory(new_content)
-        return True
+
+        return new_content, True
 
     @staticmethod
     def _trim_context_block(text: str, max_chars: int) -> str:
@@ -170,12 +259,7 @@ class MemoryManager:
         if not memory_content:
             return ""
 
-        filtered_lines = []
-        for line in memory_content.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("*(") and stripped.endswith(")*"):
-                continue
-            filtered_lines.append(line)
+        filtered_lines = strip_placeholder_lines(memory_content.splitlines())
 
         filtered = "\n".join(filtered_lines).strip()
         if not filtered or filtered == "# MEMORY.md - Long-Term Memory":
@@ -237,6 +321,18 @@ class MemoryManager:
                             'content': full_block,
                             'score': 0.8 - (days_back * 0.1)
                         })
+
+        # Search structured local facts.
+        try:
+            for fact in self.fact_store.search(query, limit=max_results):
+                results.append({
+                    'source': 'local-facts.sqlite',
+                    'line': fact.get('id'),
+                    'content': fact.get('content', ''),
+                    'score': float(fact.get('score', 0.0)),
+                })
+        except Exception:
+            logger.debug("Local fact memory search failed", exc_info=True)
         
         # Sort by score and limit
         results.sort(key=lambda x: x['score'], reverse=True)
@@ -301,6 +397,7 @@ class MemoryManager:
         long_term_chars: int = 4000,
         recent_days: int = 7,
         recent_chars: int = 3000,
+        fact_chars: int = 1600,
     ) -> str:
         """Build combined long-term + recent memory context for prompt injection."""
         parts = []
@@ -308,6 +405,14 @@ class MemoryManager:
         long_term = self.get_long_term_context(max_chars=long_term_chars)
         if long_term:
             parts.append(f"## Long-Term Memory\n\n{long_term}")
+
+        try:
+            facts = self.fact_store.build_prompt_context(max_chars=fact_chars)
+        except Exception:
+            logger.debug("Local fact memory prompt context failed", exc_info=True)
+            facts = ""
+        if facts:
+            parts.append(f"## Local Fact Memory\n\n{facts}")
 
         recent = self.get_recent_context(
             days=recent_days,
@@ -329,7 +434,9 @@ class MemoryManager:
             'daily_log_count': len(daily_logs),
             'oldest_log': min(daily_logs).stem if daily_logs else None,
             'newest_log': max(daily_logs).stem if daily_logs else None,
-            'workspace': str(self.workspace)
+            'workspace': str(self.workspace),
+            'fact_store_exists': self.fact_store.db_path.exists(),
+            'fact_count': len(self.fact_store.list_facts(limit=10_000)) if self.fact_store.db_path.exists() else 0,
         }
 
 

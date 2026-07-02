@@ -4,9 +4,9 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-from mobile_app.backend import app_server
-from mobile_app.backend import runtime as app_runtime
-from mobile_app.backend.models import SessionDetailView
+from app_backend import app_server
+from app_backend import runtime as app_runtime
+from app_backend.models import SessionDetailView
 from shared import channel_runtime
 from shared.task_intent import is_screen_observation_message, is_task_like_message
 from telegram_bot import telegram_message_handlers

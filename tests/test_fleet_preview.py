@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
-from mobile_app.backend.fleet_preview import request_fleet_worker_preview
-from mobile_app.backend.remote_control_store import RemoteControlPlaneStore
+from app_backend.fleet_preview import request_fleet_worker_preview
+from app_backend.remote_control_store import RemoteControlPlaneStore
 
 
 class _FakePreviewManager:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mobile_app.backend.remote_shared_state_policy import (
+from app_backend.remote_shared_state_policy import (
     empty_fleet_state,
     empty_sidebar_state,
     normalize_fleet_state,

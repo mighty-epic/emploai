@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class ModelConfig:
     """Configuration for a specific model."""
     name: str
-    provider: str  # anthropic, openai, google, xai, deepseek, openrouter, nvidia
+    provider: str  # anthropic, openai, openai-codex, google, xai, deepseek, openrouter, nvidia
     model_id: str
     supports_thinking: bool = False
     supports_tools: bool = True
@@ -706,7 +706,7 @@ class UnifiedAgent:
                 # Call model with provider-specific logic
                 if self.model_config.provider == 'anthropic':
                     response = self._call_anthropic(tools)
-                elif self.model_config.provider in ['openai', 'xai', 'deepseek', 'openrouter', 'nvidia']:
+                elif self.model_config.provider in ['openai', 'openai-codex', 'xai', 'deepseek', 'openrouter', 'nvidia']:
                     response = self._call_openai_compatible(tools)
                 elif self.model_config.provider == 'google':
                     response = self._call_google(tools)
@@ -866,7 +866,7 @@ class UnifiedAgent:
         """Check if the task is complete (no more tool calls)."""
         if self.model_config.provider == 'anthropic':
             return response.stop_reason == 'end_turn'
-        elif self.model_config.provider in ['openai', 'xai', 'deepseek', 'openrouter', 'nvidia']:
+        elif self.model_config.provider in ['openai', 'openai-codex', 'xai', 'deepseek', 'openrouter', 'nvidia']:
             message = response.choices[0].message
             return not hasattr(message, 'tool_calls') or message.tool_calls is None
         elif self.model_config.provider == 'google':
@@ -880,7 +880,7 @@ class UnifiedAgent:
                 if hasattr(block, 'text'):
                     return block.text
             return str(response.content)
-        elif self.model_config.provider in ['openai', 'xai', 'deepseek', 'openrouter', 'nvidia']:
+        elif self.model_config.provider in ['openai', 'openai-codex', 'xai', 'deepseek', 'openrouter', 'nvidia']:
             return response.choices[0].message.content or "Task completed"
         elif self.model_config.provider == 'google':
             return response.text if hasattr(response, 'text') else str(response)
@@ -955,7 +955,7 @@ class UnifiedAgent:
                     })
             return tool_calls
         
-        elif self.model_config.provider in ['openai', 'xai', 'deepseek', 'openrouter', 'nvidia']:
+        elif self.model_config.provider in ['openai', 'openai-codex', 'xai', 'deepseek', 'openrouter', 'nvidia']:
             message = response.choices[0].message
             if hasattr(message, 'tool_calls') and message.tool_calls:
                 return [
@@ -994,7 +994,7 @@ class UnifiedAgent:
                 'content': content
             })
         
-        elif self.model_config.provider in ['openai', 'xai', 'deepseek', 'openrouter', 'nvidia']:
+        elif self.model_config.provider in ['openai', 'openai-codex', 'xai', 'deepseek', 'openrouter', 'nvidia']:
             for result in tool_results:
                 self.conversation_history.append({
                     'role': 'tool',
@@ -1051,8 +1051,11 @@ def create_unified_agent(
         "gpt-5.5": ModelConfig(name="gpt-5.5", provider="openai", model_id="gpt-5.5", max_context=1000000, api_type="responses"),
         "gpt-5.4": ModelConfig(name="gpt-5.4", provider="openai", model_id="gpt-5.4-2026-03-05", max_context=1050000, api_type="responses"),
         "gpt-5.4-mini": ModelConfig(name="gpt-5.4-mini", provider="openai", model_id="gpt-5.4-mini", max_context=400000, api_type="responses"),
-        "gpt-5.1-codex-max": ModelConfig(name="gpt-5.1-codex-max", provider="openai", model_id="gpt-5.1-codex-max", max_context=400000, api_type="responses"),
-        "gpt-5.2-codex": ModelConfig(name="gpt-5.2-codex", provider="openai", model_id="gpt-5.2-codex", max_context=400000, api_type="responses"),
+        "chatgpt/gpt-5.5": ModelConfig(name="chatgpt/gpt-5.5", provider="openai-codex", model_id="gpt-5.5", max_context=1000000, api_type="responses"),
+        "chatgpt/gpt-5.4": ModelConfig(name="chatgpt/gpt-5.4", provider="openai-codex", model_id="gpt-5.4", max_context=1050000, api_type="responses"),
+        "chatgpt/gpt-5.4-mini": ModelConfig(name="chatgpt/gpt-5.4-mini", provider="openai-codex", model_id="gpt-5.4-mini", max_context=400000, api_type="responses"),
+        "gpt-5.1-codex-max": ModelConfig(name="gpt-5.1-codex-max", provider="openai-codex", model_id="gpt-5.1-codex-max", max_context=400000, api_type="responses"),
+        "gpt-5.2-codex": ModelConfig(name="gpt-5.2-codex", provider="openai-codex", model_id="gpt-5.2-codex", max_context=400000, api_type="responses"),
         "gpt-4.1": ModelConfig(name="gpt-4.1", provider="openai", model_id="gpt-4.1", max_context=1047576),
         "gpt-4o": ModelConfig(name="gpt-4o", provider="openai", model_id="gpt-4o", max_context=128000),
         "gpt-4o-mini": ModelConfig(name="gpt-4o-mini", provider="openai", model_id="gpt-4o-mini", max_context=128000),

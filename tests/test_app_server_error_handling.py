@@ -4,7 +4,7 @@ import warnings
 import pytest
 from fastapi.testclient import TestClient
 
-from mobile_app.backend import app_server
+from app_backend import app_server
 
 
 def _app_with_crashing_route():
@@ -46,7 +46,7 @@ def test_unhandled_exception_response_can_include_traceback_for_debug(monkeypatc
 
 
 def test_app_lifespan_starts_and_stops_background_services(monkeypatch):
-    from mobile_app.backend import cron_runtime
+    from app_backend import cron_runtime
 
     events = []
 

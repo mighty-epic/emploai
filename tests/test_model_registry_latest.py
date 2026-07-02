@@ -34,6 +34,31 @@ def test_shared_unified_agent_maps_gpt_5_4_to_openai_snapshot():
     assert agent.model_config.api_type == "responses"
 
 
+def test_codex_subscription_models_use_separate_provider():
+    assert MODEL_CONFIGS["gpt-5.5"]["provider"] == "openai"
+    assert MODEL_CONFIGS["chatgpt/gpt-5.5"]["provider"] == "openai-codex"
+    assert MODEL_CONFIGS["chatgpt/gpt-5.5"]["id"] == "gpt-5.5"
+    assert MODEL_CONFIGS["chatgpt/gpt-5.4"]["provider"] == "openai-codex"
+    assert MODEL_CONFIGS["chatgpt/gpt-5.4-mini"]["provider"] == "openai-codex"
+
+    defaults = default_model_pair_for_enabled_providers({"openai-codex"})
+    assert defaults.model == "chatgpt/gpt-5.5"
+    assert defaults.planner_model == "chatgpt/gpt-5.4-mini"
+
+    agent = create_unified_agent(
+        model_name="chatgpt/gpt-5.5",
+        client=object(),
+        tool_executor=lambda _name, _args: None,
+        workspace=Path.cwd(),
+        logger_func=lambda _text: None,
+        system_prompt="test",
+    )
+
+    assert agent.model_config.provider == "openai-codex"
+    assert agent.model_config.model_id == "gpt-5.5"
+    assert agent.model_config.api_type == "responses"
+
+
 def test_current_gemini_models_are_registered_without_shutdown_ids():
     expected = {
         "gemini-3.5-flash",

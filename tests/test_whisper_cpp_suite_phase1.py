@@ -2,9 +2,9 @@ from pathlib import Path
 import subprocess
 from types import SimpleNamespace
 
-from mobile_app.backend import standalone_voice_engine
-from mobile_app.backend import whisper_cpp_runtime as runtime
-from mobile_app.backend import whisper_cpp_live
+from app_backend import standalone_voice_engine
+from app_backend import whisper_cpp_runtime as runtime
+from app_backend import whisper_cpp_live
 
 
 def test_release_asset_name_supports_windows_x64(monkeypatch):

@@ -5,7 +5,7 @@ import wave
 
 import pytest
 
-from mobile_app.backend import voice_runtime
+from app_backend import voice_runtime
 
 
 def _silent_wav_bytes(sample_rate: int = 16_000, seconds: float = 1.0) -> bytes:

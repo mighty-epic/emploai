@@ -29,9 +29,9 @@ function Invoke-LocalBackendJson {
         [string[]]$Arguments
     )
 
-    $output = & $PythonLauncher $PythonVersion -m deploy.windows.release_backend @Arguments 2>$null
+    $output = & $PythonLauncher $PythonVersion -m desktop_runtime.backend @Arguments 2>$null
     if ($LASTEXITCODE -ne 0) {
-        throw "Local backend command failed: $PythonLauncher $PythonVersion -m deploy.windows.release_backend $($Arguments -join ' ')"
+        throw "Local backend command failed: $PythonLauncher $PythonVersion -m desktop_runtime.backend $($Arguments -join ' ')"
     }
     return ($output | ConvertFrom-Json)
 }

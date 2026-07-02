@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from mobile_app.backend import session_bridge
+from app_backend import session_bridge
 from shared import channel_runtime
 from shared.artifact_store import ChatArtifactStore
 

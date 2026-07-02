@@ -23,8 +23,8 @@ except ImportError:
         get_auto_mode_tool_handlers,
     )
     from telegram_messaging import safe_reply, safe_edit_message
-from bot_core.ui_helpers import InlineKeyboardHelper, ThinkingModeVisualizer
-from single_agent.agent import AGENT_TOOLS
+from runtime_support.ui_helpers import InlineKeyboardHelper, ThinkingModeVisualizer
+from local_agent_runtime.agent import AGENT_TOOLS
 from shared import begin_chat_turn, merge_openai_tools, run_reserved_chat_turn
 from shared.task_board import TASK_BOARD_INTERNAL_TOOL_NAME, get_active_task_board
 from shared.task_intent import is_screen_observation_message, is_task_like_message

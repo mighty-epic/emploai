@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
-from mobile_app.backend.fleet_task_dispatch import try_dispatch_fleet_worker_task, try_stop_fleet_worker_task
-from mobile_app.backend.remote_control_store import RemoteControlPlaneStore
+from app_backend.fleet_task_dispatch import try_dispatch_fleet_worker_task, try_stop_fleet_worker_task
+from app_backend.remote_control_store import RemoteControlPlaneStore
 
 
 class _FakeFleetDesktopManager:

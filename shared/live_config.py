@@ -129,10 +129,10 @@ class LiveConfig:
             },
             'channels': {
                 'telegram': {
-                    'enabled': True
+                    'enabled': False
                 },
                 'app': {
-                    'enabled': False,
+                    'enabled': True,
                     'host': '0.0.0.0',
                     'port': 8787,
                     'auth_mode': 'token',

@@ -669,6 +669,8 @@ def _planner_model_supported(session: Any, model_name: str) -> bool:
     api = str(config.get("api", "chat"))
     if provider == "google":
         return getattr(session, "gemini_openai_client", None) is not None
+    if provider == "openai-codex":
+        return getattr(session, "openai_codex_client", None) is not None
     return provider in {"openai", "anthropic", "xai", "deepseek", "openrouter", "nvidia"} and api != "responses"
 
 
@@ -718,7 +720,7 @@ def _planner_create_completion(model_name: str, provider: str, client: Any, prom
     user_prompt = json.dumps(prompt_payload, ensure_ascii=True, indent=2)
     model_id = MODEL_CONFIGS.get(model_name, {}).get("id", model_name)
 
-    if provider in {"openai", "xai", "deepseek", "openrouter", "nvidia", "google"}:
+    if provider in {"openai", "openai-codex", "xai", "deepseek", "openrouter", "nvidia", "google"}:
         response = create_openai_completion(
             client,
             model_name=model_name,

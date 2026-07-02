@@ -21,6 +21,12 @@ contextBridge.exposeInMainWorld('emploaiDesktop', {
     save: (payload) => ipcRenderer.invoke('emploai:setup:save', payload),
     validateField: (payload) => ipcRenderer.invoke('emploai:setup:validate-field', payload),
   },
+  codexAuth: {
+    status: () => ipcRenderer.invoke('emploai:codex-auth:status'),
+    startDevice: () => ipcRenderer.invoke('emploai:codex-auth:start-device'),
+    pollDevice: () => ipcRenderer.invoke('emploai:codex-auth:poll-device'),
+    logout: () => ipcRenderer.invoke('emploai:codex-auth:logout'),
+  },
   remoteAuth: {
     status: () => ipcRenderer.invoke('emploai:remote-auth:status'),
     login: (payload) => ipcRenderer.invoke('emploai:remote-auth:login', payload),

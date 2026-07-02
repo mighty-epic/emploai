@@ -24,6 +24,7 @@ type Props = {
   onSetVoiceDefaultEngine: (nextEngine: string) => void;
   onToggleVoicePackRequest: (pack: DesktopVoicePackSummary) => void;
   onInstallVoicePack?: (packId: string) => void;
+  onSelectTtsVoicePack?: (pack: DesktopVoicePackSummary) => void;
   onRemoveVoicePack?: (packId: string) => void;
 };
 
@@ -81,6 +82,7 @@ export function DesktopSetupVoiceSection({
   onSetVoiceDefaultEngine,
   onToggleVoicePackRequest,
   onInstallVoicePack,
+  onSelectTtsVoicePack,
   onRemoveVoicePack,
 }: Props) {
   const isVoicePackBusy = (packId: string) => voicePackBusyId === packId;
@@ -250,7 +252,17 @@ export function DesktopSetupVoiceSection({
             const activeProgress = isVoicePackBusy(pack.id) ? voicePackProgress : null;
             const busy = isVoicePackBusy(pack.id);
             const packBackend = String(pack.backend || '').trim();
-            const active = Boolean(packBackend && selectedTtsBackend === packBackend);
+            const usableInstalledPack = Boolean(pack.available);
+            const active = Boolean(pack.enabled || (packBackend && selectedTtsBackend === packBackend));
+            const primaryLabel = busy
+              ? 'Working...'
+              : active
+                ? 'Active'
+                : usableInstalledPack
+                  ? 'Use Pack'
+                  : pack.installed
+                    ? 'Reinstall and Use'
+                    : 'Install and Use';
             return (
               <View key={pack.id} style={styles.voicePackCard}>
                 <View style={styles.voicePackHeader}>
@@ -276,12 +288,16 @@ export function DesktopSetupVoiceSection({
                       styles.voicePackActionButton,
                       active || busy ? styles.voiceModeButtonDisabled : null,
                     ]}
-                    onPress={() => onInstallVoicePack?.(pack.id)}
+                    onPress={() => {
+                      if (usableInstalledPack) {
+                        onSelectTtsVoicePack?.(pack);
+                        return;
+                      }
+                      onInstallVoicePack?.(pack.id);
+                    }}
                     disabled={active || busy}
                   >
-                    <Text style={styles.voicePackActionText}>
-                      {busy ? 'Working...' : pack.installed ? 'Use Pack' : 'Install and Use'}
-                    </Text>
+                    <Text style={styles.voicePackActionText}>{primaryLabel}</Text>
                   </Pressable>
                   {pack.installed ? (
                     <Pressable

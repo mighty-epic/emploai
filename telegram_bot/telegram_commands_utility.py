@@ -9,7 +9,7 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from bot_core.ui_helpers import InlineKeyboardHelper
+from runtime_support.ui_helpers import InlineKeyboardHelper
 
 
 logger = logging.getLogger(__name__)

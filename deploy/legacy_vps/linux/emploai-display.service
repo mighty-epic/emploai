@@ -1,0 +1,20 @@
+[Unit]
+Description=EmploAI persistent virtual display
+After=network.target
+
+[Service]
+Type=simple
+User=emploai
+Group=emploai
+WorkingDirectory=/opt/emploai
+Environment=DISPLAY_NUM=:99
+Environment=DISPLAY_GEOMETRY=1920x1080x24
+Environment=VNC_PORT=5900
+Environment=VNC_BIND_LOCALHOST=1
+Environment=XAUTH_FILE=/opt/emploai/.xauth/emploai-xauth
+ExecStart=/bin/bash /opt/emploai/deploy/legacy_vps/linux/start-display.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

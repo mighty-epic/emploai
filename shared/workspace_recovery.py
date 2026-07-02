@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from shared.cloud_object_store import CloudObjectStore
 from shared.runtime_paths import user_state_root
+from shared.standalone_policy import cloud_backend_enabled
 
 
 _FILE_ACCESS_RE = re.compile(
@@ -63,6 +64,14 @@ def restore_cloud_workspace_files(
     target_dir: Optional[Path] = None,
 ) -> WorkspacePreflightResult:
     target = Path(target_dir).expanduser().resolve() if target_dir else managed_workspace_path(user_id=user_id, workspace_id=workspace_id)
+    if not cloud_backend_enabled():
+        return WorkspacePreflightResult(
+            ok=False,
+            action="cloud_disabled",
+            workspace_id=workspace_id,
+            restored_path=str(target),
+            message="Cloud workspace restore is disabled in standalone desktop mode.",
+        )
     store = CloudObjectStore(user_id=int(user_id))
     restored: List[Dict[str, Any]] = []
     missing: List[Dict[str, Any]] = []
@@ -154,6 +163,10 @@ def ensure_session_workspace_ready_for_task(
         ],
         message=(
             "This task appears to need local workspace files, but this machine does not have the folder and "
-            "there is no cloud-saved generated/evidence copy to restore. Reconnect the original folder or upload the needed files."
+            + (
+                "cloud restore is disabled in standalone mode. Reconnect the original folder or upload the needed files."
+                if restored.action == "cloud_disabled"
+                else "there is no cloud-saved generated/evidence copy to restore. Reconnect the original folder or upload the needed files."
+            )
         ),
     )

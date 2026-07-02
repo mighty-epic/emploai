@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from cli.models.session import Session
 from cli.session_manager import SessionManager
-from mobile_app.backend import app_server, runtime, session_bridge
+from app_backend import app_server, runtime, session_bridge
 from shared.task_board import create_task_board
 from shared.tool_packs import default_enabled_tool_packs
 from telegram_bot.telegram_session_state import TelegramSession

@@ -22,9 +22,9 @@ It is not the older heavier Hebrew stack. The current path is:
 - `scripts/hebrew_whisper_live_terminal.py`
 - `scripts/start_hebrew_whisper_live.ps1`
 - `scripts/test_hebrew_whisper_local.py`
-- `mobile_app/backend/hebrew_transformers_runtime.py`
-- `mobile_app/backend/voice_pack_manager.py`
-- `mobile_app/backend/voice_runtime.py`
+- `app_backend/hebrew_transformers_runtime.py`
+- `app_backend/voice_pack_manager.py`
+- `app_backend/voice_runtime.py`
 
 The runtime model currently used for testing is:
 
@@ -71,11 +71,12 @@ The working runtime-ready folder contains:
 
 ## Local Runtime Constraints
 
-The local Hebrew path currently depends on the packaged Python runtime under:
+In source checkouts, the local Hebrew path uses the active Python environment
+and the local voice-pack/runtime files managed by `app_backend/voice_pack_manager.py`.
+Older packaged builds used a bundled backend runtime directory, but that path is
+no longer part of the current source layout.
 
-- `desktop_app/backend/_internal`
-
-That includes the local `torch` / `transformers` environment used by:
+The Python environment must include the local `torch` / `transformers` stack used by:
 
 - `scripts/test_hebrew_whisper_local.py`
 - `scripts/hebrew_whisper_live_terminal.py`

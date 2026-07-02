@@ -8,6 +8,8 @@ from cli.tui_constants import MODEL_CONFIGS
 
 OPENAI_DEFAULT_MODEL = "gpt-5.4-mini"
 OPENAI_DEFAULT_PLANNER_MODEL = "gpt-5.4-mini"
+OPENAI_CODEX_DEFAULT_MODEL = "chatgpt/gpt-5.5"
+OPENAI_CODEX_DEFAULT_PLANNER_MODEL = "chatgpt/gpt-5.4-mini"
 ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4.5"
 ANTHROPIC_DEFAULT_PLANNER_MODEL = "claude-haiku-4.5"
 GOOGLE_DEFAULT_MODEL = "gemini-3.5-flash"
@@ -37,6 +39,8 @@ def provider_for_model(
 def default_model_pair_for_enabled_providers(enabled_providers: set[str]) -> DefaultModelPair:
     if "openai" in enabled_providers:
         return DefaultModelPair(OPENAI_DEFAULT_MODEL, OPENAI_DEFAULT_PLANNER_MODEL)
+    if "openai-codex" in enabled_providers:
+        return DefaultModelPair(OPENAI_CODEX_DEFAULT_MODEL, OPENAI_CODEX_DEFAULT_PLANNER_MODEL)
     if "anthropic" in enabled_providers:
         return DefaultModelPair(ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_DEFAULT_PLANNER_MODEL)
     if "google" in enabled_providers:
@@ -55,6 +59,8 @@ def default_planner_for_model(
     provider = provider_for_model(model_name, model_configs)
     if provider == "openai":
         return OPENAI_DEFAULT_PLANNER_MODEL
+    if provider == "openai-codex":
+        return OPENAI_CODEX_DEFAULT_PLANNER_MODEL
     if provider == "anthropic":
         return ANTHROPIC_DEFAULT_PLANNER_MODEL
     if provider == "google":

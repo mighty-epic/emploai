@@ -7,7 +7,7 @@ from telegram_bot.telegram_unified_agent import (
     _execute_browser_snapshot,
     build_unified_system_prompt,
 )
-from single_agent.browser_actions import browser_error, browser_success
+from local_agent_runtime.browser_actions import browser_error, browser_success
 
 
 class DummyConfig(dict):

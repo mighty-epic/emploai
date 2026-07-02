@@ -61,8 +61,13 @@ class ContextLoader:
         return None
 
     def _bundled_agent_data_dir(self) -> Optional[Path]:
-        candidate = self.workspace / "telegram_bot" / "agent_data"
-        return candidate if candidate.is_dir() else None
+        for candidate in (
+            self.workspace / "runtime_context",
+            self.workspace / "telegram_bot" / "agent_data",
+        ):
+            if candidate.is_dir():
+                return candidate
+        return None
 
     def _candidate_directories(self) -> list[Path]:
         candidates = [

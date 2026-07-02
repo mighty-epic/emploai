@@ -9,11 +9,15 @@ MEMORY.md
 WORK_IN_PROGRESS.md
 jobs.json
 bot_core/data/analytics.json
+runtime_support/data/analytics.json
+data/analytics.json
+data/
 SYSTEM_HEALTH_REPORT.md
 config.local.json
 config.*.local.json
 jobs.local.json
 memory/
+.tools/
 .xauth/
 .electron-data/
 venv/
@@ -31,7 +35,11 @@ __pycache__/
 telegram_bot/jobs.json
 telegram_bot/logs/
 telegram_bot/single_agent/screenshots/
+app/static/screenshots/
+legacy_web_app/static/screenshots/
+local_agent_runtime/screenshots/
 single_agent/screenshots/
+single_agent/single_agent/screenshots/
 test_outputs/whisper_cpp/
 test_outputs/
 
@@ -64,6 +72,7 @@ emplo-own/
 git-push-test/
 agent_data/AGENTS.md
 m/
+test_workspace/
 temp/
 tmp/
 tmp_*

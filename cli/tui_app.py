@@ -34,7 +34,7 @@ from cli.tui_input import AgentShellInputMixin
 from cli.tui_logging import log, run_safe
 from cli.tui_settings import SettingsScreen
 from cli.agent_tools.loop import run_tool_loop
-from single_agent.agent import SingleAgent
+from local_agent_runtime.agent import SingleAgent
 
 from cli.tui_constants import (
     AGENT_MODE_COLORS,
@@ -180,7 +180,7 @@ class ChatProcessor:
                 if hasattr(self.single_agent, "tools"):
                     # SingleAgent.tools is a dict of name: function
                     # We need the OpenAI-style tool definitions (AGENT_TOOLS in agent.py)
-                    from single_agent.agent import AGENT_TOOLS
+                    from local_agent_runtime.agent import AGENT_TOOLS
                     extra_tools = AGENT_TOOLS
                     
                     # Build custom prompt with skills index

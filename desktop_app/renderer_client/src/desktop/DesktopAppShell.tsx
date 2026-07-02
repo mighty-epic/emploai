@@ -10,6 +10,7 @@ import {
   denyPendingConfirmation,
   createTelegramBotConfig,
   fetchAgentOverview,
+  fetchAgentConfig,
   fetchPendingConfirmations,
   fetchRecoveryItems,
   fetchRuntimeOrchestratorStatus,
@@ -431,6 +432,60 @@ export function DesktopAppShell() {
   }, [remoteAuthStatus?.profile]);
 
   useEffect(() => {
+    const standaloneMode = Boolean(remoteAuthStatus?.cloudDisabled || remoteAuthStatus?.standalone);
+    if (!standaloneMode || !bootstrap?.apiBaseUrl || !bootstrap?.accessToken) {
+      return;
+    }
+    let disposed = false;
+    const configKeys = [
+      'agent.custom_system_prompt_append',
+      'agent.max_turns',
+      'memory.prompt_context_enabled',
+      'memory.search_enabled',
+      'memory.write_enabled',
+    ];
+    Promise.all(
+      configKeys.map((key) => (
+        fetchAgentConfig(bootstrap.apiBaseUrl, bootstrap.accessToken, key, bootstrap.currentSessionId || undefined)
+          .then((result) => result.items?.[0] || null)
+          .catch(() => null)
+      )),
+    ).then((items) => {
+      if (disposed) {
+        return;
+      }
+      const valueFor = (key: string) => items.find((item) => item?.key === key)?.value;
+      const promptValue = valueFor('agent.custom_system_prompt_append');
+      const maxTurnsValue = valueFor('agent.max_turns');
+      setSharedSettingsDraft((current) => ({
+        ...(current || profileToSharedSettingsDraft(null)),
+        cloudChatBackupEnabled: false,
+        customSystemPromptAppend: typeof promptValue === 'string' ? promptValue : current?.customSystemPromptAppend || '',
+        maxTurns: typeof maxTurnsValue === 'number' && maxTurnsValue > 0
+          ? String(maxTurnsValue)
+          : setupMaxTurns
+            ? String(setupMaxTurns)
+            : current?.maxTurns || '',
+        sleepModeEnabled: Boolean(orchestratorStatus?.headless_mode_enabled),
+        memoryPromptContextEnabled: valueFor('memory.prompt_context_enabled') !== false,
+        memorySearchEnabled: valueFor('memory.search_enabled') !== false,
+        memoryWriteEnabled: valueFor('memory.write_enabled') !== false,
+      }));
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [
+    bootstrap?.accessToken,
+    bootstrap?.apiBaseUrl,
+    bootstrap?.currentSessionId,
+    orchestratorStatus?.headless_mode_enabled,
+    remoteAuthStatus?.cloudDisabled,
+    remoteAuthStatus?.standalone,
+    setupMaxTurns,
+  ]);
+
+  useEffect(() => {
     bootstrapRef.current = bootstrap;
   }, [bootstrap]);
 
@@ -653,7 +708,7 @@ export function DesktopAppShell() {
   };
 
   const remoteAccountHydrationKey = () => {
-    if (!remoteAuthStatus?.signedIn) {
+    if (!remoteAuthStatus?.signedIn || remoteAuthStatus?.cloudDisabled) {
       return null;
     }
     return [
@@ -667,6 +722,7 @@ export function DesktopAppShell() {
     const hydrationKey = remoteAccountHydrationKey();
     return Boolean(
       remoteAuthStatus?.signedIn
+      && !remoteAuthStatus?.cloudDisabled
       && hydrationKey
       && remoteAccountHydratedKeyRef.current !== hydrationKey
     );
@@ -756,7 +812,7 @@ export function DesktopAppShell() {
   };
 
   const hydrateSignedInAccountData = async () => {
-    if (!remoteAuthStatus?.signedIn) {
+    if (!remoteAuthStatus?.signedIn || remoteAuthStatus?.cloudDisabled) {
       return null;
     }
     setRemoteAccountHydrating(true);
@@ -1194,12 +1250,9 @@ export function DesktopAppShell() {
       setLoadingState('Checking account');
       return;
     }
-    if (!remoteAuthStatus?.signedIn) {
-      setLoadingState('Sign-in required');
-      return;
-    }
-    const hydrationKey = remoteAccountHydrationKey();
-    if (hydrationKey && remoteAccountHydratedKeyRef.current !== hydrationKey) {
+    const accountHydrationEnabled = Boolean(remoteAuthStatus?.signedIn && !remoteAuthStatus?.cloudDisabled);
+    const hydrationKey = accountHydrationEnabled ? remoteAccountHydrationKey() : '';
+    if (accountHydrationEnabled && hydrationKey && remoteAccountHydratedKeyRef.current !== hydrationKey) {
       if (remoteAccountHydrationInFlightKeyRef.current === hydrationKey || remoteAccountHydrating) {
         setLoadingState('Loading saved setup');
         return;
@@ -1768,6 +1821,7 @@ export function DesktopAppShell() {
     refreshMemory,
     saveMemory,
     installVoicePack,
+    selectTtsVoicePack,
     removeVoicePack,
     selectVoiceEngine,
     installUpdateNow,
@@ -1874,5 +1928,5 @@ export function DesktopAppShell() {
     window.history.forward();
   };
 
-  return <DesktopAppShellView scope={{ confirmAction, confirmationDialog, params, requestedSessionId, requestedTab, requestedDesktopRoute, requestedDesktopMode, requestedSurfaceMode, activeTab, setActiveTab, bootstrap, setBootstrap, runtimeStatus, setRuntimeStatus, updateStatus, setUpdateStatus, loadingState, setLoadingState, error, setError, notice, setNotice, accountMenuOpen, setAccountMenuOpen, conversationSidebarToggleSignal, setConversationSidebarToggleSignal, startupPhase, setStartupPhase, startupErrorDetail, setStartupErrorDetail, startupCurrentTimeoutSeconds, setStartupCurrentTimeoutSeconds, showSetup, setShowSetup, startingRuntime, setStartingRuntime, stoppingRuntime, setStoppingRuntime, savingSetup, setSavingSetup, voicePackBusyId, setVoicePackBusyId, voicePackProgress, setVoicePackProgress, checkingUpdates, setCheckingUpdates, installingUpdate, setInstallingUpdate, memoryState, setMemoryState, memoryLoading, setMemoryLoading, memorySaving, setMemorySaving, telegramBotConfigs, setTelegramBotConfigs, orchestratorStatus, setOrchestratorStatus, setupSessions, setSetupSessions, setupMaxTurns, setSetupMaxTurns, recoveryItems, setRecoveryItems, pendingConfirmations, setPendingConfirmations, recoveryBusyId, setRecoveryBusyId, recoveryMessage, setRecoveryMessage, sharedSettingsDraft, setSharedSettingsDraft, sharedSettingsSaving, setSharedSettingsSaving, sharedSettingsStatus, setSharedSettingsStatus, remoteAuthStatus, setRemoteAuthStatus, remoteAuthLoading, setRemoteAuthLoading, remoteAuthBusy, setRemoteAuthBusy, remoteAuthLoggingOut, setRemoteAuthLoggingOut, remoteAuthMode, setRemoteAuthMode, remoteAuthEmail, setRemoteAuthEmail, remoteAuthPassword, setRemoteAuthPassword, remoteAuthDisplayName, setRemoteAuthDisplayName, remoteAuthRememberMe, setRemoteAuthRememberMe, remoteAuthOtpChallenge, setRemoteAuthOtpChallenge, remoteAuthOtpCode, setRemoteAuthOtpCode, remoteAuthMessage, setRemoteAuthMessage, remoteSecretItems, setRemoteSecretItems, remoteSecretsBusy, setRemoteSecretsBusy, remoteSecretsMessage, setRemoteSecretsMessage, remoteAccountHydrating, setRemoteAccountHydrating, remoteAccountSetupCheckPending, startupPhaseRef, startupWatchdogTimerRef, startupFlowInFlightRef, startupInitializedRef, startupAutoRetryAttemptedRef, startupAutoRetryInFlightRef, startupDeferredRetryTimeoutRef, startupRecoveryInFlightRef, postStartupRefreshKeyRef, postStartupSetupNoticeSentRef, previousTelegramStateRef, bootstrapRef, runtimeStatusRef, startupSleepWakeAttemptedRef, startupVoiceWarmKeyRef, remoteAccountHydratedKeyRef, remoteAccountHydrationInFlightKeyRef, runtimeDowngradeRecheckInFlightRef, resetAccountStartupState, refreshRemoteAuthStatus, submitRemoteAuth, verifyRemoteAuthOtp, resendRemoteAuthOtp, submitRemoteGoogleAuth, currentStartupWatchdogMs, nextStartupRetryWindowSeconds, setRuntimeStatusWithRef, shouldPreserveReadyRuntimeStatus, scheduleReadyRuntimeDowngradeRecheck, applyBootstrap, remoteAccountHydrationKey, hydrateSignedInAccountData, failStartup, retryStartupSilently, handleStartupFailure, beginStartup, refreshUpdateStatus, wakeDesktopFromSleepMode, reconnectDesktopAfterWindowReopen, recoverReadyRuntimeFromStatus, remoteRuntimes, effectiveRuntimeStatus, localRuntimeReady, runtimeProcessDetected, setupBlocksRuntime, chatSkeletonVisible, handleConversationStartupState, refreshSetupRuntimeControls, retryStartup, startLocalRuntime, stopLocalRuntimeNow, logoutRemoteAccount, deleteRemoteAccountData, refreshRecovery, setCloudChatBackupEnabled, saveSharedSettings, approveSharedConfirmation, denySharedConfirmation, restoreArchivedItem, permanentlyDeleteArchivedItem, restoreManagedWorkspace, deleteRemoteSecretFromCloud, createRemotePairingTokenFromAccount, refreshRemoteSecretItems, saveCurrentSetupSecretsToCloud, saveLoginCredentialSecretsToCloud, saveTelegramBotSecretToCloud, applyCloudSetupSecrets, saveSetup, refreshMemory, saveMemory, installVoicePack, removeVoicePack, selectVoiceEngine, installUpdateNow, createSetupTelegramBot, updateSetupTelegramBot, deleteSetupTelegramBot, configureRuntimeOrchestratorFromSetup, updateSetupGeneralAgentConfig, runtimeSummary, showStartupRuntimeSummary, updateAvailable, accountEmail, telegramStatus, telegramSummary, telegramStatusTone, navigateWindowHistory }} />;
+  return <DesktopAppShellView scope={{ confirmAction, confirmationDialog, params, requestedSessionId, requestedTab, requestedDesktopRoute, requestedDesktopMode, requestedSurfaceMode, activeTab, setActiveTab, bootstrap, setBootstrap, runtimeStatus, setRuntimeStatus, updateStatus, setUpdateStatus, loadingState, setLoadingState, error, setError, notice, setNotice, accountMenuOpen, setAccountMenuOpen, conversationSidebarToggleSignal, setConversationSidebarToggleSignal, startupPhase, setStartupPhase, startupErrorDetail, setStartupErrorDetail, startupCurrentTimeoutSeconds, setStartupCurrentTimeoutSeconds, showSetup, setShowSetup, startingRuntime, setStartingRuntime, stoppingRuntime, setStoppingRuntime, savingSetup, setSavingSetup, voicePackBusyId, setVoicePackBusyId, voicePackProgress, setVoicePackProgress, checkingUpdates, setCheckingUpdates, installingUpdate, setInstallingUpdate, memoryState, setMemoryState, memoryLoading, setMemoryLoading, memorySaving, setMemorySaving, telegramBotConfigs, setTelegramBotConfigs, orchestratorStatus, setOrchestratorStatus, setupSessions, setSetupSessions, setupMaxTurns, setSetupMaxTurns, recoveryItems, setRecoveryItems, pendingConfirmations, setPendingConfirmations, recoveryBusyId, setRecoveryBusyId, recoveryMessage, setRecoveryMessage, sharedSettingsDraft, setSharedSettingsDraft, sharedSettingsSaving, setSharedSettingsSaving, sharedSettingsStatus, setSharedSettingsStatus, remoteAuthStatus, setRemoteAuthStatus, remoteAuthLoading, setRemoteAuthLoading, remoteAuthBusy, setRemoteAuthBusy, remoteAuthLoggingOut, setRemoteAuthLoggingOut, remoteAuthMode, setRemoteAuthMode, remoteAuthEmail, setRemoteAuthEmail, remoteAuthPassword, setRemoteAuthPassword, remoteAuthDisplayName, setRemoteAuthDisplayName, remoteAuthRememberMe, setRemoteAuthRememberMe, remoteAuthOtpChallenge, setRemoteAuthOtpChallenge, remoteAuthOtpCode, setRemoteAuthOtpCode, remoteAuthMessage, setRemoteAuthMessage, remoteSecretItems, setRemoteSecretItems, remoteSecretsBusy, setRemoteSecretsBusy, remoteSecretsMessage, setRemoteSecretsMessage, remoteAccountHydrating, setRemoteAccountHydrating, remoteAccountSetupCheckPending, startupPhaseRef, startupWatchdogTimerRef, startupFlowInFlightRef, startupInitializedRef, startupAutoRetryAttemptedRef, startupAutoRetryInFlightRef, startupDeferredRetryTimeoutRef, startupRecoveryInFlightRef, postStartupRefreshKeyRef, postStartupSetupNoticeSentRef, previousTelegramStateRef, bootstrapRef, runtimeStatusRef, startupSleepWakeAttemptedRef, startupVoiceWarmKeyRef, remoteAccountHydratedKeyRef, remoteAccountHydrationInFlightKeyRef, runtimeDowngradeRecheckInFlightRef, resetAccountStartupState, refreshRemoteAuthStatus, submitRemoteAuth, verifyRemoteAuthOtp, resendRemoteAuthOtp, submitRemoteGoogleAuth, currentStartupWatchdogMs, nextStartupRetryWindowSeconds, setRuntimeStatusWithRef, shouldPreserveReadyRuntimeStatus, scheduleReadyRuntimeDowngradeRecheck, applyBootstrap, remoteAccountHydrationKey, hydrateSignedInAccountData, failStartup, retryStartupSilently, handleStartupFailure, beginStartup, refreshUpdateStatus, wakeDesktopFromSleepMode, reconnectDesktopAfterWindowReopen, recoverReadyRuntimeFromStatus, remoteRuntimes, effectiveRuntimeStatus, localRuntimeReady, runtimeProcessDetected, setupBlocksRuntime, chatSkeletonVisible, handleConversationStartupState, refreshSetupRuntimeControls, retryStartup, startLocalRuntime, stopLocalRuntimeNow, logoutRemoteAccount, deleteRemoteAccountData, refreshRecovery, setCloudChatBackupEnabled, saveSharedSettings, approveSharedConfirmation, denySharedConfirmation, restoreArchivedItem, permanentlyDeleteArchivedItem, restoreManagedWorkspace, deleteRemoteSecretFromCloud, createRemotePairingTokenFromAccount, refreshRemoteSecretItems, saveCurrentSetupSecretsToCloud, saveLoginCredentialSecretsToCloud, saveTelegramBotSecretToCloud, applyCloudSetupSecrets, saveSetup, refreshMemory, saveMemory, installVoicePack, selectTtsVoicePack, removeVoicePack, selectVoiceEngine, installUpdateNow, createSetupTelegramBot, updateSetupTelegramBot, deleteSetupTelegramBot, configureRuntimeOrchestratorFromSetup, updateSetupGeneralAgentConfig, runtimeSummary, showStartupRuntimeSummary, updateAvailable, accountEmail, telegramStatus, telegramSummary, telegramStatusTone, navigateWindowHistory }} />;
 }

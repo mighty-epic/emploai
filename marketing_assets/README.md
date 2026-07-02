@@ -30,6 +30,10 @@ Use this loop for every Kraitos social campaign:
 
 ## File Registry
 
+0. **[CMO_RULES.md](CMO_RULES.md)**:
+   - Rules, persona, safety boundaries, and campaign workflow for Kraitos marketing agents.
+   - Load before creating or scheduling marketing content.
+
 1. **[kraitos_launch_plan.md](kraitos_launch_plan.md)**:
    - Brand migration plan from EmploAI to Kraitos.
    - Launch-week cadence, positioning, HyperFrames brief, and success metrics.

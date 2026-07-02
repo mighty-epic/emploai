@@ -337,7 +337,7 @@ class ContextManager:
                 except Exception:
                     continue
 
-        if tokenizer_family in {"openai", "xai", "deepseek", "nvidia"} and tiktoken is not None:
+        if tokenizer_family in {"openai", "openai-codex", "xai", "deepseek", "nvidia"} and tiktoken is not None:
             count = self._count_tokens_with_tiktoken(messages, model_id)
             if count is not None:
                 return count, "tiktoken"

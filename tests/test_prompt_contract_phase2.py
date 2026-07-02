@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from cli.chat_processor_core import build_tui_auto_system_prompt
 from cli.tui_constants import UNIFIED_AGENT_PROMPT
-from mobile_app.backend import runtime as app_runtime
+from app_backend import runtime as app_runtime
 from shared import channel_runtime
 from shared.task_board import TASK_BOARD_INTERNAL_TOOL_NAME
 from shared.task_intent import request_requires_tool_evidence
@@ -409,7 +409,7 @@ def test_unified_system_prompt_only_lists_enabled_tool_packs():
     assert "# MANAGED TASK BOARD RUNTIME" not in prompt
 
 
-def test_unified_system_prompt_appends_account_custom_instructions_after_core_prompt():
+def test_unified_system_prompt_appends_local_custom_instructions_after_core_prompt():
     session = SimpleNamespace(
         enabled_tool_packs=[PACK_WORKSPACE_READ],
         system_info="Active Windows: EmploAI App",
@@ -426,8 +426,8 @@ def test_unified_system_prompt_appends_account_custom_instructions_after_core_pr
     prompt = build_unified_system_prompt(session)
 
     assert "## CORE CONTRACT" in prompt
-    assert "## ACCOUNT CUSTOM INSTRUCTIONS\nPrefer concise answers for this account." in prompt
-    assert prompt.index("## CORE CONTRACT") < prompt.index("## ACCOUNT CUSTOM INSTRUCTIONS")
+    assert "## LOCAL CUSTOM INSTRUCTIONS - APPEND ONLY (managed local section)\nPrefer concise answers for this account." in prompt
+    assert prompt.index("## CORE CONTRACT") < prompt.index("## LOCAL CUSTOM INSTRUCTIONS")
 
 
 def test_unified_system_prompt_includes_task_board_only_when_active():

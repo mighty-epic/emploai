@@ -59,12 +59,50 @@ export type DesktopRemoteAccountDesktop = {
 
 export type DesktopRemoteAuthStatus = {
   signedIn: boolean;
+  cloudDisabled?: boolean;
+  mobileDisabled?: boolean;
+  standalone?: boolean;
   apiBaseUrl?: string | null;
   user?: DesktopRemoteAccountUser | null;
   desktop?: DesktopRemoteAccountDesktop | null;
   profile?: Record<string, unknown> | null;
   error?: string | null;
+  detail?: string | null;
   sessionPath?: string | null;
+  sessionStorage?: string | null;
+};
+
+export type DesktopCodexAuthStatus = {
+  provider?: string;
+  configured: boolean;
+  signedIn?: boolean;
+  authMode?: string | null;
+  baseUrl?: string | null;
+  accountId?: string | null;
+  expiresAt?: number | null;
+  expiresAtIso?: string | null;
+  hasRefreshToken?: boolean;
+  accessTokenUsable?: boolean;
+  pendingDeviceLogin?: boolean;
+  authPath?: string | null;
+  ok?: boolean;
+  state?: string | null;
+  detail?: string | null;
+  error?: string | null;
+};
+
+export type DesktopCodexDeviceLogin = {
+  ok: boolean;
+  provider?: string;
+  verification_uri?: string;
+  verificationUri?: string;
+  user_code?: string;
+  userCode?: string;
+  interval_seconds?: number;
+  intervalSeconds?: number;
+  expires_at?: number;
+  expiresAt?: number;
+  authPath?: string | null;
 };
 
 export type DesktopRemoteAuthOtpChallenge = {
@@ -347,6 +385,7 @@ export type DesktopSetupState = {
   voiceStatus?: DesktopVoiceRuntimeStatus | null;
   voicePacks?: DesktopVoicePackState | null;
   remoteControlStatus?: DesktopRemoteControlStatus | null;
+  codexAuth?: DesktopCodexAuthStatus | null;
 };
 
 export type DesktopMemoryState = {
@@ -476,6 +515,12 @@ type DesktopBridge = {
   setup?: {
     save: (payload: { values: Partial<DesktopSetupValues>; restart_policy?: 'auto' | 'never' }) => Promise<DesktopBootstrap>;
     validateField: (payload: { field: keyof DesktopSetupValues | string; value: string }) => Promise<DesktopSetupFieldValidation>;
+  };
+  codexAuth?: {
+    status: () => Promise<DesktopCodexAuthStatus>;
+    startDevice: () => Promise<DesktopCodexDeviceLogin>;
+    pollDevice: () => Promise<DesktopCodexAuthStatus>;
+    logout: () => Promise<DesktopCodexAuthStatus>;
   };
   remoteAuth?: {
     status: () => Promise<DesktopRemoteAuthStatus>;
@@ -639,6 +684,38 @@ export async function validateDesktopSetupField(field: keyof DesktopSetupValues 
     return null;
   }
   return bridge.setup.validateField({ field, value });
+}
+
+export async function loadDesktopCodexAuthStatus() {
+  const bridge = getDesktopBridge();
+  if (!bridge?.codexAuth?.status) {
+    return null;
+  }
+  return bridge.codexAuth.status();
+}
+
+export async function startDesktopCodexDeviceLogin() {
+  const bridge = getDesktopBridge();
+  if (!bridge?.codexAuth?.startDevice) {
+    return null;
+  }
+  return bridge.codexAuth.startDevice();
+}
+
+export async function pollDesktopCodexDeviceLogin() {
+  const bridge = getDesktopBridge();
+  if (!bridge?.codexAuth?.pollDevice) {
+    return null;
+  }
+  return bridge.codexAuth.pollDevice();
+}
+
+export async function logoutDesktopCodexAuth() {
+  const bridge = getDesktopBridge();
+  if (!bridge?.codexAuth?.logout) {
+    return null;
+  }
+  return bridge.codexAuth.logout();
 }
 
 export async function loadDesktopRemoteAuthStatus() {

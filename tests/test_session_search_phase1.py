@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from cli.session_manager import SessionManager
-from mobile_app.backend import app_server
+from app_backend import app_server
 
 
 def _create_session_with_messages(

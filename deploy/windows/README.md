@@ -1,6 +1,18 @@
-# Windows Desktop Release
+# Windows Desktop Runtime And Legacy Packaging
 
-This release path builds the desktop-first Windows app:
+The current development and user path is to run the desktop app directly:
+
+```powershell
+npm start
+```
+
+This folder now contains legacy Windows packaging scripts plus compatibility wrappers for runtime modules that moved to `desktop_runtime/`. MSI packaging is preserved for later but is not the default standalone desktop workflow right now.
+
+Use `python -m desktop_runtime.backend <command>` for current local runtime helper commands. The old `python -m deploy.windows.release_backend <command>` path remains as a compatibility wrapper.
+
+## Legacy MSI Release
+
+The preserved release path builds the desktop-first Windows app:
 
 - `EmploAI.msi` - per-user Windows installer with upgrade support.
 - `dist\desktop\EmploAI-win32-x64\EmploAI.exe` - packaged Electron app produced before MSI wrapping.
@@ -59,7 +71,7 @@ The desktop app is an Electron shell around the exported desktop Expo web render
 Build artifacts are assembled as follows:
 
 1. `npm --prefix desktop_app/renderer_client run export:web` writes the renderer to `desktop_app/renderer_client/dist`.
-2. PyInstaller builds `deploy/windows/release_backend.py` into `dist\EmploAIBackend\EmploAIBackend.exe`.
+2. PyInstaller builds `desktop_runtime/backend.py` into `dist\EmploAIBackend\EmploAIBackend.exe`.
 3. The build copies the renderer into `desktop_app\renderer`.
 4. The build copies the backend bundle into `desktop_app\backend`.
 5. `electron-packager` builds `dist\desktop\EmploAI-win32-x64`.
@@ -67,7 +79,7 @@ Build artifacts are assembled as follows:
 
 Electron development mode and packaged mode intentionally differ only in where they load artifacts from:
 
-- Development Electron uses `desktop_app/renderer_client/dist/index.html` and `python -m deploy.windows.release_backend`.
+- Development Electron uses `desktop_app/renderer_client/dist/index.html` and `python -m desktop_runtime.backend`.
 - Packaged Electron uses `renderer/index.html` and `backend/EmploAIBackend.exe` from the installed app directory.
 
 The app functionality should be identical across both paths.
@@ -129,7 +141,7 @@ npm --prefix mobile_app/client run typecheck
 npm --prefix desktop_app/renderer_client run typecheck
 npm --prefix desktop_app/renderer_client run export:web
 python -m pip install -r requirements.txt
-python -m deploy.windows.release_backend status
+python -m desktop_runtime.backend status
 powershell -ExecutionPolicy Bypass -File .\deploy\windows\build_beta_release.ps1
 ```
 

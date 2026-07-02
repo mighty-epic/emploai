@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import deploy.windows.release_backend as release_backend
+import desktop_runtime.backend as desktop_backend
 
 
 def _http_json(
@@ -99,7 +99,7 @@ def _resolve_workspace(
 
 
 def run_smoke(prompt: str, *, timeout_seconds: float, keep_session: bool = False) -> dict[str, Any]:
-    bootstrap = release_backend._bootstrap_payload(
+    bootstrap = desktop_backend._bootstrap_payload(
         force_launch=True,
         resolve_current_session=False,
     )

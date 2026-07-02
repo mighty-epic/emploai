@@ -1,6 +1,6 @@
 import json
 
-from mobile_app.backend.auth_store import AppAuthStore
+from app_backend.auth_store import AppAuthStore
 
 
 def test_ensure_device_token_reuses_device_without_persisting_plaintext_token(tmp_path):

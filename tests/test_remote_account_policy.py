@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from mobile_app.backend.remote_account_policy import (
+from app_backend.remote_account_policy import (
     MAX_SECRET_VALUE_CHARS,
     normalize_email,
     redact_secret_value,

@@ -37,16 +37,17 @@ def test_log_tool_call_survives_non_utf_console(monkeypatch):
 
 def test_log_tool_call_redacts_secret_values(monkeypatch):
     logged = []
+    secret_like_value = "sk-" + "live-secret1234567890"
 
     monkeypatch.setattr(tool_logger.tool_logger, "info", lambda message, *args, **kwargs: logged.append(str(message)))
 
     tool_logger.log_tool_call(
         "run_command",
-        {"command": "echo sk-live-secret1234567890", "password": "plain-secret"},
+        {"command": f"echo {secret_like_value}", "password": "plain-secret"},
         provider="openai",
     )
 
     rendered = "\n".join(logged)
-    assert "sk-live-secret1234567890" not in rendered
+    assert secret_like_value not in rendered
     assert "plain-secret" not in rendered
     assert "[REDACTED_SECRET]" in rendered

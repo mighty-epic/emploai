@@ -3,7 +3,7 @@
 ## Summary
 - Build a real `Windows-first` desktop app using an `Electron` shell around the existing React/Expo web-capable client, not a browser-only wrapper.
 - Keep one shared session system across `Telegram`, `mobile app`, and `desktop app`; the desktop app auto-opens the last active session and creates a new one only if no session exists.
-- Treat voice as the primary input path and text as a secondary fallback control; do not build a new voice engine, only integrate the existing desktop-oriented voice engine/runtime already present in `mobile_app/backend`.
+- Treat voice as the primary input path and text as a secondary fallback control; do not build a new voice engine, only integrate the existing desktop-oriented voice engine/runtime already present in `app_backend`.
 - The desktop app has two top-level tabs from day one:
   - `This Computer`: fully functional in v1, same core behavior as the mobile app chat/control surface, but with no pairing flow and no local screen preview.
   - `Other Computers`: visible in v1 as a non-functional control shell with placeholder states and preview regions, ready for future VPS/remote-agent work.

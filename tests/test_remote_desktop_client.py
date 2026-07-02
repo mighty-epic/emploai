@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from mobile_app.backend import remote_desktop_client
+from app_backend import remote_desktop_client
 
 
 def test_terminal_local_chat_event_error_marks_errors_and_known_warnings_terminal():

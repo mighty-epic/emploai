@@ -13,6 +13,7 @@ type Props = {
   draft: SharedSettingsDraft;
   saving?: boolean;
   status?: string | null;
+  standaloneMode?: boolean;
   onChange: (draft: SharedSettingsDraft) => void;
   onSave: () => void;
 };
@@ -38,14 +39,16 @@ function ToggleRow({
   );
 }
 
-export function DesktopSetupSharedSettingsSection({ draft, saving = false, status, onChange, onSave }: Props) {
+export function DesktopSetupSharedSettingsSection({ draft, saving = false, status, standaloneMode = false, onChange, onSave }: Props) {
   const update = (patch: Partial<SharedSettingsDraft>) => onChange({ ...draft, ...patch });
 
   return (
     <View style={styles.section}>
-      <Text style={styles.sectionTitle}>Shared Account Settings</Text>
+      <Text style={styles.sectionTitle}>{standaloneMode ? 'Local Runtime Settings' : 'Shared Account Settings'}</Text>
       <Text style={styles.helperText}>
-        These account-backed controls apply from desktop, mobile, and Telegram.
+        {standaloneMode
+          ? 'These controls are saved on this computer and apply to the local desktop runtime.'
+          : 'These account-backed controls apply from desktop, mobile, and Telegram.'}
       </Text>
 
       <View style={styles.settingStack}>
@@ -79,32 +82,36 @@ export function DesktopSetupSharedSettingsSection({ draft, saving = false, statu
           </View>
           <ToggleRow title="Sleep mode" value={draft.sleepModeEnabled} onPress={() => update({ sleepModeEnabled: !draft.sleepModeEnabled })} />
           <ToggleRow title="Verbose feed" value={draft.verboseMode} onPress={() => update({ verboseMode: !draft.verboseMode })} />
-          <ToggleRow
-            title="Cloud chat backup"
-            value={draft.cloudChatBackupEnabled}
-            onPress={() => update({ cloudChatBackupEnabled: !draft.cloudChatBackupEnabled })}
-          />
+          {!standaloneMode ? (
+            <ToggleRow
+              title="Cloud chat backup"
+              value={draft.cloudChatBackupEnabled}
+              onPress={() => update({ cloudChatBackupEnabled: !draft.cloudChatBackupEnabled })}
+            />
+          ) : null}
         </View>
 
-        <View style={styles.settingCard}>
-          <Text style={styles.settingCardTitle}>Active-run messages</Text>
-          <View style={styles.voiceModeRow}>
-            {INTERRUPT_OPTIONS.map((option) => {
-              const selected = draft.interruptPolicy === option.value;
-              return (
-                <Pressable
-                  key={option.value}
-                  style={[styles.voiceModeButton, selected ? styles.voiceModeButtonActive : null]}
-                  onPress={() => update({ interruptPolicy: option.value })}
-                >
-                  <Text style={[styles.voiceModeButtonText, selected ? styles.voiceModeButtonTextActive : null]}>
-                    {option.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
+        {!standaloneMode ? (
+          <View style={styles.settingCard}>
+            <Text style={styles.settingCardTitle}>Active-run messages</Text>
+            <View style={styles.voiceModeRow}>
+              {INTERRUPT_OPTIONS.map((option) => {
+                const selected = draft.interruptPolicy === option.value;
+                return (
+                  <Pressable
+                    key={option.value}
+                    style={[styles.voiceModeButton, selected ? styles.voiceModeButtonActive : null]}
+                    onPress={() => update({ interruptPolicy: option.value })}
+                  >
+                    <Text style={[styles.voiceModeButtonText, selected ? styles.voiceModeButtonTextActive : null]}>
+                      {option.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
           </View>
-        </View>
+        ) : null}
 
         <View style={styles.settingCard}>
           <Text style={styles.settingCardTitle}>Memory controls</Text>
@@ -125,22 +132,24 @@ export function DesktopSetupSharedSettingsSection({ draft, saving = false, statu
           />
         </View>
 
-        <View style={styles.settingCard}>
-          <Text style={styles.settingCardTitle}>Telegram user IDs</Text>
-          <TextInput
-            value={draft.telegramAllowedUserIds}
-            onChangeText={(value) => update({ telegramAllowedUserIds: value })}
-            style={styles.input}
-            placeholder="123456789, 987654321"
-            placeholderTextColor="#7f93b5"
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-        </View>
+        {!standaloneMode ? (
+          <View style={styles.settingCard}>
+            <Text style={styles.settingCardTitle}>Telegram user IDs</Text>
+            <TextInput
+              value={draft.telegramAllowedUserIds}
+              onChangeText={(value) => update({ telegramAllowedUserIds: value })}
+              style={styles.input}
+              placeholder="123456789, 987654321"
+              placeholderTextColor="#7f93b5"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </View>
+        ) : null}
 
         <View style={styles.pathActions}>
           <Pressable style={[styles.primaryButton, saving ? styles.primaryButtonDisabled : null]} onPress={onSave} disabled={saving}>
-            <Text style={styles.primaryButtonText}>{saving ? 'Saving...' : 'Save Shared Settings'}</Text>
+            <Text style={styles.primaryButtonText}>{saving ? 'Saving...' : standaloneMode ? 'Save Local Settings' : 'Save Shared Settings'}</Text>
           </Pressable>
           {status ? <Text style={styles.helperText}>{status}</Text> : null}
         </View>

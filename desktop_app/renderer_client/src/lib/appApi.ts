@@ -17,8 +17,8 @@ function wait(ms: number) {
     setTimeout(resolve, ms);
   });
 }
-import type { AppProfile, RemoteUser, RemoteDesktop, RemoteMobile, RemoteAuthLoginResult, RemoteAuthOtpChallengeResult, RemoteGoogleAuthStartResult, RemoteGoogleAuthPollResult, RemoteAccountCloudProfile, RemoteAccountProfile, RemoteAccountCloudProfileResult, RemoteAccountSecretItem, RemoteAccountSecretsListResult, RemoteAccountSecretsRevealResult, RemoteAuthLogoutResult, RemoteAccountDataDeleteResult, RemotePairStartResult, RemotePairCompleteResult, SessionSummary, SessionMessage, SessionTimelineEvent, SessionDetail, FleetIdentity, FleetWorker, FleetTask, FleetReport, FleetGroup, FleetToolGrant, FleetWorkspaceBinding, FleetSnapshot, ArtifactSummary, ArtifactDetail, DeleteSessionResult, SessionSearchResult, ScheduledJob, JobCreatePayload, CronFeedItem, AutomationEventRun, ProcessWait, PlannerContract, RecoveryArchiveItem, RecoveryListResponse, PendingConfirmation, ConfirmationCreatePayload, WorkspaceRestoreResponse, ModelProviderGroup, AgentHistoryItem, PendingFile, UploadResponse, ContextCompaction, ContextUsage, TaskBoardSubGoal, TaskBoard, HeartbeatStatus, MemorySummary, AnalyticsSummary, SecuritySummary, ConfigEntry, AgentOverview, TelegramBotConfig, RuntimeWorkerStatus, RuntimeOrchestratorStatus, WorkspaceGitState, SidebarProjectState, SidebarSessionState, SidebarState, SidebarStateResult, VoiceRuntimeStatus, TaskBoardArmResult, AgentConfigurePayload, ToolPackUpdatePayload, SessionBotAssignmentPayload, SessionHeadlessEligibilityPayload, SessionSecurityPermissionPayload, HeadlessConfigurePayload, AgentAction, BridgeStatus, SkillSummary, SkillValidation, SubAgentTask, SubAgentStatus, MemorySearchResult } from './appApiTypes';
-export type { AppProfile, RemoteUser, RemoteDesktop, RemoteMobile, RemoteAuthLoginResult, RemoteAuthOtpChallengeResult, RemoteGoogleAuthStartResult, RemoteGoogleAuthPollResult, RemoteAccountCloudProfile, RemoteAccountProfile, RemoteAccountCloudProfileResult, RemoteAccountSecretItem, RemoteAccountSecretsListResult, RemoteAccountSecretsRevealResult, RemoteAuthLogoutResult, RemoteAccountDataDeleteResult, RemotePairStartResult, RemotePairCompleteResult, SessionSummary, SessionMessage, SessionTimelineEvent, SessionDetail, FleetIdentity, FleetWorker, FleetTask, FleetReport, FleetGroup, FleetToolGrant, FleetWorkspaceBinding, FleetSnapshot, ArtifactSummary, ArtifactDetail, DeleteSessionResult, SessionSearchResult, ScheduledJob, JobCreatePayload, CronFeedItem, AutomationEventRun, ProcessWait, PlannerContract, RecoveryArchiveItem, RecoveryListResponse, PendingConfirmation, ConfirmationCreatePayload, WorkspaceRestoreResponse, ModelProviderGroup, AgentHistoryItem, PendingFile, UploadResponse, ContextCompaction, ContextUsage, TaskBoardSubGoal, TaskBoard, HeartbeatStatus, MemorySummary, AnalyticsSummary, SecuritySummary, ConfigEntry, AgentOverview, TelegramBotConfig, RuntimeWorkerStatus, RuntimeOrchestratorStatus, WorkspaceGitState, SidebarProjectState, SidebarSessionState, SidebarState, SidebarStateResult, VoiceRuntimeStatus, TaskBoardArmResult, AgentConfigurePayload, ToolPackUpdatePayload, SessionBotAssignmentPayload, SessionHeadlessEligibilityPayload, SessionSecurityPermissionPayload, HeadlessConfigurePayload, AgentAction, BridgeStatus, SkillSummary, SkillValidation, SubAgentTask, SubAgentStatus, MemorySearchResult } from './appApiTypes';
+import type { AppProfile, RemoteUser, RemoteDesktop, RemoteMobile, RemoteAuthLoginResult, RemoteAuthOtpChallengeResult, RemoteGoogleAuthStartResult, RemoteGoogleAuthPollResult, RemoteAccountCloudProfile, RemoteAccountProfile, RemoteAccountCloudProfileResult, RemoteAccountSecretItem, RemoteAccountSecretsListResult, RemoteAccountSecretsRevealResult, RemoteAuthLogoutResult, RemoteAccountDataDeleteResult, RemotePairStartResult, RemotePairCompleteResult, SessionSummary, SessionMessage, SessionTimelineEvent, SessionDetail, FleetIdentity, FleetWorker, FleetTask, FleetReport, FleetGroup, FleetToolGrant, FleetWorkspaceBinding, FleetSnapshot, ArtifactSummary, ArtifactDetail, DeleteSessionResult, SessionSearchResult, ScheduledJob, JobCreatePayload, CronFeedItem, AutomationEventRun, ProcessWait, PlannerContract, RecoveryArchiveItem, RecoveryListResponse, PendingConfirmation, ConfirmationCreatePayload, WorkspaceRestoreResponse, ModelProviderGroup, AgentHistoryItem, PendingFile, UploadResponse, ContextCompaction, ContextUsage, TaskBoardSubGoal, TaskBoard, HeartbeatStatus, MemorySummary, AnalyticsSummary, SecuritySummary, ConfigEntry, AgentOverview, TelegramBotConfig, RuntimeWorkerStatus, RuntimeOrchestratorStatus, WorkspaceGitState, SidebarProjectState, SidebarSessionState, SidebarState, SidebarStateResult, VoiceRuntimeStatus, TaskBoardArmResult, AgentConfigurePayload, ToolPackUpdatePayload, SessionBotAssignmentPayload, SessionHeadlessEligibilityPayload, SessionSecurityPermissionPayload, HeadlessConfigurePayload, AgentAction, BridgeStatus, SkillSummary, SkillDetail, SkillLearnResult, SkillValidation, SubAgentTask, SubAgentStatus, MemorySearchResult, MemoryOperation, MemoryOperationResult, MemoryFact } from './appApiTypes';
+export type { AppProfile, RemoteUser, RemoteDesktop, RemoteMobile, RemoteAuthLoginResult, RemoteAuthOtpChallengeResult, RemoteGoogleAuthStartResult, RemoteGoogleAuthPollResult, RemoteAccountCloudProfile, RemoteAccountProfile, RemoteAccountCloudProfileResult, RemoteAccountSecretItem, RemoteAccountSecretsListResult, RemoteAccountSecretsRevealResult, RemoteAuthLogoutResult, RemoteAccountDataDeleteResult, RemotePairStartResult, RemotePairCompleteResult, SessionSummary, SessionMessage, SessionTimelineEvent, SessionDetail, FleetIdentity, FleetWorker, FleetTask, FleetReport, FleetGroup, FleetToolGrant, FleetWorkspaceBinding, FleetSnapshot, ArtifactSummary, ArtifactDetail, DeleteSessionResult, SessionSearchResult, ScheduledJob, JobCreatePayload, CronFeedItem, AutomationEventRun, ProcessWait, PlannerContract, RecoveryArchiveItem, RecoveryListResponse, PendingConfirmation, ConfirmationCreatePayload, WorkspaceRestoreResponse, ModelProviderGroup, AgentHistoryItem, PendingFile, UploadResponse, ContextCompaction, ContextUsage, TaskBoardSubGoal, TaskBoard, HeartbeatStatus, MemorySummary, AnalyticsSummary, SecuritySummary, ConfigEntry, AgentOverview, TelegramBotConfig, RuntimeWorkerStatus, RuntimeOrchestratorStatus, WorkspaceGitState, SidebarProjectState, SidebarSessionState, SidebarState, SidebarStateResult, VoiceRuntimeStatus, TaskBoardArmResult, AgentConfigurePayload, ToolPackUpdatePayload, SessionBotAssignmentPayload, SessionHeadlessEligibilityPayload, SessionSecurityPermissionPayload, HeadlessConfigurePayload, AgentAction, BridgeStatus, SkillSummary, SkillDetail, SkillLearnResult, SkillValidation, SubAgentTask, SubAgentStatus, MemorySearchResult, MemoryOperation, MemoryOperationResult, MemoryFact } from './appApiTypes';
 
 
 function authHeaders(token: string): Record<string, string> {
@@ -1297,6 +1297,117 @@ export async function appendAgentMemoryNote(apiBaseUrl: string, token: string, n
   });
 }
 
+export async function applyAgentMemoryOperations(
+  apiBaseUrl: string,
+  token: string,
+  operations: MemoryOperation[],
+  sessionId?: string
+) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+
+  return requestJson<MemoryOperationResult>({
+    scope: 'agent.memory.operations',
+    url: `${apiBaseUrl}/api/app/agent/memory/operations${params.size ? `?${params.toString()}` : ''}`,
+    init: {
+      method: 'POST',
+      headers: {
+        ...authHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ operations }),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function addAgentMemoryFact(
+  apiBaseUrl: string,
+  token: string,
+  payload: { content: string; category?: string; tags?: string[]; trust?: number },
+  sessionId?: string
+) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+
+  return requestJson<MemoryFact>({
+    scope: 'agent.memory.facts.add',
+    url: `${apiBaseUrl}/api/app/agent/memory/facts${params.size ? `?${params.toString()}` : ''}`,
+    init: {
+      method: 'POST',
+      headers: {
+        ...authHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function fetchAgentMemoryFacts(
+  apiBaseUrl: string,
+  token: string,
+  sessionId?: string,
+  options?: { category?: string; limit?: number }
+) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+  if (options?.category) params.set('category', options.category);
+  if (options?.limit) params.set('limit', String(options.limit));
+
+  return requestJson<{ items: MemoryFact[] }>({
+    scope: 'agent.memory.facts.list',
+    url: `${apiBaseUrl}/api/app/agent/memory/facts${params.size ? `?${params.toString()}` : ''}`,
+    init: { headers: authHeaders(token) },
+    timeoutMs: 30000,
+  });
+}
+
+export async function deleteAgentMemoryFact(
+  apiBaseUrl: string,
+  token: string,
+  factId: number,
+  sessionId?: string
+) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+
+  return requestJson<AgentAction>({
+    scope: 'agent.memory.facts.delete',
+    url: `${apiBaseUrl}/api/app/agent/memory/facts/${encodeURIComponent(String(factId))}${params.size ? `?${params.toString()}` : ''}`,
+    init: {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function rateAgentMemoryFact(
+  apiBaseUrl: string,
+  token: string,
+  payload: { fact_id: number; helpful: boolean },
+  sessionId?: string
+) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+
+  return requestJson<MemoryFact>({
+    scope: 'agent.memory.facts.feedback',
+    url: `${apiBaseUrl}/api/app/agent/memory/facts/feedback${params.size ? `?${params.toString()}` : ''}`,
+    init: {
+      method: 'POST',
+      headers: {
+        ...authHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    },
+    timeoutMs: 30000,
+  });
+}
+
 export async function clearAgentPendingFiles(apiBaseUrl: string, token: string, sessionId?: string) {
   const params = new URLSearchParams();
   if (sessionId) params.set('session_id', sessionId);
@@ -1365,6 +1476,49 @@ export async function fetchAgentSkills(apiBaseUrl: string, token: string, sessio
     scope: 'agent.skills.list',
     url: `${apiBaseUrl}/api/app/agent/skills${params.size ? `?${params.toString()}` : ''}`,
     init: { headers: authHeaders(token) },
+  });
+}
+
+export async function fetchAgentSkillDetail(
+  apiBaseUrl: string,
+  token: string,
+  name: string,
+  sessionId?: string,
+  options?: { includeResources?: boolean }
+) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+  if (options?.includeResources) params.set('include_resources', 'true');
+
+  return requestJson<SkillDetail>({
+    scope: 'agent.skills.view',
+    url: `${apiBaseUrl}/api/app/agent/skills/${encodeURIComponent(name)}${params.size ? `?${params.toString()}` : ''}`,
+    init: { headers: authHeaders(token) },
+    timeoutMs: 30000,
+  });
+}
+
+export async function learnAgentSkill(
+  apiBaseUrl: string,
+  token: string,
+  payload: { name: string; description?: string | null; workflow?: string; activate?: boolean; overwrite?: boolean },
+  sessionId?: string
+) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+
+  return requestJson<SkillLearnResult>({
+    scope: 'agent.skills.learn',
+    url: `${apiBaseUrl}/api/app/agent/skills/learn${params.size ? `?${params.toString()}` : ''}`,
+    init: {
+      method: 'POST',
+      headers: {
+        ...authHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    },
+    timeoutMs: 30000,
   });
 }
 

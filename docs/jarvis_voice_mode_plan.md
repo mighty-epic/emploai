@@ -20,9 +20,9 @@ Jarvis mode initially supports the English local voice path only. Hebrew can rem
 
 The feature should build on existing app voice infrastructure instead of creating a separate agent:
 
-- `mobile_app/backend/app_server.py` exposes `WS /ws/app/voice`.
+- `app_backend/app_server.py` exposes `WS /ws/app/voice`.
 - `VoiceClientEvent` already supports `voice_start`, `voice_chunk`, `voice_pause`, `voice_resume`, `voice_commit`, and `voice_cancel`.
-- `mobile_app/backend/voice_runtime.py` contains `VoiceDraftState`, local STT routing, English/Hebrew voice pack status, and `synthesize_assistant_audio`.
+- `app_backend/voice_runtime.py` contains `VoiceDraftState`, local STT routing, English/Hebrew voice pack status, and `synthesize_assistant_audio`.
 - `DesktopConversationView.tsx` already has microphone capture, always-on VAD/gating, voice chunk streaming, and `assistant_audio` playback.
 - `run_app_chat_turn` already sends finalized voice transcripts through the same agent/session path using `source_format="app_voice_transcript"`.
 - `shared/channel_runtime.py` already emits `assistant_delta`, `tool_use`, `status`, `task_board`, and related events through `event_sink`.
@@ -121,7 +121,7 @@ The preferred engine is local and packaged like the English/Hebrew voice packs. 
 
 Add a backend TTS adapter layer rather than wiring a model directly into the websocket handler:
 
-- `mobile_app/backend/tts_runtime.py` or a clearly separated TTS section in `voice_runtime.py`
+- `app_backend/tts_runtime.py` or a clearly separated TTS section in `voice_runtime.py`
 - engine interface: `synthesize(text, voice, speed, priority) -> audio payload`
 - status interface: `get_tts_runtime_status()`
 - warmup interface: `preload_tts_engine()`

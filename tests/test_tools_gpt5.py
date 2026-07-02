@@ -159,7 +159,7 @@ async def main():
     # 2. Test Automation Tools
     logger.info("\n=== Testing Automation Tools ===")
     
-    # Simplified copy of critical tools from single_agent/agent.py to verify generic tool calling
+    # Simplified copy of critical tools from local_agent_runtime/agent.py to verify generic tool calling
     AUTOMATION_TOOLS = [
        {"type": "function", "function": {"name": "describe_screen", "description": "Use AI vision to describe the current screen state.", "parameters": {"type": "object", "properties": {"question": {"type": "string"}}}}},
        {"type": "function", "function": {"name": "open_browser", "description": "Open Chrome browser and navigate to a URL.", "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}},

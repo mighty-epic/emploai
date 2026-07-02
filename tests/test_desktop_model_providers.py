@@ -40,6 +40,7 @@ def test_desktop_model_provider_helpers_execute_with_typescript_transpile():
         const catalog = [
           { provider: 'anthropic', models: ['claude-sonnet-4.5', 'claude-haiku'] },
           { provider: 'openai', models: ['gpt-5.4-mini', 'gpt-5.4'] },
+          { provider: 'openai-codex', models: ['chatgpt/gpt-5.4-mini', 'chatgpt/gpt-5.5'] },
           { provider: 'google', models: ['gemini-2.5-pro'] },
         ];
 
@@ -47,6 +48,10 @@ def test_desktop_model_provider_helpers_execute_with_typescript_transpile():
         assert.strictEqual(
           providers.preferredModelFromGroups([{ provider: 'nvidia', models: ['google/diffusiongemma-26b-a4b-it', 'mistralai/ministral-14b-instruct-2512'] }]),
           'mistralai/ministral-14b-instruct-2512',
+        );
+        assert.strictEqual(
+          providers.preferredModelFromGroups([{ provider: 'openai-codex', models: ['chatgpt/gpt-5.4-mini', 'chatgpt/gpt-5.5'] }]),
+          'chatgpt/gpt-5.5',
         );
         assert.strictEqual(providers.modelProviderKey(' OpenAI '), 'openai');
         assert.strictEqual(
@@ -69,18 +74,20 @@ def test_desktop_model_provider_helpers_execute_with_typescript_transpile():
           { provider: 'openai', models: ['gpt-5.4-mini'] },
         ]), false);
         assert.strictEqual(providers.providerForModelName('claude-opus-4.5', catalog), 'anthropic');
+        assert.strictEqual(providers.providerForModelName('chatgpt/gpt-5.5', []), 'openai-codex');
         assert.strictEqual(providers.providerForModelName('google/diffusiongemma-26b-a4b-it', catalog), 'nvidia');
         assert.strictEqual(providers.providerForModelName('mistralai/ministral-14b-instruct-2512', catalog), 'nvidia');
         assert.strictEqual(providers.providerForModelName('vendor/custom-model', catalog), 'vendor');
 
         const grouped = providers.groupPlannerModelsByProvider(
-          ['gemini-2.5-flash', 'claude-haiku', 'openrouter/mistral', 'google/diffusiongemma-26b-a4b-it', 'gpt-5.4-mini'],
+          ['gemini-2.5-flash', 'claude-haiku', 'openrouter/mistral', 'google/diffusiongemma-26b-a4b-it', 'gpt-5.4-mini', 'chatgpt/gpt-5.5'],
           catalog,
         );
         assert.strictEqual(
           JSON.stringify(grouped.map((group) => [group.provider, group.models])),
           JSON.stringify([
             ['openai', ['gpt-5.4-mini']],
+            ['openai-codex', ['chatgpt/gpt-5.5']],
             ['anthropic', ['claude-haiku']],
             ['google', ['gemini-2.5-flash']],
             ['nvidia', ['google/diffusiongemma-26b-a4b-it']],

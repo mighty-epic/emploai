@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mobile_app.backend.fleet_orchestration import (
+from app_backend.fleet_orchestration import (
     fleet_selected_chat_for_worker,
     fleet_task_target_session_id,
     task_requires_workspace_write,

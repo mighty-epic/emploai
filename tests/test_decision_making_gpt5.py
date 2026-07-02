@@ -38,7 +38,7 @@ logger.info(f"Using Model: {MODEL_ID} ({REAL_MODEL_ID})")
 # -----------------------------------------------------------------------------
 # TOOL DEFINITIONS (Simulated Automation Tools + CLI Tools)
 # -----------------------------------------------------------------------------
-# Mock version of automation tools found in single_agent/agent.py
+# Mock version of automation tools found in local_agent_runtime/agent.py
 # The model will see these descriptions and must choose correctly.
 AUTOMATION_TOOLS = [
    {"type": "function", "function": {"name": "describe_screen", "description": "Use AI vision to describe the current screen state. Best for understanding UI layout.", "parameters": {"type": "object", "properties": {"question": {"type": "string"}}}}},

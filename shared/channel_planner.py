@@ -56,7 +56,7 @@ def _desktop_window_context_message(session: Any) -> Optional[Dict[str, str]]:
     if "observe_desktop" not in allowed_tools and "interactive_desktop" not in enabled_packs:
         return None
     try:
-        from bot_core.system_info import format_active_windows_snapshot
+        from runtime_support.system_info import format_active_windows_snapshot
 
         snapshot = format_active_windows_snapshot(limit=30)
     except Exception:
@@ -253,7 +253,7 @@ def _planner_final_completion(session: Any, *, prompt_payload: Dict[str, Any]) -
     user_prompt = json.dumps(prompt_payload, ensure_ascii=True, indent=2)
 
     try:
-        if provider in {"openai", "xai", "deepseek", "openrouter", "nvidia", "google"}:
+        if provider in {"openai", "openai-codex", "xai", "deepseek", "openrouter", "nvidia", "google"}:
             response = create_openai_completion(
                 client,
                 model_name=model_name,
@@ -297,7 +297,7 @@ def _planner_contract_completion(session: Any, *, user_message: str) -> Optional
     user_prompt = json.dumps(planner_contract_prompt_payload(user_message), ensure_ascii=True, indent=2)
 
     try:
-        if provider in {"openai", "xai", "deepseek", "openrouter", "nvidia", "google"}:
+        if provider in {"openai", "openai-codex", "xai", "deepseek", "openrouter", "nvidia", "google"}:
             response = create_openai_completion(
                 client,
                 model_name=model_name,

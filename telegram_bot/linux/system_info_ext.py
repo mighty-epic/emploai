@@ -1,7 +1,7 @@
 """
 Linux active windows listing for system_info.
 
-Replaces the pywinauto-based window listing used on Windows (bot_core/system_info.py).
+Replaces the pywinauto-based window listing used on Windows (runtime_support/system_info.py).
 Called via a flag switch in system_info.py when running on Linux.
 """
 
@@ -13,7 +13,7 @@ def get_linux_active_windows() -> str:
     """Get list of active windows on Linux using wmctrl or xdotool.
     
     Returns a comma-separated string of window titles, matching the format
-    used by the Windows implementation in bot_core/system_info.py.
+    used by the Windows implementation in runtime_support/system_info.py.
     """
     try:
         if shutil.which("wmctrl"):

@@ -17,6 +17,27 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
+def resolve_default_skills_dir() -> Path:
+    """Resolve the skill directory for local-first standalone runs."""
+    bundled_dir = Path(__file__).parent.parent / "skills"
+    configured = os.getenv("EMPLOAI_SKILLS_DIR", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+
+    runtime_home = os.getenv("EMPLOAI_HOME", "").strip()
+    if not runtime_home:
+        return bundled_dir
+
+    user_dir = Path(runtime_home).expanduser().resolve() / "skills"
+    try:
+        from shared.local_skill_sync import sync_bundled_skills
+
+        sync_bundled_skills(bundled_dir, user_dir)
+    except Exception:
+        logger.debug("Failed to sync bundled skills into local runtime home", exc_info=True)
+    return user_dir
+
+
 @dataclass
 class SkillMetadata:
     """Skill metadata from YAML frontmatter."""
@@ -78,7 +99,7 @@ class SkillLoader:
             skills_dir: Directory containing skill folders. Defaults to ./skills
         """
         if skills_dir is None:
-            skills_dir = Path(__file__).parent.parent / "skills"
+            skills_dir = resolve_default_skills_dir()
         
         self.skills_dir = Path(skills_dir)
         self.skills: Dict[str, Skill] = {}
@@ -86,6 +107,7 @@ class SkillLoader:
     
     def _load_skills(self):
         """Load all skills from the skills directory."""
+        self.skills.clear()
         if not self.skills_dir.exists():
             logger.warning(f"Skills directory not found: {self.skills_dir}")
             return
@@ -103,6 +125,10 @@ class SkillLoader:
                         logger.error(f"Failed to load skill from {skill_path}: {e}")
         
         logger.info(f"Loaded {len(self.skills)} skills from {self.skills_dir}")
+
+    def reload(self) -> None:
+        """Reload skill metadata from disk."""
+        self._load_skills()
     
     def _parse_skill(self, skill_path: Path) -> Optional[Skill]:
         """
@@ -145,14 +171,24 @@ class SkillLoader:
         skill = Skill(
             metadata=metadata,
             skill_path=skill_path,
-            body=body,
-            body_loaded=True  # We loaded the body during parsing for simplicity
+            body="",
+            body_loaded=False
         )
         
         # Scan for resources but don't load them yet
         self._scan_resources(skill)
         
         return skill
+
+    def _load_skill_body(self, skill: Skill) -> None:
+        """Load SKILL.md body on demand."""
+        if skill.body_loaded:
+            return
+        skill_md = skill.skill_path / "SKILL.md"
+        content = skill_md.read_text(encoding='utf-8')
+        frontmatter_match = re.match(r'^---\s*\n(.*?)\n---\s*\n(.*)', content, re.DOTALL)
+        skill.body = frontmatter_match.group(2) if frontmatter_match else content
+        skill.body_loaded = True
     
     def _scan_resources(self, skill: Skill):
         """Scan skill directory for resources without loading them."""
@@ -210,6 +246,8 @@ class SkillLoader:
         skill = self.skills.get(skill_name)
         if not skill:
             return None
+        if include_body:
+            self._load_skill_body(skill)
         
         resource = skill.resources.get(resource_name)
         if not resource:
@@ -303,6 +341,52 @@ class SkillLoader:
                     context_parts.append(resource.content)
         
         return "\n".join(context_parts)
+
+    def get_skill_detail(
+        self,
+        skill_name: str,
+        *,
+        include_body: bool = True,
+        include_resources: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Return a progressive-disclosure detail view for a skill."""
+        skill = self.skills.get(skill_name)
+        if not skill:
+            return None
+        if include_body:
+            self._load_skill_body(skill)
+
+        resources = []
+        for resource in skill.resources.values():
+            item: Dict[str, Any] = {
+                "name": resource.name,
+                "type": resource.resource_type,
+                "loaded": resource.loaded,
+            }
+            if include_resources and resource.resource_type == "reference":
+                loaded = self.load_resource(skill_name, resource.name)
+                if loaded and loaded.content is not None:
+                    item["content"] = loaded.content
+                    item["loaded"] = True
+            resources.append(item)
+
+        return {
+            "name": skill.name,
+            "description": skill.description,
+            "path": str(skill.skill_path),
+            "body": skill.body if include_body else "",
+            "body_loaded": skill.body_loaded,
+            "resources": sorted(resources, key=lambda item: (item["type"], item["name"])),
+            "metadata": {
+                "homepage": skill.metadata.homepage,
+                "user_invocable": skill.metadata.user_invocable,
+                "disable_model_invocation": skill.metadata.disable_model_invocation,
+                "command_dispatch": skill.metadata.command_dispatch,
+                "command_tool": skill.metadata.command_tool,
+                "command_arg_mode": skill.metadata.command_arg_mode,
+                "metadata": skill.metadata.metadata_json or {},
+            },
+        }
 
 
 class SkillGating:
@@ -403,6 +487,13 @@ class SkillRegistry:
         self.gating = SkillGating(self.loader)
         self._trigger_patterns: Dict[str, Callable[[str], bool]] = {}
         self._register_default_triggers()
+
+    def reload(self) -> None:
+        """Reload skills and gate state from disk."""
+        self.loader.reload()
+        self.gating.refresh()
+        self._trigger_patterns.clear()
+        self._register_default_triggers()
     
     def _register_default_triggers(self):
         """Register default trigger patterns for skills."""
@@ -486,6 +577,20 @@ class SkillRegistry:
                 contexts.append(f"## ACTIVE SKILL: {name}\n\n{context}")
                 
         return "\n\n---\n\n".join(contexts)
+
+    def get_skill_detail(
+        self,
+        skill_name: str,
+        *,
+        include_body: bool = True,
+        include_resources: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Return a detail view without changing active skills."""
+        return self.loader.get_skill_detail(
+            skill_name,
+            include_body=include_body,
+            include_resources=include_resources,
+        )
     
     def get_user_invocable_skills(self) -> List[Skill]:
         """Get skills that can be invoked by users via slash commands."""
@@ -553,6 +658,7 @@ class SkillRegistry:
         references = [r for r in skill.resources.values() if r.resource_type == "reference"]
         assets = [r for r in skill.resources.values() if r.resource_type == "asset"]
 
+        self.loader._load_skill_body(skill)
         if not skill.body.strip():
             warnings.append("SKILL.md body is empty")
 

@@ -13,7 +13,7 @@ from typing import Callable, Optional
 from cli.agent_tools.definitions import CLI_AGENT_TOOLS
 from cli.agent_tools.loop import run_tool_loop
 from cli.tui_constants import MODEL_CONFIGS
-from single_agent.agent import AGENT_TOOLS
+from local_agent_runtime.agent import AGENT_TOOLS
 from shared import current_session_id
 from shared.proactive_runtime import install_background_process_hooks
 from shared.tool_packs import (

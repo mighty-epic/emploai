@@ -207,6 +207,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
     refreshMemory,
     saveMemory,
     installVoicePack,
+    selectTtsVoicePack,
     removeVoicePack,
     selectVoiceEngine,
     installUpdateNow,
@@ -263,7 +264,8 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
   const remotePreferences = remoteProfile.preferences && typeof remoteProfile.preferences === 'object'
     ? remoteProfile.preferences
     : {};
-  const cloudChatBackupEnabled = remotePreferences.cloud_chat_backup_enabled !== false;
+  const standaloneMode = Boolean(remoteAuthStatus?.cloudDisabled || remoteAuthStatus?.standalone);
+  const cloudChatBackupEnabled = standaloneMode ? false : remotePreferences.cloud_chat_backup_enabled !== false;
   const cloudBackupPreferenceBusy = recoveryBusyId === 'cloud_chat_backup';
 
   if (remoteAuthLoggingOut) {
@@ -280,7 +282,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
     );
   }
 
-  if (remoteAuthLoading || !remoteAuthStatus?.signedIn) {
+  if (remoteAuthLoading || (!standaloneMode && !remoteAuthStatus?.signedIn)) {
     return (
       <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={styles.startupPage}>
         {confirmationDialog}
@@ -519,6 +521,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
               voicePackProgress={voicePackProgress}
               onSave={(values) => void saveSetup(values)}
               onInstallVoicePack={(packId) => void installVoicePack(packId)}
+              onSelectTtsVoicePack={(pack) => void selectTtsVoicePack(pack)}
               onRemoveVoicePack={(packId) => void removeVoicePack(packId)}
               onDismiss={undefined}
               onOpenPath={(targetPath) => void openDesktopPath(targetPath)}
@@ -529,6 +532,11 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
               memorySaving={memorySaving}
               onReloadMemory={() => void refreshMemory()}
               onSaveMemory={(content) => void saveMemory(content)}
+              localIntelligenceApi={{
+                apiBaseUrl: bootstrap.apiBaseUrl,
+                token: bootstrap.accessToken,
+                sessionId: bootstrap.currentSessionId,
+              }}
               updateStatus={updateStatus}
               checkingUpdates={checkingUpdates}
               installingUpdate={installingUpdate}
@@ -605,6 +613,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
               voicePackProgress={voicePackProgress}
               onSave={(values) => void saveSetup(values)}
               onInstallVoicePack={(packId) => void installVoicePack(packId)}
+              onSelectTtsVoicePack={(pack) => void selectTtsVoicePack(pack)}
               onRemoveVoicePack={(packId) => void removeVoicePack(packId)}
               onDismiss={() => setShowSetup(false)}
               onOpenPath={(targetPath) => void openDesktopPath(targetPath)}
@@ -615,6 +624,11 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
               memorySaving={memorySaving}
               onReloadMemory={() => void refreshMemory()}
               onSaveMemory={(content) => void saveMemory(content)}
+              localIntelligenceApi={{
+                apiBaseUrl: bootstrap.apiBaseUrl,
+                token: bootstrap.accessToken,
+                sessionId: bootstrap.currentSessionId,
+              }}
               updateStatus={updateStatus}
               checkingUpdates={checkingUpdates}
               installingUpdate={installingUpdate}
@@ -781,12 +795,25 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
               hovered ? styles.windowChromeMenuButtonHovered : null,
               pressed ? styles.windowChromeButtonPressed : null,
             ]}
-            onPress={() => setNotice('Open Settings for setup, recovery, voice, updates, and account controls.')}
+            onPress={() => setNotice('Open Settings for setup, recovery, voice, updates, and local data controls.')}
           >
             <Text style={styles.windowChromeMenuText}>Help</Text>
           </Pressable>
         </View>
         <View style={[styles.windowChromeRight, webWindowNoDragStyle]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open settings"
+            style={({ pressed, hovered }) => [
+              styles.windowChromeMenuButton,
+              showSetup ? styles.windowChromeSettingsButtonActive : null,
+              hovered ? styles.windowChromeMenuButtonHovered : null,
+              pressed ? styles.windowChromeButtonPressed : null,
+            ]}
+            onPress={() => setShowSetup(true)}
+          >
+            <Text style={styles.windowChromeMenuText}>Settings</Text>
+          </Pressable>
           {updateAvailable ? (
             <Pressable
               accessibilityRole="button"
@@ -952,6 +979,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
                 voicePackProgress={voicePackProgress}
                 onSave={(values) => void saveSetup(values)}
                 onInstallVoicePack={(packId) => void installVoicePack(packId)}
+                onSelectTtsVoicePack={(pack) => void selectTtsVoicePack(pack)}
                 onRemoveVoicePack={(packId) => void removeVoicePack(packId)}
                 onDismiss={bootstrap.setupState.required ? undefined : () => setShowSetup(false)}
                 onOpenPath={(targetPath) => void openDesktopPath(targetPath)}
@@ -962,6 +990,11 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
                 memorySaving={memorySaving}
                 onReloadMemory={() => void refreshMemory()}
                 onSaveMemory={(content) => void saveMemory(content)}
+                localIntelligenceApi={{
+                  apiBaseUrl: bootstrap.apiBaseUrl,
+                  token: bootstrap.accessToken,
+                  sessionId: bootstrap.currentSessionId,
+                }}
                 updateStatus={updateStatus}
                 checkingUpdates={checkingUpdates}
                 installingUpdate={installingUpdate}

@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from shared.cloud_object_store import CloudObjectStore
 from shared.runtime_paths import user_state_root
+from shared.standalone_policy import cloud_backend_enabled
 
 
 TEXT_PREVIEW_HEAD_CHARS = 650
@@ -130,6 +131,8 @@ def _score_match(query: str, haystacks: List[str]) -> float:
 
 
 def _should_cloud_sync_artifact(*, source_kind: str, artifact_kind: str, metadata: Optional[Dict[str, Any]]) -> bool:
+    if not cloud_backend_enabled():
+        return False
     meta = dict(metadata or {})
     policy = str(meta.get("cloud_mirror_policy") or "").strip().lower()
     if policy in {"disabled", "local_only", "none"}:

@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from mobile_app.backend.voice_pack_manager import (
+from app_backend.voice_pack_manager import (
     DEFAULT_KYUTAI_TTS_VOICE_FILENAME,
     TTS_SITE_PACKAGES_DIRNAME,
     TTS_VOICES_DIRNAME,

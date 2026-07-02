@@ -3,6 +3,7 @@ import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
 import { styles } from './DesktopSetupPanel.styles';
 import { DesktopSetupRecoverySection } from './DesktopSetupRecoverySection';
+import { DesktopSetupLocalIntelligenceSection } from './DesktopSetupLocalIntelligenceSection';
 import { DesktopSetupSharedSettingsSection } from './DesktopSetupSharedSettingsSection';
 import { DesktopSetupVoiceSection } from './DesktopSetupVoiceSection';
 import { VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW, VOICE_ENGINE_NONE } from './desktopVoicePolicy';
@@ -19,6 +20,8 @@ import {
 } from '@/lib/appApi';
 import type {
   DesktopRemoteAccountDesktop,
+  DesktopCodexAuthStatus,
+  DesktopCodexDeviceLogin,
   DesktopRemoteAuthStatus,
   DesktopRemotePairingToken,
   DesktopRemoteSecretItem,
@@ -30,7 +33,13 @@ import type {
   DesktopVoicePackInstallProgress,
   DesktopVoicePackSummary,
 } from '@/lib/desktopBridge';
-import { validateDesktopSetupField } from '@/lib/desktopBridge';
+import {
+  loadDesktopCodexAuthStatus,
+  logoutDesktopCodexAuth,
+  pollDesktopCodexDeviceLogin,
+  startDesktopCodexDeviceLogin,
+  validateDesktopSetupField,
+} from '@/lib/desktopBridge';
 import { InfoHint } from '@/components/InfoHint';
 import { shortStatusText, userFacingError } from '../../lib/diagnostics';
 import type { SharedSettingsDraft } from '@/lib/accountProfile';
@@ -64,6 +73,7 @@ type Props = {
   voicePackProgress?: DesktopVoicePackInstallProgress | null;
   onSave: (values: Partial<DesktopSetupValues>) => void;
   onInstallVoicePack?: (packId: string) => void;
+  onSelectTtsVoicePack?: (pack: DesktopVoicePackSummary) => void;
   onRemoveVoicePack?: (packId: string) => void;
   onDismiss?: () => void;
   onOpenPath?: (targetPath: string) => void;
@@ -74,6 +84,11 @@ type Props = {
   memorySaving?: boolean;
   onReloadMemory?: () => void;
   onSaveMemory?: (content: string) => void;
+  localIntelligenceApi?: {
+    apiBaseUrl?: string | null;
+    token?: string | null;
+    sessionId?: string | null;
+  } | null;
   updateStatus?: DesktopUpdateStatus | null;
   checkingUpdates?: boolean;
   installingUpdate?: boolean;
@@ -180,6 +195,7 @@ export function DesktopSetupPanel({
   voicePackProgress,
   onSave,
   onInstallVoicePack,
+  onSelectTtsVoicePack,
   onRemoveVoicePack,
   onDismiss,
   onOpenPath,
@@ -190,6 +206,7 @@ export function DesktopSetupPanel({
   memorySaving = false,
   onReloadMemory,
   onSaveMemory,
+  localIntelligenceApi,
   updateStatus,
   checkingUpdates = false,
   installingUpdate = false,
@@ -250,12 +267,18 @@ export function DesktopSetupPanel({
   const [remotePairingExpiresIn, setRemotePairingExpiresIn] = useState<number | null>(null);
   const [remoteMessage, setRemoteMessage] = useState('');
   const [remoteDesktops, setRemoteDesktops] = useState<DesktopRemoteAccountDesktop[]>([]);
+  const [codexAuthStatus, setCodexAuthStatus] = useState<DesktopCodexAuthStatus | null>(setupState.codexAuth || null);
+  const [codexDeviceLogin, setCodexDeviceLogin] = useState<DesktopCodexDeviceLogin | null>(null);
+  const [codexBusy, setCodexBusy] = useState(false);
+  const [codexMessage, setCodexMessage] = useState('');
   const validationTimersRef = useRef<Record<string, ReturnType<typeof setTimeout> | null>>({});
   const validationRunRef = useRef<Record<string, number>>({});
+  const codexPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     setValues(setupState.values);
     setFieldValidation({});
+    setCodexAuthStatus(setupState.codexAuth || null);
   }, [setupState]);
 
   useEffect(() => {
@@ -292,7 +315,88 @@ export function DesktopSetupPanel({
         clearTimeout(timer);
       }
     });
+    if (codexPollTimerRef.current) {
+      clearTimeout(codexPollTimerRef.current);
+      codexPollTimerRef.current = null;
+    }
   }, []);
+
+  const refreshCodexAuthStatus = async () => {
+    const status = await loadDesktopCodexAuthStatus();
+    if (status) {
+      setCodexAuthStatus(status);
+    }
+    return status;
+  };
+
+  const scheduleCodexDevicePoll = (delaySeconds = 5) => {
+    if (codexPollTimerRef.current) {
+      clearTimeout(codexPollTimerRef.current);
+    }
+    codexPollTimerRef.current = setTimeout(() => {
+      void (async () => {
+        try {
+          const status = await pollDesktopCodexDeviceLogin();
+          if (!status) {
+            setCodexMessage('ChatGPT sign-in polling is unavailable in this desktop shell.');
+            return;
+          }
+          setCodexAuthStatus(status);
+          if (status.ok || status.configured || status.state === 'connected') {
+            setCodexDeviceLogin(null);
+            setCodexMessage('ChatGPT subscription connected. Save settings to refresh active model lists and workers.');
+            return;
+          }
+          if (status.state === 'pending') {
+            scheduleCodexDevicePoll(5);
+            return;
+          }
+          setCodexMessage(status.detail || status.error || 'ChatGPT sign-in did not complete.');
+        } catch (error) {
+          setCodexMessage(userFacingError(error, 'ChatGPT sign-in polling failed.'));
+        }
+      })();
+    }, Math.max(1, delaySeconds) * 1000);
+  };
+
+  const beginCodexDeviceLogin = async () => {
+    setCodexBusy(true);
+    setCodexMessage('');
+    try {
+      const login = await startDesktopCodexDeviceLogin();
+      if (!login) {
+        setCodexMessage('ChatGPT sign-in is unavailable in this desktop shell.');
+        return;
+      }
+      setCodexDeviceLogin(login);
+      const code = login.userCode || login.user_code || '';
+      setCodexMessage(code ? `Browser opened. Enter code ${code} to connect ChatGPT.` : 'Browser opened for ChatGPT sign-in.');
+      scheduleCodexDevicePoll(Number(login.intervalSeconds || login.interval_seconds || 5));
+    } catch (error) {
+      setCodexMessage(userFacingError(error, 'Could not start ChatGPT sign-in.'));
+    } finally {
+      setCodexBusy(false);
+    }
+  };
+
+  const disconnectCodexAuth = async () => {
+    setCodexBusy(true);
+    setCodexMessage('');
+    try {
+      const status = await logoutDesktopCodexAuth();
+      setCodexAuthStatus(status || { configured: false });
+      setCodexDeviceLogin(null);
+      if (codexPollTimerRef.current) {
+        clearTimeout(codexPollTimerRef.current);
+        codexPollTimerRef.current = null;
+      }
+      setCodexMessage('Deleted the local ChatGPT subscription sign-in from this computer.');
+    } catch (error) {
+      setCodexMessage(userFacingError(error, 'Could not delete ChatGPT sign-in.'));
+    } finally {
+      setCodexBusy(false);
+    }
+  };
 
   const scheduleFieldValidation = (key: keyof DesktopSetupValues, nextValue: string) => {
     const fieldKey = String(key);
@@ -383,6 +487,13 @@ export function DesktopSetupPanel({
     setupState.configuredProviders,
     Array.from(lockedProviderSecretNames).map(String),
   );
+  const visibleConfiguredProviders = (() => {
+    const providers = [...displayedConfiguredProviders];
+    if (codexAuthStatus?.configured && !providers.includes('OpenAI Codex (ChatGPT)')) {
+      providers.push('OpenAI Codex (ChatGPT)');
+    }
+    return providers;
+  })();
   const valuesWithoutLockedProviderKeys = () => {
     const nextValues = { ...values };
     lockedProviderSecretNames.forEach((fieldKey) => {
@@ -440,10 +551,26 @@ export function DesktopSetupPanel({
 
   const fallbackBotId = telegramBotConfigs[0]?.id || null;
   const allowedTelegramUserIds = parseTelegramUserIds(values.ALLOWED_USER_IDS);
-  const selectedSettingsTab = SETTINGS_TABS.find((item) => item.key === activeTab) || SETTINGS_TABS[0];
+  const standaloneMode = Boolean(remoteAuthStatus?.cloudDisabled || remoteAuthStatus?.standalone);
+  const settingsTabs = standaloneMode
+    ? SETTINGS_TABS.map((tab) => (
+        tab.key === 'remote'
+          ? { ...tab, label: 'Workers', description: 'Local desktop and other computers' }
+          : tab
+      ))
+    : SETTINGS_TABS;
+  const selectedSettingsTab = settingsTabs.find((item) => item.key === activeTab) || settingsTabs[0];
   const maxTurnsValue = Math.min(1000, Math.max(10, Number.parseInt(maxTurnsDraft || String(currentMaxTurns || 80), 10) || 80));
   const maxConcurrentValue = Math.min(12, Math.max(1, Number.parseInt(maxConcurrentChatsDraft || '4', 10) || 4));
   const sleepModeEnabled = runtimeOrchestratorStatus?.headless_mode_enabled ?? false;
+  const codexConnected = Boolean(codexAuthStatus?.configured);
+  const codexUserCode = codexDeviceLogin?.userCode || codexDeviceLogin?.user_code || '';
+  const codexVerificationUri = codexDeviceLogin?.verificationUri || codexDeviceLogin?.verification_uri || 'https://auth.openai.com/codex/device';
+  const codexExpiresLabel = codexAuthStatus?.expiresAtIso
+    ? `Access token refreshes locally. Current token expires ${new Date(codexAuthStatus.expiresAtIso).toLocaleString()}.`
+    : codexConnected
+      ? 'Access token refreshes locally when needed.'
+      : 'Not connected.';
 
   const requestSleepModeChange = () => {
     if (sleepModeEnabled) {
@@ -618,7 +745,7 @@ export function DesktopSetupPanel({
             </View>
           )}
           <View style={styles.settingsNavList}>
-            {SETTINGS_TABS.map((tab) => {
+            {settingsTabs.map((tab) => {
               const selected = activeTab === tab.key;
               return (
                 <Pressable
@@ -663,6 +790,7 @@ export function DesktopSetupPanel({
                     draft={sharedSettingsDraft}
                     saving={sharedSettingsSaving}
                     status={sharedSettingsStatus}
+                    standaloneMode={standaloneMode}
                     onChange={onSharedSettingsDraftChange}
                     onSave={onSaveSharedSettings}
                   />
@@ -749,7 +877,7 @@ export function DesktopSetupPanel({
                         <View style={styles.settingRowCopy}>
                           <Text style={styles.settingRowTitle}>Sleep mode</Text>
                           <Text style={styles.settingRowDescription}>
-                            Hides the desktop window and keeps EmploAI available from the mobile app or Telegram until the desktop app is opened again.
+                            Hides the desktop window and keeps Telegram and local automations available until the desktop app is opened again.
                           </Text>
                         </View>
                         <View style={[styles.sleepModeStatusBadge, sleepModeEnabled ? styles.sleepModeStatusActive : null]}>
@@ -783,7 +911,7 @@ export function DesktopSetupPanel({
                         <View style={styles.sleepModeConfirmPanel}>
                           <Text style={styles.sleepModeConfirmTitle}>Enable sleep mode?</Text>
                           <Text style={styles.sleepModeConfirmText}>
-                            Mobile and Telegram become the active control surfaces, this desktop window will hide, and every Telegram bot is limited to one designated sleep chat. Open the desktop app again when you want to reconnect the UI and turn sleep mode off.
+                            Telegram and local automations become the active control surfaces, this desktop window will hide, and every Telegram bot is limited to one designated sleep chat. Open the desktop app again when you want to reconnect the UI and turn sleep mode off.
                           </Text>
                           <Pressable style={styles.sleepModeConfirmButton} onPress={confirmSleepMode}>
                             <Text style={styles.sleepModeConfirmButtonText}>I Understand, Enable Sleep</Text>
@@ -848,10 +976,12 @@ export function DesktopSetupPanel({
                   <View style={styles.settingCard}>
                     <Text style={styles.settingCardTitle}>Provider keys</Text>
                     <Text style={styles.settingCardDescription}>
-                      Paste the keys for the providers you want available in chat, Jarvis, Telegram, and Fleet workers.
+                      {standaloneMode
+                        ? 'Keys are saved on this computer only. Use Delete local key to remove a provider key from local storage and the running runtime.'
+                        : 'Paste the keys for the providers you want available in chat, Jarvis, Telegram, and Fleet workers.'}
                     </Text>
                     <View style={styles.providerRow}>
-                      {(displayedConfiguredProviders.length ? displayedConfiguredProviders : ['none yet']).map((provider) => (
+                      {(visibleConfiguredProviders.length ? visibleConfiguredProviders : ['none yet']).map((provider) => (
                         <View key={provider} style={styles.providerChip}>
                           <Text style={styles.providerChipText}>{provider}</Text>
                         </View>
@@ -863,9 +993,18 @@ export function DesktopSetupPanel({
                       const lockedByVault = Boolean(vaultItem);
                       const localRuntimeSecret = setupState.localRuntimeSecrets?.[String(field.key)];
                       const localRuntimeRedactedValue = String(localRuntimeSecret?.redacted_value || '').trim();
+                      const localDraftValue = String(values[field.key] || '').trim();
+                      const hasSavedLocalKey = Boolean(localRuntimeRedactedValue);
+                      const hasTypedLocalKey = Boolean(localDraftValue);
                       const showingLocalRuntimePreview = !lockedByVault
-                        && !String(values[field.key] || '').trim()
-                        && Boolean(localRuntimeRedactedValue);
+                        && !localDraftValue
+                        && hasSavedLocalKey;
+                      const hasLocalKey = !lockedByVault && (hasTypedLocalKey || hasSavedLocalKey);
+                      const localKeyStatusText = hasSavedLocalKey
+                        ? hasTypedLocalKey
+                          ? 'Replacement typed; saved local key still exists until you save or delete it.'
+                          : 'Saved locally on this computer.'
+                        : 'Typed key is not saved yet.';
                       const inputValue = lockedByVault
                         ? (vaultItem?.redacted_value || 'Already saved')
                         : showingLocalRuntimePreview
@@ -899,7 +1038,7 @@ export function DesktopSetupPanel({
                           />
                           {vaultItem ? (
                             <View style={styles.providerVaultStatus}>
-                              <Text style={styles.providerVaultStatusText}>Saved.</Text>
+                              <Text style={styles.providerVaultStatusText}>Saved in account vault.</Text>
                               <Pressable
                                 style={[
                                   styles.providerVaultDeleteButton,
@@ -908,22 +1047,27 @@ export function DesktopSetupPanel({
                                 onPress={() => onDeleteRemoteSecret?.('setup', String(field.key))}
                                 disabled={remoteSecretsBusy || !onDeleteRemoteSecret}
                               >
-                                <Text style={styles.providerVaultDeleteText}>Remove</Text>
+                                <Text style={styles.providerVaultDeleteText}>Delete saved key</Text>
                               </Pressable>
                             </View>
                           ) : null}
-                          {showingLocalRuntimePreview ? (
+                          {hasLocalKey ? (
                             <View style={styles.providerVaultStatus}>
-                              <Text style={styles.providerVaultStatusText}>Saved locally.</Text>
+                              <Text style={styles.providerVaultStatusText}>{localKeyStatusText}</Text>
                               <Pressable
                                 style={[
                                   styles.providerVaultDeleteButton,
-                                  (saving || !onRemoveLocalRuntimeSecret) ? styles.voiceModeButtonDisabled : null,
+                                  (saving || (hasSavedLocalKey && !onRemoveLocalRuntimeSecret)) ? styles.voiceModeButtonDisabled : null,
                                 ]}
-                                onPress={() => onRemoveLocalRuntimeSecret?.(field.key)}
-                                disabled={saving || !onRemoveLocalRuntimeSecret}
+                                onPress={() => {
+                                  updateValue(field.key, '');
+                                  if (hasSavedLocalKey) {
+                                    onRemoveLocalRuntimeSecret?.(field.key);
+                                  }
+                                }}
+                                disabled={saving || (hasSavedLocalKey && !onRemoveLocalRuntimeSecret)}
                               >
-                                <Text style={styles.providerVaultDeleteText}>Remove</Text>
+                                <Text style={styles.providerVaultDeleteText}>{hasSavedLocalKey ? 'Delete local key' : 'Clear typed key'}</Text>
                               </Pressable>
                             </View>
                           ) : null}
@@ -935,6 +1079,62 @@ export function DesktopSetupPanel({
                         </View>
                       );
                     })}
+                  </View>
+
+                  <View style={styles.settingCard}>
+                    <View style={styles.settingRow}>
+                      <View style={styles.settingRowCopy}>
+                        <Text style={styles.settingCardTitle}>ChatGPT subscription</Text>
+                        <Text style={styles.settingCardDescription}>
+                          Sign in with OpenAI in the browser to use the local Codex provider without an OpenAI API key.
+                        </Text>
+                      </View>
+                      <View style={[styles.sleepModeStatusBadge, codexConnected ? styles.sleepModeStatusActive : null]}>
+                        <Text style={styles.sleepModeStatusText}>{codexConnected ? 'Connected' : 'Local'}</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.voiceModeHelper}>
+                      {codexConnected
+                        ? `${codexAuthStatus?.accountId ? `Account ${codexAuthStatus.accountId}. ` : ''}${codexExpiresLabel}`
+                        : 'Tokens are saved only on this computer and can be deleted here.'}
+                    </Text>
+                    {codexDeviceLogin ? (
+                      <View style={styles.providerVaultStatus}>
+                        <Text style={styles.providerVaultStatusText}>
+                          Open {codexVerificationUri} and enter code {codexUserCode || 'shown by OpenAI'}.
+                        </Text>
+                      </View>
+                    ) : null}
+                    <View style={styles.sleepModeActionRow}>
+                      <Pressable
+                        style={[styles.sleepModeActionButton, codexBusy ? styles.buttonDisabled : null]}
+                        onPress={beginCodexDeviceLogin}
+                        disabled={codexBusy}
+                      >
+                        <Text style={styles.sleepModeActionButtonText}>{codexConnected ? 'Reconnect ChatGPT' : 'Sign In With ChatGPT'}</Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.sleepModeSecondaryButton, codexBusy ? styles.buttonDisabled : null]}
+                        onPress={() => void refreshCodexAuthStatus()}
+                        disabled={codexBusy}
+                      >
+                        <Text style={styles.sleepModeSecondaryButtonText}>Refresh</Text>
+                      </Pressable>
+                      {codexConnected ? (
+                        <Pressable
+                          style={[styles.providerVaultDeleteButton, codexBusy ? styles.voiceModeButtonDisabled : null]}
+                          onPress={disconnectCodexAuth}
+                          disabled={codexBusy}
+                        >
+                          <Text style={styles.providerVaultDeleteText}>Delete local sign-in</Text>
+                        </Pressable>
+                      ) : null}
+                    </View>
+                    {codexMessage ? (
+                      <Text style={[styles.validationText, codexConnected ? styles.validationTextValid : styles.validationTextChecking]}>
+                        {codexMessage}
+                      </Text>
+                    ) : null}
                   </View>
 
                   <View style={styles.settingCard}>
@@ -1115,6 +1315,13 @@ export function DesktopSetupPanel({
                     ) : null}
                   </View>
                 </View>
+
+                <DesktopSetupLocalIntelligenceSection
+                  apiBaseUrl={localIntelligenceApi?.apiBaseUrl}
+                  token={localIntelligenceApi?.token}
+                  sessionId={localIntelligenceApi?.sessionId}
+                  onOpenPath={onOpenPath}
+                />
               </>
             ) : null}
 
@@ -1360,6 +1567,47 @@ export function DesktopSetupPanel({
             ) : null}
 
             {activeTab === 'remote' ? (
+              standaloneMode ? (
+              <>
+                <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>Standalone Desktop</Text>
+                  <Text style={styles.helperText}>
+                    EmploAI is running without account login, phone pairing, or the cloud backend. Local chat, Jarvis, automations, and fleet control use this computer&apos;s local app session.
+                  </Text>
+                  <View style={styles.metaRow}>
+                    <View style={styles.metaCard}>
+                      <Text style={styles.metaLabel}>Mode</Text>
+                      <Text style={styles.metaValue}>Local</Text>
+                    </View>
+                    <View style={styles.metaCard}>
+                      <Text style={styles.metaLabel}>Cloud account</Text>
+                      <Text style={styles.metaValue}>Off</Text>
+                    </View>
+                    <View style={styles.metaCard}>
+                      <Text style={styles.metaLabel}>Mobile pairing</Text>
+                      <Text style={styles.metaValue}>Off</Text>
+                    </View>
+                    <View style={styles.metaCard}>
+                      <Text style={styles.metaLabel}>Desktop</Text>
+                      <Text style={styles.metaValue}>{remoteDesktopName || 'EmploAI Desktop'}</Text>
+                    </View>
+                  </View>
+                  {remoteAuthStatus?.detail ? <Text style={styles.voiceModeHelper}>{remoteAuthStatus.detail}</Text> : null}
+                </View>
+
+                <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>Other Computers</Text>
+                  <Text style={styles.helperText}>
+                    Use Fleet in the main app to create local workers or enrollment tokens for other machines. This path stays local to the desktop backend and does not require an EmploAI account.
+                  </Text>
+                  <View style={styles.noteCard}>
+                    <Text style={styles.noteLine}>1. Open Fleet from the main app.</Text>
+                    <Text style={styles.noteLine}>2. Create a local worker or enrollment token.</Text>
+                    <Text style={styles.noteLine}>3. Connect the other machine to this desktop&apos;s local fleet controller.</Text>
+                  </View>
+                </View>
+              </>
+              ) : (
               <>
                 <View style={styles.section}>
                   <Text style={styles.sectionTitle}>Connected devices</Text>
@@ -1521,6 +1769,7 @@ export function DesktopSetupPanel({
                   </View>
                 </View>
               </>
+              )
             ) : null}
 
             {activeTab === 'voice' ? (
@@ -1539,6 +1788,7 @@ export function DesktopSetupPanel({
                 onSetVoiceDefaultEngine={setVoiceDefaultEngine}
                 onToggleVoicePackRequest={toggleVoicePackRequest}
                 onInstallVoicePack={onInstallVoicePack}
+                onSelectTtsVoicePack={onSelectTtsVoicePack}
                 onRemoveVoicePack={onRemoveVoicePack}
               />
             ) : null}
@@ -1550,6 +1800,7 @@ export function DesktopSetupPanel({
                 recoveryBusyId={recoveryBusyId}
                 recoveryMessage={recoveryMessage}
                 remoteAccountSignedIn={Boolean(remoteAuthStatus?.signedIn)}
+                standaloneMode={standaloneMode}
                 remoteSecretsBusy={remoteSecretsBusy}
                 cloudChatBackupEnabled={cloudChatBackupEnabled}
                 cloudBackupPreferenceBusy={cloudBackupPreferenceBusy}

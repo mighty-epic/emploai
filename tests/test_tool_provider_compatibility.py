@@ -19,8 +19,8 @@ from cli.agent_tools.loop import run_tool_loop
 from shared.openai_api import create_openai_completion
 from shared.unified_agent import UnifiedToolRegistry
 from shared.tool_packs import filter_tools_by_enabled_packs, tools_for_enabled_packs
-from single_agent.extension_tool import create_extension_tool
-from single_agent.tool_manifest import AGENT_TOOLS
+from local_agent_runtime.extension_tool import create_extension_tool
+from local_agent_runtime.tool_manifest import AGENT_TOOLS
 
 
 ANTHROPIC_NATIVE_EDITOR = {

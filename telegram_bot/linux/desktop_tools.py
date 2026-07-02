@@ -66,7 +66,7 @@ def _parse_coordinate(value: object) -> int:
 
 
 def _temp_capture_path(prefix: str = "screen") -> Path:
-    preferred_dir = Path("single_agent/screenshots")
+    preferred_dir = Path("local_agent_runtime/screenshots")
     preferred_dir.mkdir(parents=True, exist_ok=True)
     return preferred_dir / f"{prefix}_{int(time.time() * 1000)}.png"
 

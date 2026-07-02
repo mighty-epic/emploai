@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from mobile_app.backend import runtime as app_runtime
+from app_backend import runtime as app_runtime
 
 
 def test_remote_api_config_uses_env_values_with_encrypted_session_file(monkeypatch, tmp_path: Path):

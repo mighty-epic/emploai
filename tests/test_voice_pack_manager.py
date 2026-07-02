@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from mobile_app.backend import voice_pack_manager
+from app_backend import voice_pack_manager
 
 
 def _write_english_pack(root: Path) -> None:

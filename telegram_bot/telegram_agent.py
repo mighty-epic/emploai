@@ -28,9 +28,9 @@ except ImportError:
 from dotenv import load_dotenv
 load_dotenv()
 
-from bot_core.hooks import HookEvent, HookType
-from bot_core.security import SecurityManager, rate_limited, authorized_only
-from bot_core.ui_helpers import InlineKeyboardHelper, MessageFormatter
+from runtime_support.hooks import HookEvent, HookType
+from runtime_support.security import SecurityManager, rate_limited, authorized_only
+from runtime_support.ui_helpers import InlineKeyboardHelper, MessageFormatter
 from cli.tui_constants import AVAILABLE_MODELS as _ALL_MODELS, MODEL_CONFIGS as _ALL_MODEL_CONFIGS
 from shared.telegram_bot_config_store import TelegramBotConfigStore
 try:
@@ -177,7 +177,7 @@ def _safe_start_embedded_app_server() -> None:
         logger.info("Embedded app server startup skipped for background Telegram worker")
         return
     try:
-        from mobile_app.backend import start_embedded_app_server_if_enabled
+        from app_backend import start_embedded_app_server_if_enabled
 
         force_enabled = os.getenv("EMPLOAI_DESKTOP_FORCE_APP_SERVER", "").strip().lower() in {"1", "true", "yes", "on"}
         start_embedded_app_server_if_enabled(force=force_enabled)
@@ -190,7 +190,7 @@ async def _safe_start_cron_scheduler() -> None:
         logger.info("Cron scheduler startup skipped for background Telegram worker")
         return
     try:
-        from mobile_app.backend.cron_runtime import ensure_global_cron_scheduler_started
+        from app_backend.cron_runtime import ensure_global_cron_scheduler_started
 
         await ensure_global_cron_scheduler_started()
     except Exception:

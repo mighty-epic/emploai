@@ -14,7 +14,7 @@ from openai import OpenAI
 from cli.config_manager import get_config_manager
 from cli.models.session import Session
 from cli.session_manager import SessionManager
-from bot_core.system_info import get_system_info
+from runtime_support.system_info import get_system_info
 from cli.tui_constants import (
     AGENT_MODES,
     DEFAULT_AGENT_MODE,
@@ -22,7 +22,7 @@ from cli.tui_constants import (
     MODEL_VARIANTS,
     ChatMessage,
 )
-from single_agent.agent import SingleAgent
+from local_agent_runtime.agent import SingleAgent
 from cli.agent_tools.executor import ToolExecutor
 from skills import get_skill_registry
 from shared.tool_packs import default_enabled_tool_packs

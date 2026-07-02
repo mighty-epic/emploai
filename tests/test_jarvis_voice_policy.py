@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mobile_app.backend.jarvis_voice_policy import (
+from app_backend.jarvis_voice_policy import (
     jarvis_barge_in_is_self_echo,
     jarvis_barge_in_text_is_meaningful,
     jarvis_barge_in_words,

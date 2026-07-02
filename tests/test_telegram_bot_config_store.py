@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 
-from mobile_app.backend.session_bridge import AppSessionBridge
+from app_backend.session_bridge import AppSessionBridge
 from shared.telegram_bot_config_store import TELEGRAM_BOT_TOKENS_JSON_ENV, TelegramBotConfigStore
 
 
@@ -35,7 +35,7 @@ def test_telegram_bot_tokens_are_runtime_only(monkeypatch, tmp_path: Path):
 def test_restore_telegram_bot_parenting_rebuilds_chat_assignments(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("shared.telegram_bot_config_store.user_state_root", lambda _user_id: tmp_path)
     monkeypatch.setattr("shared.multi_chat_orchestrator.user_state_root", lambda _user_id: tmp_path)
-    monkeypatch.setattr("mobile_app.backend.session_bridge.user_state_root", lambda _user_id: tmp_path)
+    monkeypatch.setattr("app_backend.session_bridge.user_state_root", lambda _user_id: tmp_path)
     monkeypatch.delenv(TELEGRAM_BOT_TOKENS_JSON_ENV, raising=False)
 
     bridge = AppSessionBridge(user_id=7002, workspace=tmp_path)

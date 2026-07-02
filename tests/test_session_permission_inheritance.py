@@ -2,7 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from cli.session_manager import SessionManager
-from mobile_app.backend import session_bridge
+from app_backend import session_bridge
 
 
 def test_session_index_rebuild_preserves_security_permission_mode(tmp_path: Path):

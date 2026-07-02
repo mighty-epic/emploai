@@ -1286,7 +1286,7 @@ class AgentEvalHarness:
 
     def _configure_isolated_scheduler(self) -> None:
         try:
-            from single_agent import cron_scheduler
+            from local_agent_runtime import cron_scheduler
 
             cron_scheduler._global_scheduler = cron_scheduler.create_scheduler(
                 job_store=str((self.runtime_home / "jobs.json").resolve())
@@ -1297,14 +1297,14 @@ class AgentEvalHarness:
     def _load_modules(self) -> None:
         if self._mods:
             return
-        from mobile_app.backend.runtime import (
+        from app_backend.runtime import (
             _conversational_turn_guard,
             _kickstart_prelude,
             _screen_observation_contract,
             _task_execution_contract,
             run_app_chat_turn,
         )
-        from mobile_app.backend.session_bridge import AppSessionBridge
+        from app_backend.session_bridge import AppSessionBridge
         from shared.channel_runtime import _memory_context
         from shared.multi_chat_orchestrator import _ORCHESTRATORS
         from shared.task_intent import (

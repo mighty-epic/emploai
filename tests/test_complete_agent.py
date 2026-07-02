@@ -16,7 +16,7 @@ from typing import Dict, List
 from dataclasses import dataclass
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from agent.unified_agent import UnifiedAgent, TestResult
+from legacy_agent_orchestration.unified_agent import UnifiedAgent, TestResult
 
 
 # ============================================================

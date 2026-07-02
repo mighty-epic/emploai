@@ -136,7 +136,7 @@ You need your **own** Telegram bot. This takes ~2 minutes:
    - Give your bot a **username** (must end in `bot`, e.g., `my_emploai_bot`)
 4. BotFather will give you a **Bot Token** — copy it. It looks like:
    ```
-   <TELEGRAM_BOT_TOKEN>
+   <bot-id>:<bot-token-from-botfather>
    ```
 5. **Save this token** — you'll need it for the `.env` file.
 
@@ -179,13 +179,13 @@ The bot only responds to authorized user IDs. To find yours:
    
    # === API KEYS (provided to you separately) ===
    
-   OPENAI_API_KEY=sk-proj-...
-   ANTHROPIC_API_KEY=sk-ant-...
-   XAI_API_KEY=xai-...
-   GEMINI_API_KEY=AIza...
-   DEEPSEEK_API_KEY=sk-...
+   OPENAI_API_KEY=replace_with_openai_key
+   ANTHROPIC_API_KEY=replace_with_anthropic_key
+   XAI_API_KEY=replace_with_xai_key
+   GEMINI_API_KEY=replace_with_gemini_key
+   DEEPSEEK_API_KEY=replace_with_deepseek_key
    NVIDIA_API_KEY=...
-   OPENROUTER_API_KEY=sk-or-...
+   OPENROUTER_API_KEY=replace_with_openrouter_key
    
    # === BETA MODE (leave as true) ===
    BETA_MODE=true

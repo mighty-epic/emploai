@@ -22,6 +22,8 @@ GOOGLE_UNSUPPORTED_SCHEMA_KEYS = {
 def normalize_provider(provider: Optional[str]) -> str:
     """Normalize provider names to the small set used by the tool adapters."""
     normalized = (provider or "openai").strip().lower()
+    if normalized == "openai-codex":
+        return "openai"
     if normalized in {"anthropic", "google"}:
         return normalized
     if normalized in OPENAI_COMPATIBLE_PROVIDERS:

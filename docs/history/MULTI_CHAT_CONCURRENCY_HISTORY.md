@@ -274,16 +274,16 @@ The main implementation touched these areas:
 - `shared/telegram_bot_config_store.py`
 - `shared/cron_feed_store.py`
 - `cli/models/session.py`
-- `mobile_app/backend/session_bridge.py`
-- `mobile_app/backend/app_server.py`
-- `mobile_app/backend/runtime.py`
-- `mobile_app/backend/cron_runtime.py`
+- `app_backend/session_bridge.py`
+- `app_backend/app_server.py`
+- `app_backend/runtime.py`
+- `app_backend/cron_runtime.py`
 - `telegram_bot/telegram_session_state.py`
 - `telegram_bot/telegram_unified_agent.py`
 - `telegram_bot/telegram_message_handlers.py`
 - `telegram_bot/telegram_app.py`
 - `telegram_bot/telegram_agent.py`
-- `single_agent/cron_scheduler.py`
+- `local_agent_runtime/cron_scheduler.py` (formerly `single_agent/cron_scheduler.py`)
 - `desktop_app/renderer_client/src/desktop/DesktopConversationView.tsx`
 - `desktop_app/renderer_client/src/desktop/DesktopSetupPanel.tsx`
 - `desktop_app/renderer_client/src/desktop/DesktopAppShell.tsx`

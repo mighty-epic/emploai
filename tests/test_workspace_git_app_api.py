@@ -3,7 +3,7 @@ import subprocess
 
 from fastapi.testclient import TestClient
 
-from mobile_app.backend import app_server
+from app_backend import app_server
 
 
 def _client(monkeypatch):

@@ -24,11 +24,12 @@ def collect_tree(src: Path, prefix: str):
 hiddenimports = []
 for package_name in (
     "telegram_bot",
-    "single_agent",
+    "local_agent_runtime",
     "shared",
-    "bot_core",
+    "runtime_support",
     "cli",
-    "mobile_app.backend",
+    "app_backend",
+    "desktop_runtime",
     "mss",
     "PIL",
     "pytesseract",
@@ -50,7 +51,7 @@ if tesseract_bundle:
     datas += collect_tree(Path(tesseract_bundle), "vendor/tesseract")
 
 a = Analysis(
-    [str(project_root / "deploy" / "windows" / "release_launcher.py")],
+    [str(project_root / "desktop_runtime" / "launcher.py")],
     pathex=[str(project_root)],
     binaries=[],
     datas=datas,

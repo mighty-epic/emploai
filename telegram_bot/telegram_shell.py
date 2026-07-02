@@ -8,18 +8,21 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# ======================================================================================
-# 🔒 CONFIGURATION - EDIT THIS SECTION
-# ======================================================================================
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
-# 1. Get your token from @BotFather on Telegram
-BOT_TOKEN = "<TELEGRAM_BOT_TOKEN>" 
 
-# 2. Get your User ID from @userinfobot on Telegram
-#    CRITICAL: Only this user ID will be able to run commands.
-ALLOWED_USER_ID = 8562474049 
+def _allowed_user_id() -> int | None:
+    raw = os.getenv("ALLOWED_USER_ID", "").strip() or os.getenv("ALLOWED_USER_IDS", "").strip()
+    first = raw.split(",", 1)[0].strip()
+    if not first:
+        return None
+    try:
+        return int(first)
+    except ValueError:
+        return None
 
-# ======================================================================================
+
+ALLOWED_USER_ID = _allowed_user_id()
 
 # Configure logging
 logging.basicConfig(
@@ -101,7 +104,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user = update.effective_user
     
     # SECURITY CHECK
-    if user.id != ALLOWED_USER_ID:
+    if ALLOWED_USER_ID is None or user.id != ALLOWED_USER_ID:
         logger.warning(f"Unauthorized access attempt by User ID: {user.id}")
         await update.message.reply_text(f"⛔ Unauthorized access. Your ID: {user.id}")
         return
@@ -125,7 +128,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Passes the user message to the shell input."""
     user = update.effective_user
-    if user.id != ALLOWED_USER_ID:
+    if ALLOWED_USER_ID is None or user.id != ALLOWED_USER_ID:
         return
 
     text = update.message.text
@@ -180,20 +183,20 @@ async def flush_output(context: ContextTypes.DEFAULT_TYPE):
 def main() -> None:
     """Start the bot."""
     # Simple check for configuration
-    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+    if not BOT_TOKEN or ALLOWED_USER_ID is None:
         print("\n" + "="*60)
-        print("❌ CONFIGURATION REQUIRED")
-        print("Please edit 'telegram_shell.py' and set BOT_TOKEN.")
+        print("CONFIGURATION REQUIRED")
+        print("Set TELEGRAM_BOT_TOKEN and ALLOWED_USER_ID or ALLOWED_USER_IDS.")
         print("="*60 + "\n")
         return
 
-    print("🤖 Bot starting...")
+    print("Bot starting...")
     application = Application.builder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("✅ Bot is polling. Press Ctrl+C to stop.")
+    print("Bot is polling. Press Ctrl+C to stop.")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":

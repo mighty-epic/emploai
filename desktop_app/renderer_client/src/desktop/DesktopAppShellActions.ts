@@ -7,6 +7,7 @@ import {
   createTelegramBotConfig,
   deleteTelegramBotConfig,
   denyPendingConfirmation,
+  configureVoiceTtsBackend,
   fetchAgentOverview,
   fetchPendingConfirmations,
   fetchRecoveryItems,
@@ -369,6 +370,10 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
   };
 
   const setCloudChatBackupEnabled = async (enabled: boolean) => {
+    if (remoteAuthStatus?.cloudDisabled) {
+      setRecoveryMessage('Cloud chat backup is disabled in standalone desktop mode.');
+      return;
+    }
     if (!remoteAuthStatus?.signedIn) {
       setRecoveryMessage('Sign in before changing cloud chat backup.');
       return;
@@ -408,49 +413,73 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
   };
 
   const saveSharedSettings = async () => {
-    if (!remoteAuthStatus?.signedIn) {
-      setSharedSettingsStatus('Sign in before saving shared settings.');
-      return;
-    }
     const validationError = validateSharedSettingsDraft(sharedSettingsDraft);
     if (validationError) {
       setSharedSettingsStatus(validationError);
       return;
     }
+    const cloudAccountEnabled = Boolean(remoteAuthStatus?.signedIn && !remoteAuthStatus?.cloudDisabled);
+    const standaloneMode = Boolean(remoteAuthStatus?.cloudDisabled || remoteAuthStatus?.standalone);
+    if (!cloudAccountEnabled && !standaloneMode) {
+      setSharedSettingsStatus('Sign in before saving shared settings.');
+      return;
+    }
     setSharedSettingsSaving(true);
-    setSharedSettingsStatus('Saving shared settings...');
+    setSharedSettingsStatus(standaloneMode ? 'Saving local settings...' : 'Saving shared settings...');
     try {
-      const nextProfile = applySharedSettingsDraftToProfile(remoteAuthStatus.profile as any, sharedSettingsDraft);
-      const result = await updateDesktopRemoteAccountProfile(nextProfile);
-      if (!result) {
-        throw new Error('Desktop account profile controls are unavailable in this shell.');
-      }
-      const profile = result.profile && typeof result.profile === 'object' ? result.profile : nextProfile;
-      setRemoteAuthStatus((current: any) => current ? { ...current, profile } : current);
-      setSharedSettingsDraft(profileToSharedSettingsDraft(profile as any));
-
       const maxTurns = sharedMaxTurnsFromDraft(sharedSettingsDraft);
+      const runtimePayload = {
+        ...(maxTurns ? { max_turns: maxTurns } : {}),
+        verbose_mode: sharedSettingsDraft.verboseMode,
+        custom_system_prompt_append: sharedSettingsDraft.customSystemPromptAppend.trim(),
+        memory_controls: {
+          prompt_context_enabled: sharedSettingsDraft.memoryPromptContextEnabled,
+          search_enabled: sharedSettingsDraft.memorySearchEnabled,
+          write_enabled: sharedSettingsDraft.memoryWriteEnabled,
+        },
+      };
+      const runtimeReady = Boolean(bootstrap?.apiBaseUrl && bootstrap?.accessToken);
+
+      if (cloudAccountEnabled) {
+        const nextProfile = applySharedSettingsDraftToProfile(remoteAuthStatus.profile as any, sharedSettingsDraft);
+        const result = await updateDesktopRemoteAccountProfile(nextProfile);
+        if (!result) {
+          throw new Error('Desktop account profile controls are unavailable in this shell.');
+        }
+        const profile = result.profile && typeof result.profile === 'object' ? result.profile : nextProfile;
+        setRemoteAuthStatus((current: any) => current ? { ...current, profile } : current);
+        setSharedSettingsDraft(profileToSharedSettingsDraft(profile as any));
+      } else if (!runtimeReady) {
+        throw new Error('Start the local desktop runtime before saving local settings.');
+      }
+
       if (bootstrap?.apiBaseUrl && bootstrap?.accessToken) {
-        await Promise.all([
-          maxTurns && bootstrap.currentSessionId
-            ? configureAgent(
-                bootstrap.apiBaseUrl,
-                bootstrap.accessToken,
-                { max_turns: maxTurns, verbose_mode: sharedSettingsDraft.verboseMode },
-                bootstrap.currentSessionId,
-              ).catch(() => null)
-            : Promise.resolve(null),
+        const runtimeTasks = [
+          configureAgent(
+            bootstrap.apiBaseUrl,
+            bootstrap.accessToken,
+            runtimePayload,
+            bootstrap.currentSessionId,
+          ),
           configureHeadlessRuntime(bootstrap.apiBaseUrl, bootstrap.accessToken, {
             enabled: sharedSettingsDraft.sleepModeEnabled,
-          }).then((next) => setOrchestratorStatus(next)).catch(() => null),
-        ]);
+          }).then((next) => setOrchestratorStatus(next)),
+        ];
+        if (cloudAccountEnabled) {
+          await Promise.all(runtimeTasks.map((task) => task.catch(() => null)));
+        } else {
+          await Promise.all(runtimeTasks);
+        }
         if (maxTurns) {
           setSetupMaxTurns(maxTurns);
         }
       }
-      setSharedSettingsStatus('Shared settings saved.');
+      if (standaloneMode) {
+        setSharedSettingsDraft((current: any) => current ? { ...current, cloudChatBackupEnabled: false } : current);
+      }
+      setSharedSettingsStatus(standaloneMode ? 'Local settings saved on this computer.' : 'Shared settings saved.');
     } catch (profileError) {
-      setSharedSettingsStatus(userFacingError(profileError, 'Shared settings were not saved.'));
+      setSharedSettingsStatus(userFacingError(profileError, standaloneMode ? 'Local settings were not saved.' : 'Shared settings were not saved.'));
     } finally {
       setSharedSettingsSaving(false);
     }
@@ -1128,6 +1157,72 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
     }
   };
 
+  const selectTtsVoicePack = async (pack: { id?: string; backend?: string | null; title?: string | null }) => {
+    const packId = String(pack?.id || '').trim();
+    const backend = String(pack?.backend || '').trim();
+    const packLabel = String(pack?.title || desktopVoicePackLabel(packId)).trim() || 'voice pack';
+    if (!packId || !backend) {
+      setError('This voice pack does not declare a TTS backend.');
+      return false;
+    }
+    if (!bootstrap?.apiBaseUrl || !bootstrap?.accessToken) {
+      setError('Voice controls are unavailable until the local runtime is ready.');
+      return false;
+    }
+    setVoicePackBusyId(packId);
+    setVoicePackProgress(null);
+    setError(null);
+    setNotice(`Switching Jarvis voice to ${packLabel}...`);
+    try {
+      const nextStatus = await configureVoiceTtsBackend(bootstrap.apiBaseUrl, bootstrap.accessToken, backend);
+      const switchError = nextStatus.tts_switch?.ok === false
+        ? nextStatus.tts_switch.issues?.[0] || `${packLabel} is not ready.`
+        : nextStatus.tts_ready === false
+          ? nextStatus.tts_issues?.[0] || `${packLabel} is not ready.`
+          : '';
+      if (switchError) {
+        throw new Error(switchError);
+      }
+      const selectedBackend = String(nextStatus.tts_backend || backend).trim();
+      const nextVoicePacks = bootstrap.setupState?.voicePacks
+        ? {
+            ...bootstrap.setupState.voicePacks,
+            packs: (bootstrap.setupState.voicePacks.packs || []).map((item: any) => {
+              if (item?.kind !== 'tts') {
+                return item;
+              }
+              const itemBackend = String(item.backend || '').trim();
+              return {
+                ...item,
+                enabled: Boolean(itemBackend && itemBackend === selectedBackend),
+                requested: item.id === packId ? true : item.requested,
+              };
+            }),
+          }
+        : bootstrap.setupState?.voicePacks;
+      applyBootstrap(
+        {
+          ...bootstrap,
+          setupState: bootstrap.setupState
+            ? {
+                ...bootstrap.setupState,
+                voiceStatus: nextStatus as any,
+                voicePacks: nextVoicePacks,
+              }
+            : bootstrap.setupState,
+        },
+        { keepSetupClosed: false, preserveLoadingState: true },
+      );
+      setNotice(`${packLabel} is active for Jarvis speech.`);
+      return true;
+    } catch (selectionError) {
+      setError(userFacingError(selectionError, `${packLabel} was not enabled.`));
+      return false;
+    } finally {
+      setVoicePackBusyId(null);
+    }
+  };
+
   const removeVoicePack = async (packId: string) => {
     const packLabel = desktopVoicePackLabel(packId);
     const confirmed = await confirmAction({
@@ -1334,7 +1429,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
       });
       setOrchestratorStatus(next);
       if (payload.enabled === true) {
-        setNotice('Sleep mode enabled. Desktop UI is hiding; use the mobile app or Telegram to continue.');
+        setNotice('Sleep mode enabled. Desktop UI is hiding; use Telegram or local automations to continue.');
         try {
           await hideDesktopWindowForSleepMode();
         } catch (hideError) {
@@ -1396,6 +1491,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
     refreshMemory,
     saveMemory,
     installVoicePack,
+    selectTtsVoicePack,
     removeVoicePack,
     selectVoiceEngine,
     installUpdateNow,

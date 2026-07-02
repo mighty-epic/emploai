@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from anthropic import Anthropic
 
-from bot_core.hooks import HookEvent, HookType
+from runtime_support.hooks import HookEvent, HookType
 from cli.agent_tools.loop import LoopResult, run_tool_loop
 from cli.tui_constants import MODEL_CONFIGS
 from shared.channel_sync import get_channel_sync_hub

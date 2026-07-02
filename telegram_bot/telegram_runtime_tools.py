@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from shared.channel_sync import get_channel_sync_hub
-from single_agent.cron_scheduler import parse_schedule_with_error
+from local_agent_runtime.cron_scheduler import parse_schedule_with_error
 
 PYAUTOGUI_IMPORT_ERROR = None
 try:

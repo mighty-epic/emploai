@@ -4,13 +4,21 @@
   "private": true,
   "main": "main.js",
   "scripts": {
-    "start": "electron .",
-    "dev": "electron .",
+    "start": "powershell -ExecutionPolicy Bypass -File ../scripts/desktop/start.ps1",
+    "start:fast": "powershell -ExecutionPolicy Bypass -File ../scripts/desktop/start.ps1 -Fast",
+    "start:electron": "electron .",
+    "start:check": "powershell -ExecutionPolicy Bypass -File ../scripts/desktop/start.ps1 -CheckOnly",
+    "dev": "npm run start:fast",
     "build:renderer": "npm --prefix renderer_client run export:web",
+    "fleet:yggdrasil:status": "cd .. && python -m desktop_runtime.backend yggdrasil-status",
+    "fleet:yggdrasil:bootstrap": "cd .. && python -m desktop_runtime.backend yggdrasil-bootstrap --install --start --configure-default-peers",
+    "fleet:yggdrasil:pair": "cd .. && python -m desktop_runtime.backend fleet-yggdrasil-pair --configure-manager-bind",
+    "fleet:yggdrasil:join": "cd .. && python -m desktop_runtime.backend fleet-yggdrasil-join",
     "smoke:chat": "py -3.13 ..\\scripts\\smoke_desktop_chat.py",
     "release:check": "python ../scripts/check_release_hygiene.py",
     "prepackage:win": "npm run release:check",
-    "package:win": "powershell -ExecutionPolicy Bypass -File ../deploy/windows/build_beta_release.ps1"
+    "package:win": "node -e \"console.log('Windows MSI/package build is disabled for standalone desktop mode. Use npm run package:win:legacy to run the old packager.')\"",
+    "package:win:legacy": "powershell -ExecutionPolicy Bypass -File ../deploy/windows/build_beta_release.ps1"
   },
   "devDependencies": {
     "electron": "^35.5.1",

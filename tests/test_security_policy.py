@@ -80,7 +80,8 @@ def test_security_policy_blocks_workspace_write_when_binding_missing(tmp_path):
 
 
 def test_redaction_removes_secrets_from_text_and_json():
-    assert "sk-live-secret" not in redact_text("key=sk-live-secret1234567890")
+    secret_like_value = "sk-" + "live-secret1234567890"
+    assert secret_like_value[:14] not in redact_text(f"key={secret_like_value}")
     payload = redact_json({"password": "secret", "nested": {"token": "abc"}, "safe": "hello", "session_id": "sess-1"})
 
     assert payload["password"] == "[REDACTED_SECRET]"

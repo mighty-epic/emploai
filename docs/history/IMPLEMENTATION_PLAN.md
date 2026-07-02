@@ -1,5 +1,9 @@
 # EmploAI App Channel Implementation Plan
 
+Archive note: this plan predates the local-first desktop cleanup. The mobile
+backend now lives at `app_backend/`, and mobile docs use `LEGACY_*.md` names to
+avoid being mistaken for the current architecture.
+
 ## Objective
 Add a new app delivery channel while preserving the current Telegram system unchanged.
 

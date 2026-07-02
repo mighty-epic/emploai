@@ -4,16 +4,16 @@ import time
 
 import pytest
 
-from mobile_app.backend.fleet_policy import (
+from app_backend.fleet_policy import (
     MAX_FLEET_ENROLLMENT_TTL_SECONDS,
     MIN_FLEET_ENROLLMENT_TTL_SECONDS,
 )
-from mobile_app.backend.fleet_report_validation import (
+from app_backend.fleet_report_validation import (
     MAX_FLEET_REPORT_LIST_ITEMS,
     MAX_FLEET_REPORT_NEXT_ACTION_CHARS,
     MAX_FLEET_REPORT_SUMMARY_CHARS,
 )
-from mobile_app.backend.remote_control_store import AUTH_OTP_MAX_ATTEMPTS, REMOTE_CONTROL_DB_FILENAME, RemoteControlPlaneStore
+from app_backend.remote_control_store import AUTH_OTP_MAX_ATTEMPTS, REMOTE_CONTROL_DB_FILENAME, RemoteControlPlaneStore
 
 
 def test_remote_control_store_registers_login_and_pairs_mobile_to_desktop(tmp_path):

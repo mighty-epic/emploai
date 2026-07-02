@@ -15,9 +15,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from agent.dual_agent import DualAgentCoordinator, MemoryAgent, ExecutorAgent
-from agent.dual_agent.coordinator import run_dual_agent_task
-from agent.dual_agent.schemas import (
+from legacy_agent_orchestration.dual_agent import DualAgentCoordinator, MemoryAgent, ExecutorAgent
+from legacy_agent_orchestration.dual_agent.coordinator import run_dual_agent_task
+from legacy_agent_orchestration.dual_agent.schemas import (
     ExecutorRequest, RequestType, ObserveRequest, ActionRequest,
     ObservationMethod, ActionType
 )

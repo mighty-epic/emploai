@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { ActivityIndicator, Image, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
 import { FoldSection, MonoIcon } from './DesktopConversationView.components';
@@ -12,14 +11,7 @@ type DesktopConversationSidebarDockProps = {
 export function DesktopConversationSidebarDock({ scope }: DesktopConversationSidebarDockProps) {
     const { VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW, activeSessionArtifactCount, activity, alwaysOnEnabled, alwaysOnVoiceAutoSend, artifactDetailLoading, artifactError, artifacts, artifactsLoading, beginHorizontalResize, beginNewChat, cancelAlwaysOnSegment, clearSidebarChatTooltipTimer, closeArtifactRail, closeReferenceRail, deleteSidebarSession, downloadArtifact, draftChat, englishVoicePack, formatAbsoluteTime, formatRelativeTime, handleVoiceEngineSelection, hebrewVoicePack, hideSidebarChatTooltip, hideVoicePanel, highlightedMessageIndex, historyAvailable, historyMessageLayoutRef, historyScrollRef, historySummary, hoveredProjectPath, hoveredSessionId, id, onOpenSetup, openArtifactExternally, openArtifactPreview, openArtifactRail, openDraftChat, openProjectMenuPath, openReferenceRail, openSession, openSessionMenuId, openSidebarSearchModal, openVoicePanel, pinnedChats, pinnedProjects, projectDragProps, projectGroups, projectPath, projectPathBasename, promptForProjectFolder, referenceEntries, referenceSummary, removeProjectFromSidebar, renameProject, rightSidebarWidth, router, scheduleSidebarChatTooltip, selectProjectPath, selectedArtifactDetail, selectedArtifactId, selectedArtifactSummary, selectedProjectPath, selectedVoiceEngine, selectedVoicePackSummary, sessionDragProps, sessionId, sessionMeta, sessions, setActiveCommandPanel, setHoveredProjectPath, setHoveredSessionId, setOpenProjectMenuPath, setOpenSessionMenuId, setProjectMenuRef, setProjectMenuTriggerRef, setRightSidebarWidth, setSelectedArtifactId, setSessionMenuRef, setSessionMenuTriggerRef, setSessionRowRef, setSidebarExpanded, setVoiceMode, shortStatusText, showArtifactRail, showReferenceRail, sidebarExpanded, sidebarSearchLauncherRef, sidebarState, startAlwaysOnVoice, startVoiceCapture, stopAlwaysOnVoice, stopVoiceCapture, telegramBotLabelForSession, timelineEntries, title, toggleProjectCollapsed, toggleProjectPin, toggleSessionPin, voiceDraft, voiceEngineChanging, voiceError, voiceMode, voicePackDiagnostics, voicePanelActive, voicePressActiveRef, voiceRecording, voiceRunning, voiceSummary } = scope;
     const sessionListLoading = Boolean(scope.sessionListLoading);
-    const [accountMenuOpen, setAccountMenuOpen] = useState(false);
-    const sidebarAccountEmail = String(scope.accountEmail || '').trim() || 'Not signed in';
-    const sidebarAccountInitial = sidebarAccountEmail === 'Not signed in'
-      ? 'E'
-      : sidebarAccountEmail.charAt(0).toUpperCase();
     const sidebarUpdateAvailable = Boolean(scope.updateAvailable);
-    const accountActionBusy = Boolean(scope.remoteAuthBusy || scope.remoteAuthLoggingOut);
-    const accountLogoutLabel = scope.remoteAuthLoggingOut ? 'Signing out' : scope.remoteAuthBusy ? 'Working' : 'Log out';
 
   return (
       <View
@@ -59,7 +51,6 @@ export function DesktopConversationSidebarDock({ scope }: DesktopConversationSid
             onScroll={() => {
               clearSidebarChatTooltipTimer();
               hideSidebarChatTooltip();
-              setAccountMenuOpen(false);
             }}
             scrollEventThrottle={16}
           >
@@ -757,74 +748,21 @@ export function DesktopConversationSidebarDock({ scope }: DesktopConversationSid
 
           </ScrollView>
           <View style={styles.sidebarAccountFooter}>
-            {accountMenuOpen ? (
-              <View style={styles.sidebarAccountMenu}>
-                <Pressable
-                  accessibilityRole="button"
-                  style={({ pressed, hovered }: any) => [
-                    styles.sidebarAccountMenuRow,
-                    hovered ? styles.sidebarAccountMenuRowHovered : null,
-                    pressed ? styles.sidebarAccountMenuRowPressed : null,
-                  ]}
-                  onPress={() => {
-                    setAccountMenuOpen(false);
-                    onOpenSetup?.();
-                  }}
-                >
-                  <MonoIcon name="settings" style={styles.sidebarAccountMenuIcon} />
-                  <Text style={styles.sidebarAccountMenuText}>Settings</Text>
-                </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  style={({ pressed, hovered }: any) => [
-                    styles.sidebarAccountMenuRow,
-                    hovered ? styles.sidebarAccountMenuRowHovered : null,
-                    pressed ? styles.sidebarAccountMenuRowPressed : null,
-                  ]}
-                  onPress={() => {
-                    setAccountMenuOpen(false);
-                    onOpenSetup?.();
-                  }}
-                >
-                  <MonoIcon name="history" style={styles.sidebarAccountMenuIcon} />
-                  <Text style={styles.sidebarAccountMenuText}>Usage remaining</Text>
-                </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  style={({ pressed, hovered }: any) => [
-                    styles.sidebarAccountMenuRow,
-                    styles.sidebarAccountMenuDangerRow,
-                    hovered ? styles.sidebarAccountMenuDangerRowHovered : null,
-                    pressed ? styles.sidebarAccountMenuRowPressed : null,
-                    accountActionBusy || !scope.onLogoutRemoteAccount ? styles.sidebarAccountMenuRowDisabled : null,
-                  ]}
-                  disabled={accountActionBusy || !scope.onLogoutRemoteAccount}
-                  onPress={() => {
-                    setAccountMenuOpen(false);
-                    scope.onLogoutRemoteAccount?.();
-                  }}
-                >
-                  <Text style={styles.sidebarAccountMenuIcon}>⌫</Text>
-                  <Text style={styles.sidebarAccountMenuText}>{accountLogoutLabel}</Text>
-                </Pressable>
-              </View>
-            ) : null}
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`Open account settings for ${sidebarAccountEmail}`}
+              accessibilityLabel="Open settings"
               style={({ pressed, hovered }: any) => [
                 styles.sidebarAccountButton,
-                accountMenuOpen ? styles.sidebarAccountButtonActive : null,
                 hovered ? styles.sidebarAccountButtonHovered : null,
                 pressed ? styles.sidebarAccountButtonPressed : null,
               ]}
-              onPress={() => setAccountMenuOpen((current) => !current)}
+              onPress={() => onOpenSetup?.()}
             >
               <View style={styles.sidebarAccountAvatar}>
-                <Text style={styles.sidebarAccountAvatarText}>{sidebarAccountInitial}</Text>
+                <MonoIcon name="settings" style={styles.sidebarAccountAvatarText} />
               </View>
               <View style={styles.sidebarAccountCopy}>
-                <Text style={styles.sidebarAccountEmail} numberOfLines={1}>{sidebarAccountEmail}</Text>
+                <Text style={styles.sidebarAccountEmail} numberOfLines={1}>Settings</Text>
               </View>
               {sidebarUpdateAvailable ? (
                 <View style={styles.sidebarAccountUpdateBadge}>

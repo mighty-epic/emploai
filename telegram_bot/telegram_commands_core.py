@@ -10,7 +10,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from cli.tui_constants import AGENT_MODE_LABELS, AVAILABLE_MODELS, MODEL_CONFIGS
-from mobile_app.backend.session_bridge import AppSessionBridge
+from app_backend.session_bridge import AppSessionBridge
 from shared.channel_sync import get_channel_sync_hub
 
 
@@ -277,7 +277,7 @@ def build_core_command_handlers(
             logger.exception("Failed to publish Telegram session config sync")
 
     def _fleet_store():
-        from mobile_app.backend.app_server import _get_remote_control_store
+        from app_backend.app_server import _get_remote_control_store
 
         return _get_remote_control_store()
 

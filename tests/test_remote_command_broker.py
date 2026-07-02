@@ -4,13 +4,13 @@ import asyncio
 
 import pytest
 
-from mobile_app.backend.remote_command_broker import (
+from app_backend.remote_command_broker import (
     BrokeredRemoteCommandError,
     dispatch_remote_desktop_command_via_broker,
     pump_remote_desktop_command_broker,
     request_remote_desktop_command_via_broker,
 )
-from mobile_app.backend.remote_control_store import RemoteControlPlaneStore
+from app_backend.remote_control_store import RemoteControlPlaneStore
 
 
 def _store_with_desktop(tmp_path):

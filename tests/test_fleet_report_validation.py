@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mobile_app.backend.fleet_report_validation import normalize_worker_task_report
+from app_backend.fleet_report_validation import normalize_worker_task_report
 
 
 def test_normalize_worker_task_report_keeps_completed_report_with_evidence():

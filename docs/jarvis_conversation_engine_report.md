@@ -13,7 +13,7 @@ Repos found:
 | `Jarvis-v2.0` | Deterministic voice command router | `Jarvis (Male Version).py`, `Jarvia (Female Version).py`, `README.md` |
 | `Jarvis-MT67` | Gemini Live native-audio assistant | `main.py`, `core/prompt.txt`, `memory/memory_manager.py`, `jarvis_telegram_patch.py` |
 | `Mark-XL` | Local LLM voice/text assistant with tool calls | `main.py`, `core/llm_client.py`, `core/stt.py`, `core/tts.py`, `core/prompt.txt`, `memory/memory_manager.py` |
-| `emploai` | Multi-chat desktop/app agent runtime with persistent sessions, tool packs, planner verifier, and websocket sync | `mobile_app/backend/app_server.py`, `mobile_app/backend/runtime.py`, `mobile_app/backend/session_bridge.py`, `shared/channel_runtime.py`, `shared/multi_chat_orchestrator.py`, `cli/agent_tools/loop.py`, `telegram_bot/telegram_session_state.py`, `telegram_bot/telegram_unified_agent.py`, `desktop_app/renderer_client/src/desktop/DesktopConversationView.tsx` |
+| `emploai` | Multi-chat desktop/app agent runtime with persistent sessions, tool packs, planner verifier, and websocket sync | `app_backend/app_server.py`, `app_backend/runtime.py`, `app_backend/session_bridge.py`, `shared/channel_runtime.py`, `shared/multi_chat_orchestrator.py`, `cli/agent_tools/loop.py`, `telegram_bot/telegram_session_state.py`, `telegram_bot/telegram_unified_agent.py`, `desktop_app/renderer_client/src/desktop/DesktopConversationView.tsx` |
 
 ## Executive Summary
 
@@ -256,10 +256,10 @@ The active transcript is `_conversation`, an in-memory list. Long-term memory is
 EmploAI's main conversation engine is the desktop app plus agent backend. It is not a single Jarvis loop; it is a layered runtime:
 
 1. The desktop app opens `/ws/app/chat` or `/ws/app/voice`.
-2. `mobile_app/backend/app_server.py` authenticates the websocket and resolves the session.
+2. `app_backend/app_server.py` authenticates the websocket and resolves the session.
 3. `AppSessionBridge` loads disk-backed session details and exposes session summaries/details to the UI.
 4. `UserMultiChatOrchestrator` leases a per-session worker and enforces shared-resource locks.
-5. `mobile_app/backend/runtime.py` converts the app turn into the shared runtime format.
+5. `app_backend/runtime.py` converts the app turn into the shared runtime format.
 6. `shared/channel_runtime.py` appends the user message, builds prompt context, emits live events, persists timeline rows, captures artifacts, and calls the tool loop.
 7. `cli/agent_tools/loop.py` streams the model, executes provider-normalized tool calls, and asks the final-quality guard whether a candidate final can be shown.
 8. Results are persisted back into `Session.chat_history`, published through channel sync, and reflected in the frontend.
@@ -278,7 +278,7 @@ The persistent session model is `cli/models/session.py::Session`. It stores:
 
 `telegram_bot/telegram_session_state.py::TelegramSession` mirrors this state at runtime. Save/load copies both `chat_history` and `event_timeline` between the live runtime object and the disk-backed `Session` object.
 
-`mobile_app/backend/session_bridge.py` exposes session detail to the frontend as:
+`app_backend/session_bridge.py` exposes session detail to the frontend as:
 
 - `messages`
 - `timeline_events`
@@ -326,7 +326,7 @@ The frontend and session bridge can activate or create chats while a runtime is 
 - memory context
 - skill index and loaded skill context
 
-`mobile_app/backend/runtime.py` also adds turn-specific system messages:
+`app_backend/runtime.py` also adds turn-specific system messages:
 
 - task execution contract
 - screen observation contract

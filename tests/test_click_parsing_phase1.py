@@ -1,5 +1,5 @@
-import single_agent.agent as single_agent_module
-from single_agent.agent import SingleAgent
+import local_agent_runtime.agent as single_agent_module
+from local_agent_runtime.agent import SingleAgent
 
 
 class FakePyAutoGUI:

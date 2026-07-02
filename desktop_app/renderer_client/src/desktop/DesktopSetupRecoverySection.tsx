@@ -10,6 +10,7 @@ type Props = {
   recoveryBusyId?: string | null;
   recoveryMessage?: string | null;
   remoteAccountSignedIn?: boolean;
+  standaloneMode?: boolean;
   remoteSecretsBusy?: boolean;
   cloudChatBackupEnabled?: boolean;
   cloudBackupPreferenceBusy?: boolean;
@@ -29,6 +30,7 @@ export function DesktopSetupRecoverySection({
   recoveryBusyId = null,
   recoveryMessage = null,
   remoteAccountSignedIn = false,
+  standaloneMode = false,
   remoteSecretsBusy = false,
   cloudChatBackupEnabled = true,
   cloudBackupPreferenceBusy = false,
@@ -47,11 +49,14 @@ export function DesktopSetupRecoverySection({
 
   return (
     <View style={styles.section}>
-      <Text style={styles.sectionTitle}>Recovery</Text>
+      <Text style={styles.sectionTitle}>{standaloneMode ? 'Local Recovery' : 'Recovery'}</Text>
       <Text style={styles.helperText}>
-        EmploAI keeps chats, tool timelines, worker reports, automations, and generated artifacts recoverable where cloud backup is available.
+        {standaloneMode
+          ? 'EmploAI keeps recoverable local app state on this computer. Cloud backup and account cleanup are disabled.'
+          : 'EmploAI keeps chats, tool timelines, worker reports, automations, and generated artifacts recoverable where cloud backup is available.'}
       </Text>
       <View style={styles.settingStack}>
+        {!standaloneMode ? (
         <View style={styles.settingCard}>
           <View style={styles.settingRow}>
             <View style={styles.settingRowCopy}>
@@ -81,10 +86,11 @@ export function DesktopSetupRecoverySection({
             </View>
           </View>
         </View>
+        ) : null}
         <View style={styles.settingCard}>
           <Text style={styles.settingCardTitle}>Pending confirmations</Text>
           <Text style={styles.settingCardDescription}>
-            Sensitive actions requested from desktop, mobile, Telegram, or Jarvis can be approved here before they continue.
+            Sensitive actions requested from desktop, Telegram, Jarvis, or automations can be approved here before they continue.
           </Text>
           {pendingConfirmations.length ? (
             <View style={styles.settingStack}>
@@ -179,6 +185,7 @@ export function DesktopSetupRecoverySection({
             <Text style={styles.helperText}>No archived items are waiting to be restored.</Text>
           )}
         </View>
+        {!standaloneMode ? (
         <View style={styles.settingCard}>
           <Text style={styles.settingCardTitle}>Workspace restore</Text>
           <Text style={styles.settingCardDescription}>
@@ -199,6 +206,8 @@ export function DesktopSetupRecoverySection({
             </Text>
           </Pressable>
         </View>
+        ) : null}
+        {!standaloneMode ? (
         <View style={styles.settingCard}>
           <Text style={styles.settingCardTitle}>Account cleanup</Text>
           <Text style={styles.settingCardDescription}>
@@ -215,6 +224,7 @@ export function DesktopSetupRecoverySection({
             <Text style={styles.voicePackActionTextSecondary}>Delete Account Data</Text>
           </Pressable>
         </View>
+        ) : null}
       </View>
     </View>
   );

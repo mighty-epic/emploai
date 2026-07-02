@@ -20,7 +20,7 @@ def _session_sync_user_id(session, fallback_user_id: int) -> int:
 
 
 def _confirmation_store():
-    from mobile_app.backend.remote_control_store import RemoteControlPlaneStore
+    from app_backend.remote_control_store import RemoteControlPlaneStore
 
     return RemoteControlPlaneStore()
 

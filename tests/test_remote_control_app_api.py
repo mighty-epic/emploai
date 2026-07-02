@@ -9,10 +9,16 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from mobile_app.backend import app_server
-from mobile_app.backend.auth_store import AppAuthStore
-from mobile_app.backend.remote_control_runtime import RemoteDesktopConnectionManager
-from mobile_app.backend.remote_control_store import REMOTE_CONTROL_DB_FILENAME, RemoteControlPlaneStore
+from app_backend import app_server
+from app_backend.auth_store import AppAuthStore
+from app_backend.remote_control_runtime import RemoteDesktopConnectionManager
+from app_backend.remote_control_store import REMOTE_CONTROL_DB_FILENAME, RemoteControlPlaneStore
+
+
+@pytest.fixture(autouse=True)
+def enable_legacy_cloud_and_mobile_routes(monkeypatch):
+    monkeypatch.setenv("EMPLOAI_CLOUD_BACKEND_ENABLED", "1")
+    monkeypatch.setenv("EMPLOAI_MOBILE_CONNECTION_ENABLED", "1")
 
 
 def _paired_remote_session(tmp_path):
@@ -4003,10 +4009,12 @@ def test_remote_email_password_auth_requires_otp_before_session(tmp_path, monkey
     assert "otp_code" not in signup_payload
     assert sent_codes[-1]["email"] == "otp-api@example.com"
     assert sent_codes[-1]["purpose"] == "signup_verify"
-    assert store._conn.execute(
-        "SELECT user_id FROM users WHERE email = ?",
+    pending_user = store._conn.execute(
+        "SELECT user_id, email_verified_at FROM users WHERE email = ?",
         ("otp-api@example.com",),
-    ).fetchone() is None
+    ).fetchone()
+    assert pending_user is not None
+    assert pending_user["email_verified_at"] is None
 
     unverified_login = client.post(
         "/api/remote/auth/login",
@@ -4128,10 +4136,12 @@ def test_remote_email_password_auth_allows_reclaiming_unverified_signup(tmp_path
     assert first.status_code == 200
     first_payload = first.json()
     first_code = sent_codes[-1]["code"]
-    assert store._conn.execute(
-        "SELECT user_id FROM users WHERE email = ?",
+    first_user_row = store._conn.execute(
+        "SELECT user_id, email_verified_at FROM users WHERE email = ?",
         ("otp-reclaim-api@example.com",),
-    ).fetchone() is None
+    ).fetchone()
+    assert first_user_row is not None
+    assert first_user_row["email_verified_at"] is None
 
     second = client.post(
         "/api/remote/auth/register",
@@ -4148,10 +4158,13 @@ def test_remote_email_password_auth_allows_reclaiming_unverified_signup(tmp_path
     assert second.status_code == 200
     second_payload = second.json()
     second_code = sent_codes[-1]["code"]
-    assert store._conn.execute(
-        "SELECT user_id FROM users WHERE email = ?",
+    second_user_row = store._conn.execute(
+        "SELECT user_id, email_verified_at FROM users WHERE email = ?",
         ("otp-reclaim-api@example.com",),
-    ).fetchone() is None
+    ).fetchone()
+    assert second_user_row is not None
+    assert second_user_row["email_verified_at"] is None
+    assert int(second_user_row["user_id"]) == int(first_user_row["user_id"])
 
     stale_verify = client.post(
         "/api/remote/auth/otp/verify",

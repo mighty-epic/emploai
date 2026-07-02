@@ -3,6 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { createRemoteAccountSessionStore } = require('./session_store');
+const { cloudBackendEnabled, mobileConnectionEnabled, standaloneDesktopEnabled } = require('./standalone_mode');
 
 function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHome, saveSetup, getBootstrapCache }) {
   if (!net || !shell || !safeStorage || typeof resolveRuntimeHome !== 'function' || typeof saveSetup !== 'function' || typeof getBootstrapCache !== 'function') {
@@ -82,6 +83,25 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
 
   function currentRemoteAccountSession() {
     return remoteAccountMemorySession || readRemoteAccountSession();
+  }
+
+  function cloudDisabledStatus(session = currentRemoteAccountSession()) {
+    return {
+      signedIn: false,
+      cloudDisabled: true,
+      mobileDisabled: !mobileConnectionEnabled(),
+      standalone: standaloneDesktopEnabled(),
+      apiBaseUrl: normalizeRemoteBaseUrl(session?.apiBaseUrl),
+      sessionPath: resolveRemoteAccountSessionPath(),
+      sessionStorage: remoteAccountSessionStore.storageKind(),
+      detail: 'Cloud account and mobile pairing are disabled in standalone desktop mode.',
+    };
+  }
+
+  function ensureCloudAccountEnabled() {
+    if (!cloudBackendEnabled()) {
+      throw new Error('Cloud account and mobile pairing are disabled in standalone desktop mode.');
+    }
   }
 
   function writeRemoteAccountSession(payload) {
@@ -241,6 +261,9 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
 
   async function remoteAuthStatus() {
     const session = currentRemoteAccountSession();
+    if (!cloudBackendEnabled()) {
+      return cloudDisabledStatus(session);
+    }
     if (!session?.sessionToken) {
       return {
         signedIn: false,
@@ -307,6 +330,7 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
   }
 
   async function remoteAuthLogin(payload = {}) {
+    ensureCloudAccountEnabled();
     const apiBaseUrl = normalizeRemoteBaseUrl(payload.apiBaseUrl);
     const email = String(payload.email || '').trim();
     const password = String(payload.password || '').trim();
@@ -333,6 +357,7 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
   }
 
   async function remoteAuthGoogleLogin(payload = {}) {
+    ensureCloudAccountEnabled();
     const apiBaseUrl = normalizeRemoteBaseUrl(payload.apiBaseUrl);
     const started = await remoteControlJson(apiBaseUrl, '/api/remote/auth/google/start', {
       method: 'POST',
@@ -383,6 +408,7 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
   }
 
   async function remoteAuthRegister(payload = {}) {
+    ensureCloudAccountEnabled();
     const apiBaseUrl = normalizeRemoteBaseUrl(payload.apiBaseUrl);
     const result = await remoteControlJson(apiBaseUrl, '/api/remote/auth/register', {
       method: 'POST',
@@ -401,6 +427,7 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
   }
 
   async function remoteAuthVerifyOtp(payload = {}) {
+    ensureCloudAccountEnabled();
     const apiBaseUrl = normalizeRemoteBaseUrl(payload.apiBaseUrl);
     const challengeId = String(payload.challengeId || payload.challenge_id || '').trim();
     const code = String(payload.code || '').trim();
@@ -431,6 +458,7 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
   }
 
   async function remoteAuthResendOtp(payload = {}) {
+    ensureCloudAccountEnabled();
     const apiBaseUrl = normalizeRemoteBaseUrl(payload.apiBaseUrl);
     const challengeId = String(payload.challengeId || payload.challenge_id || '').trim();
     if (!challengeId) {
@@ -445,6 +473,9 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
   }
 
   async function remoteAuthLogout() {
+    if (!cloudBackendEnabled()) {
+      return cloudDisabledStatus();
+    }
     const session = currentRemoteAccountSession();
     if (session?.sessionToken) {
       await remoteControlJson(session.apiBaseUrl, '/api/remote/auth/logout', {
@@ -470,6 +501,7 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
   }
 
   function remoteAccountSessionOrThrow() {
+    ensureCloudAccountEnabled();
     const session = currentRemoteAccountSession();
     if (!session?.sessionToken) {
       throw new Error('Desktop is not signed in.');
@@ -579,6 +611,9 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
   }
 
   function remoteAccountRuntimeOverlayValues() {
+    if (!cloudBackendEnabled()) {
+      return {};
+    }
     const session = currentRemoteAccountSession();
     const sessionToken = String(session?.sessionToken || session?.session_token || '').trim();
     if (!sessionToken) {
@@ -920,7 +955,34 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
     };
   }
 
+  function localAppSessionOrThrow() {
+    const bootstrap = getBootstrapCache() || {};
+    const apiBaseUrl = String(bootstrap.apiBaseUrl || bootstrap.api_base_url || '').trim().replace(/\/+$/, '');
+    const accessToken = String(bootstrap.accessToken || bootstrap.access_token || '').trim();
+    if (!apiBaseUrl || !accessToken) {
+      throw new Error('Local desktop backend is not ready yet.');
+    }
+    return { apiBaseUrl, accessToken };
+  }
+
+  async function localAppApi(pathname, options = {}) {
+    const local = localAppSessionOrThrow();
+    return remoteControlJson(local.apiBaseUrl, pathname, {
+      method: options.method || 'GET',
+      token: local.accessToken,
+      body: options.body,
+      headers: options.headers || {},
+    });
+  }
+
   async function fleetApi(pathname, options = {}) {
+    try {
+      return await localAppApi(pathname, options);
+    } catch (error) {
+      if (!cloudBackendEnabled()) {
+        throw error;
+      }
+    }
     const session = remoteAccountSessionOrThrow();
     return remoteControlJson(session.apiBaseUrl, pathname, {
       method: options.method || 'GET',

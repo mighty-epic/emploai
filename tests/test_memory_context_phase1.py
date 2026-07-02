@@ -1,9 +1,11 @@
 from pathlib import Path
 
+import pytest
+
 from cli.models.session import Session
 from shared.context_loader import ContextLoader
 from shared.memory import MemoryManager
-from single_agent.browser_tool import ARIA_SNAPSHOT_JS
+from local_agent_runtime.browser_tool import ARIA_SNAPSHOT_JS
 
 
 def test_memory_prompt_context_includes_long_term_and_recent_sections(tmp_path):
@@ -40,6 +42,66 @@ def test_append_to_memory_skips_duplicate_entries(tmp_path):
     assert manager.read_memory().count("- Real Chrome runs inside the VPS display.") == 1
 
 
+def test_memory_operations_apply_as_single_safe_write(tmp_path):
+    manager = MemoryManager(tmp_path)
+
+    result = manager.apply_operations(
+        [
+            {"action": "add", "section": "Context", "content": "- Kraitos is local-first."},
+            {"action": "replace", "old_text": "Kraitos is local-first.", "new_text": "Kraitos stores user data locally."},
+        ]
+    )
+
+    assert result["changed"] is True
+    memory = manager.read_memory()
+    assert "Kraitos stores user data locally." in memory
+    assert "Kraitos is local-first." not in memory
+    assert list((tmp_path / "memory" / "backups").glob("MEMORY.md.memory.*.bak"))
+
+
+def test_memory_operations_reject_secret_like_content(tmp_path):
+    manager = MemoryManager(tmp_path)
+    secret_like_value = "sk-" + "thisshouldnotbestoredinmemory123456"
+
+    with pytest.raises(ValueError):
+        manager.apply_operations(
+            [
+                {
+                    "action": "add",
+                    "section": "Context",
+                    "content": f"- api_key: {secret_like_value}",
+                }
+            ]
+        )
+
+    assert secret_like_value[:24] not in manager.read_memory()
+
+
+def test_local_fact_memory_is_searchable_and_prompt_visible(tmp_path):
+    manager = MemoryManager(tmp_path)
+    manager.fact_store.add_fact(
+        "Kraitos should preserve interactive desktop verification.",
+        category="project",
+        tags=["kraitos", "desktop"],
+    )
+
+    results = manager.search_memory("desktop verification", max_results=5)
+    prompt_context = manager.build_prompt_context()
+
+    assert any(result["source"] == "local-facts.sqlite" for result in results)
+    assert "## Local Fact Memory" in prompt_context
+    assert "interactive desktop verification" in prompt_context
+
+
+def test_local_fact_memory_delete_removes_fact(tmp_path):
+    manager = MemoryManager(tmp_path)
+    fact = manager.fact_store.add_fact("Temporary local fact.", category="general")
+
+    assert manager.fact_store.remove_fact(fact["id"]) is True
+    assert manager.fact_store.remove_fact(fact["id"]) is False
+    assert manager.fact_store.search("Temporary local fact") == []
+
+
 def test_memory_manager_uses_runtime_home_when_present(monkeypatch, tmp_path):
     runtime_home = tmp_path / "runtime-home"
     workspace = tmp_path / "custom-workspace"
@@ -69,7 +131,7 @@ def test_context_loader_includes_local_tools_file(monkeypatch, tmp_path):
     assert "Gmail account is available for the bot." in prompt_context
 
 
-def test_context_loader_prefers_bundled_runtime_agent_data_over_case_mismatched_repo_file(monkeypatch, tmp_path):
+def test_context_loader_prefers_runtime_context_over_case_mismatched_repo_file(monkeypatch, tmp_path):
     monkeypatch.delenv("EMPLOAI_HOME", raising=False)
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
@@ -80,9 +142,9 @@ def test_context_loader_prefers_bundled_runtime_agent_data_over_case_mismatched_
         encoding="utf-8",
     )
 
-    bundled_agent_data = repo_root / "telegram_bot" / "agent_data"
-    bundled_agent_data.mkdir(parents=True)
-    (bundled_agent_data / "AGENTS.md").write_text(
+    runtime_context = repo_root / "runtime_context"
+    runtime_context.mkdir(parents=True)
+    (runtime_context / "AGENTS.md").write_text(
         "# Correct AGENTS\n\n- This is the runtime context file.\n",
         encoding="utf-8",
     )

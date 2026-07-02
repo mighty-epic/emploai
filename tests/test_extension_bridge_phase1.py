@@ -7,7 +7,7 @@ import time
 import pytest
 import websockets
 
-from single_agent.extension_tool import ExtensionTool
+from local_agent_runtime.extension_tool import ExtensionTool
 
 
 def _free_port() -> int:

@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
-from single_agent.browser_tool import create_browser_tool
-from single_agent.extension_tool import create_extension_tool
+from local_agent_runtime.browser_tool import create_browser_tool
+from local_agent_runtime.extension_tool import create_extension_tool
 
 FAILOVER_ERROR_TYPES = {"connection", "protocol", "timeout"}
 

@@ -24,31 +24,31 @@ The suite:
 Quick command benchmark with the smallest English model:
 
 ```powershell
-python -m mobile_app.backend.whisper_cpp_suite --fixture-profile commands --models tiny.en --iterations 2
+python -m app_backend.whisper_cpp_suite --fixture-profile commands --models tiny.en --iterations 2
 ```
 
 Compare a tiny model against a larger quantized English model:
 
 ```powershell
-python -m mobile_app.backend.whisper_cpp_suite --fixture-profile commands --models tiny.en base.en-q5_1 --iterations 2
+python -m app_backend.whisper_cpp_suite --fixture-profile commands --models tiny.en base.en-q5_1 --iterations 2
 ```
 
 Run with a domain prompt so `whisper.cpp` knows assistant and product names in advance:
 
 ```powershell
-python -m mobile_app.backend.whisper_cpp_suite --fixture-profile commands --models base.en --initial-prompt "The wake phrase is EmploAI. Known terms: EmploAI, OpenAI, GitHub, GPT."
+python -m app_backend.whisper_cpp_suite --fixture-profile commands --models base.en --initial-prompt "The wake phrase is EmploAI. Known terms: EmploAI, OpenAI, GitHub, GPT."
 ```
 
 Run a mixed profile with both short commands and the official JFK sample:
 
 ```powershell
-python -m mobile_app.backend.whisper_cpp_suite --fixture-profile mixed --models tiny.en
+python -m app_backend.whisper_cpp_suite --fixture-profile mixed --models tiny.en
 ```
 
 Force a fresh download of binaries, models, and generated fixtures:
 
 ```powershell
-python -m mobile_app.backend.whisper_cpp_suite --fixture-profile commands --models tiny.en --force-download
+python -m app_backend.whisper_cpp_suite --fixture-profile commands --models tiny.en --force-download
 ```
 
 ## What To Look At
@@ -83,7 +83,7 @@ If the results are good enough, the next step is to wrap the same runtime helper
 If you want to test your own voice instead of synthetic fixtures, pass one or more WAV files:
 
 ```powershell
-python -m mobile_app.backend.whisper_cpp_suite --fixtures C:\path\to\wake1.wav C:\path\to\wake2.wav --models base.en-q5_1
+python -m app_backend.whisper_cpp_suite --fixtures C:\path\to\wake1.wav C:\path\to\wake2.wav --models base.en-q5_1
 ```
 
 If you also want WER scoring, create a JSON manifest like this:
@@ -98,7 +98,7 @@ If you also want WER scoring, create a JSON manifest like this:
 Then run:
 
 ```powershell
-python -m mobile_app.backend.whisper_cpp_suite --fixtures C:\path\to\wake1.wav C:\path\to\wake2.wav --expected-manifest C:\path\to\expected.json --models base.en-q5_1
+python -m app_backend.whisper_cpp_suite --fixtures C:\path\to\wake1.wav C:\path\to\wake2.wav --expected-manifest C:\path\to\expected.json --models base.en-q5_1
 ```
 
 ## Recording From The Microphone
@@ -106,19 +106,19 @@ python -m mobile_app.backend.whisper_cpp_suite --fixtures C:\path\to\wake1.wav C
 List input devices:
 
 ```powershell
-python -m mobile_app.backend.whisper_cpp_suite --list-input-devices
+python -m app_backend.whisper_cpp_suite --list-input-devices
 ```
 
 Record directly from the default microphone, then run the suite on that fresh recording:
 
 ```powershell
-python -m mobile_app.backend.whisper_cpp_suite --record-mic --record-seconds 5 --models base.en-q5_1 --initial-prompt "The wake phrase is EmploAI. Known terms: EmploAI, OpenAI, GitHub, GPT."
+python -m app_backend.whisper_cpp_suite --record-mic --record-seconds 5 --models base.en-q5_1 --initial-prompt "The wake phrase is EmploAI. Known terms: EmploAI, OpenAI, GitHub, GPT."
 ```
 
 Record from a specific device and score against an expected transcript:
 
 ```powershell
-python -m mobile_app.backend.whisper_cpp_suite --record-mic --device-index 1 --record-seconds 5 --record-name wake_phrase --expected-text "EmploAI open GitHub in Chrome" --models base.en-q5_1 --initial-prompt "The wake phrase is EmploAI. Known terms: EmploAI, OpenAI, GitHub, GPT."
+python -m app_backend.whisper_cpp_suite --record-mic --device-index 1 --record-seconds 5 --record-name wake_phrase --expected-text "EmploAI open GitHub in Chrome" --models base.en-q5_1 --initial-prompt "The wake phrase is EmploAI. Known terms: EmploAI, OpenAI, GitHub, GPT."
 ```
 
 ## Free-Talk Live Transcription
@@ -126,18 +126,18 @@ python -m mobile_app.backend.whisper_cpp_suite --record-mic --device-index 1 --r
 If you just want to speak freely into the microphone and watch local `whisper.cpp` transcribe in real time, use:
 
 ```powershell
-python -m mobile_app.backend.whisper_cpp_live --spawn-window --device-index 1
+python -m app_backend.whisper_cpp_live --spawn-window --device-index 1
 ```
 
 Useful variants:
 
 ```powershell
-python -m mobile_app.backend.whisper_cpp_live --list-input-devices
-python -m mobile_app.backend.whisper_cpp_live --show-presets
-python -m mobile_app.backend.whisper_cpp_live --spawn-window --preset fast
-python -m mobile_app.backend.whisper_cpp_live --spawn-window --preset balanced --device-index 1
-python -m mobile_app.backend.whisper_cpp_live --spawn-window --preset strict --device-index 1
-python -m mobile_app.backend.whisper_cpp_live --spawn-window --preset dictation --keep-context
+python -m app_backend.whisper_cpp_live --list-input-devices
+python -m app_backend.whisper_cpp_live --show-presets
+python -m app_backend.whisper_cpp_live --spawn-window --preset fast
+python -m app_backend.whisper_cpp_live --spawn-window --preset balanced --device-index 1
+python -m app_backend.whisper_cpp_live --spawn-window --preset strict --device-index 1
+python -m app_backend.whisper_cpp_live --spawn-window --preset dictation --keep-context
 ```
 
 This mode uses `whisper-stream.exe`, not the benchmark harness, so it is meant for free speech and live experimentation rather than scored WER reports.
@@ -149,7 +149,7 @@ One important limitation remains: `whisper-stream.exe` does not expose an initia
 If the live stream starts hearing words you did not say, use the stricter path first:
 
 ```powershell
-python -m mobile_app.backend.whisper_cpp_live --spawn-window --preset strict --device-index 1
+python -m app_backend.whisper_cpp_live --spawn-window --preset strict --device-index 1
 ```
 
 That preset raises the VAD threshold, lowers the max token budget, increases the high-pass filter, and disables decoder fallback so the stream is less eager to turn noise into text.
@@ -159,7 +159,7 @@ That preset raises the VAD threshold, lowers the max token budget, increases the
 If background noise or tiny whispers are still being turned into text, use the gated microphone path instead of raw `whisper-stream`:
 
 ```powershell
-python -m mobile_app.backend.whisper_cpp_live --engine gated-cli --preset strict --device-index 1 --gate-dbfs -29 --initial-prompt "The wake phrase is EmploAI. Known terms: EmploAI, OpenAI, GitHub, GPT."
+python -m app_backend.whisper_cpp_live --engine gated-cli --preset strict --device-index 1 --gate-dbfs -29 --initial-prompt "The wake phrase is EmploAI. Known terms: EmploAI, OpenAI, GitHub, GPT."
 ```
 
 This mode:
@@ -175,13 +175,13 @@ This mode:
 Useful tuning examples:
 
 ```powershell
-python -m mobile_app.backend.whisper_cpp_live --engine gated-cli --preset balanced --device-index 1 --gate-dbfs -32
-python -m mobile_app.backend.whisper_cpp_live --engine gated-cli --preset strict --device-index 1 --gate-dbfs -27
-python -m mobile_app.backend.whisper_cpp_live --engine gated-cli --preset strict --device-index 1 --gate-dbfs -29 --gate-release-ms 400 --gate-min-ms 600
-python -m mobile_app.backend.whisper_cpp_live --engine gated-cli --preset strict --device-index 1 --gate-dbfs -36 --gate-attack-ms 40 --gate-min-ms 120 --gate-release-ms 180 --gate-frame-ms 30
-python -m mobile_app.backend.whisper_cpp_live --engine gated-cli --preset balanced --device-index 1 --context-chars 220
-python -m mobile_app.backend.whisper_cpp_live --engine gated-cli --preset balanced --device-index 1 --draft-interval-ms 900 --draft-min-ms 1400 --draft-confidence 0.82
-python -m mobile_app.backend.whisper_cpp_live --engine gated-cli --preset balanced --device-index 1 --model base.en-q5_1 --draft-model tiny.en
+python -m app_backend.whisper_cpp_live --engine gated-cli --preset balanced --device-index 1 --gate-dbfs -32
+python -m app_backend.whisper_cpp_live --engine gated-cli --preset strict --device-index 1 --gate-dbfs -27
+python -m app_backend.whisper_cpp_live --engine gated-cli --preset strict --device-index 1 --gate-dbfs -29 --gate-release-ms 400 --gate-min-ms 600
+python -m app_backend.whisper_cpp_live --engine gated-cli --preset strict --device-index 1 --gate-dbfs -36 --gate-attack-ms 40 --gate-min-ms 120 --gate-release-ms 180 --gate-frame-ms 30
+python -m app_backend.whisper_cpp_live --engine gated-cli --preset balanced --device-index 1 --context-chars 220
+python -m app_backend.whisper_cpp_live --engine gated-cli --preset balanced --device-index 1 --draft-interval-ms 900 --draft-min-ms 1400 --draft-confidence 0.82
+python -m app_backend.whisper_cpp_live --engine gated-cli --preset balanced --device-index 1 --model base.en-q5_1 --draft-model tiny.en
 ```
 
 Less negative values such as `-27` are stricter and will ignore more quiet sounds. More negative values such as `-35` are more permissive.

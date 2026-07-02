@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import single_agent.agent as single_agent_module
+import local_agent_runtime.agent as single_agent_module
 import telegram_bot.telegram_unified_agent as telegram_module
 from shared.tesseract_runtime import (
     TESSERACT_MISSING_MESSAGE,

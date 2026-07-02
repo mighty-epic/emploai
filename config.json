@@ -47,24 +47,37 @@
     "use_extension": false
   },
   "voice": {
-    "selection_source": "settings",
-    "default_engine": "english_local",
+    "selection_source": "default",
+    "default_engine": "none",
+    "tts_backend": "openai",
     "packs": {
       "english_local": {
-        "requested": true,
+        "requested": false,
         "display_name": "English voice pack",
         "placeholder": false
       },
       "hebrew_local": {
-        "requested": true,
+        "requested": false,
         "display_name": "Hebrew voice pack",
+        "placeholder": false
+      }
+    },
+    "tts_packs": {
+      "kokoro_tts": {
+        "requested": false,
+        "display_name": "Kokoro voice pack",
+        "placeholder": false
+      },
+      "kyutai_clone_tts": {
+        "requested": false,
+        "display_name": "Kyutai clone voice pack",
         "placeholder": false
       }
     }
   },
   "channels": {
     "telegram": {
-      "enabled": true
+      "enabled": false
     },
     "app": {
       "enabled": true,
@@ -79,6 +92,7 @@
       "host": "127.0.0.1",
       "port": 8787,
       "auto_start": false,
+      "keep_runtime_on_app_close": false,
       "attach_timeout_seconds": 20
     }
   }

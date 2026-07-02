@@ -179,13 +179,20 @@ from shared import (
     get_heartbeat_manager,
 )
 from shared.task_board import TASK_BOARD_INTERNAL_TOOL_NAME, build_task_board_prompt, get_active_task_board
+from shared.prompt_layers import (
+    active_skills_section,
+    join_prompt_sections,
+    local_custom_instructions_section,
+    memory_context_section,
+    skills_index_section,
+)
 from shared.tool_packs import (
     PACK_BROWSER_ISOLATED,
     PACK_INTERACTIVE_DESKTOP,
     PACK_SCHEDULER,
     build_tool_pack_prompt,
 )
-from single_agent.cron_scheduler import CRON_TOOL_DEFINITIONS
+from local_agent_runtime.cron_scheduler import CRON_TOOL_DEFINITIONS
 
 
 logger = logging.getLogger(__name__)
@@ -991,11 +998,11 @@ Supported schedules include: 'every 30 seconds', 'every 5 minutes', 'every 1 hou
         cron_prompt if PACK_SCHEDULER in active_tool_packs else "",
         build_tool_pack_prompt(active_tool_packs),
         PACK_SCOPED_UNIFIED_AGENT_CORE_PROMPT,
-        f"## ACCOUNT CUSTOM INSTRUCTIONS\n{custom_prompt_append}" if custom_prompt_append else "",
+        local_custom_instructions_section(custom_prompt_append) if custom_prompt_append else "",
         workspace_context.strip() if workspace_context else "",
-        memory_context.strip() if memory_context else "",
-        skills_index.strip() if skills_index else "",
-        active_skills_context.strip() if active_skills_context else "",
+        memory_context_section(memory_context) if memory_context else "",
+        skills_index_section(skills_index) if skills_index else "",
+        active_skills_section(active_skills_context) if active_skills_context else "",
     ]
-    system_prompt = "\n\n".join(section for section in sections if section)
+    system_prompt = join_prompt_sections(sections)
     return system_prompt.replace("{{SYSTEM_INFO}}", session.system_info)

@@ -7,6 +7,7 @@ from typing import Any
 PROVIDER_ORDER = [
     "anthropic",
     "openai",
+    "openai-codex",
     "google",
     "xai",
     "deepseek",
@@ -26,11 +27,19 @@ PROVIDER_ENV_VARS = {
 }
 
 
-def enabled_providers_from_env(values: Mapping[str, str]) -> set[str]:
+def enabled_providers_from_env(values: Mapping[str, str], *, include_local_codex_auth: bool = False) -> set[str]:
     enabled: set[str] = set()
     for provider, env_var in PROVIDER_ENV_VARS.items():
         if str(values.get(env_var, "")).strip():
             enabled.add(provider)
+    if include_local_codex_auth:
+        try:
+            from shared.openai_codex_auth import is_codex_auth_configured
+
+            if is_codex_auth_configured():
+                enabled.add("openai-codex")
+        except Exception:
+            pass
     return enabled
 
 
@@ -43,6 +52,7 @@ def enabled_providers_from_clients(
     deepseek_client: Any = None,
     nvidia_client: Any = None,
     openrouter_client: Any = None,
+    openai_codex_client: Any = None,
 ) -> set[str]:
     enabled: set[str] = set()
     if openai_client is not None:
@@ -59,6 +69,8 @@ def enabled_providers_from_clients(
         enabled.add("nvidia")
     if openrouter_client is not None:
         enabled.add("openrouter")
+    if openai_codex_client is not None:
+        enabled.add("openai-codex")
     return enabled
 
 

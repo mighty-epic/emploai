@@ -1,6 +1,6 @@
 import pytest
 
-from mobile_app.backend import remote_control_runtime
+from app_backend import remote_control_runtime
 
 
 def test_remote_control_routing_status_defaults_to_single_process(monkeypatch):

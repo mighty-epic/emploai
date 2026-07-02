@@ -43,7 +43,7 @@ except ImportError:  # pragma: no cover
     webrtcvad = None
 
 
-from mobile_app.backend.whisper_cpp_runtime import (  # noqa: E402
+from app_backend.whisper_cpp_runtime import (  # noqa: E402
     DEFAULT_BINARY_FLAVOR,
     DEFAULT_LANGUAGE,
     WhisperFixture,
@@ -963,7 +963,7 @@ async def _transcribe_wav_desktop_voice_runtime_async(
     show_drafts: bool,
     stt_pad_ms: int,
 ) -> tuple[str, float]:
-    from mobile_app.backend.voice_runtime import VoiceDraftState, get_voice_runtime_status
+    from app_backend.voice_runtime import VoiceDraftState, get_voice_runtime_status
 
     normalized_path = _normalize_wav_for_whisper(audio_path, output_dir=output_dir, pad_ms=stt_pad_ms)
     sample_rate, frames = _read_pcm16_mono_wav(normalized_path)

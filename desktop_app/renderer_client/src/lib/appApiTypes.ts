@@ -904,6 +904,12 @@ export type AgentConfigurePayload = {
   variant?: string;
   planner_model?: string | null;
   max_turns?: number;
+  custom_system_prompt_append?: string | null;
+  memory_controls?: {
+    prompt_context_enabled?: boolean;
+    search_enabled?: boolean;
+    write_enabled?: boolean;
+  };
   workspace?: string;
   auto_reply_enabled?: boolean;
   verbose_mode?: boolean;
@@ -959,6 +965,35 @@ export type SkillSummary = {
   available: boolean;
   active: boolean;
   unavailable_reason?: string | null;
+  body_loaded?: boolean;
+  resources?: string[];
+};
+
+export type SkillResource = {
+  name: string;
+  type: string;
+  loaded: boolean;
+  content?: string | null;
+};
+
+export type SkillDetail = {
+  name: string;
+  description: string;
+  path?: string;
+  body: string;
+  body_loaded: boolean;
+  resources: SkillResource[];
+  metadata: Record<string, unknown>;
+  available: boolean;
+  active: boolean;
+  unavailable_reason?: string | null;
+};
+
+export type SkillLearnResult = {
+  ok: boolean;
+  action: string;
+  message: string;
+  skill: SkillDetail;
 };
 
 export type SkillValidation = {
@@ -996,4 +1031,30 @@ export type MemorySearchResult = {
   source: string;
   line?: number | null;
   content: string;
+};
+
+export type MemoryOperation = {
+  action: 'add' | 'replace' | 'remove';
+  section?: string;
+  content?: string;
+  old_text?: string;
+  new_text?: string;
+};
+
+export type MemoryOperationResult = {
+  changed: boolean;
+  operations: Array<Record<string, unknown>>;
+  memory_file?: string | null;
+  message?: string | null;
+};
+
+export type MemoryFact = {
+  id: number;
+  content: string;
+  category: string;
+  tags: string[];
+  trust: number;
+  source: string;
+  created_at: string;
+  updated_at: string;
 };
