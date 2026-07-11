@@ -28,23 +28,15 @@ contextBridge.exposeInMainWorld('emploaiDesktop', {
     logout: () => ipcRenderer.invoke('emploai:codex-auth:logout'),
   },
   remoteAuth: {
-    status: () => ipcRenderer.invoke('emploai:remote-auth:status'),
-    login: (payload) => ipcRenderer.invoke('emploai:remote-auth:login', payload),
-    googleLogin: (payload) => ipcRenderer.invoke('emploai:remote-auth:google-login', payload),
-    register: (payload) => ipcRenderer.invoke('emploai:remote-auth:register', payload),
-    verifyOtp: (payload) => ipcRenderer.invoke('emploai:remote-auth:otp-verify', payload),
-    resendOtp: (payload) => ipcRenderer.invoke('emploai:remote-auth:otp-resend', payload),
-    logout: () => ipcRenderer.invoke('emploai:remote-auth:logout'),
-    createPairingToken: () => ipcRenderer.invoke('emploai:remote-auth:create-pairing-token'),
-    listSecrets: (payload) => ipcRenderer.invoke('emploai:remote-auth:list-secrets', payload),
-    saveSetupSecrets: (payload) => ipcRenderer.invoke('emploai:remote-auth:save-setup-secrets', payload),
-    saveSecrets: (payload) => ipcRenderer.invoke('emploai:remote-auth:save-secrets', payload),
-    applyAccountData: () => ipcRenderer.invoke('emploai:remote-auth:apply-account-data'),
-    deleteSecret: (payload) => ipcRenderer.invoke('emploai:remote-auth:delete-secret', payload),
-    deleteAccountData: (payload) => ipcRenderer.invoke('emploai:remote-auth:delete-account-data', payload),
-    profile: () => ipcRenderer.invoke('emploai:remote-auth:profile'),
-    updateProfile: (payload) => ipcRenderer.invoke('emploai:remote-auth:update-profile', payload),
-    applySetupSecrets: (payload) => ipcRenderer.invoke('emploai:remote-auth:apply-setup-secrets', payload),
+    // Compatibility status only. Hosted account operations are not exposed to
+    // the renderer in the local-only product.
+    status: async () => ({
+      signedIn: false,
+      cloudDisabled: true,
+      mobileDisabled: true,
+      standalone: true,
+      detail: 'EmploAI stores its state locally and has no hosted account mode.',
+    }),
   },
   fleet: {
     snapshot: () => ipcRenderer.invoke('emploai:fleet:snapshot'),

@@ -5,11 +5,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from shared.cloud_object_store import CloudObjectStore
-from shared.runtime_paths import user_state_root
-from shared.standalone_policy import cloud_backend_enabled
-
-
 _FILE_ACCESS_RE = re.compile(
     r"\b(read|open|inspect|summari[sz]e|write|save|create|edit|update|modify|append|delete|rename|move|copy|generate)\b"
     r".{0,80}\b(file|folder|directory|workspace|repo|project|document|artifact|path)\b",
@@ -52,74 +47,6 @@ def task_likely_needs_workspace_access(text: str, metadata: Optional[Dict[str, A
     return bool(_FILE_ACCESS_RE.search(str(text or "")))
 
 
-def managed_workspace_path(*, user_id: int, workspace_id: Optional[str]) -> Path:
-    workspace_label = re.sub(r"[^A-Za-z0-9._-]+", "-", str(workspace_id or "workspace").strip()).strip("-") or "workspace"
-    return (user_state_root(int(user_id)) / "managed_workspaces" / workspace_label).resolve()
-
-
-def restore_cloud_workspace_files(
-    *,
-    user_id: int,
-    workspace_id: Optional[str],
-    target_dir: Optional[Path] = None,
-) -> WorkspacePreflightResult:
-    target = Path(target_dir).expanduser().resolve() if target_dir else managed_workspace_path(user_id=user_id, workspace_id=workspace_id)
-    if not cloud_backend_enabled():
-        return WorkspacePreflightResult(
-            ok=False,
-            action="cloud_disabled",
-            workspace_id=workspace_id,
-            restored_path=str(target),
-            message="Cloud workspace restore is disabled in standalone desktop mode.",
-        )
-    store = CloudObjectStore(user_id=int(user_id))
-    restored: List[Dict[str, Any]] = []
-    missing: List[Dict[str, Any]] = []
-    conflicts = 0
-    for item in store.list_objects():
-        metadata = dict(item.get("metadata") or {})
-        item_workspace_id = str(metadata.get("workspace_id") or "").strip()
-        legacy_workspace = str(metadata.get("workspace") or "").strip()
-        if workspace_id and item_workspace_id and item_workspace_id != str(workspace_id):
-            continue
-        if workspace_id and not item_workspace_id and legacy_workspace and legacy_workspace != str(workspace_id):
-            continue
-        object_key = str(item.get("object_key") or "").strip()
-        if not object_key:
-            continue
-        file_name = str(item.get("file_name") or metadata.get("title") or "artifact")
-        relative_path = str(metadata.get("file_path") or metadata.get("path") or file_name)
-        try:
-            result = store.restore_object_to_relative_path(
-                object_key=object_key,
-                target_dir=target,
-                relative_path=relative_path,
-                fallback_file_name=file_name,
-                preserve_conflicts=True,
-            )
-            if result.get("conflict_preserved"):
-                conflicts += 1
-            restored.append(result)
-        except FileNotFoundError:
-            missing.append({"object_key": object_key, "reason": "cloud_object_missing"})
-        except Exception as exc:
-            missing.append({"object_key": object_key, "reason": str(exc)})
-    return WorkspacePreflightResult(
-        ok=bool(restored),
-        action="restored" if restored else "no_cloud_files",
-        workspace_id=workspace_id,
-        restored_path=str(target),
-        restored_files=restored,
-        missing_original_files=missing,
-        conflict_count=conflicts,
-        message=(
-            f"Restored {len(restored)} cloud-saved workspace file{'s' if len(restored) != 1 else ''}."
-            if restored
-            else "No cloud-saved generated or evidence files are available for this workspace."
-        ),
-    )
-
-
 def ensure_session_workspace_ready_for_task(
     session: Any,
     *,
@@ -141,32 +68,16 @@ def ensure_session_workspace_ready_for_task(
         except Exception:
             pass
 
-    restored = restore_cloud_workspace_files(user_id=int(user_id), workspace_id=workspace_id)
-    if restored.restored_files:
-        setattr(session, "workspace", str(restored.restored_path))
-        setattr(session, "workspace_binding_status", "active")
-        if workspace_id:
-            setattr(session, "workspace_id", workspace_id)
-        return restored
-
     return WorkspacePreflightResult(
         ok=False,
         action="missing_original_files",
         workspace_id=workspace_id,
-        restored_path=restored.restored_path,
         missing_original_files=[
             {
-                "reason": "no_cloud_copy_for_required_workspace",
+                "reason": "local_workspace_unavailable",
                 "workspace": workspace,
                 "workspace_id": workspace_id,
             }
         ],
-        message=(
-            "This task appears to need local workspace files, but this machine does not have the folder and "
-            + (
-                "cloud restore is disabled in standalone mode. Reconnect the original folder or upload the needed files."
-                if restored.action == "cloud_disabled"
-                else "there is no cloud-saved generated/evidence copy to restore. Reconnect the original folder or upload the needed files."
-            )
-        ),
+        message="This task needs local workspace files, but the folder is unavailable. Reconnect the original folder or upload the needed files.",
     )

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from shared.fleet_connection import load_fleet_connection
+
 def _runtime_pid_path(home: Path) -> Path:
     return home / RUNTIME_PID_FILENAME
 
@@ -49,7 +51,7 @@ def _voice_pack_bootstrap_report_path(home: Path) -> Path:
 
 
 def _default_user_id() -> int:
-    return _remote_account_user_id(runtime_home()) or DEFAULT_APP_USER_ID
+    return DEFAULT_APP_USER_ID
 
 
 def _normalize_allowed_user_ids(raw_value: str) -> str:
@@ -74,23 +76,11 @@ def _telegram_config_fingerprint_from_values(values: dict[str, str]) -> str:
 
 
 def _remote_control_config_fingerprint_from_values(values: dict[str, str]) -> str:
-    session_fingerprint = _remote_account_session_config_fingerprint(runtime_home(), values)
-    if session_fingerprint:
-        return session_fingerprint
-
-    base_url = str(values.get("EMPLOAI_REMOTE_CONTROL_BASE_URL", "") or "").strip().rstrip("/")
-    email = str(values.get("EMPLOAI_REMOTE_CONTROL_EMAIL", "") or "").strip().casefold()
-    password = str(values.get("EMPLOAI_REMOTE_CONTROL_PASSWORD", "") or "").strip()
-    desktop_name = str(values.get("EMPLOAI_REMOTE_DESKTOP_NAME", "") or "").strip() or "EmploAI Desktop"
-    desktop_key = str(values.get("EMPLOAI_REMOTE_DESKTOP_KEY", "") or "").strip() or "desktop-default"
-    if not (base_url and email and password):
-        return ""
-    payload = "\n".join([base_url, email, password, desktop_name, desktop_key]).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
+    return _fleet_connection_config_fingerprint(runtime_home())
 
 
-def _remote_account_session_config_fingerprint(home: Path, values: dict[str, str] | None = None) -> str:
-    payload = remote_account_session_payload(home, values)
+def _fleet_connection_config_fingerprint(home: Path) -> str:
+    payload = load_fleet_connection(home)
     base_url = str(payload.get("apiBaseUrl") or payload.get("api_base_url") or "").strip().rstrip("/")
     session_token = str(payload.get("sessionToken") or payload.get("session_token") or "").strip()
     desktop_id = str((payload.get("desktop") or {}).get("desktop_id") or "").strip()

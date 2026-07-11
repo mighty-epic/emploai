@@ -53,7 +53,6 @@ class AppAuthStore:
 
     def _default_data(self) -> Dict[str, Any]:
         return {
-            "pairings": {},
             "devices": {},
             "tokens": {},
         }
@@ -70,7 +69,7 @@ class AppAuthStore:
         if not isinstance(loaded, dict):
             return self._default_data()
 
-        loaded.setdefault("pairings", {})
+        loaded.pop("pairings", None)
         loaded.setdefault("devices", {})
         loaded.setdefault("tokens", {})
         return loaded
@@ -122,14 +121,6 @@ class AppAuthStore:
         now = time.time()
         changed = False
 
-        pairings = target.setdefault("pairings", {})
-        for pairing_id, pairing in list(pairings.items()):
-            expires_at = float(pairing.get("expires_at", 0))
-            used_at = pairing.get("used_at")
-            if used_at or expires_at < now:
-                pairings.pop(pairing_id, None)
-                changed = True
-
         devices = target.setdefault("devices", {})
         tokens = target.setdefault("tokens", {})
         for token_hash, token_data in list(tokens.items()):
@@ -169,94 +160,6 @@ class AppAuthStore:
         )
         for token_hash, _token_data in active_tokens[MAX_ACTIVE_TOKENS_PER_DEVICE:]:
             self._data["tokens"].pop(token_hash, None)
-
-    def create_pairing(
-        self,
-        *,
-        device_name: Optional[str],
-        created_by: Optional[str],
-        ttl_seconds: int,
-    ) -> Dict[str, Any]:
-        with self._lock:
-            self._cleanup()
-            pairing_id = secrets.token_hex(8)
-            issued_at = int(time.time())
-            record = {
-                "pairing_id": pairing_id,
-                "device_name": (device_name or "").strip() or None,
-                "issued_at": issued_at,
-                "expires_at": issued_at + ttl_seconds,
-                "created_by": created_by,
-                "used_at": None,
-            }
-            self._data["pairings"][pairing_id] = record
-            self._save()
-            return dict(record)
-
-    def get_pairing(self, pairing_id: str) -> Optional[Dict[str, Any]]:
-        with self._lock:
-            self._cleanup()
-            pairing = self._data["pairings"].get(pairing_id)
-            return dict(pairing) if pairing else None
-
-    def complete_pairing(
-        self,
-        *,
-        pairing_id: str,
-        user_id: int,
-        device_name: Optional[str],
-        device_platform: Optional[str],
-        token_ttl_seconds: int,
-    ) -> Dict[str, Any]:
-        with self._lock:
-            self._cleanup()
-            pairing = self._data["pairings"].get(pairing_id)
-            if not pairing:
-                raise KeyError("Unknown pairing")
-
-            if pairing.get("used_at"):
-                raise ValueError("Pairing token already used")
-
-            expires_at = float(pairing.get("expires_at", 0))
-            if expires_at < time.time():
-                self._data["pairings"].pop(pairing_id, None)
-                self._save()
-                raise ValueError("Expired pairing token")
-
-            device_id = secrets.token_hex(12)
-            access_token = secrets.token_urlsafe(32)
-            token_hash = _hash_token(access_token)
-            now = time.time()
-            final_device_name = (device_name or pairing.get("device_name") or "EmploAI App").strip()
-            device_record = {
-                "device_id": device_id,
-                "user_id": user_id,
-                "device_name": final_device_name,
-                "device_platform": (device_platform or "").strip() or None,
-                "created_at": now,
-                "last_used_at": now,
-                "revoked_at": None,
-            }
-            token_record = {
-                "device_id": device_id,
-                "user_id": user_id,
-                "created_at": now,
-                "last_used_at": now,
-                "expires_at": now + token_ttl_seconds,
-                "revoked_at": None,
-            }
-
-            self._data["devices"][device_id] = device_record
-            self._data["tokens"][token_hash] = token_record
-            pairing["used_at"] = now
-            pairing["completed_device_id"] = device_id
-            self._save()
-            return {
-                "device_id": device_id,
-                "access_token": access_token,
-                "expires_at": token_record["expires_at"],
-                "device": dict(device_record),
-            }
 
     def resolve_access_token(self, access_token: str) -> Optional[Dict[str, Any]]:
         if not access_token:

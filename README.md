@@ -6,9 +6,9 @@ The current product direction is standalone desktop:
 
 - no EmploAI account is required
 - no EmploAI VPS, hosted domain, or cloud backend is required
-- no mobile app pairing is active by default
+- no mobile app pairing or hosted account routes are included in the active backend
 - app state, chats, memory, settings, API keys, and local auth files stay on the user's computer
-- cloud/mobile code is preserved in the repo for future reconnection, but is disabled by default
+- Fleet workers pair directly through Yggdrasil and do not use an EmploAI cloud account
 
 ## What It Does
 
@@ -181,13 +181,13 @@ Desktop UI
         -> Fleet workers
 ```
 
-The desktop app owns execution on the local machine. The old remote account and phone-pairing paths are intentionally disconnected in standalone mode.
+The desktop app owns execution and durable state on the local machine. The hosted account, cloud backup, mobile relay, and phone-pairing implementations have been removed from the active product.
 
 ## Legacy And Disabled Paths
 
 These folders are still present but are not the current default product path:
 
-- `mobile_app/client/`: mobile client, preserved for future reconnection
+- `mobile_app/client/`: archived mobile client; it is not packaged or connected to the desktop product
 - `mobile_app/docs/`: archived mobile/cloud design notes
 - `mobile_app/backend/`: compatibility shim for older imports; backend code now lives in `app_backend/`
 - `deploy/windows/`: older Windows packaging scripts plus compatibility wrappers for moved runtime modules
@@ -220,5 +220,3 @@ python -m pytest tests/test_model_registry_latest.py tests/test_desktop_runtime_
 ```
 
 `python run_tests.py` runs the fast local desktop sanity group. Use `python run_tests.py all` for the full pytest suite, or named groups such as `desktop`, `local-first`, `legacy`, `brain`, and `integration`.
-
-The mobile typecheck is still useful for keeping preserved mobile code healthy, even though mobile pairing is disabled by default.

@@ -4,10 +4,10 @@ const path = require('path');
 const ENCRYPTED_STORAGE_KIND = 'electron_safe_storage';
 const ENVELOPE_VERSION = 2;
 
-function createRemoteAccountSessionStore({
+function createLocalSecretStore({
   resolveRuntimeHome,
   safeStorage,
-  filename = 'remote-account-session.json',
+  filename = 'local-runtime-secrets.json',
 } = {}) {
   if (typeof resolveRuntimeHome !== 'function') {
     throw new Error('resolveRuntimeHome is required');
@@ -84,7 +84,7 @@ function createRemoteAccountSessionStore({
     const filePath = resolvePath();
     const normalized = normalizePayload(payload);
     if (!normalized) {
-      throw new Error('Remote account session payload must be an object.');
+      throw new Error('Local secret payload must be an object.');
     }
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, `${JSON.stringify(encodePayload(normalized), null, 2)}\n`, 'utf-8');
@@ -143,6 +143,6 @@ function createRemoteAccountSessionStore({
 }
 
 module.exports = {
-  createRemoteAccountSessionStore,
+  createLocalSecretStore,
   ENCRYPTED_STORAGE_KIND,
 };

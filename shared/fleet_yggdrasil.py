@@ -14,9 +14,10 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Mapping
 
+from shared.fleet_connection import write_fleet_connection
+
 
 PAIRING_TOKEN_PREFIX = "emploai-yggdrasil-v1."
-REMOTE_SESSION_FILENAME = "remote-account-session.json"
 YGGDRASIL_EXE_ENV = "EMPLOAI_YGGDRASIL_EXE"
 YGGDRASIL_CTL_ENV = "EMPLOAI_YGGDRASILCTL_EXE"
 DEFAULT_PAIRING_TTL_SECONDS = 30 * 60
@@ -580,12 +581,11 @@ def write_remote_worker_session(
     token = str(completed.get("session_token") or "").strip()
     if not token:
         raise RuntimeError("Fleet enrollment did not return a worker session token")
-    path = home / REMOTE_SESSION_FILENAME
-    path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "apiBaseUrl": str(manager_url or "").strip().rstrip("/"),
+        "managerUrl": str(manager_url or "").strip().rstrip("/"),
         "sessionToken": token,
-        "user": completed.get("user") or {},
+        "userId": int(completed.get("user_id") or 0),
         "desktop": completed.get("desktop") or {},
         "worker": completed.get("worker") or {},
         "transport": {
@@ -595,9 +595,4 @@ def write_remote_worker_session(
             "pairedAt": int(time.time()),
         },
     }
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
-    return path
+    return write_fleet_connection(home=home, payload=payload)

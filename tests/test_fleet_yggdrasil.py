@@ -5,6 +5,7 @@ import json
 import pytest
 
 from shared import fleet_yggdrasil
+from shared.fleet_connection import FLEET_CONNECTION_FILENAME
 
 
 def test_yggdrasil_pairing_token_round_trips_ipv6_manager_url():
@@ -89,7 +90,7 @@ def test_update_yggdrasil_peers_config_is_idempotent_when_peers_exist():
     assert updated == config
 
 
-def test_complete_worker_enrollment_writes_remote_session(tmp_path, monkeypatch):
+def test_complete_worker_enrollment_writes_local_fleet_connection(tmp_path, monkeypatch):
     manager_url = fleet_yggdrasil.manager_url_for_yggdrasil("0200::abcd", 8787)
     payload = fleet_yggdrasil.build_pairing_payload(
         manager_url=manager_url,
@@ -104,7 +105,7 @@ def test_complete_worker_enrollment_writes_remote_session(tmp_path, monkeypatch)
         calls.append(kwargs)
         return {
             "session_token": "session-token",
-            "user": {"user_id": 1},
+            "user_id": 1,
             "desktop": {"desktop_id": "dsk_worker"},
             "worker": {"worker_id": "wrk_worker"},
         }
@@ -122,7 +123,7 @@ def test_complete_worker_enrollment_writes_remote_session(tmp_path, monkeypatch)
     assert completed["session_token"] == "session-token"
     assert calls[0]["url"] == f"{manager_url}/api/fleet/enrollments/complete"
     assert calls[0]["payload"]["enrollment_token"] == "fw_join"
-    session = json.loads((tmp_path / fleet_yggdrasil.REMOTE_SESSION_FILENAME).read_text(encoding="utf-8"))
+    session = json.loads((tmp_path / FLEET_CONNECTION_FILENAME).read_text(encoding="utf-8"))
     assert session["apiBaseUrl"] == manager_url
     assert session["sessionToken"] == "session-token"
     assert session["transport"]["kind"] == "yggdrasil"

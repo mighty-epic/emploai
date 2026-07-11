@@ -35,7 +35,6 @@ DEFAULT_DEVICE_NAME = "EmploAI Desktop"
 DEFAULT_DEVICE_PLATFORM = "desktop-electron"
 DEFAULT_DEVICE_KEY = "desktop-local"
 DEFAULT_APP_USER_ID = 0
-REMOTE_ACCOUNT_SESSION_FILENAME = "remote-account-session.json"
 TOKEN_TTL_SECONDS = 60 * 60 * 24 * 180
 logger = logging.getLogger(__name__)
 
@@ -88,26 +87,8 @@ def _workspace_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _remote_account_user_id() -> int | None:
-    home = runtime_home() or _runtime_home()
-    path = home / REMOTE_ACCOUNT_SESSION_FILENAME
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
-    raw_user_id = user.get("user_id") or payload.get("user_id")
-    try:
-        user_id = int(raw_user_id)
-    except (TypeError, ValueError):
-        return None
-    return user_id if user_id > 0 else None
-
-
 def _default_user_id() -> int:
-    return _remote_account_user_id() or DEFAULT_APP_USER_ID
+    return DEFAULT_APP_USER_ID
 
 
 def load_desktop_runtime_config() -> DesktopRuntimeConfig:

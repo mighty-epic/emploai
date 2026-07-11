@@ -22,10 +22,8 @@ def _bootstrap_payload(
         existing=existing,
         include_voice_runtime_status=False,
     )
-    _allow_cloud_account_setup_bootstrap(setup_state, home)
-    cloud_existing = _apply_cloud_account_runtime_overlay(root, home, existing)
-    cloud_existing = _apply_runtime_secret_overlay(cloud_existing)
-    effective_existing, _ = _effective_release_env_values(root, home, cloud_existing, mark_rebind_required=False)
+    local_existing = _apply_runtime_secret_overlay(existing)
+    effective_existing, _ = _effective_release_env_values(root, home, local_existing, mark_rebind_required=False)
     _refresh_setup_model_catalog(setup_state, effective_existing)
     _refresh_setup_voice_status(setup_state, home)
     setup_state_ms = round((time.perf_counter() - phase_started_at) * 1000, 1)

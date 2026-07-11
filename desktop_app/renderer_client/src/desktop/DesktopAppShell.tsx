@@ -1218,7 +1218,7 @@ export function DesktopAppShell() {
           return;
         }
         const message = userFacingError(authError, 'Sign-in status did not load.');
-        setRemoteAuthStatus({ signedIn: false, error: message, apiBaseUrl: 'https://api.kraitos.app' });
+        setRemoteAuthStatus({ signedIn: false, cloudDisabled: true, standalone: true, error: message, apiBaseUrl: 'http://127.0.0.1:8787' });
         setRemoteAuthMessage(message);
       })
       .finally(() => {

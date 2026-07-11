@@ -17,20 +17,15 @@ import websockets
 from websockets.client import WebSocketClientProtocol
 
 from app_backend.local_runtime_server import start_runtime_context
+from shared.fleet_connection import load_fleet_connection
 from shared.runtime_paths import runtime_home
 
 
 logger = logging.getLogger(__name__)
 
-REMOTE_CONTROL_BASE_URL_ENV = "EMPLOAI_REMOTE_CONTROL_BASE_URL"
-REMOTE_CONTROL_SESSION_TOKEN_ENV = "EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN"
-REMOTE_CONTROL_EMAIL_ENV = "EMPLOAI_REMOTE_CONTROL_EMAIL"
-REMOTE_CONTROL_PASSWORD_ENV = "EMPLOAI_REMOTE_CONTROL_PASSWORD"
 REMOTE_CONTROL_DESKTOP_NAME_ENV = "EMPLOAI_REMOTE_DESKTOP_NAME"
 REMOTE_CONTROL_DESKTOP_KEY_ENV = "EMPLOAI_REMOTE_DESKTOP_KEY"
 REMOTE_CONTROL_STATUS_PATH_ENV = "EMPLOAI_REMOTE_CONTROL_STATUS_PATH"
-REMOTE_CONTROL_SESSION_FILENAME = "remote-account-session.json"
-DEFAULT_REMOTE_BASE_URL = "https://api.kraitos.app"
 FLEET_ACTIVE_TASK_SESSIONS: Dict[str, str] = {}
 FLEET_STOP_REQUESTED_TASKS: set[str] = set()
 SNAPSHOT_INTERVAL_SECONDS = 1.2
@@ -138,8 +133,7 @@ def _extract_worker_report(text: str) -> Dict[str, Any]:
 class RemoteDesktopConfig:
     remote_base_url: str
     session_token: str
-    email: str
-    password: str
+    desktop_id: str
     desktop_name: str
     device_key: str
 
@@ -183,44 +177,35 @@ def _normalize_base_url(value: str) -> str:
 
 def _remote_session_file_payload() -> Dict[str, Any]:
     try:
-        path = runtime_home() / REMOTE_CONTROL_SESSION_FILENAME
+        return load_fleet_connection(runtime_home())
     except Exception:
         return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
 
 
 def load_remote_desktop_config() -> RemoteDesktopConfig:
     session_payload = _remote_session_file_payload()
     remote_base_url = _normalize_base_url(
-        os.getenv(REMOTE_CONTROL_BASE_URL_ENV, "")
-        or str(session_payload.get("apiBaseUrl") or session_payload.get("api_base_url") or "")
-        or DEFAULT_REMOTE_BASE_URL
+        str(session_payload.get("managerUrl") or session_payload.get("apiBaseUrl") or "")
     )
     session_token = str(
-        os.getenv(REMOTE_CONTROL_SESSION_TOKEN_ENV, "")
-        or session_payload.get("sessionToken")
-        or session_payload.get("session_token")
-        or ""
+        session_payload.get("sessionToken") or ""
     ).strip()
-    email = str(os.getenv(REMOTE_CONTROL_EMAIL_ENV, "") or "").strip()
-    password = str(os.getenv(REMOTE_CONTROL_PASSWORD_ENV, "") or "").strip()
-    desktop_name = str(os.getenv(REMOTE_CONTROL_DESKTOP_NAME_ENV, "") or "").strip() or "EmploAI Desktop"
+    desktop = session_payload.get("desktop") if isinstance(session_payload.get("desktop"), dict) else {}
+    desktop_id = str((desktop or {}).get("desktop_id") or "").strip()
+    desktop_name = str(
+        os.getenv(REMOTE_CONTROL_DESKTOP_NAME_ENV, "")
+        or (desktop or {}).get("display_name")
+        or "EmploAI Fleet Worker"
+    ).strip()
     device_key = str(os.getenv(REMOTE_CONTROL_DESKTOP_KEY_ENV, "") or "").strip() or "desktop-default"
     if not remote_base_url:
-        raise RuntimeError(f"{REMOTE_CONTROL_BASE_URL_ENV} is required")
-    if not session_token and (not email or not password):
-        raise RuntimeError(
-            f"{REMOTE_CONTROL_SESSION_TOKEN_ENV} or {REMOTE_CONTROL_EMAIL_ENV}/{REMOTE_CONTROL_PASSWORD_ENV} is required"
-        )
+        raise RuntimeError("A locally paired Yggdrasil Fleet manager is required")
+    if not session_token or not desktop_id:
+        raise RuntimeError("The Fleet connection is missing its worker session token or desktop identity")
     return RemoteDesktopConfig(
         remote_base_url=remote_base_url,
         session_token=session_token,
-        email=email,
-        password=password,
+        desktop_id=desktop_id,
         desktop_name=desktop_name,
         device_key=device_key,
     )
@@ -228,62 +213,9 @@ def load_remote_desktop_config() -> RemoteDesktopConfig:
 
 def _ws_url_from_base(base_url: str, path: str) -> str:
     normalized = _normalize_base_url(base_url)
-    if normalized.startswith("https://"):
-        return f"wss://{normalized[len('https://'):]}/{path.lstrip('/')}"
     if normalized.startswith("http://"):
         return f"ws://{normalized[len('http://'):]}/{path.lstrip('/')}"
-    raise RuntimeError(f"Unsupported base URL: {base_url}")
-
-
-async def _remote_login(config: RemoteDesktopConfig) -> Dict[str, Any]:
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            f"{config.remote_base_url}/api/remote/auth/login",
-            json={
-                "email": config.email,
-                "password": config.password,
-                "actor_kind": "desktop",
-                "device_name": config.desktop_name,
-                "device_platform": "desktop-electron",
-                "device_key": config.device_key,
-            },
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if str(payload.get("status") or "") == "otp_required":
-            raise RuntimeError(
-                "Email/password remote login now requires OTP verification. "
-                "Sign in interactively once and use the saved remote session token for the desktop relay."
-            )
-        return payload
-
-
-async def _remote_account_profile(config: RemoteDesktopConfig, token: str) -> Dict[str, Any]:
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(
-            f"{config.remote_base_url}/api/remote/account/me",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        response.raise_for_status()
-        return response.json()
-
-
-async def _remote_authenticate(config: RemoteDesktopConfig) -> Dict[str, Any]:
-    if config.session_token:
-        try:
-            profile = await _remote_account_profile(config, config.session_token)
-            if str(profile.get("actor_kind") or "") != "desktop":
-                raise RuntimeError("Stored remote session token is not a desktop token")
-            return {
-                "session_token": config.session_token,
-                "desktop": profile.get("desktop") or {},
-                "user": profile.get("user") or {},
-            }
-        except Exception:
-            if not (config.email and config.password):
-                raise
-            logger.warning("Stored remote session token failed; falling back to email/password login")
-    return await _remote_login(config)
+    raise RuntimeError("Fleet workers only connect to directly paired Yggdrasil managers over HTTP")
 
 
 async def _request_json(
@@ -969,14 +901,10 @@ async def _send_command_result(
 
 async def run_remote_desktop_client() -> None:
     logging.basicConfig(level=logging.INFO)
-    _write_remote_status(state="starting", detail="Signing in to the EmploAI remote control plane...")
+    _write_remote_status(state="starting", detail="Connecting to the paired Yggdrasil Fleet manager...")
     config = load_remote_desktop_config()
-    login = await _remote_authenticate(config)
-    remote_token = str(login.get("session_token") or "")
-    desktop = dict(login.get("desktop") or {})
-    desktop_id = str(desktop.get("desktop_id") or "").strip()
-    if not remote_token or not desktop_id:
-        raise RuntimeError("Remote desktop login did not return a usable session")
+    remote_token = config.session_token
+    desktop_id = config.desktop_id
 
     local_bootstrap = start_runtime_context()
     local_api_base_url = str(local_bootstrap.get("apiBaseUrl") or "").strip()
@@ -985,7 +913,7 @@ async def run_remote_desktop_client() -> None:
         raise RuntimeError("Local desktop runtime is not available for remote relay")
     _write_remote_status(
         state="starting",
-        detail="Desktop authenticated. Connecting remote websocket...",
+        detail="Fleet worker paired. Connecting directly to its manager...",
         desktop_id=desktop_id,
         desktop_name=config.desktop_name,
     )
@@ -1000,7 +928,7 @@ async def run_remote_desktop_client() -> None:
             async with websockets.connect(remote_ws_url, max_size=REMOTE_WS_MAX_SIZE_BYTES) as ws:
                 _write_remote_status(
                     state="running",
-                    detail="Desktop is connected to the EmploAI remote control plane.",
+                    detail="Fleet worker is connected directly to its Yggdrasil manager.",
                     desktop_id=desktop_id,
                     desktop_name=config.desktop_name,
                     ready=True,
@@ -1088,7 +1016,7 @@ async def run_remote_desktop_client() -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Connect a local desktop runtime to the EmploAI remote control plane.")
+    parser = argparse.ArgumentParser(description="Connect a local Fleet worker to its paired Yggdrasil manager.")
     return parser
 
 

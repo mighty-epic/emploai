@@ -168,7 +168,6 @@ _SERVER_TAMPER_PATTERNS = (
     r"\bDELETE\s+FROM\b.*\b(remote_|fleet_|users?|sessions?)",
     r"\b/var/lib/emploai",
     r"\bemploai-remote\b.*\b(?:delete|rm|truncate|drop|reset)\b",
-    r"/api/remote/account/secrets/reveal",
 )
 
 _TOKEN_PATTERNS = (
@@ -310,8 +309,6 @@ def _url_or_target_is_blocked(value: Any) -> Optional[str]:
     parsed = urlparse(target if re.match(r"^[a-z][a-z0-9+\-.]*://", target) else f"https://{target}")
     host = (parsed.netloc or parsed.path.split("/")[0]).lower()
     combined = f"{host} {parsed.path}".lower()
-    if "/api/remote/account/secrets/reveal" in combined:
-        return "raw secret reveal endpoints are manual UI-only"
     if parsed.scheme == "file":
         return "file URL navigation is blocked for browser tools"
     for marker in _EXPLICIT_DOMAIN_MARKERS:

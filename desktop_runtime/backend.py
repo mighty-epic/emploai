@@ -40,9 +40,6 @@ from desktop_runtime.config import (
     load_existing_env_values,
     load_release_state,
     load_runtime_config,
-    remote_account_session_configured,
-    remote_account_session_payload,
-    remote_account_session_path,
     resolve_voice_runtime_status,
     runtime_home,
     save_env,
@@ -50,10 +47,6 @@ from desktop_runtime.config import (
     save_runtime_config,
     should_require_telegram_rebind,
     strip_local_secret_env_values,
-    REMOTE_CONTROL_BASE_URL_ENV,
-    REMOTE_CONTROL_DESKTOP_ID_ENV,
-    REMOTE_CONTROL_SESSION_TOKEN_ENV,
-    REMOTE_CONTROL_USER_ID_ENV,
     TTS_BACKEND_KOKORO,
     TTS_BACKEND_KYUTAI,
     TTS_BACKEND_OPENAI,
@@ -65,6 +58,7 @@ from desktop_runtime.config import (
     VOICE_ENGINE_NONE,
     _voice_pack_setup_payload,
 )
+from shared.fleet_connection import fleet_connection_path
 from shared.openai_codex_auth import (
     begin_codex_device_login,
     codex_auth_status,
@@ -113,10 +107,6 @@ RUNTIME_SECRET_OVERLAY_FIELDS = frozenset(
         "OPENROUTER_API_KEY",
         "TELEGRAM_BOT_TOKEN",
         "EMPLOAI_TELEGRAM_BOT_TOKENS_JSON",
-        REMOTE_CONTROL_BASE_URL_ENV,
-        REMOTE_CONTROL_SESSION_TOKEN_ENV,
-        REMOTE_CONTROL_USER_ID_ENV,
-        REMOTE_CONTROL_DESKTOP_ID_ENV,
     }
 )
 ALLOW_DEV_VOICE_PACK_SOURCES_ENV = "EMPLOAI_ALLOW_DEV_VOICE_PACK_SOURCES"
@@ -594,30 +584,20 @@ def _configure_pack_source_environment(root: Path) -> None:
 
 
 from desktop_runtime import bootstrap as _runtime_bootstrap
-from desktop_runtime import cloud as _runtime_cloud
+from desktop_runtime import local_environment as _runtime_local_environment
 from desktop_runtime import records as _runtime_records
 from desktop_runtime import services as _runtime_services
 
 _DESKTOP_RUNTIME_MODULES = (
-    _runtime_cloud,
+    _runtime_local_environment,
     _runtime_records,
     _runtime_services,
     _runtime_bootstrap,
 )
-_CLOUD_HELPER_NAMES = (
-    '_read_remote_account_session_payload',
-    '_remote_account_user_id',
-    '_remote_account_request_json',
-    '_remote_account_reveal_secrets',
-    '_remote_account_list_secrets',
-    '_cloud_setup_values_from_profile',
-    '_cloud_bot_assignment_map',
-    '_restore_cloud_telegram_bots',
-    '_apply_cloud_account_runtime_overlay',
+_LOCAL_ENVIRONMENT_HELPER_NAMES = (
     '_runtime_secret_overlay_values',
     '_apply_runtime_secret_overlay',
     '_prepare_environment',
-    '_allow_cloud_account_setup_bootstrap',
     '_refresh_setup_model_catalog',
     '_refresh_setup_voice_status',
     '_effective_release_env_values',
@@ -637,7 +617,7 @@ _RECORD_HELPER_NAMES = (
     '_telegram_config_fingerprint',
     '_telegram_config_fingerprint_from_values',
     '_remote_control_config_fingerprint_from_values',
-    '_remote_account_session_config_fingerprint',
+    '_fleet_connection_config_fingerprint',
     '_current_session_id',
     '_ensure_desktop_token',
     '_self_command',
@@ -713,7 +693,7 @@ _BOOTSTRAP_HELPER_NAMES = (
     '_cleanup_runtime_home',
 )
 _DESKTOP_RUNTIME_HELPER_NAMES = (
-    *_CLOUD_HELPER_NAMES,
+    *_LOCAL_ENVIRONMENT_HELPER_NAMES,
     *_RECORD_HELPER_NAMES,
     *_SERVICE_HELPER_NAMES,
     *_BOOTSTRAP_HELPER_NAMES,
@@ -998,10 +978,10 @@ def _fleet_yggdrasil_create_pairing(
 def _clear_remote_control_env_values(env_file: Path, existing: Mapping[str, str]) -> None:
     cleaned = dict(existing)
     for key in (
-        REMOTE_CONTROL_BASE_URL_ENV,
-        REMOTE_CONTROL_SESSION_TOKEN_ENV,
-        REMOTE_CONTROL_USER_ID_ENV,
-        REMOTE_CONTROL_DESKTOP_ID_ENV,
+        "EMPLOAI_REMOTE_CONTROL_BASE_URL",
+        "EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN",
+        "EMPLOAI_REMOTE_CONTROL_USER_ID",
+        "EMPLOAI_REMOTE_CONTROL_DESKTOP_ID",
         "EMPLOAI_REMOTE_CONTROL_EMAIL",
         "EMPLOAI_REMOTE_CONTROL_PASSWORD",
     ):
@@ -1044,7 +1024,7 @@ def _fleet_yggdrasil_join_worker(
         "managerUrl": pairing["manager_url"],
         "worker": completed.get("worker") or {},
         "desktop": completed.get("desktop") or {},
-        "sessionPath": str(remote_account_session_path(home)),
+        "sessionPath": str(fleet_connection_path(home)),
         "remoteWorkerStarted": bool(start_worker),
         "deviceName": identity["device_name"],
     }

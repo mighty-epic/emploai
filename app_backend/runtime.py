@@ -13,8 +13,9 @@ import httpx
 from runtime_support.ui_helpers import ThinkingModeVisualizer
 from cli.agent_tools.definitions import CLI_AGENT_TOOLS
 from local_agent_runtime.tool_manifest import AGENT_TOOLS
+from app_backend.auth_store import AppAuthStore
+from app_backend.local_runtime_server import load_desktop_runtime_config
 from shared.channel_sync import get_channel_sync_hub
-from shared.runtime_paths import runtime_home
 from telegram_bot.telegram_unified_agent import (
     build_unified_system_prompt,
     get_auto_mode_extra_tools,
@@ -42,11 +43,6 @@ from shared.tool_packs import (
 
 
 STEERING_BETA_ENV = "EMPLO_APP_STEERING_BETA_ENABLED"
-REMOTE_CONTROL_BASE_URL_ENV = "EMPLOAI_REMOTE_CONTROL_BASE_URL"
-REMOTE_CONTROL_SESSION_TOKEN_ENV = "EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN"
-REMOTE_CONTROL_DESKTOP_ID_ENV = "EMPLOAI_REMOTE_CONTROL_DESKTOP_ID"
-REMOTE_CONTROL_SESSION_FILENAME = "remote-account-session.json"
-DEFAULT_REMOTE_BASE_URL = "https://api.kraitos.app"
 FLEET_MANAGER_TOOL_CACHE_SECONDS = 8.0
 
 def _fleet_tool(
@@ -189,52 +185,26 @@ def _screen_observation_contract(enabled_tool_packs) -> dict[str, str]:
     return build_pack_aware_screen_observation_contract(enabled_tool_packs)
 
 
-def _remote_session_payload() -> Dict[str, Any]:
-    payload: Dict[str, Any] = {}
-    try:
-        home = runtime_home()
-        if home is not None:
-            path = home / REMOTE_CONTROL_SESSION_FILENAME
-            if path.exists():
-                parsed = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(parsed, dict):
-                    payload = parsed
-    except Exception:
-        payload = {}
-    return payload
-
-
-def _remote_api_config() -> Dict[str, str]:
-    payload = _remote_session_payload()
-    base_url = str(
-        os.getenv(REMOTE_CONTROL_BASE_URL_ENV, "")
-        or payload.get("apiBaseUrl")
-        or payload.get("api_base_url")
-        or DEFAULT_REMOTE_BASE_URL
-    ).strip().rstrip("/")
-    token = str(
-        os.getenv(REMOTE_CONTROL_SESSION_TOKEN_ENV, "")
-        or payload.get("sessionToken")
-        or payload.get("session_token")
-        or ""
-    ).strip()
-    desktop = payload.get("desktop") if isinstance(payload.get("desktop"), dict) else {}
+def _local_fleet_api_config() -> Dict[str, str]:
+    config = load_desktop_runtime_config()
+    token_payload = AppAuthStore().ensure_device_token(
+        user_id=0,
+        device_name="EmploAI Desktop",
+        device_platform="desktop-electron",
+        token_ttl_seconds=60 * 60 * 24 * 180,
+        device_key="desktop-local",
+    )
     return {
-        "base_url": base_url or DEFAULT_REMOTE_BASE_URL,
-        "token": token,
-        "desktop_id": str(
-            os.getenv(REMOTE_CONTROL_DESKTOP_ID_ENV, "")
-            or (desktop or {}).get("desktop_id")
-            or payload.get("desktop_id")
-            or ""
-        ).strip(),
+        "base_url": config.api_base_url.rstrip("/"),
+        "token": str(token_payload.get("access_token") or "").strip(),
+        "desktop_id": "",
     }
 
 
 def _fleet_api_request(method: str, path: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    config = _remote_api_config()
+    config = _local_fleet_api_config()
     if not config["token"]:
-        return {"error": "Fleet tools require a signed-in desktop account.", "error_type": "not_signed_in"}
+        return {"error": "The local desktop token is unavailable.", "error_type": "local_auth_unavailable"}
     try:
         timeout = httpx.Timeout(10.0, connect=3.0, read=10.0, write=10.0)
         with httpx.Client(timeout=timeout) as client:
@@ -269,20 +239,16 @@ def _fleet_manager_tool_context(session: Any) -> Dict[str, Any]:
     if isinstance(cached, dict) and now - float(cached.get("fetched_at") or 0.0) < FLEET_MANAGER_TOOL_CACHE_SECONDS:
         return cached
 
-    config = _remote_api_config()
+    config = _local_fleet_api_config()
     snapshot = _fleet_snapshot_uncached()
     workers = list(snapshot.get("workers") or []) if isinstance(snapshot, dict) else []
     manager = snapshot.get("manager") if isinstance(snapshot, dict) and isinstance(snapshot.get("manager"), dict) else None
-    is_primary_manager = bool(
-        manager
-        and config.get("desktop_id")
-        and str(manager.get("desktop_id") or "") == str(config.get("desktop_id") or "")
-    )
+    is_primary_manager = bool(manager)
     context = {
         "enabled": bool(is_primary_manager and not snapshot.get("error")),
         "has_workers": bool(workers),
         "snapshot": snapshot if isinstance(snapshot, dict) else {},
-        "desktop_id": config.get("desktop_id") or "",
+        "desktop_id": str((manager or {}).get("desktop_id") or ""),
         "fetched_at": now,
     }
     try:

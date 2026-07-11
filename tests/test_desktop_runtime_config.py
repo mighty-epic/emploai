@@ -209,35 +209,12 @@ def test_validate_setup_values_allows_account_token_remote_configuration():
     assert not any("Remote control requires service URL, email, and password together." in issue for issue in issues)
 
 
-def test_build_setup_state_marks_remote_control_configuration(tmp_path: Path):
+def test_build_setup_state_ignores_removed_hosted_account_configuration(monkeypatch, tmp_path: Path):
     source_root = tmp_path / "source"
     source_root.mkdir()
     env_file = tmp_path / ".env"
-    state = build_setup_state(
-        home=tmp_path,
-        env_file=env_file,
-        source_root=source_root,
-        existing={
-            "DEFAULT_WORKSPACE": "C:/Work",
-            "OPENAI_API_KEY": "sk-test",
-            "EMPLOAI_REMOTE_CONTROL_BASE_URL": "https://example.com",
-            "EMPLOAI_REMOTE_CONTROL_EMAIL": "user@example.com",
-            "EMPLOAI_REMOTE_CONTROL_PASSWORD": "correct horse battery staple",
-        },
-    )
-
-    assert state["remoteControlConfigured"] is True
-    assert state["remoteControlPartiallyConfigured"] is False
-
-
-def test_build_setup_state_marks_remote_account_session_configured(tmp_path: Path):
-    source_root = tmp_path / "source"
-    source_root.mkdir()
-    env_file = tmp_path / ".env"
-    (tmp_path / "remote-account-session.json").write_text(
-        json.dumps({"apiBaseUrl": "https://api.kraitos.app", "sessionToken": "session-token"}),
-        encoding="utf-8",
-    )
+    monkeypatch.setenv("EMPLOAI_REMOTE_CONTROL_BASE_URL", "https://api.kraitos.app")
+    monkeypatch.setenv("EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN", "session-token")
 
     state = build_setup_state(
         home=tmp_path,
@@ -248,25 +225,22 @@ def test_build_setup_state_marks_remote_account_session_configured(tmp_path: Pat
             "OPENAI_API_KEY": "sk-test",
         },
     )
-
-    assert state["remoteControlConfigured"] is True
+    assert state["remoteControlConfigured"] is False
     assert state["remoteControlPartiallyConfigured"] is False
 
 
-def test_build_setup_state_marks_plain_json_fallback_remote_session_configured(tmp_path: Path):
+def test_build_setup_state_accepts_only_yggdrasil_fleet_connection(tmp_path: Path):
     source_root = tmp_path / "source"
     source_root.mkdir()
     env_file = tmp_path / ".env"
-    (tmp_path / "remote-account-session.json").write_text(
+    (tmp_path / "fleet-connection.json").write_text(
         json.dumps(
             {
-                "version": 2,
-                "storage": "plain_json_fallback",
-                "payload": {
-                    "apiBaseUrl": "https://api.kraitos.app",
-                    "sessionToken": "session-token",
-                    "user": {"user_id": 77},
-                },
+                "apiBaseUrl": "http://[200::abcd]:8787",
+                "managerUrl": "http://[200::abcd]:8787",
+                "sessionToken": "fleet-token",
+                "desktop": {"desktop_id": "fleet-desktop"},
+                "transport": {"kind": "yggdrasil"},
             }
         ),
         encoding="utf-8",
@@ -276,68 +250,11 @@ def test_build_setup_state_marks_plain_json_fallback_remote_session_configured(t
         home=tmp_path,
         env_file=env_file,
         source_root=source_root,
-        existing={
-            "DEFAULT_WORKSPACE": "C:/Work",
-            "OPENAI_API_KEY": "sk-test",
-        },
+        existing={"DEFAULT_WORKSPACE": "C:/Work", "OPENAI_API_KEY": "sk-test"},
     )
 
     assert state["remoteControlConfigured"] is True
     assert state["remoteControlPartiallyConfigured"] is False
-    assert desktop_config.remote_account_session_payload(tmp_path)["user"]["user_id"] == 77
-
-
-def test_build_setup_state_does_not_treat_encrypted_remote_session_as_plaintext(tmp_path: Path):
-    source_root = tmp_path / "source"
-    source_root.mkdir()
-    env_file = tmp_path / ".env"
-    (tmp_path / "remote-account-session.json").write_text(
-        json.dumps({"version": 2, "storage": "electron_safe_storage", "ciphertext": "opaque"}),
-        encoding="utf-8",
-    )
-
-    state = build_setup_state(
-        home=tmp_path,
-        env_file=env_file,
-        source_root=source_root,
-        existing={
-            "DEFAULT_WORKSPACE": "C:/Work",
-            "OPENAI_API_KEY": "sk-test",
-        },
-    )
-
-    assert state["remoteControlConfigured"] is False
-    assert state["remoteControlPartiallyConfigured"] is False
-
-
-def test_build_setup_state_marks_env_remote_account_session_configured(monkeypatch, tmp_path: Path):
-    source_root = tmp_path / "source"
-    source_root.mkdir()
-    env_file = tmp_path / ".env"
-    (tmp_path / "remote-account-session.json").write_text(
-        json.dumps({"version": 2, "storage": "electron_safe_storage", "ciphertext": "opaque"}),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("EMPLOAI_REMOTE_CONTROL_BASE_URL", "https://api.kraitos.app")
-    monkeypatch.setenv("EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN", "session-token")
-    monkeypatch.setenv("EMPLOAI_REMOTE_CONTROL_USER_ID", "77")
-    monkeypatch.setenv("EMPLOAI_REMOTE_CONTROL_DESKTOP_ID", "desktop-abc")
-
-    state = build_setup_state(
-        home=tmp_path,
-        env_file=env_file,
-        source_root=source_root,
-        existing={
-            "DEFAULT_WORKSPACE": "C:/Work",
-            "OPENAI_API_KEY": "sk-test",
-        },
-    )
-    session = desktop_config.remote_account_session_payload(tmp_path)
-
-    assert state["remoteControlConfigured"] is True
-    assert state["remoteControlPartiallyConfigured"] is False
-    assert session["user"]["user_id"] == "77"
-    assert session["desktop"]["desktop_id"] == "desktop-abc"
 
 
 def test_needs_first_run_setup_requires_workspace_and_provider_key():
@@ -432,10 +349,6 @@ def test_run_first_run_setup_saves_all_provider_keys_and_onboarded_version(tmp_p
         "123:abc",
         "42",
         "C:/Work",
-        "https://remote.emplo.ai",
-        "user@example.com",
-        "",
-        "",
         "sk-openai",
         "sk-ant",
         "google-key",
@@ -463,9 +376,9 @@ def test_run_first_run_setup_saves_all_provider_keys_and_onboarded_version(tmp_p
     assert merged["DEEPSEEK_API_KEY"] == "deepseek-key"
     assert merged["NVIDIA_API_KEY"] == "nvidia-key"
     assert merged["OPENROUTER_API_KEY"] == "openrouter-key"
-    assert merged["EMPLOAI_REMOTE_CONTROL_BASE_URL"] == "https://remote.emplo.ai"
-    assert merged["EMPLOAI_REMOTE_CONTROL_EMAIL"] == "user@example.com"
-    assert merged["EMPLOAI_REMOTE_CONTROL_PASSWORD"] == ""
+    assert "EMPLOAI_REMOTE_CONTROL_BASE_URL" not in merged
+    assert "EMPLOAI_REMOTE_CONTROL_EMAIL" not in merged
+    assert "EMPLOAI_REMOTE_CONTROL_PASSWORD" not in merged
     assert merged["EMPLOAI_REMOTE_DESKTOP_NAME"] == "EmploAI Desktop"
     assert merged["EMPLOAI_REMOTE_DESKTOP_KEY"] == "desktop-default"
     assert load_release_state(runtime_home)["last_onboarded_version"] == "0.1.0-beta.2"

@@ -1,31 +1,12 @@
-const crypto = require('crypto');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const { createRemoteAccountSessionStore } = require('./session_store');
-const { cloudBackendEnabled, mobileConnectionEnabled, standaloneDesktopEnabled } = require('./standalone_mode');
+const { createLocalSecretStore } = require('./session_store');
 
-function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHome, saveSetup, getBootstrapCache }) {
-  if (!net || !shell || !safeStorage || typeof resolveRuntimeHome !== 'function' || typeof saveSetup !== 'function' || typeof getBootstrapCache !== 'function') {
-    throw new Error('Remote control services require Electron APIs, runtime path, setup saver, and bootstrap cache access.');
+function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, getBootstrapCache }) {
+  if (!net || !safeStorage || typeof resolveRuntimeHome !== 'function' || typeof getBootstrapCache !== 'function') {
+    throw new Error('Local control services require Electron networking, runtime path, and bootstrap cache access.');
   }
-  const remoteAccountSessionFilename = 'remote-account-session.json';
   const localRuntimeSecretsFilename = 'local-runtime-secrets.json';
-  const remoteDesktopIdentityFilename = 'remote-desktop-identity.json';
-  const defaultRemoteControlBaseUrl = 'https://api.kraitos.app';
+  const defaultRemoteControlBaseUrl = 'http://127.0.0.1';
   const remoteControlRequestTimeoutMs = 30000;
-  const setupSecretFields = [
-    'OPENAI_API_KEY',
-    'ANTHROPIC_API_KEY',
-    'GOOGLE_API_KEY',
-    'XAI_API_KEY',
-    'DEEPSEEK_API_KEY',
-    'NVIDIA_API_KEY',
-    'OPENROUTER_API_KEY',
-    'TELEGRAM_BOT_TOKEN',
-    'GMAIL_LOGIN_EMAIL',
-    'GMAIL_LOGIN_PASSWORD',
-  ];
   const setupProviderSecretFields = new Set([
     'OPENAI_API_KEY',
     'ANTHROPIC_API_KEY',
@@ -40,87 +21,24 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
     'TELEGRAM_BOT_TOKEN',
     'EMPLOAI_TELEGRAM_BOT_TOKENS_JSON',
   ]);
-  const remoteAccountRuntimeOverlayFields = new Set([
-    'EMPLOAI_REMOTE_CONTROL_BASE_URL',
-    'EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN',
-    'EMPLOAI_REMOTE_CONTROL_USER_ID',
-    'EMPLOAI_REMOTE_CONTROL_DESKTOP_ID',
-  ]);
-  const runtimeOverlayFields = new Set([
-    ...localRuntimeSetupSecretFields,
-    ...remoteAccountRuntimeOverlayFields,
-  ]);
+  const runtimeOverlayFields = new Set(localRuntimeSetupSecretFields);
   const localSetupSecretFields = new Set([
-    ...setupSecretFields,
+    ...localRuntimeSetupSecretFields,
     'GEMINI_API_KEY',
-    'EMPLOAI_TELEGRAM_BOT_TOKENS_JSON',
     'EMPLOAI_REMOTE_CONTROL_PASSWORD',
     'EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN',
+    'GMAIL_LOGIN_EMAIL',
+    'GMAIL_LOGIN_PASSWORD',
     'GMAIL_EMAIL',
     'GMAIL_PASSWORD',
   ]);
 
-  let remoteAccountMemorySession = null;
-  const remoteAccountSessionStore = createRemoteAccountSessionStore({
-    filename: remoteAccountSessionFilename,
-    resolveRuntimeHome,
-    safeStorage,
-  });
-  const localRuntimeSecretStore = createRemoteAccountSessionStore({
+  const localRuntimeSecretStore = createLocalSecretStore({
     filename: localRuntimeSecretsFilename,
     resolveRuntimeHome,
     safeStorage,
   });
   let runtimeSecretOverlay = readLocalRuntimeSecretOverlay();
-
-  function resolveRemoteAccountSessionPath() {
-    return remoteAccountSessionStore.resolvePath();
-  }
-
-  function readRemoteAccountSession() {
-    return remoteAccountSessionStore.read();
-  }
-
-  function currentRemoteAccountSession() {
-    return remoteAccountMemorySession || readRemoteAccountSession();
-  }
-
-  function cloudDisabledStatus(session = currentRemoteAccountSession()) {
-    return {
-      signedIn: false,
-      cloudDisabled: true,
-      mobileDisabled: !mobileConnectionEnabled(),
-      standalone: standaloneDesktopEnabled(),
-      apiBaseUrl: normalizeRemoteBaseUrl(session?.apiBaseUrl),
-      sessionPath: resolveRemoteAccountSessionPath(),
-      sessionStorage: remoteAccountSessionStore.storageKind(),
-      detail: 'Cloud account and mobile pairing are disabled in standalone desktop mode.',
-    };
-  }
-
-  function ensureCloudAccountEnabled() {
-    if (!cloudBackendEnabled()) {
-      throw new Error('Cloud account and mobile pairing are disabled in standalone desktop mode.');
-    }
-  }
-
-  function writeRemoteAccountSession(payload) {
-    return remoteAccountSessionStore.write(payload);
-  }
-
-  function setRemoteAccountSession(payload, { rememberMe = true } = {}) {
-    if (rememberMe) {
-      remoteAccountMemorySession = null;
-      return writeRemoteAccountSession(payload);
-    }
-    remoteAccountMemorySession = payload;
-    return payload;
-  }
-
-  function clearRemoteAccountSession() {
-    remoteAccountMemorySession = null;
-    remoteAccountSessionStore.clear();
-  }
 
   function normalizeRuntimeSecretOverlay(secrets = {}) {
     const values = {};
@@ -157,50 +75,13 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
   }
 
   function normalizeRemoteBaseUrl(value) {
-    return String(value || defaultRemoteControlBaseUrl).trim().replace(/\/+$/, '') || defaultRemoteControlBaseUrl;
-  }
-
-  function resolveRemoteDesktopIdentityPath() {
-    return path.join(resolveRuntimeHome(), remoteDesktopIdentityFilename);
-  }
-
-  function resolveRemoteDesktopKey(candidate) {
-    const provided = String(candidate || '').trim();
-    if (provided) {
-      return provided;
+    const candidate = String(value || defaultRemoteControlBaseUrl).trim().replace(/\/+$/, '') || defaultRemoteControlBaseUrl;
+    const parsed = new URL(candidate);
+    const hostname = String(parsed.hostname || '').replace(/^\[|\]$/g, '').toLowerCase();
+    if (!['127.0.0.1', 'localhost', '::1'].includes(hostname)) {
+      throw new Error('The desktop control service only permits the local EmploAI backend.');
     }
-
-    const filePath = resolveRemoteDesktopIdentityPath();
-    try {
-      if (fs.existsSync(filePath)) {
-        const existing = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-        const key = String(existing?.deviceKey || '').trim();
-        if (key) {
-          return key;
-        }
-      }
-    } catch (_error) {
-      // Fall through and write a new stable key.
-    }
-
-    const deviceKey = `desktop-${crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex')}`;
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, `${JSON.stringify({ deviceKey, createdAt: new Date().toISOString() }, null, 2)}\n`, 'utf-8');
-    try {
-      fs.chmodSync(filePath, 0o600);
-    } catch (_error) {
-      // Windows ACLs are inherited; chmod is best-effort here.
-    }
-    return deviceKey;
-  }
-
-  function resolveRemoteDesktopName(candidate) {
-    const provided = String(candidate || '').trim();
-    if (provided) {
-      return provided;
-    }
-    const hostname = String(os.hostname() || '').trim();
-    return hostname ? `EmploAI Desktop (${hostname})` : 'EmploAI Desktop';
+    return candidate;
   }
 
   async function remoteControlJson(baseUrl, endpoint, options = {}) {
@@ -257,300 +138,6 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
       throw new Error(payload?.detail || `${response.status} ${response.statusText}`);
     }
     return payload;
-  }
-
-  async function remoteAuthStatus() {
-    const session = currentRemoteAccountSession();
-    if (!cloudBackendEnabled()) {
-      return cloudDisabledStatus(session);
-    }
-    if (!session?.sessionToken) {
-      return {
-        signedIn: false,
-        apiBaseUrl: normalizeRemoteBaseUrl(session?.apiBaseUrl),
-        sessionPath: resolveRemoteAccountSessionPath(),
-        sessionStorage: remoteAccountSessionStore.storageKind(),
-      };
-    }
-    try {
-      const profile = await remoteControlJson(session.apiBaseUrl, '/api/remote/account/me', {
-        token: session.sessionToken,
-      });
-      const next = setRemoteAccountSession({
-        ...session,
-        apiBaseUrl: normalizeRemoteBaseUrl(session.apiBaseUrl),
-        actorKind: profile.actor_kind || 'desktop',
-        user: profile.user || null,
-        desktop: profile.desktop || null,
-        profile: profile.profile || null,
-        verifiedAt: new Date().toISOString(),
-      }, {
-        rememberMe: Boolean(session.rememberMe),
-      });
-      return {
-        signedIn: true,
-        apiBaseUrl: next.apiBaseUrl,
-        user: next.user,
-        desktop: next.desktop,
-        profile: next.profile || null,
-        sessionPath: resolveRemoteAccountSessionPath(),
-        sessionStorage: remoteAccountSessionStore.storageKind(),
-      };
-    } catch (error) {
-      return {
-        signedIn: false,
-        apiBaseUrl: normalizeRemoteBaseUrl(session.apiBaseUrl),
-        error: error?.message || String(error),
-        sessionPath: resolveRemoteAccountSessionPath(),
-        sessionStorage: remoteAccountSessionStore.storageKind(),
-      };
-    }
-  }
-
-  async function finishLegacyRemoteAuthIfSession(apiBaseUrl, result, loginProvider = 'password') {
-    if (!result?.session_token) {
-      return result;
-    }
-    const rememberMe = result.remember_me === undefined ? true : Boolean(result.remember_me);
-    setRemoteAccountSession(
-      {
-        apiBaseUrl,
-        sessionToken: result.session_token,
-        actorKind: result.actor_kind || 'desktop',
-        user: result.user || null,
-        desktop: result.desktop || null,
-        savedAt: new Date().toISOString(),
-        loginProvider,
-        rememberMe,
-        expiresInSeconds: result.expires_in_seconds || null,
-      },
-      { rememberMe },
-    );
-    return remoteAuthStatus();
-  }
-
-  async function remoteAuthLogin(payload = {}) {
-    ensureCloudAccountEnabled();
-    const apiBaseUrl = normalizeRemoteBaseUrl(payload.apiBaseUrl);
-    const email = String(payload.email || '').trim();
-    const password = String(payload.password || '').trim();
-    if (!email || !password) {
-      throw new Error('Email and password are required.');
-    }
-    const result = await remoteControlJson(apiBaseUrl, '/api/remote/auth/login', {
-      method: 'POST',
-      body: {
-        email,
-        password,
-        actor_kind: 'desktop',
-        device_name: resolveRemoteDesktopName(payload.deviceName),
-        device_platform: 'desktop-electron',
-        device_key: resolveRemoteDesktopKey(payload.deviceKey),
-        remember_me: Boolean(payload.rememberMe || payload.remember_me),
-      },
-    });
-    return finishLegacyRemoteAuthIfSession(apiBaseUrl, result, 'password');
-  }
-
-  function wait(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  async function remoteAuthGoogleLogin(payload = {}) {
-    ensureCloudAccountEnabled();
-    const apiBaseUrl = normalizeRemoteBaseUrl(payload.apiBaseUrl);
-    const started = await remoteControlJson(apiBaseUrl, '/api/remote/auth/google/start', {
-      method: 'POST',
-      body: {
-        actor_kind: 'desktop',
-        device_name: resolveRemoteDesktopName(payload.deviceName),
-        device_platform: 'desktop-electron',
-        device_key: resolveRemoteDesktopKey(payload.deviceKey),
-        remember_me: Boolean(payload.rememberMe || payload.remember_me),
-      },
-    });
-    if (!started?.auth_url || !started?.request_id || !started?.poll_token) {
-      throw new Error('Google sign-in did not return a login request.');
-    }
-    await shell.openExternal(started.auth_url);
-    const startedAt = Date.now();
-    const timeoutMs = Math.max(30000, Number(started.expires_in_seconds || 300) * 1000);
-    while (Date.now() - startedAt < timeoutMs) {
-      await wait(1500);
-      const result = await remoteControlJson(apiBaseUrl, '/api/remote/auth/google/poll', {
-        method: 'POST',
-        body: {
-          request_id: started.request_id,
-          poll_token: started.poll_token,
-        },
-      });
-      if (result?.status === 'complete') {
-        setRemoteAccountSession({
-          apiBaseUrl,
-          sessionToken: result.session_token,
-          actorKind: 'desktop',
-          user: result.user || null,
-          desktop: result.desktop || null,
-          savedAt: new Date().toISOString(),
-          loginProvider: 'google',
-          rememberMe: Boolean(result.remember_me),
-          expiresInSeconds: result.expires_in_seconds || null,
-        }, {
-          rememberMe: Boolean(result.remember_me),
-        });
-        return remoteAuthStatus();
-      }
-      if (result?.status === 'error' || result?.status === 'expired') {
-        throw new Error(result.error || 'Google sign-in did not complete.');
-      }
-    }
-    throw new Error('Google sign-in timed out. Try again from the account screen.');
-  }
-
-  async function remoteAuthRegister(payload = {}) {
-    ensureCloudAccountEnabled();
-    const apiBaseUrl = normalizeRemoteBaseUrl(payload.apiBaseUrl);
-    const result = await remoteControlJson(apiBaseUrl, '/api/remote/auth/register', {
-      method: 'POST',
-      body: {
-        email: String(payload.email || '').trim(),
-        password: String(payload.password || '').trim(),
-        display_name: String(payload.displayName || '').trim() || undefined,
-        actor_kind: 'desktop',
-        device_name: resolveRemoteDesktopName(payload.deviceName),
-        device_platform: 'desktop-electron',
-        device_key: resolveRemoteDesktopKey(payload.deviceKey),
-        remember_me: Boolean(payload.rememberMe || payload.remember_me),
-      },
-    });
-    return finishLegacyRemoteAuthIfSession(apiBaseUrl, result, 'password');
-  }
-
-  async function remoteAuthVerifyOtp(payload = {}) {
-    ensureCloudAccountEnabled();
-    const apiBaseUrl = normalizeRemoteBaseUrl(payload.apiBaseUrl);
-    const challengeId = String(payload.challengeId || payload.challenge_id || '').trim();
-    const code = String(payload.code || '').trim();
-    if (!challengeId || !code) {
-      throw new Error('Verification code is required.');
-    }
-    const result = await remoteControlJson(apiBaseUrl, '/api/remote/auth/otp/verify', {
-      method: 'POST',
-      body: {
-        challenge_id: challengeId,
-        code,
-      },
-    });
-    setRemoteAccountSession({
-      apiBaseUrl,
-      sessionToken: result.session_token,
-      actorKind: result.actor_kind || 'desktop',
-      user: result.user || null,
-      desktop: result.desktop || null,
-      savedAt: new Date().toISOString(),
-      loginProvider: 'password',
-      rememberMe: Boolean(result.remember_me),
-      expiresInSeconds: result.expires_in_seconds || null,
-    }, {
-      rememberMe: Boolean(result.remember_me),
-    });
-    return remoteAuthStatus();
-  }
-
-  async function remoteAuthResendOtp(payload = {}) {
-    ensureCloudAccountEnabled();
-    const apiBaseUrl = normalizeRemoteBaseUrl(payload.apiBaseUrl);
-    const challengeId = String(payload.challengeId || payload.challenge_id || '').trim();
-    if (!challengeId) {
-      throw new Error('Verification challenge is required.');
-    }
-    return remoteControlJson(apiBaseUrl, '/api/remote/auth/otp/resend', {
-      method: 'POST',
-      body: {
-        challenge_id: challengeId,
-      },
-    });
-  }
-
-  async function remoteAuthLogout() {
-    if (!cloudBackendEnabled()) {
-      return cloudDisabledStatus();
-    }
-    const session = currentRemoteAccountSession();
-    if (session?.sessionToken) {
-      await remoteControlJson(session.apiBaseUrl, '/api/remote/auth/logout', {
-        method: 'POST',
-        token: session.sessionToken,
-      }).catch(() => null);
-    }
-    clearRemoteAccountSession();
-    return { signedIn: false, apiBaseUrl: defaultRemoteControlBaseUrl, sessionPath: resolveRemoteAccountSessionPath() };
-  }
-
-  async function remoteAuthCreatePairingToken() {
-    const session = currentRemoteAccountSession();
-    if (!session?.sessionToken) {
-      throw new Error('Desktop is not signed in.');
-    }
-    const result = await remoteControlJson(session.apiBaseUrl, '/api/remote/pair/start', {
-      method: 'POST',
-      token: session.sessionToken,
-      body: { desktop_id: session.desktop?.desktop_id || null },
-    });
-    return result;
-  }
-
-  function remoteAccountSessionOrThrow() {
-    ensureCloudAccountEnabled();
-    const session = currentRemoteAccountSession();
-    if (!session?.sessionToken) {
-      throw new Error('Desktop is not signed in.');
-    }
-    return session;
-  }
-
-  function setupSecretMetadata() {
-    return {
-      OPENAI_API_KEY: { label: 'OpenAI API key', kind: 'provider_api_key' },
-      ANTHROPIC_API_KEY: { label: 'Anthropic API key', kind: 'provider_api_key' },
-      GOOGLE_API_KEY: { label: 'Google Gemini API key', kind: 'provider_api_key' },
-      XAI_API_KEY: { label: 'xAI Grok API key', kind: 'provider_api_key' },
-      DEEPSEEK_API_KEY: { label: 'DeepSeek API key', kind: 'provider_api_key' },
-      NVIDIA_API_KEY: { label: 'NVIDIA API key', kind: 'provider_api_key' },
-      OPENROUTER_API_KEY: { label: 'OpenRouter API key', kind: 'provider_api_key' },
-      TELEGRAM_BOT_TOKEN: { label: 'Telegram bot token', kind: 'telegram_bot_token' },
-    };
-  }
-
-  function setupValuesFromRemoteProfile(profile = {}) {
-    const values = {};
-    const preferences = profile?.preferences && typeof profile.preferences === 'object' ? profile.preferences : {};
-    const integrations = profile?.integrations && typeof profile.integrations === 'object' ? profile.integrations : {};
-    const telegram = integrations.telegram && typeof integrations.telegram === 'object' ? integrations.telegram : {};
-    const defaultWorkspace = String(preferences.default_workspace || '').trim();
-    const plannerModel = String(preferences.planner_model || '').trim();
-    const interruptPolicy = String(preferences.interrupt_policy_default || '').trim().toLowerCase();
-    if (defaultWorkspace) {
-      values.DEFAULT_WORKSPACE = defaultWorkspace;
-    }
-    if (plannerModel) {
-      values.PLANNER_MODEL = plannerModel;
-    }
-    if (['none', 'steer_now', 'after_tool'].includes(interruptPolicy)) {
-      values.INTERRUPT_POLICY_DEFAULT = interruptPolicy;
-    }
-    const allowedUserIds = Array.isArray(telegram.allowed_user_ids)
-      ? telegram.allowed_user_ids
-      : Array.isArray(telegram.allowedUserIds)
-        ? telegram.allowedUserIds
-        : [];
-    const cleanAllowedUserIds = allowedUserIds
-      .map((item) => String(item || '').trim().replace(/^\+/, ''))
-      .filter((item, index, items) => /^-?\d+$/.test(item) && items.indexOf(item) === index);
-    if (cleanAllowedUserIds.length) {
-      values.ALLOWED_USER_IDS = cleanAllowedUserIds.join(',');
-    }
-    return values;
   }
 
   function sanitizeSetupValuesForLocal(values = {}) {
@@ -610,32 +197,8 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
     return previews;
   }
 
-  function remoteAccountRuntimeOverlayValues() {
-    if (!cloudBackendEnabled()) {
-      return {};
-    }
-    const session = currentRemoteAccountSession();
-    const sessionToken = String(session?.sessionToken || session?.session_token || '').trim();
-    if (!sessionToken) {
-      return {};
-    }
-    const values = {
-      EMPLOAI_REMOTE_CONTROL_BASE_URL: normalizeRemoteBaseUrl(session.apiBaseUrl || session.api_base_url),
-      EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN: sessionToken,
-    };
-    const userId = String(session?.user?.user_id || session?.user_id || '').trim();
-    if (userId) {
-      values.EMPLOAI_REMOTE_CONTROL_USER_ID = userId;
-    }
-    const desktopId = String(session?.desktop?.desktop_id || session?.desktop_id || '').trim();
-    if (desktopId) {
-      values.EMPLOAI_REMOTE_CONTROL_DESKTOP_ID = desktopId;
-    }
-    return values;
-  }
-
   function runtimeSecretOverlayEnvironment() {
-    const values = remoteAccountRuntimeOverlayValues();
+    const values = {};
     for (const [key, rawValue] of Object.entries(runtimeSecretOverlay || {})) {
       const cleanKey = String(key || '').trim();
       const value = String(rawValue || '').trim();
@@ -644,315 +207,6 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
       }
     }
     return Object.keys(values).length ? JSON.stringify(values) : '';
-  }
-
-  function readRuntimeEnvValues() {
-    const envFile = path.join(resolveRuntimeHome(), '.env');
-    const values = {};
-    let text = '';
-    try {
-      text = fs.readFileSync(envFile, 'utf-8');
-    } catch (_error) {
-      return values;
-    }
-    for (const rawLine of text.split(/\r?\n/)) {
-      const line = String(rawLine || '').trim();
-      if (!line || line.startsWith('#')) {
-        continue;
-      }
-      const normalizedLine = line.startsWith('export ') ? line.slice(7).trim() : line;
-      const equalsIndex = normalizedLine.indexOf('=');
-      if (equalsIndex <= 0) {
-        continue;
-      }
-      const key = normalizedLine.slice(0, equalsIndex).trim();
-      let value = normalizedLine.slice(equalsIndex + 1).trim();
-      if (
-        value.length >= 2
-        && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
-      ) {
-        value = value.slice(1, -1);
-      }
-      if (key) {
-        values[key] = value;
-      }
-    }
-    return values;
-  }
-
-  function runtimeValuesChanged(values = {}) {
-    const existing = readRuntimeEnvValues();
-    return Object.entries(values || {}).some(([key, rawValue]) => {
-      const cleanValue = String(rawValue || '').trim();
-      return cleanValue && String(existing[key] || '').trim() !== cleanValue;
-    });
-  }
-
-  async function remoteAuthRevealSecrets(session, namespace, names = []) {
-    const revealed = await remoteControlJson(session.apiBaseUrl, '/api/remote/account/secrets/reveal', {
-      method: 'POST',
-      token: session.sessionToken,
-      headers: { 'X-EmploAI-Manual-Secret-Reveal': 'true' },
-      body: {
-        namespace,
-        names,
-      },
-    });
-    return revealed?.secrets && typeof revealed.secrets === 'object' ? revealed.secrets : {};
-  }
-
-  async function remoteAuthListSecrets(payload = {}) {
-    const session = remoteAccountSessionOrThrow();
-    const namespace = String(payload.namespace || 'setup').trim() || 'setup';
-    return remoteControlJson(session.apiBaseUrl, `/api/remote/account/secrets?namespace=${encodeURIComponent(namespace)}`, {
-      token: session.sessionToken,
-    });
-  }
-
-  async function remoteAuthSaveSetupSecrets(payload = {}) {
-    const session = remoteAccountSessionOrThrow();
-    const values = payload.values || {};
-    const secrets = {};
-    for (const field of setupSecretFields) {
-      const value = String(values[field] || '').trim();
-      if (value) {
-        secrets[field] = value;
-      }
-    }
-    if (!Object.keys(secrets).length) {
-      return remoteAuthListSecrets({ namespace: 'setup' });
-    }
-    const existingSecrets = await remoteAuthListSecrets({ namespace: 'setup' });
-    const existingSecretNames = new Set((existingSecrets?.items || []).map((item) => String(item?.name || '').trim()).filter(Boolean));
-    const blockedProviderFields = Object.keys(secrets).filter((field) => (
-      setupProviderSecretFields.has(field) && existingSecretNames.has(field)
-    ));
-    if (blockedProviderFields.length) {
-      const metadata = setupSecretMetadata();
-      const labels = blockedProviderFields
-        .map((field) => metadata[field]?.label || field)
-        .join(', ');
-      throw new Error(`Remove the saved ${labels} before replacing ${blockedProviderFields.length === 1 ? 'it' : 'them'}.`);
-    }
-    return remoteControlJson(session.apiBaseUrl, '/api/remote/account/secrets', {
-      method: 'PUT',
-      token: session.sessionToken,
-      body: {
-        namespace: 'setup',
-        secrets,
-        metadata: setupSecretMetadata(),
-      },
-    });
-  }
-
-  async function remoteAuthSaveSecrets(payload = {}) {
-    const session = remoteAccountSessionOrThrow();
-    const namespace = String(payload.namespace || '').trim();
-    const rawSecrets = payload.secrets && typeof payload.secrets === 'object' ? payload.secrets : {};
-    const secrets = {};
-    for (const [rawName, rawValue] of Object.entries(rawSecrets)) {
-      const name = String(rawName || '').trim();
-      const value = String(rawValue || '').trim();
-      if (name && value) {
-        secrets[name] = value;
-      }
-    }
-    if (!namespace) {
-      throw new Error('Secret namespace is required.');
-    }
-    if (!Object.keys(secrets).length) {
-      return remoteAuthListSecrets({ namespace });
-    }
-    return remoteControlJson(session.apiBaseUrl, '/api/remote/account/secrets', {
-      method: 'PUT',
-      token: session.sessionToken,
-      body: {
-        namespace,
-        secrets,
-        metadata: payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : {},
-      },
-    });
-  }
-
-  async function remoteAuthApplyAccountData() {
-    const session = remoteAccountSessionOrThrow();
-    const account = await remoteControlJson(session.apiBaseUrl, '/api/remote/account/me', {
-      token: session.sessionToken,
-    });
-    const profile = account?.profile && typeof account.profile === 'object' ? account.profile : {};
-    const [setupSecrets, telegramBotSecrets] = await Promise.all([
-      remoteAuthRevealSecrets(session, 'setup'),
-      remoteAuthRevealSecrets(session, 'telegram_bots').catch(() => ({})),
-    ]);
-    const values = setupValuesFromRemoteProfile(profile);
-    const cleanValues = {};
-    for (const [key, rawValue] of Object.entries(values)) {
-      const value = String(rawValue || '').trim();
-      if (value) {
-        cleanValues[key] = value;
-      }
-    }
-    const runtimeSecretValues = {};
-    for (const [key, rawValue] of Object.entries(setupSecrets)) {
-      const cleanKey = String(key || '').trim();
-      const value = String(rawValue || '').trim();
-      if (value && localRuntimeSetupSecretFields.has(cleanKey)) {
-        runtimeSecretValues[cleanKey] = value;
-      }
-    }
-    const count = Object.keys(cleanValues).length + Object.keys(setupSecrets).length + Object.keys(telegramBotSecrets).length;
-    if (!count) {
-      return {
-        applied: false,
-        count: 0,
-        profile,
-        setupSecretCount: Object.keys(setupSecrets).length,
-        telegramBotSecretCount: Object.keys(telegramBotSecrets).length,
-        detail: 'No saved setup found.',
-      };
-    }
-    const localApplyValues = {
-      ...cleanValues,
-      ...runtimeSecretValues,
-    };
-    rememberRuntimeSecretOverlay(runtimeSecretValues);
-    if (!Object.keys(localApplyValues).length) {
-      return {
-        applied: false,
-        count,
-        profile,
-        bootstrap: getBootstrapCache(),
-        setupSecretCount: Object.keys(setupSecrets).length,
-        telegramBotSecretCount: Object.keys(telegramBotSecrets).length,
-        detail: 'Saved account data is already available to the runtime.',
-      };
-    }
-    try {
-      const restartPolicy = runtimeValuesChanged(runtimeSecretValues) ? 'auto' : 'never';
-      const bootstrap = await saveSetup({ values: localApplyValues, restart_policy: restartPolicy });
-      return {
-        applied: true,
-        count,
-        profile,
-        bootstrap,
-        setupSecretCount: Object.keys(setupSecrets).length,
-        telegramBotSecretCount: Object.keys(telegramBotSecrets).length,
-      };
-    } catch (error) {
-      return {
-        applied: false,
-        count,
-        profile,
-        setupSecretCount: Object.keys(setupSecrets).length,
-        telegramBotSecretCount: Object.keys(telegramBotSecrets).length,
-        detail: error?.message || String(error),
-      };
-    }
-  }
-
-  async function remoteAuthDeleteSecret(payload = {}) {
-    const session = remoteAccountSessionOrThrow();
-    const namespace = String(payload.namespace || '').trim();
-    const name = String(payload.name || '').trim();
-    if (!namespace || !name) {
-      throw new Error('Secret namespace and name are required.');
-    }
-    return remoteControlJson(
-      session.apiBaseUrl,
-      `/api/remote/account/secrets/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
-      {
-        method: 'DELETE',
-        token: session.sessionToken,
-        headers: payload.confirmationId || payload.confirmation_id
-          ? { 'X-EmploAI-Confirmation-Id': payload.confirmationId || payload.confirmation_id }
-          : {},
-      },
-    );
-  }
-
-  async function remoteAuthDeleteAccountData(payload = {}) {
-    const session = remoteAccountSessionOrThrow();
-    return remoteControlJson(session.apiBaseUrl, '/api/remote/account/data', {
-      method: 'DELETE',
-      token: session.sessionToken,
-      headers: payload.confirmationId || payload.confirmation_id
-        ? { 'X-EmploAI-Confirmation-Id': payload.confirmationId || payload.confirmation_id }
-        : {},
-    });
-  }
-
-  async function remoteAuthProfile() {
-    const session = remoteAccountSessionOrThrow();
-    return remoteControlJson(session.apiBaseUrl, '/api/remote/account/profile', {
-      token: session.sessionToken,
-    });
-  }
-
-  async function remoteAuthUpdateProfile(payload = {}) {
-    const session = remoteAccountSessionOrThrow();
-    const profile = payload.profile && typeof payload.profile === 'object' ? payload.profile : {};
-    const result = await remoteControlJson(session.apiBaseUrl, '/api/remote/account/profile', {
-      method: 'PUT',
-      token: session.sessionToken,
-      body: { profile },
-    });
-    if (result?.profile && typeof result.profile === 'object') {
-      setRemoteAccountSession({
-        ...session,
-        profile: result.profile,
-        verifiedAt: new Date().toISOString(),
-      }, {
-        rememberMe: Boolean(session.rememberMe),
-      });
-    }
-    return result;
-  }
-
-  async function remoteAuthApplySetupSecrets(payload = {}) {
-    const session = remoteAccountSessionOrThrow();
-    const names = Array.isArray(payload.names) && payload.names.length
-      ? payload.names.map((item) => String(item || '').trim()).filter(Boolean)
-      : setupSecretFields;
-    const revealed = await remoteControlJson(session.apiBaseUrl, '/api/remote/account/secrets/reveal', {
-      method: 'POST',
-      token: session.sessionToken,
-      headers: { 'X-EmploAI-Manual-Secret-Reveal': 'true' },
-      body: {
-        namespace: 'setup',
-        names,
-      },
-    });
-    const secrets = revealed?.secrets && typeof revealed.secrets === 'object' ? revealed.secrets : {};
-    if (!Object.keys(secrets).length) {
-      return { applied: false, count: 0, bootstrap: getBootstrapCache(), detail: 'No saved setup found.' };
-    }
-    const runtimeSecretValues = {};
-    for (const [key, rawValue] of Object.entries(secrets)) {
-      const cleanKey = String(key || '').trim();
-      const value = String(rawValue || '').trim();
-      if (value && localRuntimeSetupSecretFields.has(cleanKey)) {
-        runtimeSecretValues[cleanKey] = value;
-      }
-    }
-    if (Object.keys(runtimeSecretValues).length) {
-      rememberRuntimeSecretOverlay(runtimeSecretValues);
-      const restartPolicy = runtimeValuesChanged(runtimeSecretValues) ? 'auto' : 'never';
-      const bootstrap = await saveSetup({ values: runtimeSecretValues, restart_policy: restartPolicy });
-      return {
-        applied: true,
-        count: Object.keys(secrets).length,
-        bootstrap,
-        detail: restartPolicy === 'auto'
-          ? 'Saved setup secrets were applied and the runtime restarted.'
-          : 'Saved setup secrets are already available to the runtime.',
-      };
-    }
-    return {
-      applied: true,
-      count: Object.keys(secrets).length,
-      bootstrap: getBootstrapCache(),
-      detail: 'Saved setup secrets are already available to the runtime.',
-    };
   }
 
   function localAppSessionOrThrow() {
@@ -976,20 +230,7 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
   }
 
   async function fleetApi(pathname, options = {}) {
-    try {
-      return await localAppApi(pathname, options);
-    } catch (error) {
-      if (!cloudBackendEnabled()) {
-        throw error;
-      }
-    }
-    const session = remoteAccountSessionOrThrow();
-    return remoteControlJson(session.apiBaseUrl, pathname, {
-      method: options.method || 'GET',
-      token: session.sessionToken,
-      body: options.body,
-      headers: options.headers || {},
-    });
+    return localAppApi(pathname, options);
   }
 
   async function fleetSnapshot() {
@@ -1364,23 +605,6 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
     runtimeSecretOverlayPreviews,
     sanitizeSetupValuesForLocal,
     rememberRuntimeSecretOverlay,
-    remoteAuthStatus,
-    remoteAuthLogin,
-    remoteAuthGoogleLogin,
-    remoteAuthRegister,
-    remoteAuthVerifyOtp,
-    remoteAuthResendOtp,
-    remoteAuthLogout,
-    remoteAuthCreatePairingToken,
-    remoteAuthListSecrets,
-    remoteAuthSaveSetupSecrets,
-    remoteAuthSaveSecrets,
-    remoteAuthApplyAccountData,
-    remoteAuthDeleteSecret,
-    remoteAuthDeleteAccountData,
-    remoteAuthProfile,
-    remoteAuthUpdateProfile,
-    remoteAuthApplySetupSecrets,
     fleetSnapshot,
     fleetSetActiveIdentity,
     fleetSetIdentityActiveChat,

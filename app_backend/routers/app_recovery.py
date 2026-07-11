@@ -11,8 +11,6 @@ from app_backend.models import (
     RecoveryActionResponse,
     RecoveryArchiveItemView,
     RecoveryListResponse,
-    WorkspaceRestoreRequest,
-    WorkspaceRestoreResponse,
 )
 
 
@@ -26,10 +24,7 @@ class AppRecoveryRouterDeps:
     get_store: Callable[[], Any]
     bridge_for_user: Callable[[int], Any]
     sync_session_workspace_binding: Callable[..., None]
-    mirror_session_snapshot: Callable[..., None]
     consume_approved_confirmation: Callable[..., Dict[str, Any]]
-    purge_archived_cloud_objects: Callable[..., Dict[str, Any]]
-    restore_cloud_workspace_files: Callable[..., Dict[str, Any]]
     check_rate_limit: Callable[..., None]
     rate_limit_max_attempts: int
 
@@ -94,11 +89,7 @@ def create_app_recovery_router(deps: AppRecoveryRouterDeps) -> APIRouter:
             metadata={"archive_id": archive_id},
         )
         try:
-            archived = deps.get_store().get_archived_item(user_id=user_id, archive_id=archive_id)
-            purge_result = deps.purge_archived_cloud_objects(user_id=user_id, archived_item=archived)
             item = deps.get_store().permanently_delete_archived_item(user_id=user_id, archive_id=archive_id)
-            if purge_result.get("deleted"):
-                item.setdefault("metadata", {})["cloud_objects_purged"] = purge_result
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Archived item not found") from exc
         return RecoveryActionResponse(action="permanent_delete", item=RecoveryArchiveItemView(**item))
@@ -118,51 +109,6 @@ def create_app_recovery_router(deps: AppRecoveryRouterDeps) -> APIRouter:
         )
         result = deps.get_store().purge_expired_archives(user_id=user_id)
         return RecoveryActionResponse(action="purge_expired", purged=int(result.get("purged") or 0))
-
-    @router.post("/api/app/workspace/restore", response_model=WorkspaceRestoreResponse)
-    async def restore_workspace_files(
-        request: WorkspaceRestoreRequest,
-        http_request: Request,
-        authorization: Optional[str] = Header(default=None),
-    ) -> WorkspaceRestoreResponse:
-        auth = dict(deps.resolve_token(authorization))
-        if deps.is_remote_session_auth(auth):
-            raise HTTPException(status_code=409, detail="Workspace restore must run on the local desktop backend")
-        user_id = int(auth["user_id"])
-        deps.check_rate_limit(
-            http_request,
-            email=str(user_id),
-            action="workspace_restore",
-            max_attempts=deps.rate_limit_max_attempts,
-        )
-        restore_result = deps.restore_cloud_workspace_files(
-            user_id=user_id,
-            workspace_id=request.workspace_id,
-            target_dir=Path(request.local_path).expanduser().resolve() if request.local_path else None,
-        )
-        target_dir = Path(str(restore_result.get("restored_path") or "")).expanduser().resolve()
-        restored = list(restore_result.get("restored_files") or [])
-        missing = list(restore_result.get("missing_original_files") or [])
-        conflicts = int(restore_result.get("conflict_count") or 0)
-        if request.workspace_id and request.machine_id:
-            try:
-                deps.get_store().upsert_workspace_binding(
-                    user_id=user_id,
-                    workspace_id=request.workspace_id,
-                    machine_id=request.machine_id,
-                    local_path=str(target_dir),
-                    label=target_dir.name,
-                    status="active",
-                    metadata={"restored_from_cloud": True, "restored_count": len(restored), "conflict_count": conflicts},
-                )
-            except Exception:
-                logger.exception("[recovery] failed updating restored workspace binding")
-        return WorkspaceRestoreResponse(
-            restored_path=str(target_dir),
-            restored_files=restored,
-            missing_original_files=missing,
-            conflict_count=conflicts,
-        )
 
     return router
 
@@ -202,6 +148,5 @@ def _restore_chat_archive(
         ]
         deps.sync_session_workspace_binding(user_id=user_id, auth=auth, session=restored_session)
         bridge.session_manager.save_session(restored_session)
-        deps.mirror_session_snapshot(user_id=user_id, bridge=bridge, session=restored_session, reason="chat_restored")
     except Exception as exc:
         raise HTTPException(status_code=409, detail=f"Could not restore chat: {exc}") from exc

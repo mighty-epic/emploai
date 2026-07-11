@@ -5,99 +5,14 @@ import re
 from typing import Any, Dict, List, Optional
 
 
-SECRET_NAME_RE = re.compile(r"^[A-Za-z0-9_:\-\.]{2,128}$")
-MAX_PROFILE_DICT_KEYS = 100
-MAX_EMAIL_CHARS = 254
-MAX_PASSWORD_CHARS = 256
-MIN_STRONG_PASSWORD_CHARS = 12
 MAX_DISPLAY_NAME_CHARS = 160
 MAX_DEVICE_PLATFORM_CHARS = 80
 MAX_DEVICE_KEY_CHARS = 256
-MAX_SECRET_ITEMS_PER_REQUEST = 100
-MAX_SECRET_VALUE_CHARS = 20_000
-MAX_SECRET_REVEAL_NAMES = 100
-COMMON_WEAK_PASSWORDS = frozenset(
-    {
-        "password",
-        "password1",
-        "password12",
-        "password123",
-        "password123!",
-        "qwerty123",
-        "qwerty123!",
-        "letmein123",
-        "admin12345",
-        "welcome123",
-        "changeme123",
-        "123456789",
-        "1234567890",
-    }
-)
-SETUP_SECRET_NAMES = frozenset(
-    {
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "GOOGLE_API_KEY",
-        "XAI_API_KEY",
-        "DEEPSEEK_API_KEY",
-        "NVIDIA_API_KEY",
-        "OPENROUTER_API_KEY",
-        "TELEGRAM_BOT_TOKEN",
-        "GMAIL_LOGIN_EMAIL",
-        "GMAIL_LOGIN_PASSWORD",
-    }
-)
-
-
-def normalize_email(value: str) -> str:
-    return value.strip().casefold()
-
-
-def strong_password_errors(password: str, *, email: str = "", display_name: Optional[str] = None) -> List[str]:
-    value = str(password or "")
-    errors: List[str] = []
-    if len(value) < MIN_STRONG_PASSWORD_CHARS:
-        errors.append(f"Password must be at least {MIN_STRONG_PASSWORD_CHARS} characters.")
-    if len(value) > MAX_PASSWORD_CHARS:
-        errors.append("Password is too long.")
-
-    if not re.search(r"[a-z]", value):
-        errors.append("Password must include a lowercase letter.")
-    if not re.search(r"[A-Z]", value):
-        errors.append("Password must include an uppercase letter.")
-    if not re.search(r"\d", value):
-        errors.append("Password must include a number.")
-    if not re.search(r"[^A-Za-z0-9]", value):
-        errors.append("Password must include a symbol.")
-
-    lowered = value.casefold()
-    compact_lowered = re.sub(r"\s+", "", lowered)
-    if compact_lowered in COMMON_WEAK_PASSWORDS:
-        errors.append("Password is too common.")
-
-    normalized_email = normalize_email(email)
-    local_part = normalized_email.split("@", 1)[0] if "@" in normalized_email else ""
-    if local_part and len(local_part) >= 4 and local_part.casefold() in lowered:
-        errors.append("Password cannot include the email name.")
-
-    clean_display = re.sub(r"[^A-Za-z0-9]+", "", str(display_name or "")).casefold()
-    clean_password = re.sub(r"[^A-Za-z0-9]+", "", lowered)
-    if clean_display and len(clean_display) >= 4 and clean_display in clean_password:
-        errors.append("Password cannot include the display name.")
-
-    if re.search(r"(.)\1{4,}", value):
-        errors.append("Password cannot repeat the same character too many times.")
-    if re.search(r"(0123|1234|2345|3456|4567|5678|6789|abcd|bcde|cdef|qwer|wert|asdf|sdfg|zxcv)", lowered):
-        errors.append("Password cannot contain obvious keyboard or counting sequences.")
-    return errors
-
-
 def default_user_profile() -> Dict[str, Any]:
     return {
         "schema_version": 1,
         "preferences": {
             "verbose_mode": False,
-            "cloud_chat_backup_enabled": True,
             "interrupt_policy_default": "none",
             "custom_system_prompt_append": None,
             "max_turns": None,
@@ -114,7 +29,6 @@ def default_user_profile() -> Dict[str, Any]:
         "setup": {
             "completed_versions": {},
             "desktop": {},
-            "mobile": {},
         },
         "integrations": {
             "telegram": {
@@ -124,7 +38,6 @@ def default_user_profile() -> Dict[str, Any]:
                 "bots": [],
             },
         },
-        "credential_refs": {},
         "metadata": {},
     }
 
@@ -191,37 +104,6 @@ def safe_profile_value(value: Any, *, depth: int = 0) -> Any:
     return None
 
 
-def safe_secret_metadata(value: Any) -> Dict[str, Any]:
-    cleaned = safe_profile_value(value)
-    return cleaned if isinstance(cleaned, dict) else {}
-
-
-def redact_secret_value(value: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    if len(text) <= 8:
-        return "*" * len(text)
-    return f"{text[:4]}...{text[-4:]}"
-
-
-def validate_secret_namespace(namespace: str) -> str:
-    normalized_namespace = str(namespace or "setup").strip().lower() or "setup"
-    if len(normalized_namespace) > 64 or not re.match(r"^[a-z0-9_\-\.]+$", normalized_namespace):
-        raise ValueError("Secret namespace is invalid")
-    return normalized_namespace
-
-
-def validate_secret_location(namespace: str, name: str) -> tuple[str, str]:
-    normalized_namespace = validate_secret_namespace(namespace)
-    normalized_name = str(name or "").strip()
-    if not SECRET_NAME_RE.match(normalized_name):
-        raise ValueError("Secret name is invalid")
-    if normalized_namespace == "setup" and normalized_name not in SETUP_SECRET_NAMES:
-        raise ValueError(f"Unsupported setup secret: {normalized_name}")
-    return normalized_namespace, normalized_name
-
-
 def normalize_allowed_user_ids(value: Any) -> List[str]:
     if isinstance(value, str):
         candidates = [part.strip() for part in value.split(",")]
@@ -248,13 +130,12 @@ def sanitize_user_profile(payload: Any) -> Dict[str, Any]:
         return defaults
 
     profile = dict(defaults)
-    for key in ("preferences", "setup", "integrations", "credential_refs", "metadata"):
+    for key in ("preferences", "setup", "integrations", "metadata"):
         if isinstance(safe_payload.get(key), dict):
             profile[key] = deep_merge_dict(dict(profile.get(key) or {}), safe_payload[key])
 
     preferences = dict(profile.get("preferences") or {})
     preferences["verbose_mode"] = bool(preferences.get("verbose_mode", False))
-    preferences["cloud_chat_backup_enabled"] = bool(preferences.get("cloud_chat_backup_enabled", True))
     preferences["custom_system_prompt_append"] = safe_string(
         preferences.get("custom_system_prompt_append"),
         max_length=8000,
@@ -284,9 +165,8 @@ def sanitize_user_profile(payload: Any) -> Dict[str, Any]:
     setup = dict(profile.get("setup") or {})
     completed_versions = setup.get("completed_versions")
     setup["completed_versions"] = completed_versions if isinstance(completed_versions, dict) else {}
-    for surface in ("desktop", "mobile"):
-        surface_payload = setup.get(surface)
-        setup[surface] = surface_payload if isinstance(surface_payload, dict) else {}
+    desktop_setup = setup.get("desktop")
+    setup["desktop"] = desktop_setup if isinstance(desktop_setup, dict) else {}
     profile["setup"] = setup
 
     integrations = dict(profile.get("integrations") or {})
