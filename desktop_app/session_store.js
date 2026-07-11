@@ -43,10 +43,10 @@ function atomicWriteUtf8(filePath, text) {
   }
 }
 
-function createRemoteAccountSessionStore({
+function createLocalSecretStore({
   resolveRuntimeHome,
   safeStorage,
-  filename = 'remote-account-session.json',
+  filename = 'local-runtime-secrets.json',
 } = {}) {
   if (typeof resolveRuntimeHome !== 'function') {
     throw new Error('resolveRuntimeHome is required');
@@ -123,7 +123,7 @@ function createRemoteAccountSessionStore({
     const filePath = resolvePath();
     const normalized = normalizePayload(payload);
     if (!normalized) {
-      throw new Error('Remote account session payload must be an object.');
+      throw new Error('Local secret payload must be an object.');
     }
     const encoded = encodePayload(normalized);
     const serialized = `${JSON.stringify(encoded, null, 2)}\n`;
@@ -193,7 +193,7 @@ function createRemoteAccountSessionStore({
 }
 
 module.exports = {
-  createRemoteAccountSessionStore,
+  createLocalSecretStore,
   ENCRYPTED_STORAGE_KIND,
   UNAVAILABLE_STORAGE_KIND,
 };

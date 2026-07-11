@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from shared.fleet_connection import fleet_connection_configured
+
 def _telegram_service_status(
     home: Path,
     *,
@@ -177,34 +179,12 @@ def _ensure_telegram_worker(
     return _telegram_service_status(home, enabled=enabled, configured=configured)
 
 
-from shared.standalone_policy import cloud_backend_enabled
-
-
 def _yggdrasil_remote_session_configured(home: Path) -> bool:
-    try:
-        payload = remote_account_session_payload(home)
-    except Exception:
-        payload = {}
-    if not isinstance(payload, dict):
-        return False
-    transport = payload.get("transport") if isinstance(payload.get("transport"), dict) else {}
-    return bool(
-        str((transport or {}).get("kind") or "").strip().lower() == "yggdrasil"
-        and str(payload.get("apiBaseUrl") or payload.get("api_base_url") or "").strip()
-        and str(payload.get("sessionToken") or payload.get("session_token") or "").strip()
-    )
+    return fleet_connection_configured(home)
 
 
 def _remote_control_configured_from_values(values: dict[str, str]) -> bool:
-    if not cloud_backend_enabled():
-        return _yggdrasil_remote_session_configured(runtime_home())
-    if remote_account_session_configured(runtime_home()):
-        return True
-    return bool(
-        str(values.get("EMPLOAI_REMOTE_CONTROL_BASE_URL", "") or "").strip()
-        and str(values.get("EMPLOAI_REMOTE_CONTROL_EMAIL", "") or "").strip()
-        and str(values.get("EMPLOAI_REMOTE_CONTROL_PASSWORD", "") or "").strip()
-    )
+    return _yggdrasil_remote_session_configured(runtime_home())
 
 
 def _remote_control_service_status(

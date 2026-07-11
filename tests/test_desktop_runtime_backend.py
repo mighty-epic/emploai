@@ -382,9 +382,6 @@ def test_bootstrap_payload_ensures_service_workers_after_runtime_ready(monkeypat
     existing = {
         "TELEGRAM_BOT_TOKEN": "token",
         "ALLOWED_USER_IDS": "42",
-        "EMPLOAI_REMOTE_CONTROL_BASE_URL": "https://example.com",
-        "EMPLOAI_REMOTE_CONTROL_EMAIL": "user@example.com",
-        "EMPLOAI_REMOTE_CONTROL_PASSWORD": "correct horse",
     }
     recorded = {}
 
@@ -398,11 +395,6 @@ def test_bootstrap_payload_ensures_service_workers_after_runtime_ready(monkeypat
         desktop_backend,
         "build_setup_state",
         lambda **_kwargs: {"required": False, "telegramConfigured": True, "validationIssues": []},
-    )
-    monkeypatch.setattr(
-        desktop_backend,
-        "_apply_cloud_account_runtime_overlay",
-        lambda _root, _home, values: values,
     )
     monkeypatch.setattr(
         desktop_backend,
@@ -433,6 +425,7 @@ def test_bootstrap_payload_ensures_service_workers_after_runtime_ready(monkeypat
     )
     monkeypatch.setattr(desktop_backend, "_attached_runtime_requires_restart_checked", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(desktop_backend, "configure_channels_enabled", lambda channel_name: channel_name == "telegram")
+    monkeypatch.setattr(desktop_backend, "_remote_control_configured_from_values", lambda _values: True)
     monkeypatch.setattr(
         desktop_backend,
         "_ensure_telegram_worker",
@@ -457,132 +450,6 @@ def test_bootstrap_payload_ensures_service_workers_after_runtime_ready(monkeypat
     assert payload["setupState"]["remoteControlStatus"]["state"] == "running"
 
 
-def test_cloud_account_runtime_overlay_hydrates_secrets_and_bot_parenting(monkeypatch, tmp_path: Path):
-    home = tmp_path / "runtime"
-    home.mkdir()
-    (home / "remote-account-session.json").write_text(
-        json.dumps({"apiBaseUrl": "https://api.kraitos.app", "sessionToken": "session-token"}),
-        encoding="utf-8",
-    )
-    restored: list[dict] = []
-
-    def fake_request(_session, path, **_kwargs):
-        assert _session["sessionToken"] == "session-token"
-        if path == "/api/remote/account/me":
-            return {
-                "profile": {
-                    "preferences": {
-                        "default_workspace": str(tmp_path / "workspace"),
-                        "planner_model": "gpt-5.4-mini",
-                    },
-                    "integrations": {
-                        "telegram": {
-                            "allowed_user_ids": ["42"],
-                        },
-                    },
-                },
-                "shared_state": {
-                    "session_details": {
-                        "sess-1": {"telegram_bot_config_id": "bot-a"},
-                    },
-                },
-            }
-        if path.startswith("/api/remote/account/secrets?namespace=telegram_bots"):
-            return {
-                "items": [
-                    {
-                        "name": "bot-a",
-                        "metadata": {"label": "Bot A", "bot_config_id": "bot-a", "is_default": True},
-                    }
-                ]
-            }
-        raise AssertionError(path)
-
-    monkeypatch.setattr(desktop_backend, "_remote_account_request_json", fake_request)
-    monkeypatch.setattr(
-        desktop_backend,
-        "_remote_account_reveal_secrets",
-        lambda _session, namespace: (
-            {"OPENAI_API_KEY": "sk-cloud"} if namespace == "setup" else {"bot-a": "123456:cloud-bot"}
-        ),
-    )
-    monkeypatch.setattr(
-        desktop_backend,
-        "_restore_cloud_telegram_bots",
-        lambda **kwargs: restored.append(kwargs) or {"telegram_bot_count": 1, "restored_parenting": {"updated": 1}},
-    )
-
-    effective = desktop_backend._apply_cloud_account_runtime_overlay(
-        tmp_path,
-        home,
-        {"DEFAULT_WORKSPACE": "C:/Old", "OPENAI_API_KEY": "sk-local"},
-    )
-
-    assert effective["OPENAI_API_KEY"] == "sk-cloud"
-    assert effective["TELEGRAM_BOT_TOKEN"] == "123456:cloud-bot"
-    assert effective["ALLOWED_USER_IDS"] == "42"
-    assert effective["PLANNER_MODEL"] == "gpt-5.4-mini"
-    assert restored[0]["telegram_bot_secrets"] == {"bot-a": "123456:cloud-bot"}
-    assert restored[0]["shared_state"]["session_details"]["sess-1"]["telegram_bot_config_id"] == "bot-a"
-    assert os.environ["OPENAI_API_KEY"] == "sk-cloud"
-
-
-def test_cloud_account_runtime_overlay_uses_overlay_for_encrypted_remote_session(monkeypatch, tmp_path: Path):
-    home = tmp_path / "runtime"
-    home.mkdir()
-    (home / "remote-account-session.json").write_text(
-        json.dumps({"version": 2, "storage": "electron_safe_storage", "ciphertext": "opaque"}),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv(
-        desktop_backend.RUNTIME_SECRET_OVERLAY_ENV,
-        json.dumps(
-            {
-                "EMPLOAI_REMOTE_CONTROL_BASE_URL": "https://api.kraitos.app",
-                "EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN": "session-token",
-                "EMPLOAI_REMOTE_CONTROL_USER_ID": "77",
-                "EMPLOAI_REMOTE_CONTROL_DESKTOP_ID": "desktop-abc",
-            }
-        ),
-    )
-    captured: dict[str, dict] = {}
-
-    def fake_request(session, path, **_kwargs):
-        captured["session"] = dict(session)
-        assert session["apiBaseUrl"] == "https://api.kraitos.app"
-        assert session["sessionToken"] == "session-token"
-        if path == "/api/remote/account/me":
-            return {
-                "profile": {
-                    "preferences": {
-                        "default_workspace": str(tmp_path / "workspace"),
-                    },
-                },
-                "shared_state": {},
-            }
-        raise AssertionError(path)
-
-    monkeypatch.setattr(desktop_backend, "_remote_account_request_json", fake_request)
-    monkeypatch.setattr(desktop_backend, "_remote_account_reveal_secrets", lambda _session, _namespace: {})
-    monkeypatch.setattr(desktop_backend, "_remote_account_list_secrets", lambda _session, _namespace: [])
-    monkeypatch.setattr(
-        desktop_backend,
-        "_restore_cloud_telegram_bots",
-        lambda **_kwargs: {"telegram_bot_count": 0, "restored_parenting": {"updated": 0}},
-    )
-
-    effective = desktop_backend._apply_cloud_account_runtime_overlay(tmp_path, home, {})
-
-    assert captured["session"]["user"]["user_id"] == "77"
-    assert captured["session"]["desktop"]["desktop_id"] == "desktop-abc"
-    assert effective["DEFAULT_WORKSPACE"] == str(tmp_path / "workspace")
-    assert desktop_backend._remote_account_user_id(home) == 77
-    assert desktop_backend._remote_account_session_config_fingerprint(
-        home,
-        desktop_backend._runtime_secret_overlay_values(),
-    )
-
-
 def test_runtime_secret_overlay_restores_stripped_provider_keys(monkeypatch):
     monkeypatch.setenv(
         desktop_backend.RUNTIME_SECRET_OVERLAY_ENV,
@@ -591,10 +458,6 @@ def test_runtime_secret_overlay_restores_stripped_provider_keys(monkeypatch):
                 "OPENAI_API_KEY": "sk-overlay",
                 "GOOGLE_API_KEY": "gemini-overlay",
                 "NVIDIA_API_KEY": "nvidia-overlay",
-                "EMPLOAI_REMOTE_CONTROL_BASE_URL": "https://api.kraitos.app",
-                "EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN": "session-token",
-                "EMPLOAI_REMOTE_CONTROL_USER_ID": "77",
-                "EMPLOAI_REMOTE_CONTROL_DESKTOP_ID": "desktop-abc",
                 "IGNORED_SECRET": "nope",
             }
         ),
@@ -603,10 +466,6 @@ def test_runtime_secret_overlay_restores_stripped_provider_keys(monkeypatch):
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
-    monkeypatch.delenv("EMPLOAI_REMOTE_CONTROL_BASE_URL", raising=False)
-    monkeypatch.delenv("EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN", raising=False)
-    monkeypatch.delenv("EMPLOAI_REMOTE_CONTROL_USER_ID", raising=False)
-    monkeypatch.delenv("EMPLOAI_REMOTE_CONTROL_DESKTOP_ID", raising=False)
 
     effective = desktop_backend._apply_runtime_secret_overlay({"DEFAULT_WORKSPACE": "C:/Work"})
 
@@ -614,15 +473,10 @@ def test_runtime_secret_overlay_restores_stripped_provider_keys(monkeypatch):
     assert effective["GOOGLE_API_KEY"] == "gemini-overlay"
     assert effective["GEMINI_API_KEY"] == "gemini-overlay"
     assert effective["NVIDIA_API_KEY"] == "nvidia-overlay"
-    assert effective["EMPLOAI_REMOTE_CONTROL_BASE_URL"] == "https://api.kraitos.app"
-    assert effective["EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN"] == "session-token"
-    assert effective["EMPLOAI_REMOTE_CONTROL_USER_ID"] == "77"
-    assert effective["EMPLOAI_REMOTE_CONTROL_DESKTOP_ID"] == "desktop-abc"
     assert "IGNORED_SECRET" not in effective
     assert os.environ["OPENAI_API_KEY"] == "sk-overlay"
     assert os.environ["GEMINI_API_KEY"] == "gemini-overlay"
     assert os.environ["NVIDIA_API_KEY"] == "nvidia-overlay"
-    assert os.environ["EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN"] == "session-token"
 
 
 def test_ensure_telegram_worker_cleans_duplicate_local_workers(monkeypatch, tmp_path: Path):

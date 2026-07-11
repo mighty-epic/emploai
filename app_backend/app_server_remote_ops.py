@@ -260,35 +260,9 @@ def _path_signature(path: Path) -> Optional[tuple[int, int]]:
 
     return (int(stat.st_mtime_ns), int(stat.st_size))
 
-def _resolve_pairing_user_id(pairing_id: str) -> int:
-
-    pairing = _get_auth_store().get_pairing(pairing_id)
-
-    if not pairing:
-
-        raise HTTPException(status_code=404, detail="Unknown pairing")
-
-    created_by = str(pairing.get("created_by") or "").strip()
-
-    if created_by.startswith("user:"):
-
-        try:
-
-            return int(created_by.split(":", 1)[1])
-
-        except ValueError:
-
-            pass
-
-    return _default_user_id()
-
 def _is_remote_session_auth(payload: Dict[str, Any]) -> bool:
 
     return str(payload.get("auth_kind") or "").strip() == "remote_session"
-
-def _is_remote_mobile_session_auth(payload: Dict[str, Any]) -> bool:
-
-    return _is_remote_session_auth(payload) and str(payload.get("actor_kind") or "").strip() == "mobile"
 
 def _is_remote_desktop_session_auth(payload: Dict[str, Any]) -> bool:
 
@@ -442,70 +416,6 @@ def _consume_approved_confirmation(
 
     )
 
-def _collect_cloud_object_keys(value: Any) -> set[str]:
-
-    keys: set[str] = set()
-
-    if isinstance(value, dict):
-
-        for key, nested in value.items():
-
-            if str(key) == "cloud_object_key":
-
-                clean = str(nested or "").strip()
-
-                if clean:
-
-                    keys.add(clean)
-
-            else:
-
-                keys.update(_collect_cloud_object_keys(nested))
-
-    elif isinstance(value, list):
-
-        for item in value:
-
-            keys.update(_collect_cloud_object_keys(item))
-
-    return keys
-
-def _purge_archived_cloud_objects(*, user_id: int, archived_item: Dict[str, Any]) -> Dict[str, Any]:
-
-    keys = _collect_cloud_object_keys(archived_item.get("payload"))
-
-    keys.update(_collect_cloud_object_keys(archived_item.get("metadata")))
-
-    if not keys:
-
-        return {"deleted": 0, "object_keys": []}
-
-    store = CloudObjectStore(user_id=int(user_id))
-
-    deleted = 0
-
-    results: list[Dict[str, Any]] = []
-
-    for key in sorted(keys):
-
-        try:
-
-            result = store.delete_object(key)
-
-            results.append(result)
-
-            if result.get("deleted"):
-
-                deleted += 1
-
-        except Exception as exc:
-
-            logger.warning("[recovery] failed deleting cloud object %s: %s", key, exc)
-
-            results.append({"object_key": key, "deleted": False, "reason": str(exc)})
-
-    return {"deleted": deleted, "object_keys": sorted(keys), "results": results}
-
 def _remote_profile_view(payload: Dict[str, Any]) -> AppUserProfile:
 
     state = _remote_shared_state(payload)
@@ -520,7 +430,7 @@ def _remote_profile_view(payload: Dict[str, Any]) -> AppUserProfile:
 
         current_variant=str(state.get("current_variant") or "").strip() or None,
 
-        device_id=str(payload.get("mobile_id") or payload.get("desktop_id") or "").strip() or None,
+        device_id=str(payload.get("desktop_id") or "").strip() or None,
 
         device_name=str(payload.get("device_name") or payload.get("desktop_name") or "").strip() or None,
 
@@ -608,79 +518,12 @@ def _remote_desktop_id_for_command(auth: Dict[str, Any]) -> Optional[str]:
 
     store = _get_remote_control_store()
 
-    manager = get_remote_desktop_manager()
-
     actor_kind = str(auth.get("actor_kind") or "").strip()
-
-    user_id = int(auth["user_id"])
-
-    preferred_desktop_id = store.paired_desktop_id_for_payload(auth)
-
-    if actor_kind == "desktop":
-
-        return preferred_desktop_id
-
-    if actor_kind != "mobile" or not preferred_desktop_id:
-
-        return None
-
-    if manager.is_connected_for_user(preferred_desktop_id, user_id):
-
-        return preferred_desktop_id
-
-    state = store.get_shared_state(user_id=user_id)
-
-    desktop_connection = state.get("desktop_connection") if isinstance(state.get("desktop_connection"), dict) else {}
-
-    candidate_ids = [
-
-        str(state.get("current_desktop_id") or "").strip(),
-
-        str(desktop_connection.get("desktop_id") or "").strip(),
-
-    ]
-
-    seen: set[str] = set()
-
-    for candidate_id in candidate_ids:
-
-        if not candidate_id or candidate_id in seen:
-
-            continue
-
-        seen.add(candidate_id)
-
-        if not manager.is_connected_for_user(candidate_id, user_id):
-
-            continue
-
-        mobile_id = str(auth.get("mobile_id") or "").strip()
-
-        if mobile_id and candidate_id != preferred_desktop_id:
-
-            try:
-
-                store.repair_mobile_pairing(
-
-                    user_id=user_id,
-
-                    mobile_id=mobile_id,
-
-                    desktop_id=candidate_id,
-
-                )
-
-            except Exception:
-
-                logger.exception("[remote] failed repairing stale mobile desktop pairing")
-
-        return candidate_id
-
-    return preferred_desktop_id
+    return store.paired_desktop_id_for_payload(auth) if actor_kind == "desktop" else None
 
 def _machine_id_for_workspace_binding(auth: Dict[str, Any]) -> str:
 
-    for key in ("desktop_id", "device_id", "mobile_id"):
+    for key in ("desktop_id", "device_id"):
 
         value = str(auth.get(key) or "").strip()
 
@@ -738,30 +581,6 @@ def _sync_session_workspace_binding(*, user_id: int, auth: Dict[str, Any], sessi
 
         logger.exception("[workspace] failed syncing session workspace binding")
 
-def _cloud_chat_backup_enabled(user_id: int) -> bool:
-
-    from shared.standalone_policy import cloud_backend_enabled
-
-    if not cloud_backend_enabled():
-
-        return False
-
-    try:
-
-        profile = _get_remote_control_store().get_user_profile(user_id=int(user_id))
-
-        preferences = profile.get("preferences") if isinstance(profile, dict) else {}
-
-        if isinstance(preferences, dict) and "cloud_chat_backup_enabled" in preferences:
-
-            return bool(preferences.get("cloud_chat_backup_enabled"))
-
-    except Exception:
-
-        logger.exception("[recovery] failed reading cloud chat backup preference")
-
-    return True
-
 def _mirror_session_snapshot(
 
     *,
@@ -777,54 +596,7 @@ def _mirror_session_snapshot(
     status: str = "active",
 
 ) -> None:
-
-    try:
-
-        if not _cloud_chat_backup_enabled(int(user_id)):
-
-            return
-
-        payload = bridge.detailed_session_view(session)
-
-        try:
-
-            payload["artifacts"] = bridge.list_session_artifacts(str(getattr(session, "id", "") or payload.get("id") or ""))
-
-        except Exception:
-
-            payload["artifacts"] = []
-
-        _get_remote_control_store().upsert_cloud_session_snapshot(
-
-            user_id=int(user_id),
-
-            session_id=str(getattr(session, "id", "") or payload.get("id") or ""),
-
-            payload=payload,
-
-            metadata={
-
-                "reason": reason,
-
-                "workspace_id": payload.get("workspace_id"),
-
-                "fleet_identity_id": payload.get("fleet_identity_id"),
-
-                "fleet_identity_role": payload.get("fleet_identity_role"),
-
-                "message_count": len(list(payload.get("messages") or [])),
-
-                "artifact_count": len(list(payload.get("artifacts") or [])),
-
-            },
-
-            status=status,
-
-        )
-
-    except Exception:
-
-        logger.exception("[recovery] failed mirroring session snapshot")
+    return None
 
 def _mirror_session_snapshot_later(
 
@@ -841,50 +613,7 @@ def _mirror_session_snapshot_later(
     status: str = "active",
 
 ) -> None:
-
-    try:
-
-        task = asyncio.create_task(
-
-            asyncio.to_thread(
-
-                _mirror_session_snapshot,
-
-                user_id=user_id,
-
-                bridge=bridge,
-
-                session=session,
-
-                reason=reason,
-
-                status=status,
-
-            )
-
-        )
-
-    except RuntimeError:
-
-        _mirror_session_snapshot(
-
-            user_id=user_id,
-
-            bridge=bridge,
-
-            session=session,
-
-            reason=reason,
-
-            status=status,
-
-        )
-
-        return
-
-    _BACKGROUND_SESSION_MIRROR_TASKS.add(task)
-
-    task.add_done_callback(lambda finished: _BACKGROUND_SESSION_MIRROR_TASKS.discard(finished))
+    return None
 
 def _workspace_id_for_task_request(*, user_id: int, auth: Dict[str, Any], request: Any) -> Optional[str]:
 
@@ -990,7 +719,7 @@ async def _remote_dispatch_command(
 
     if not desktop_id:
 
-        raise HTTPException(status_code=409, detail="No paired desktop is available for this account")
+        raise HTTPException(status_code=409, detail="No paired Fleet desktop is available")
 
     if not _remote_desktop_connection_session_is_active(desktop_id=desktop_id, user_id=int(auth["user_id"])):
 
@@ -1020,7 +749,7 @@ async def _remote_dispatch_command(
 
         except KeyError as exc:
 
-            raise HTTPException(status_code=409, detail="The paired desktop is unavailable for this account") from exc
+            raise HTTPException(status_code=409, detail="The paired Fleet desktop is unavailable") from exc
 
     try:
 
@@ -1072,7 +801,7 @@ async def _remote_request_desktop_command(
 
     if not desktop_id:
 
-        raise HTTPException(status_code=409, detail="No paired desktop is available for this account")
+        raise HTTPException(status_code=409, detail="No paired Fleet desktop is available")
 
     if not _remote_desktop_connection_session_is_active(desktop_id=desktop_id, user_id=int(auth["user_id"])):
 
@@ -1106,7 +835,7 @@ async def _remote_request_desktop_command(
 
         except KeyError as exc:
 
-            raise HTTPException(status_code=409, detail="The paired desktop is unavailable for this account") from exc
+            raise HTTPException(status_code=409, detail="The paired Fleet desktop is unavailable") from exc
 
         except BrokeredRemoteCommandError as exc:
 
@@ -1411,313 +1140,3 @@ async def _stop_fleet_worker_active_task(
         "task": task,
 
     }
-
-def _remote_http_proxy_headers(headers: Dict[str, str], allowed: set[str]) -> Dict[str, str]:
-
-    return filter_remote_http_proxy_headers(headers, allowed)
-
-def _should_proxy_remote_http_request(method: str, path: str) -> bool:
-
-    return should_proxy_remote_http_request(method, path, allowed_methods=_REMOTE_HTTP_PROXY_ALLOWED_METHODS)
-
-def _max_base64_chars_for_bytes(byte_limit: int) -> int:
-
-    return max_base64_chars_for_bytes(byte_limit)
-
-def _remote_http_proxy_status_code(value: Any) -> int:
-
-    return remote_http_proxy_status_code(value)
-
-def _remote_http_proxy_body_bytes(value: Any) -> bytes:
-
-    return remote_http_proxy_body_bytes(value, max_response_body_bytes=REMOTE_HTTP_PROXY_MAX_RESPONSE_BODY_BYTES)
-
-async def _read_remote_http_proxy_request_body(request: Request) -> bytes:
-
-    chunks: list[bytes] = []
-
-    total = 0
-
-    async for chunk in request.stream():
-
-        if not chunk:
-
-            continue
-
-        total += len(chunk)
-
-        if total > REMOTE_HTTP_PROXY_MAX_BODY_BYTES:
-
-            raise HTTPException(status_code=413, detail="Remote request body is too large")
-
-        chunks.append(chunk)
-
-    return b"".join(chunks)
-
-async def _remote_desktop_http_request(
-
-    auth: Dict[str, Any],
-
-    *,
-
-    method: str,
-
-    path: str,
-
-    query_string: str = "",
-
-    headers: Optional[Dict[str, str]] = None,
-
-    body: bytes = b"",
-
-    timeout_seconds: float = REMOTE_HTTP_PROXY_TIMEOUT_SECONDS,
-
-) -> Dict[str, Any]:
-
-    if len(body) > REMOTE_HTTP_PROXY_MAX_BODY_BYTES:
-
-        raise HTTPException(status_code=413, detail="Remote request body is too large")
-
-    return await _remote_request_desktop_command(
-
-        auth,
-
-        command_name="http_request",
-
-        payload={
-
-            "method": method.upper(),
-
-            "path": path,
-
-            "query_string": query_string,
-
-            "headers": dict(headers or {}),
-
-            "body_base64": base64.b64encode(body).decode("ascii") if body else "",
-
-        },
-
-        timeout_seconds=timeout_seconds,
-
-    )
-
-async def _remote_proxy_http_request(request: Request, auth: Dict[str, Any]) -> Optional[Response]:
-
-    if not _is_remote_mobile_session_auth(auth):
-
-        return None
-
-    path = request.url.path
-
-    if not _should_proxy_remote_http_request(request.method, path):
-
-        return None
-
-    if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and path in _REMOTE_AGENT_EXPLICIT_SESSION_PATHS:
-
-        if not str(request.query_params.get("session_id") or "").strip():
-
-            raise HTTPException(status_code=400, detail="Open or select a chat before using agent controls.")
-
-    body = await _read_remote_http_proxy_request_body(request)
-
-    result = await _remote_desktop_http_request(
-
-        auth,
-
-        method=request.method,
-
-        path=path,
-
-        query_string=request.url.query,
-
-        headers=_remote_http_proxy_headers(dict(request.headers), _REMOTE_HTTP_PROXY_REQUEST_HEADERS),
-
-        body=body,
-
-    )
-
-    status_code = _remote_http_proxy_status_code(result.get("status_code"))
-
-    headers = _remote_http_proxy_headers(dict(result.get("headers") or {}), _REMOTE_HTTP_PROXY_RESPONSE_HEADERS)
-
-    body_bytes = _remote_http_proxy_body_bytes(result.get("body_base64"))
-
-    return Response(content=body_bytes, status_code=status_code, headers=headers)
-
-async def _handle_remote_screen_ws(websocket: WebSocket, auth: Dict[str, Any], send_lock: asyncio.Lock) -> None:
-
-    async def send_model(event: RealtimeServerEvent) -> None:
-
-        await _send_realtime_event(websocket, send_lock, event)
-
-    try:
-
-        fps = float(websocket.query_params.get("fps", "1.0") or "1.0")
-
-    except ValueError:
-
-        fps = 1.0
-
-    fps = max(0.4, min(fps, 3.0))
-
-    interval_seconds = 1.0 / fps
-
-    try:
-
-        max_width = int(websocket.query_params.get("max_width", "960") or "960")
-
-    except ValueError:
-
-        max_width = 960
-
-    try:
-
-        jpeg_quality = int(websocket.query_params.get("quality", "55") or "55")
-
-    except ValueError:
-
-        jpeg_quality = 55
-
-    jpeg_quality = max(30, min(jpeg_quality, 85))
-
-    await send_model(
-
-        RealtimeServerEvent(
-
-            type="screen_state",
-
-            payload={
-
-                "state": "connected",
-
-                "mode": "remote",
-
-                "fps": fps,
-
-                "max_width": max_width,
-
-                "quality": jpeg_quality,
-
-            },
-
-        )
-
-    )
-
-    announced_streaming = False
-
-    try:
-
-        while True:
-
-            await _ensure_remote_ws_session_active(websocket, auth)
-
-            query = f"max_width={max_width}&quality={jpeg_quality}"
-
-            result = await _remote_desktop_http_request(
-
-                auth,
-
-                method="GET",
-
-                path="/api/app/screenshot/current",
-
-                query_string=query,
-
-                timeout_seconds=20.0,
-
-            )
-
-            status_code = int(result.get("status_code") or 502)
-
-            body_bytes = _remote_http_proxy_body_bytes(result.get("body_base64"))
-
-            if status_code >= 400:
-
-                detail = body_bytes.decode("utf-8", errors="replace")[:400]
-
-                raise RuntimeError(detail or f"Desktop screenshot failed ({status_code})")
-
-            capture = json.loads(body_bytes.decode("utf-8"))
-
-            if not isinstance(capture, dict):
-
-                raise RuntimeError("Desktop screenshot response was malformed")
-
-            if not announced_streaming:
-
-                await send_model(
-
-                    RealtimeServerEvent(
-
-                        type="screen_state",
-
-                        payload={"state": "streaming", "mode": "remote", "fps": fps},
-
-                    )
-
-                )
-
-                announced_streaming = True
-
-            await send_model(RealtimeServerEvent(type="screen_frame", payload=dict(capture or {})))
-
-            await asyncio.sleep(interval_seconds)
-
-    except WebSocketDisconnect:
-
-        raise
-
-    except HTTPException as exc:
-
-        await send_model(
-
-            RealtimeServerEvent(
-
-                type="screen_state",
-
-                payload={
-
-                    "state": "error",
-
-                    "mode": "remote",
-
-                    "message": str(exc.detail or "Remote desktop screen stream failed")[:400],
-
-                },
-
-            )
-
-        )
-
-    except Exception as exc:
-
-        await send_model(
-
-            RealtimeServerEvent(
-
-                type="screen_state",
-
-                payload={
-
-                    "state": "error",
-
-                    "mode": "remote",
-
-                    "message": str(exc or "Remote desktop screen stream failed")[:400],
-
-                },
-
-            )
-
-        )
-
-    try:
-
-        await websocket.close(code=1011)
-
-    except Exception:
-
-        pass

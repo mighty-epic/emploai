@@ -510,16 +510,6 @@ class RemoteControlStoreCoreMixin:
                     decided_by_surface TEXT,
                     decided_by_actor TEXT
                 );
-                CREATE TABLE IF NOT EXISTS cloud_session_snapshots (
-                    user_id INTEGER NOT NULL,
-                    session_id TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'active',
-                    payload TEXT NOT NULL DEFAULT '{}',
-                    metadata TEXT NOT NULL DEFAULT '{}',
-                    updated_at REAL NOT NULL,
-                    archived_at REAL,
-                    PRIMARY KEY(user_id, session_id)
-                );
                 CREATE TABLE IF NOT EXISTS automation_loop_guards (
                     user_id INTEGER NOT NULL,
                     guard_key TEXT NOT NULL,
@@ -553,7 +543,6 @@ class RemoteControlStoreCoreMixin:
                 CREATE INDEX IF NOT EXISTS idx_planner_contracts_user ON planner_contracts(user_id, session_id, updated_at);
                 CREATE INDEX IF NOT EXISTS idx_recovery_archive_user ON recovery_archive(user_id, status, archived_at);
                 CREATE INDEX IF NOT EXISTS idx_pending_confirmations_user ON pending_confirmations(user_id, status, expires_at);
-                CREATE INDEX IF NOT EXISTS idx_cloud_session_snapshots_user ON cloud_session_snapshots(user_id, status, updated_at);
                 CREATE INDEX IF NOT EXISTS idx_automation_loop_guards_user ON automation_loop_guards(user_id, updated_at);
                 """
             )
@@ -617,7 +606,7 @@ class RemoteControlStoreCoreMixin:
             user_id = int(raw_user.get("user_id") or 0)
             if user_id <= 0:
                 continue
-            email = _normalize_email(str(raw_user.get("email") or ""))
+            email = str(raw_user.get("email") or "").strip().casefold()
             if not email:
                 continue
             self._conn.execute(

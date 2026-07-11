@@ -1057,80 +1057,6 @@ class RealtimeServerEvent(BaseModel):
     payload: Dict[str, Any] = Field(default_factory=dict)
 
 
-class RemoteAuthRegisterRequest(BaseModel):
-    email: str = Field(min_length=3, max_length=254)
-    password: str = Field(min_length=12, max_length=256)
-    display_name: Optional[str] = Field(default=None, max_length=160)
-    actor_kind: Literal["mobile", "desktop"] = "mobile"
-    device_name: Optional[str] = Field(default=None, max_length=160)
-    device_platform: Optional[str] = Field(default=None, max_length=80)
-    device_key: Optional[str] = Field(default=None, max_length=256)
-    remember_me: bool = False
-
-
-class RemoteAuthLoginRequest(BaseModel):
-    email: str = Field(min_length=3, max_length=254)
-    password: str = Field(min_length=1, max_length=256)
-    actor_kind: Literal["mobile", "desktop"]
-    device_name: Optional[str] = Field(default=None, max_length=160)
-    device_platform: Optional[str] = Field(default=None, max_length=80)
-    device_key: Optional[str] = Field(default=None, max_length=256)
-    remember_me: bool = False
-
-
-class RemoteAuthOtpChallengeResponse(BaseModel):
-    status: Literal["otp_required"] = "otp_required"
-    challenge_id: str
-    email: str
-    purpose: Literal["signup_verify", "login_verify"]
-    expires_in_seconds: int
-    resend_available_in_seconds: int = 0
-
-
-class RemoteAuthOtpVerifyRequest(BaseModel):
-    challenge_id: str = Field(min_length=8, max_length=256)
-    code: str = Field(min_length=4, max_length=32)
-
-
-class RemoteAuthOtpResendRequest(BaseModel):
-    challenge_id: str = Field(min_length=8, max_length=256)
-
-
-class RemoteAuthLogoutResponse(BaseModel):
-    ok: bool = True
-    revoked: bool = False
-    disconnected_desktop: bool = False
-
-
-class RemoteGoogleAuthStartRequest(BaseModel):
-    actor_kind: Literal["mobile", "desktop"]
-    device_name: Optional[str] = Field(default=None, max_length=160)
-    device_platform: Optional[str] = Field(default=None, max_length=80)
-    device_key: Optional[str] = Field(default=None, max_length=256)
-    remember_me: bool = False
-
-
-class RemoteGoogleAuthStartResponse(BaseModel):
-    auth_url: str
-    request_id: str
-    poll_token: str
-    expires_in_seconds: int
-
-
-class RemoteGoogleAuthPollRequest(BaseModel):
-    request_id: str = Field(min_length=8, max_length=128)
-    poll_token: str = Field(min_length=16, max_length=256)
-
-
-class RemoteUserView(BaseModel):
-    user_id: int
-    email: str
-    display_name: Optional[str] = None
-    created_at: Optional[str] = None
-    last_login_at: Optional[str] = None
-    email_verified_at: Optional[str] = None
-
-
 class RemoteDesktopView(BaseModel):
     desktop_id: str
     device_key: Optional[str] = None
@@ -1140,125 +1066,6 @@ class RemoteDesktopView(BaseModel):
     created_at: Optional[str] = None
     last_seen_at: Optional[str] = None
     last_heartbeat_at: Optional[str] = None
-    paired_mobile_ids: List[str] = Field(default_factory=list)
-
-
-class RemoteMobileView(BaseModel):
-    mobile_id: str
-    device_name: Optional[str] = None
-    device_platform: Optional[str] = None
-    paired_desktop_id: Optional[str] = None
-    created_at: Optional[str] = None
-    last_used_at: Optional[str] = None
-
-
-class RemoteAuthLoginResponse(BaseModel):
-    session_token: str
-    expires_in_seconds: int
-    actor_kind: Literal["mobile", "desktop"]
-    user: RemoteUserView
-    desktop: Optional[RemoteDesktopView] = None
-    mobile: Optional[RemoteMobileView] = None
-    remember_me: bool = False
-
-
-class RemoteGoogleAuthPollResponse(BaseModel):
-    status: Literal["pending", "complete", "error", "expired"]
-    error: Optional[str] = None
-    session_token: Optional[str] = None
-    expires_in_seconds: Optional[int] = None
-    actor_kind: Optional[Literal["mobile", "desktop"]] = None
-    user: Optional[RemoteUserView] = None
-    desktop: Optional[RemoteDesktopView] = None
-    mobile: Optional[RemoteMobileView] = None
-    remember_me: Optional[bool] = None
-
-
-class RemoteAccountProfile(BaseModel):
-    user: RemoteUserView
-    actor_kind: Literal["mobile", "desktop"]
-    desktop: Optional[RemoteDesktopView] = None
-    mobile: Optional[RemoteMobileView] = None
-    profile: Dict[str, Any] = Field(default_factory=dict)
-    shared_state: Dict[str, Any] = Field(default_factory=dict)
-
-
-class RemoteAccountCloudProfileRequest(BaseModel):
-    profile: Dict[str, Any] = Field(default_factory=dict)
-
-
-class RemoteAccountCloudProfileResponse(BaseModel):
-    profile: Dict[str, Any] = Field(default_factory=dict)
-
-
-class RemoteAccountSecretItem(BaseModel):
-    namespace: str
-    name: str
-    redacted_value: str
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
-
-
-class RemoteAccountSecretsListResponse(BaseModel):
-    items: List[RemoteAccountSecretItem] = Field(default_factory=list)
-
-
-class RemoteAccountSecretsUpsertRequest(BaseModel):
-    namespace: str = Field(default="setup", max_length=64)
-    secrets: Dict[str, str] = Field(default_factory=dict, max_length=100)
-    metadata: Dict[str, Any] = Field(default_factory=dict, max_length=100)
-
-
-class RemoteAccountSecretsRevealRequest(BaseModel):
-    namespace: str = Field(default="setup", max_length=64)
-    names: List[str] = Field(default_factory=list, max_length=100)
-
-
-class RemoteAccountSecretsRevealResponse(BaseModel):
-    namespace: str = "setup"
-    secrets: Dict[str, str] = Field(default_factory=dict)
-
-
-class RemoteAccountSecretDeleteResponse(BaseModel):
-    ok: bool = True
-    deleted: bool = False
-
-
-class RemoteAccountDataDeleteResponse(BaseModel):
-    ok: bool = True
-    deleted_secrets: int = 0
-    revoked_sessions: int = 0
-    revoked_pairings: int = 0
-    unpaired_mobiles: int = 0
-    reset_desktops: int = 0
-    disconnected_desktops: int = 0
-    profile_reset: bool = False
-    shared_state_reset: bool = False
-    profile: Dict[str, Any] = Field(default_factory=dict)
-
-
-class RemotePairStartRequest(BaseModel):
-    desktop_id: Optional[str] = Field(default=None, max_length=128)
-
-
-class RemotePairStartResponse(BaseModel):
-    pairing_id: str
-    pairing_token: str
-    pairing_uri: str
-    desktop_id: str
-    desktop_name: Optional[str] = None
-    expires_in_seconds: int
-
-
-class RemotePairCompleteRequest(BaseModel):
-    pairing_token: str = Field(min_length=16, max_length=256)
-
-
-class RemotePairCompleteResponse(BaseModel):
-    desktop: RemoteDesktopView
-    mobile: RemoteMobileView
-    shared_state: Dict[str, Any] = Field(default_factory=dict)
 
 
 class FleetInstanceView(BaseModel):
@@ -1466,7 +1273,7 @@ class FleetCompleteEnrollmentRequest(BaseModel):
 class FleetCompleteEnrollmentResponse(BaseModel):
     session_token: str
     expires_in_seconds: int
-    user: RemoteUserView
+    user_id: int
     desktop: RemoteDesktopView
     worker: FleetWorkerView
 
@@ -1564,12 +1371,6 @@ class RemoteDesktopSyncEnvelope(BaseModel):
 class RemoteDesktopSocketMessage(BaseModel):
     type: str
     command_id: Optional[str] = None
-    payload: Dict[str, Any] = Field(default_factory=dict)
-
-
-class RemoteMobileSocketMessage(BaseModel):
-    type: str
-    session_id: Optional[str] = None
     payload: Dict[str, Any] = Field(default_factory=dict)
 
 

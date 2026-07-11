@@ -1347,25 +1347,6 @@ async function validateSetupField(fieldName, rawValue) {
         : setupValidationResult(field, 'invalid', 'Use numeric Telegram user IDs separated by commas');
     }
 
-    if (field === 'EMPLOAI_REMOTE_CONTROL_BASE_URL') {
-      try {
-        const parsed = new URL(value);
-        const valid = parsed.protocol === 'https:' || parsed.protocol === 'http:';
-        return valid
-          ? setupValidationResult(field, 'valid', 'Remote control service URL format looks valid')
-          : setupValidationResult(field, 'invalid', 'Remote control service URL must use http:// or https://');
-      } catch (_error) {
-        return setupValidationResult(field, 'invalid', 'Remote control service URL must be a valid URL');
-      }
-    }
-
-    if (field === 'EMPLOAI_REMOTE_CONTROL_EMAIL') {
-      const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-      return valid
-        ? setupValidationResult(field, 'valid', 'Remote control email format looks valid')
-        : setupValidationResult(field, 'invalid', 'Use a normal email address');
-    }
-
     return setupValidationResult(field, 'idle', '');
   } catch (error) {
     const detail = error?.name === 'AbortError'
@@ -2159,24 +2140,6 @@ app.whenReady().then(async () => {
   ipcMain.handle('emploai:codex-auth:start-device', async () => startCodexAuthDeviceLogin());
   ipcMain.handle('emploai:codex-auth:poll-device', async () => pollCodexAuthDeviceLogin());
   ipcMain.handle('emploai:codex-auth:logout', async () => logoutCodexAuth());
-  ipcMain.handle('emploai:remote-auth:status', async () => remoteControlServices().remoteAuthStatus());
-  ipcMain.handle('emploai:remote-auth:list-desktops', async () => remoteControlServices().remoteAuthListDesktops());
-  ipcMain.handle('emploai:remote-auth:login', async (_event, payload) => remoteControlServices().remoteAuthLogin(payload || {}));
-  ipcMain.handle('emploai:remote-auth:google-login', async (_event, payload) => remoteControlServices().remoteAuthGoogleLogin(payload || {}));
-  ipcMain.handle('emploai:remote-auth:register', async (_event, payload) => remoteControlServices().remoteAuthRegister(payload || {}));
-  ipcMain.handle('emploai:remote-auth:otp-verify', async (_event, payload) => remoteControlServices().remoteAuthVerifyOtp(payload || {}));
-  ipcMain.handle('emploai:remote-auth:otp-resend', async (_event, payload) => remoteControlServices().remoteAuthResendOtp(payload || {}));
-  ipcMain.handle('emploai:remote-auth:logout', async () => remoteControlServices().remoteAuthLogout());
-  ipcMain.handle('emploai:remote-auth:create-pairing-token', async () => remoteControlServices().remoteAuthCreatePairingToken());
-  ipcMain.handle('emploai:remote-auth:list-secrets', async (_event, payload) => remoteControlServices().remoteAuthListSecrets(payload || {}));
-  ipcMain.handle('emploai:remote-auth:save-setup-secrets', async (_event, payload) => remoteControlServices().remoteAuthSaveSetupSecrets(payload || {}));
-  ipcMain.handle('emploai:remote-auth:save-secrets', async (_event, payload) => remoteControlServices().remoteAuthSaveSecrets(payload || {}));
-  ipcMain.handle('emploai:remote-auth:apply-account-data', async () => remoteControlServices().remoteAuthApplyAccountData());
-  ipcMain.handle('emploai:remote-auth:delete-secret', async (_event, payload) => remoteControlServices().remoteAuthDeleteSecret(payload || {}));
-  ipcMain.handle('emploai:remote-auth:delete-account-data', async (_event, payload) => remoteControlServices().remoteAuthDeleteAccountData(payload || {}));
-  ipcMain.handle('emploai:remote-auth:profile', async () => remoteControlServices().remoteAuthProfile());
-  ipcMain.handle('emploai:remote-auth:update-profile', async (_event, payload) => remoteControlServices().remoteAuthUpdateProfile(payload || {}));
-  ipcMain.handle('emploai:remote-auth:apply-setup-secrets', async (_event, payload) => remoteControlServices().remoteAuthApplySetupSecrets(payload || {}));
   ipcMain.handle('emploai:fleet:snapshot', async () => remoteControlServices().fleetSnapshot());
   ipcMain.handle('emploai:fleet:set-active-identity', async (_event, payload) => remoteControlServices().fleetSetActiveIdentity(payload || {}));
   ipcMain.handle('emploai:fleet:set-identity-active-chat', async (_event, payload) => remoteControlServices().fleetSetIdentityActiveChat(payload || {}));

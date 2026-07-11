@@ -18,24 +18,12 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-from app_backend.remote_account_policy import (
+from app_backend.local_profile_policy import (
     MAX_DEVICE_KEY_CHARS,
     MAX_DEVICE_PLATFORM_CHARS,
     MAX_DISPLAY_NAME_CHARS,
-    MAX_EMAIL_CHARS,
-    MAX_PASSWORD_CHARS,
-    MAX_SECRET_ITEMS_PER_REQUEST,
-    MAX_SECRET_REVEAL_NAMES,
-    MAX_SECRET_VALUE_CHARS,
     default_user_profile as _default_user_profile,
-    normalize_email as _normalize_email,
-    redact_secret_value as _redact_secret_value,
-    safe_secret_metadata as _safe_secret_metadata,
-    safe_string as _safe_string,
     sanitize_user_profile as _sanitize_user_profile,
-    strong_password_errors as _strong_password_errors,
-    validate_secret_location as _validate_secret_location,
-    validate_secret_namespace as _validate_secret_namespace,
 )
 from app_backend.remote_shared_state_policy import (
     empty_fleet_state as _empty_fleet_state,
@@ -168,34 +156,31 @@ def _secure_chmod(path: Path, mode: int) -> None:
         pass
 
 
-from app_backend import remote_control_store_accounts as _remote_control_store_accounts
 from app_backend import remote_control_store_archive as _remote_control_store_archive
-from app_backend import remote_control_store_auth as _remote_control_store_auth
 from app_backend import remote_control_store_automations as _remote_control_store_automations
 from app_backend import remote_control_store_commands as _remote_control_store_commands
 from app_backend import remote_control_store_core as _remote_control_store_core
 from app_backend import remote_control_store_fleet_resources as _remote_control_store_fleet_resources
 from app_backend import remote_control_store_fleet_snapshot as _remote_control_store_fleet_snapshot
 from app_backend import remote_control_store_fleet_workers as _remote_control_store_fleet_workers
+from app_backend import remote_control_store_identity as _remote_control_store_identity
 from app_backend import remote_control_store_sync as _remote_control_store_sync
 from app_backend import remote_control_store_views as _remote_control_store_views
-from app_backend.remote_control_store_accounts import RemoteControlStoreAccountMixin
 from app_backend.remote_control_store_archive import RemoteControlStoreArchiveMixin
-from app_backend.remote_control_store_auth import RemoteControlStoreAuthMixin
 from app_backend.remote_control_store_automations import RemoteControlStoreAutomationMixin
 from app_backend.remote_control_store_commands import RemoteControlStoreCommandMixin
 from app_backend.remote_control_store_core import RemoteControlStoreCoreMixin
 from app_backend.remote_control_store_fleet_resources import RemoteControlStoreFleetResourceMixin
 from app_backend.remote_control_store_fleet_snapshot import RemoteControlStoreFleetSnapshotMixin
 from app_backend.remote_control_store_fleet_workers import RemoteControlStoreFleetWorkerMixin
+from app_backend.remote_control_store_identity import RemoteControlStoreIdentityMixin
 from app_backend.remote_control_store_sync import RemoteControlStoreSyncMixin
 from app_backend.remote_control_store_views import RemoteControlStoreViewMixin
 
 _REMOTE_CONTROL_STORE_MIXIN_MODULES = (
     _remote_control_store_core,
     _remote_control_store_views,
-    _remote_control_store_auth,
-    _remote_control_store_accounts,
+    _remote_control_store_identity,
     _remote_control_store_commands,
     _remote_control_store_fleet_snapshot,
     _remote_control_store_fleet_workers,
@@ -220,8 +205,7 @@ _sync_remote_control_store_mixins()
 class RemoteControlPlaneStore(
     RemoteControlStoreCoreMixin,
     RemoteControlStoreViewMixin,
-    RemoteControlStoreAuthMixin,
-    RemoteControlStoreAccountMixin,
+    RemoteControlStoreIdentityMixin,
     RemoteControlStoreCommandMixin,
     RemoteControlStoreFleetSnapshotMixin,
     RemoteControlStoreFleetWorkerMixin,

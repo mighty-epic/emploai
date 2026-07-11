@@ -33,16 +33,14 @@ class _FakePreviewManager:
 
 def _store_with_manager(tmp_path):
     store = RemoteControlPlaneStore(root_path=tmp_path)
-    user = store.register_user(email="preview@example.com", password="CorrectHorse!2026", display_name="Preview")
-    login = store.login(
-        email="preview@example.com",
-        password="CorrectHorse!2026",
-        actor_kind="desktop",
-        device_name="Manager",
+    user_id = 0
+    desktop = store.ensure_standalone_manager_desktop(
+        user_id=user_id,
+        display_name="Manager",
         device_platform="desktop",
         device_key="preview-manager",
     )
-    return store, int(user["user_id"]), str(login["desktop"]["desktop_id"])
+    return store, user_id, str(desktop["desktop_id"])
 
 
 def _remote_worker(store, *, user_id, manager_desktop_id):

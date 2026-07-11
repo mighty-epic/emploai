@@ -57,31 +57,25 @@ class _FakeBridge:
 
 def _local_worker_task(tmp_path):
     store = RemoteControlPlaneStore(root_path=tmp_path)
-    user = store.register_user(
-        email="fleet-local-runtime@example.com",
-        password="CorrectHorse!2026",
-        display_name="Fleet Local Runtime",
-    )
-    login = store.login(
-        email="fleet-local-runtime@example.com",
-        password="CorrectHorse!2026",
-        actor_kind="desktop",
-        device_name="Manager",
+    user_id = 0
+    desktop = store.ensure_standalone_manager_desktop(
+        user_id=user_id,
+        display_name="Manager",
         device_platform="desktop",
         device_key="fleet-local-runtime-manager",
     )
     worker = store.create_local_worker(
-        user_id=int(user["user_id"]),
-        desktop_id=login["desktop"]["desktop_id"],
+        user_id=user_id,
+        desktop_id=desktop["desktop_id"],
         display_name="Local Worker",
     )
     task = store.assign_worker_task(
-        user_id=int(user["user_id"]),
+        user_id=user_id,
         worker_id=worker["worker_id"],
         prompt="Complete the local worker task",
         source="manager",
     )
-    return store, int(user["user_id"]), worker, task
+    return store, user_id, worker, task
 
 
 async def _wait_for_report(store, *, user_id, task_id):

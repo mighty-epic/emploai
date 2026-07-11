@@ -30,18 +30,16 @@ class _FakeFleetDesktopManager:
 
 def _store_with_remote_worker_task(tmp_path):
     store = RemoteControlPlaneStore(root_path=tmp_path)
-    user = store.register_user(email="fleet-dispatch@example.com", password="CorrectHorse!2026", display_name="Fleet Dispatch")
-    manager_login = store.login(
-        email="fleet-dispatch@example.com",
-        password="CorrectHorse!2026",
-        actor_kind="desktop",
-        device_name="Manager",
+    user_id = 0
+    manager_desktop = store.ensure_standalone_manager_desktop(
+        user_id=user_id,
+        display_name="Manager",
         device_platform="desktop",
         device_key="fleet-dispatch-manager",
     )
     enrollment = store.create_worker_enrollment(
-        user_id=user["user_id"],
-        desktop_id=manager_login["desktop"]["desktop_id"],
+        user_id=user_id,
+        desktop_id=manager_desktop["desktop_id"],
         display_name="Remote Dispatch Worker",
     )
     completed = store.complete_worker_enrollment(
@@ -52,13 +50,13 @@ def _store_with_remote_worker_task(tmp_path):
     )
     worker = completed["worker"]
     task = store.assign_worker_task(
-        user_id=user["user_id"],
+        user_id=user_id,
         worker_id=worker["worker_id"],
         prompt="Run through dispatch helper",
         source="manager",
         metadata={"target_session_id": "sess-dispatch"},
     )
-    return store, int(user["user_id"]), worker, task
+    return store, user_id, worker, task
 
 
 def test_try_dispatch_fleet_worker_task_sends_live_command_when_connected(tmp_path):

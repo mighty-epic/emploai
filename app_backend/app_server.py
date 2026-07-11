@@ -16,11 +16,9 @@ import threading
 import time
 import traceback
 from contextlib import asynccontextmanager
-from html import escape as html_escape
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional
-from urllib.parse import urlencode
 
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,10 +32,8 @@ except Exception:  # pragma: no cover - optional at import time for local app-on
 
 from runtime_support.ui_helpers import ThinkingModeVisualizer
 from cli.tui_constants import AVAILABLE_MODELS, MODEL_CONFIGS, MODEL_CONTEXT_SIZES
-from shared.cloud_object_store import CloudObjectStore
 from shared.runtime_paths import runtime_home
-from shared.standalone_policy import cloud_backend_enabled, mobile_connection_enabled, standalone_desktop_enabled
-from shared.workspace_recovery import restore_cloud_workspace_files
+from shared.standalone_policy import standalone_desktop_enabled
 from app_backend.auth_store import AppAuthStore
 from app_backend.app_confirmation_workflow import (
     consume_approved_confirmation as _consume_approved_confirmation_workflow,
@@ -121,14 +117,9 @@ from app_backend.models import (
     MemoryFactView,
     MemoryFactListResponse,
     RealtimeServerEvent,
-    RemoteAuthLoginResponse,
-    RemoteAuthOtpChallengeResponse,
     RemoteDesktopSocketMessage,
     RemoteDesktopSyncEnvelope,
     RemoteDesktopView,
-    RemoteMobileView,
-    RemoteMobileSocketMessage,
-    RemoteUserView,
     RenameSessionRequest,
     ScheduledJobView,
     ScreenCaptureView,
@@ -161,20 +152,14 @@ from app_backend.models import (
     PlannerContractStatusRequest,
 )
 from app_backend.routers.app_confirmations import AppConfirmationsRouterDeps, create_app_confirmations_router
-from app_backend.routers.app_devices import AppDevicesRouterDeps, create_app_devices_router
 from app_backend.routers.app_files import AppFilesRouterDeps, create_app_files_router
 from app_backend.routers.app_onboarding import AppOnboardingRouterDeps, create_app_onboarding_router
-from app_backend.routers.app_pairing import AppPairingRouterDeps, create_app_pairing_router
 from app_backend.routers.app_recovery import AppRecoveryRouterDeps, create_app_recovery_router
 from app_backend.routers.app_sessions import AppSessionsRouterDeps, create_app_sessions_router
 from app_backend.routers.app_session_settings import AppSessionSettingsRouterDeps, create_app_session_settings_router
 from app_backend.routers.app_telegram_bots import AppTelegramBotsRouterDeps, create_app_telegram_bots_router
 from app_backend.routers.app_workspace import AppWorkspaceRouterDeps, create_app_workspace_router
-from app_backend.routers.desktop_releases import router as desktop_releases_router
 from app_backend.routers.fleet_enrollment import FleetEnrollmentRouterDeps, create_fleet_enrollment_router
-from app_backend.routers.remote_account import RemoteAccountRouterDeps, create_remote_account_router
-from app_backend.routers.remote_auth import RemoteAuthRouterDeps, create_remote_auth_router
-from app_backend.routers.remote_pairing import RemotePairingRouterDeps, create_remote_pairing_router
 from app_backend.remote_command_broker import (
     BrokeredRemoteCommandError,
     dispatch_remote_desktop_command_via_broker,
@@ -183,16 +168,8 @@ from app_backend.remote_command_broker import (
 )
 from app_backend.remote_control_runtime import get_remote_desktop_manager, remote_control_routing_status, remote_control_sqlite_broker_enabled
 from app_backend.remote_control_store import (
-    REMOTE_PAIRING_TTL_SECONDS,
     REMOTE_SESSION_TTL_SECONDS,
     RemoteControlPlaneStore,
-)
-from app_backend.remote_http_proxy_policy import (
-    filter_remote_http_proxy_headers,
-    max_base64_chars_for_bytes,
-    remote_http_proxy_body_bytes,
-    remote_http_proxy_status_code,
-    should_proxy_remote_http_request,
 )
 from shared.channel_events import publish_current_session_changed, publish_status_update
 from shared.channel_sync import get_channel_sync_hub
@@ -233,10 +210,7 @@ if TYPE_CHECKING:
 
 APP_SECRET_ENV = "EMPLO_APP_SECRET"
 DEPLOYMENT_ENV_ENV = "EMPLOAI_ENV"
-PAIRING_SECRET_ENV = "EMPLO_APP_PAIRING_SECRET"
 CORS_ORIGINS_ENV = "EMPLOAI_CORS_ORIGINS"
-DEFAULT_PAIR_TTL_SECONDS = 60 * 30
-TOKEN_TTL_SECONDS = 60 * 60 * 24 * 180
 
 _auth_store: Optional[AppAuthStore] = None
 _remote_control_store: Optional[RemoteControlPlaneStore] = None
@@ -260,7 +234,6 @@ _BACKGROUND_SESSION_MIRROR_TASKS: set[asyncio.Task] = set()
 _SEARCH_NORMALIZE_RE = re.compile(r"[\W_]+", re.UNICODE)
 _SESSION_SEARCH_LIMIT_MAX = 100
 DEFAULT_APP_USER_ID = 0
-REMOTE_ACCOUNT_SESSION_FILENAME = "remote-account-session.json"
 REMOTE_HTTP_PROXY_TIMEOUT_SECONDS = 120.0
 REMOTE_HTTP_PROXY_MAX_BODY_BYTES = 32 * 1024 * 1024
 REMOTE_HTTP_PROXY_MAX_RESPONSE_BODY_BYTES = 32 * 1024 * 1024
@@ -271,21 +244,11 @@ REMOTE_AUTH_RATE_LIMIT_MAX_ATTEMPTS = 20
 REMOTE_AUTH_POLL_RATE_LIMIT_MAX_ATTEMPTS = 240
 REMOTE_WS_AUTH_RATE_LIMIT_MAX_ATTEMPTS = 20
 REMOTE_AUTH_RATE_LIMIT_MAX_KEYS = 10_000
-GOOGLE_OAUTH_REQUEST_TTL_SECONDS = 5 * 60
-GOOGLE_OAUTH_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GOOGLE_OAUTH_DEFAULT_REDIRECT_URI = "https://api.kraitos.app/api/remote/auth/google/callback"
-AUTH_EMAIL_BACKEND_ENV = "EMPLOAI_EMAIL_BACKEND"
-AUTH_EMAIL_FROM_ENV = "EMPLOAI_EMAIL_FROM"
-RESEND_API_KEY_ENV = "RESEND_API_KEY"
-AUTH_EMAIL_DEFAULT_FROM = "EmploAI <no-reply@kraitos.app>"
 DEBUG_ERROR_RESPONSES_ENV = "EMPLOAI_DEBUG_ERROR_RESPONSES"
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 _PRODUCTION_ENV_VALUES = {"prod", "production"}
 _DEFAULT_PRODUCTION_CORS_ORIGINS = [
     "emploai://renderer",
-    "https://api.kraitos.app",
-    "https://kraitos.app",
 ]
 _DEFAULT_DEVELOPMENT_CORS_ORIGINS = [
     "emploai://renderer",
@@ -297,37 +260,6 @@ _DEFAULT_DEVELOPMENT_CORS_ORIGINS = [
     "http://localhost:8787",
     *_DEFAULT_PRODUCTION_CORS_ORIGINS,
 ]
-_REMOTE_HTTP_PROXY_REQUEST_HEADERS = {
-    "accept",
-    "accept-language",
-    "content-type",
-}
-_REMOTE_HTTP_PROXY_ALLOWED_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
-_REMOTE_HTTP_PROXY_RESPONSE_HEADERS = {
-    "cache-control",
-    "content-disposition",
-    "content-language",
-    "content-type",
-    "etag",
-    "last-modified",
-}
-_REMOTE_AGENT_EXPLICIT_SESSION_PATHS = {
-    "/api/app/agent/configure",
-    "/api/app/agent/config",
-    "/api/app/agent/memory/note",
-    "/api/app/agent/files/clear",
-    "/api/app/agent/forget-last",
-    "/api/app/agent/reset",
-    "/api/app/agent/compact",
-    "/api/app/agent/skills/activate",
-    "/api/app/agent/subagents",
-    "/api/app/agent/task-board/arm",
-    "/api/app/agent/task-board/reassess",
-    "/api/app/agent/control/pause",
-    "/api/app/agent/control/stop",
-    "/api/app/agent/control/identity-stop",
-    "/api/app/agent/control/restart",
-}
 _REMOTE_AUTH_RATE_LIMIT_LOCK = threading.Lock()
 _REMOTE_AUTH_RATE_LIMIT: Dict[str, list[float]] = {}
 
@@ -336,10 +268,10 @@ _REMOTE_AUTH_RATE_LIMIT: Dict[str, list[float]] = {}
 _APP_SERVER_HELPER_FUNCTIONS = {
     _app_server_voice_helpers: ('_capture_runtime_status', '_capture_screen_snapshot', '_voice_runtime_status', '_preload_hebrew_voice_models', '_preload_tts_engine', '_runtime_env_file_path', '_write_runtime_env_values', '_remove_runtime_env_values', '_restore_env_value', '_configure_tts_backend', '_normalize_stt_backend', '_configure_stt_backend', '_new_voice_draft_state', '_jarvis_fast_final_enabled', '_jarvis_pending_wait_seconds', '_synthesize_assistant_audio_sync', '_run_app_chat_turn_lazy', '_try_start_manager_review_turn', '_is_active_steering_request', '_set_startup_state', '_record_runtime_error', '_chat_turn_failure_payload', '_record_chat_turn_failure', '_is_expected_websocket_close_error',),
     _app_server_realtime: ('_send_realtime_event', '_dependency_status', '_production_mode_enabled', '_secret', '_debug_error_responses_enabled', '_format_verbose_tool_event', '_format_runtime_log_entry', '_format_thinking_for_app', '_normalize_search_text', '_project_name_from_path', '_safe_datetime_value', '_session_file_signature', '_name_match_reason', '_build_message_snippet', '_user_session_search_cache', '_load_session_search_entry', '_search_sessions_in_manager', '_sync_event_to_realtime_event', '_resolve_external_current_session_id',),
-    _app_server_remote_ws: ('_handle_remote_chat_ws', '_handle_remote_desktop_ws',),
-    _app_server_auth: ('_sign', '_get_auth_store', '_get_remote_control_store', '_bearer_token_from_header', '_remote_auth_rate_limit_key', '_remote_auth_rate_limit_keys', '_check_remote_auth_rate_limit', '_record_remote_auth_rate_limit_attempt', '_remote_ws_auth_rate_limit_keys', '_remote_auth_login_response_from_result', '_remote_auth_challenge_response', '_invalidate_remote_auth_challenge', '_send_remote_auth_otp_email', '_google_oauth_client_id', '_google_oauth_client_secret', '_google_oauth_redirect_uri', '_google_oauth_configured', '_google_oauth_auth_url', '_exchange_google_oauth_code', '_verify_google_id_token', '_google_callback_page', '_empty_sidebar_state', '_sidebar_state_path', '_read_local_sidebar_state', '_write_local_sidebar_state', '_auth_debug_enabled', '_token_hash_prefix', '_log_invalid_token_debug', '_resolve_token', '_resolve_ws_token', '_remote_ws_session_is_active', '_remote_desktop_connection_session_is_active', '_mark_remote_desktop_offline', '_mark_remote_desktop_offline_if_no_live_connection', '_command_error_implies_desktop_unavailable', '_disconnect_remote_desktops_for_user', '_disconnect_remote_desktop_for_session', '_ensure_remote_ws_session_active', '_close_remote_ws_protocol_error', '_receive_remote_ws_text', '_remote_ws_json_object', '_websocket_origin_allowed', '_ensure_websocket_origin_allowed', '_resolve_ws_token_or_close', '_authorize_pair_start',),
-    _app_server_remote_ops: ('_bridge_for_user', '_timeline_event_is_user_visible', '_runtime_message_is_user_visible', '_run_workspace_git_command', '_workspace_git_empty_state', '_workspace_git_state', '_workspace_git_checkout', '_path_signature', '_resolve_pairing_user_id', '_is_remote_session_auth', '_is_remote_mobile_session_auth', '_is_remote_desktop_session_auth', '_remote_shared_state', '_remote_current_session_id', '_fleet_task_target_session_id', '_publish_fleet_delta', '_publish_confirmation_delta', '_consume_approved_confirmation', '_collect_cloud_object_keys', '_purge_archived_cloud_objects', '_remote_profile_view', '_remote_session_summary_views', '_remote_session_detail_view', '_remote_wait_for_sync_version', '_remote_desktop_id_for_command', '_machine_id_for_workspace_binding', '_sync_session_workspace_binding', '_mirror_session_snapshot', '_mirror_session_snapshot_later', '_workspace_id_for_task_request', '_workspace_binding_blocker_for_task', '_remote_dispatch_command', '_remote_request_desktop_command', '_try_dispatch_fleet_worker_task', '_try_dispatch_next_fleet_worker_task', '_try_stop_fleet_worker_task', '_fleet_active_task_for_worker', '_stop_fleet_worker_active_task', '_remote_http_proxy_headers', '_should_proxy_remote_http_request', '_max_base64_chars_for_bytes', '_remote_http_proxy_status_code', '_remote_http_proxy_body_bytes', '_read_remote_http_proxy_request_body', '_remote_desktop_http_request', '_remote_proxy_http_request', '_handle_remote_screen_ws',),
-    _app_server_agent_runtime: ('_workspace_root', '_remote_account_user_id', '_default_user_id', '_get_security_manager', '_telegram_allowed_user_ids', '_sleep_mode_session_label', '_sleep_mode_notice_text', '_notify_sleep_mode_enabled', '_resolve_target_session_id', '_require_explicit_agent_session_id', '_load_runtime_session_or_409', '_current_headless_mode', '_model_groups', '_missing_provider_api_key_payload', '_estimate_message_tokens', '_rough_message_tokens', '_active_tool_packs_for_context_usage', '_tool_definition_name_for_usage', '_merge_tool_definitions_for_usage', '_context_usage_tool_schema_tokens', '_context_usage_prompt_messages', '_context_usage', '_history_preview', '_pending_files', '_memory_summary', '_analytics_summary', '_security_summary', '_config_preview', '_agent_overview', '_coerce_config_value', '_resolve_workspace_path', '_set_workspace', '_configure_runtime', '_publish_runtime_config_sync', '_active_task_agents', '_stop_runtime_execution', '_prepare_runtime_restart', '_ensure_background_runtime', '_skill_items', '_cors_allow_origins',),
+    _app_server_remote_ws: ('_handle_remote_desktop_ws',),
+    _app_server_auth: ('_sign', '_get_auth_store', '_get_remote_control_store', '_bearer_token_from_header', '_remote_auth_rate_limit_key', '_remote_auth_rate_limit_keys', '_check_remote_auth_rate_limit', '_record_remote_auth_rate_limit_attempt', '_remote_ws_auth_rate_limit_keys', '_empty_sidebar_state', '_sidebar_state_path', '_read_local_sidebar_state', '_write_local_sidebar_state', '_auth_debug_enabled', '_token_hash_prefix', '_log_invalid_token_debug', '_resolve_token', '_resolve_ws_token', '_remote_ws_session_is_active', '_remote_desktop_connection_session_is_active', '_mark_remote_desktop_offline', '_mark_remote_desktop_offline_if_no_live_connection', '_command_error_implies_desktop_unavailable', '_disconnect_remote_desktops_for_user', '_disconnect_remote_desktop_for_session', '_ensure_remote_ws_session_active', '_close_remote_ws_protocol_error', '_receive_remote_ws_text', '_remote_ws_json_object', '_websocket_origin_allowed', '_ensure_websocket_origin_allowed', '_resolve_ws_token_or_close',),
+    _app_server_remote_ops: ('_bridge_for_user', '_timeline_event_is_user_visible', '_runtime_message_is_user_visible', '_run_workspace_git_command', '_workspace_git_empty_state', '_workspace_git_state', '_workspace_git_checkout', '_path_signature', '_is_remote_session_auth', '_is_remote_desktop_session_auth', '_remote_shared_state', '_remote_current_session_id', '_fleet_task_target_session_id', '_publish_fleet_delta', '_publish_confirmation_delta', '_consume_approved_confirmation', '_remote_profile_view', '_remote_session_summary_views', '_remote_session_detail_view', '_remote_wait_for_sync_version', '_remote_desktop_id_for_command', '_machine_id_for_workspace_binding', '_sync_session_workspace_binding', '_mirror_session_snapshot', '_mirror_session_snapshot_later', '_workspace_id_for_task_request', '_workspace_binding_blocker_for_task', '_remote_dispatch_command', '_remote_request_desktop_command', '_try_dispatch_fleet_worker_task', '_try_dispatch_next_fleet_worker_task', '_try_stop_fleet_worker_task', '_fleet_active_task_for_worker', '_stop_fleet_worker_active_task',),
+    _app_server_agent_runtime: ('_workspace_root', '_default_user_id', '_get_security_manager', '_telegram_allowed_user_ids', '_sleep_mode_session_label', '_sleep_mode_notice_text', '_notify_sleep_mode_enabled', '_resolve_target_session_id', '_require_explicit_agent_session_id', '_load_runtime_session_or_409', '_current_headless_mode', '_model_groups', '_missing_provider_api_key_payload', '_estimate_message_tokens', '_rough_message_tokens', '_active_tool_packs_for_context_usage', '_tool_definition_name_for_usage', '_merge_tool_definitions_for_usage', '_context_usage_tool_schema_tokens', '_context_usage_prompt_messages', '_context_usage', '_history_preview', '_pending_files', '_memory_summary', '_analytics_summary', '_security_summary', '_config_preview', '_agent_overview', '_coerce_config_value', '_resolve_workspace_path', '_set_workspace', '_configure_runtime', '_publish_runtime_config_sync', '_active_task_agents', '_stop_runtime_execution', '_prepare_runtime_restart', '_ensure_background_runtime', '_skill_items', '_cors_allow_origins',),
     _app_server_proactive: ('_install_proactive_event_store_callback', '_restore_scheduler_job_from_durable', '_queue_manager_review_for_event_run', '_dispatch_claimed_event_run', '_event_run_reconciler', '_start_proactive_runtime_services', '_stop_proactive_runtime_services',),
 }
 _APP_SERVER_ROUTE_MODULES = (
@@ -444,8 +376,8 @@ def create_app() -> FastAPI:
     _sync_app_server_modules()
     _install_proactive_event_store_callback()
     app = FastAPI(title="EmploAI App Backend", version="0.1.0", lifespan=_app_lifespan)
-    cloud_routes_enabled = cloud_backend_enabled()
-    mobile_routes_enabled = mobile_connection_enabled()
+    cloud_routes_enabled = False
+    mobile_routes_enabled = False
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_allow_origins(),
@@ -453,33 +385,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.include_router(desktop_releases_router)
-    if mobile_routes_enabled:
-        app.include_router(
-            create_app_pairing_router(
-                AppPairingRouterDeps(
-                    authorize_pair_start=_authorize_pair_start,
-                    resolve_pairing_user_id=_resolve_pairing_user_id,
-                    get_auth_store=_get_auth_store,
-                    sign=_sign,
-                    check_rate_limit=_check_remote_auth_rate_limit,
-                    rate_limit_max_attempts=REMOTE_AUTH_RATE_LIMIT_MAX_ATTEMPTS,
-                    default_pair_ttl_seconds=DEFAULT_PAIR_TTL_SECONDS,
-                    token_ttl_seconds=TOKEN_TTL_SECONDS,
-                )
-            )
-        )
-        app.include_router(
-            create_app_devices_router(
-                AppDevicesRouterDeps(
-                    resolve_token=_resolve_token,
-                    is_remote_session_auth=_is_remote_session_auth,
-                    get_auth_store=_get_auth_store,
-                    check_rate_limit=_check_remote_auth_rate_limit,
-                    rate_limit_max_attempts=REMOTE_AUTH_RATE_LIMIT_MAX_ATTEMPTS,
-                )
-            )
-        )
     app.include_router(
         create_app_files_router(
             AppFilesRouterDeps(
@@ -511,10 +416,7 @@ def create_app() -> FastAPI:
                 get_store=_get_remote_control_store,
                 bridge_for_user=_bridge_for_user,
                 sync_session_workspace_binding=_sync_session_workspace_binding,
-                mirror_session_snapshot=_mirror_session_snapshot,
                 consume_approved_confirmation=_consume_approved_confirmation,
-                purge_archived_cloud_objects=_purge_archived_cloud_objects,
-                restore_cloud_workspace_files=restore_cloud_workspace_files,
                 check_rate_limit=_check_remote_auth_rate_limit,
                 rate_limit_max_attempts=REMOTE_AUTH_RATE_LIMIT_MAX_ATTEMPTS,
             )
@@ -583,58 +485,6 @@ def create_app() -> FastAPI:
             )
         )
     )
-    if cloud_routes_enabled:
-        app.include_router(
-            create_remote_auth_router(
-                RemoteAuthRouterDeps(
-                    check_rate_limit=_check_remote_auth_rate_limit,
-                    get_store=_get_remote_control_store,
-                    send_otp_email=_send_remote_auth_otp_email,
-                    invalidate_challenge=_invalidate_remote_auth_challenge,
-                    challenge_response=_remote_auth_challenge_response,
-                    login_response_from_result=_remote_auth_login_response_from_result,
-                    google_oauth_configured=_google_oauth_configured,
-                    google_oauth_auth_url=_google_oauth_auth_url,
-                    google_callback_page=_google_callback_page,
-                    exchange_google_oauth_code=_exchange_google_oauth_code,
-                    verify_google_id_token=_verify_google_id_token,
-                    bearer_token_from_header=_bearer_token_from_header,
-                    resolve_token=_resolve_token,
-                    is_remote_session_auth=_is_remote_session_auth,
-                    disconnect_remote_desktop_for_session=_disconnect_remote_desktop_for_session,
-                    remote_auth_rate_limit_max_attempts=REMOTE_AUTH_RATE_LIMIT_MAX_ATTEMPTS,
-                    remote_auth_poll_rate_limit_max_attempts=REMOTE_AUTH_POLL_RATE_LIMIT_MAX_ATTEMPTS,
-                    google_oauth_request_ttl_seconds=GOOGLE_OAUTH_REQUEST_TTL_SECONDS,
-                    remote_session_ttl_seconds=REMOTE_SESSION_TTL_SECONDS,
-                )
-            )
-        )
-        app.include_router(
-            create_remote_account_router(
-                RemoteAccountRouterDeps(
-                    resolve_token=_resolve_token,
-                    is_remote_session_auth=_is_remote_session_auth,
-                    get_store=_get_remote_control_store,
-                    remote_shared_state=_remote_shared_state,
-                    check_rate_limit=_check_remote_auth_rate_limit,
-                    consume_approved_confirmation=_consume_approved_confirmation,
-                    disconnect_remote_desktops_for_user=_disconnect_remote_desktops_for_user,
-                )
-            )
-        )
-        app.include_router(
-            create_remote_pairing_router(
-                RemotePairingRouterDeps(
-                    resolve_token=_resolve_token,
-                    is_remote_session_auth=_is_remote_session_auth,
-                    get_store=_get_remote_control_store,
-                    check_rate_limit=_check_remote_auth_rate_limit,
-                    remote_pairing_rate_limit_max_attempts=REMOTE_AUTH_RATE_LIMIT_MAX_ATTEMPTS,
-                    remote_pairing_ttl_seconds=REMOTE_PAIRING_TTL_SECONDS,
-                )
-            )
-        )
-
     @app.middleware("http")
     async def log_http_requests(request: Request, call_next):
         started_at = time.perf_counter()
@@ -660,20 +510,7 @@ def create_app() -> FastAPI:
                         return response
                 except ValueError:
                     pass
-            response: Optional[Response] = None
-            auth_header = request.headers.get("authorization")
-            if auth_header and _should_proxy_remote_http_request(request.method, request.url.path):
-                try:
-                    auth = _resolve_token(auth_header)
-                    response = await _remote_proxy_http_request(request, auth)
-                except HTTPException as exc:
-                    response = JSONResponse(
-                        status_code=exc.status_code,
-                        content={"detail": exc.detail},
-                        headers=exc.headers,
-                    )
-            if response is None:
-                response = await call_next(request)
+            response = await call_next(request)
         except Exception:
             duration_ms = int((time.perf_counter() - started_at) * 1000)
             logger.exception("[app] %s %s from %s failed after %sms", request.method, request.url.path, client_host, duration_ms)
@@ -728,9 +565,6 @@ def create_app() -> FastAPI:
             "process_id": os.getpid(),
             "runtime_home": str(current_runtime_home) if current_runtime_home is not None else None,
             "enabled": bool(forced_app_server or config.get("channels.app.enabled", False)),
-            "pairing_bootstrap_enabled": bool(os.getenv(PAIRING_SECRET_ENV, "").strip()),
-            "pairing_token_ttl_seconds": DEFAULT_PAIR_TTL_SECONDS,
-            "access_token_ttl_seconds": TOKEN_TTL_SECONDS,
             "steering_beta_enabled": bool(
                 os.getenv("EMPLO_APP_STEERING_BETA_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
                 or config.get("channels.app.steering_beta", False)

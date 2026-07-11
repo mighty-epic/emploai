@@ -12,41 +12,8 @@ def _workspace_root() -> Path:
 
     return Path(__file__).resolve().parents[2]
 
-def _remote_account_user_id() -> Optional[int]:
-
-    home = runtime_home() or _workspace_root()
-
-    path = home / REMOTE_ACCOUNT_SESSION_FILENAME
-
-    try:
-
-        payload = json.loads(path.read_text(encoding="utf-8"))
-
-    except Exception:
-
-        return None
-
-    if not isinstance(payload, dict):
-
-        return None
-
-    user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
-
-    raw_user_id = user.get("user_id") or payload.get("user_id")
-
-    try:
-
-        user_id = int(raw_user_id)
-
-    except (TypeError, ValueError):
-
-        return None
-
-    return user_id if user_id > 0 else None
-
 def _default_user_id() -> int:
-
-    return _remote_account_user_id() or DEFAULT_APP_USER_ID
+    return DEFAULT_APP_USER_ID
 
 def _normalize_agent_variant_name(value: str) -> str:
 
@@ -919,26 +886,7 @@ def _config_preview(runtime, limit: int = 18) -> list[dict[str, Any]]:
     return [{"key": key, "value": value} for key, value in sorted(items.items())[:limit]]
 
 def _shared_profile_preferences() -> dict[str, Any]:
-
-    user_id = _remote_account_user_id()
-
-    if not user_id:
-
-        return {}
-
-    try:
-
-        profile = _get_remote_control_store().get_user_profile(user_id=int(user_id))
-
-    except Exception:
-
-        logger.exception("[app] failed to load remote account profile preferences")
-
-        return {}
-
-    preferences = profile.get("preferences") if isinstance(profile, dict) else {}
-
-    return preferences if isinstance(preferences, dict) else {}
+    return {}
 
 def _set_live_config_if_changed(live_config, key: str, value: Any, *, user_id: int) -> bool:
 
@@ -1035,44 +983,7 @@ def _apply_shared_profile_to_runtime(runtime) -> None:
         runtime.live_config.save_config()
 
 def _persist_shared_runtime_preferences(*, max_turns: Optional[int] = None, verbose_mode: Optional[bool] = None) -> None:
-
-    user_id = _remote_account_user_id()
-
-    if not user_id:
-
-        return
-
-    try:
-
-        store = _get_remote_control_store()
-
-        profile = store.get_user_profile(user_id=int(user_id))
-
-        preferences = dict(profile.get("preferences") or {})
-
-        changed = False
-
-        if max_turns is not None and preferences.get("max_turns") != max_turns:
-
-            preferences["max_turns"] = max_turns
-
-            changed = True
-
-        if verbose_mode is not None and preferences.get("verbose_mode") != verbose_mode:
-
-            preferences["verbose_mode"] = verbose_mode
-
-            changed = True
-
-        if not changed:
-
-            return
-
-        store.update_user_profile(user_id=int(user_id), profile={**profile, "preferences": preferences})
-
-    except Exception:
-
-        logger.exception("[app] failed to persist shared runtime preferences")
+    return None
 
 def _agent_overview(runtime, bridge: "AppSessionBridge", *, history_count: int = 12, analytics_days: int = 7) -> dict[str, Any]:
 

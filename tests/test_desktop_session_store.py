@@ -1,161 +1,85 @@
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_desktop_remote_session_store_encrypts_and_migrates(tmp_path):
+def test_desktop_local_secret_store_encrypts_and_migrates(tmp_path):
     script_path = tmp_path / "session_store_check.js"
     runtime_home = tmp_path / "runtime"
     session_store_path = REPO_ROOT / "desktop_app" / "session_store.js"
-    remote_control_services_path = REPO_ROOT / "desktop_app" / "remote_control_services.js"
+    control_services_path = REPO_ROOT / "desktop_app" / "remote_control_services.js"
     script_path.write_text(
         """
 const fs = require('fs');
-const path = require('path');
-const { createRemoteAccountSessionStore, ENCRYPTED_STORAGE_KIND, UNAVAILABLE_STORAGE_KIND } = require(process.argv[2]);
+const { createLocalSecretStore, ENCRYPTED_STORAGE_KIND } = require(process.argv[2]);
 const { createRemoteControlServices } = require(process.argv[4]);
 
 const runtimeHome = process.argv[3];
-const secretToken = 'secret-session-token';
+const secretToken = 'nvidia-secret';
 const safeStorage = {
-  isEncryptionAvailable() {
-    return true;
-  },
-  encryptString(value) {
-    return Buffer.from(`wrapped:${value}`, 'utf8');
-  },
+  isEncryptionAvailable() { return true; },
+  encryptString(value) { return Buffer.from(`wrapped:${value}`, 'utf8'); },
   decryptString(buffer) {
     const value = Buffer.from(buffer).toString('utf8');
-    if (!value.startsWith('wrapped:')) {
-      throw new Error('bad ciphertext');
-    }
+    if (!value.startsWith('wrapped:')) throw new Error('bad ciphertext');
     return value.slice('wrapped:'.length);
   },
 };
 
-const store = createRemoteAccountSessionStore({
+const store = createLocalSecretStore({
+  filename: 'local-runtime-secrets.json',
   resolveRuntimeHome: () => runtimeHome,
   safeStorage,
 });
-
-store.write({ apiBaseUrl: 'https://api.kraitos.app', sessionToken: secretToken });
+store.write({ secrets: { NVIDIA_API_KEY: secretToken } });
 const encryptedText = fs.readFileSync(store.resolvePath(), 'utf8');
 const encryptedRecord = JSON.parse(encryptedText);
 if (encryptedRecord.storage !== ENCRYPTED_STORAGE_KIND) {
   throw new Error(`expected encrypted storage, got ${encryptedRecord.storage}`);
 }
 if (encryptedText.includes(secretToken)) {
-  throw new Error('encrypted session file contains the plaintext token');
+  throw new Error('encrypted local secret file contains plaintext');
 }
-if (store.read().sessionToken !== secretToken) {
-  throw new Error('encrypted session did not round-trip');
+if (store.read().secrets.NVIDIA_API_KEY !== secretToken) {
+  throw new Error('encrypted local secret did not round-trip');
 }
 
 fs.writeFileSync(
   store.resolvePath(),
-  `${JSON.stringify({ apiBaseUrl: 'https://api.kraitos.app', sessionToken: secretToken })}\\n`,
+  `${JSON.stringify({ secrets: { NVIDIA_API_KEY: secretToken } })}\n`,
   'utf8',
 );
 const migrated = store.read();
-const migratedText = fs.readFileSync(store.resolvePath(), 'utf8');
-const migratedRecord = JSON.parse(migratedText);
-if (migrated.sessionToken !== secretToken) {
-  throw new Error('legacy plaintext session did not read');
-}
-if (migratedRecord.storage !== ENCRYPTED_STORAGE_KIND) {
-  throw new Error('legacy plaintext session was not migrated');
-}
-if (migratedText.includes(secretToken)) {
-  throw new Error('migrated session file contains the plaintext token');
+const migratedRecord = JSON.parse(fs.readFileSync(store.resolvePath(), 'utf8'));
+if (migrated.secrets.NVIDIA_API_KEY !== secretToken || migratedRecord.storage !== ENCRYPTED_STORAGE_KIND) {
+  throw new Error('legacy plaintext local secret was not migrated');
 }
 
-const fallbackStore = createRemoteAccountSessionStore({
-  filename: 'fallback-session.json',
-  resolveRuntimeHome: () => runtimeHome,
-  safeStorage: { isEncryptionAvailable: () => false },
-});
-let insecureWriteRejected = false;
-try {
-  fallbackStore.write({ apiBaseUrl: 'https://api.kraitos.app', sessionToken: secretToken });
-} catch (error) {
-  insecureWriteRejected = String(error?.message || error).includes('Secure credential storage is unavailable');
-}
-if (!insecureWriteRejected || fallbackStore.storageKind() !== UNAVAILABLE_STORAGE_KIND) {
-  throw new Error('unencrypted credential persistence must fail closed');
-}
-if (fs.existsSync(fallbackStore.resolvePath())) {
-  throw new Error('failed secure-storage write left a plaintext credential file');
-}
-
-store.write({
-  apiBaseUrl: 'https://api.kraitos.app/',
-  sessionToken: secretToken,
-  user: { user_id: 77 },
-  desktop: { desktop_id: 'desktop-abc' },
-});
-const encryptedSessionText = fs.readFileSync(store.resolvePath(), 'utf8');
-if (encryptedSessionText.includes(secretToken) || encryptedSessionText.includes('desktop-abc')) {
-  throw new Error('encrypted remote session leaked plaintext metadata or token');
-}
-fs.writeFileSync(store.resolvePath(), '{"ciphertext":', 'utf8');
-const recoveredSession = store.read();
-if (recoveredSession?.sessionToken !== secretToken || recoveredSession?.desktop?.desktop_id !== 'desktop-abc') {
-  throw new Error('encrypted remote session did not recover from its durable backup');
-}
 const services = createRemoteControlServices({
   net: { fetch() { throw new Error('network should not be used'); } },
-  shell: { openExternal() {} },
   safeStorage,
   resolveRuntimeHome: () => runtimeHome,
-  saveSetup() {},
   getBootstrapCache() { return {}; },
+});
+services.rememberRuntimeSecretOverlay({
+  NVIDIA_API_KEY: secretToken,
+  EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN: 'obsolete-cloud-token',
+  IGNORED_SECRET: 'nope',
 });
 const overlay = JSON.parse(services.runtimeSecretOverlayEnvironment());
-if (overlay.EMPLOAI_REMOTE_CONTROL_BASE_URL !== 'https://api.kraitos.app') {
-  throw new Error(`unexpected remote base URL overlay: ${overlay.EMPLOAI_REMOTE_CONTROL_BASE_URL}`);
+if (overlay.NVIDIA_API_KEY !== secretToken) {
+  throw new Error('local provider key was not restored into the runtime overlay');
 }
-if (overlay.EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN !== secretToken) {
-  throw new Error('remote session token was not exposed to the backend overlay');
+if (overlay.EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN || overlay.IGNORED_SECRET) {
+  throw new Error('unsupported account-era secret was retained');
 }
-if (overlay.EMPLOAI_REMOTE_CONTROL_USER_ID !== '77') {
-  throw new Error('remote user id was not exposed to the backend overlay');
-}
-if (overlay.EMPLOAI_REMOTE_CONTROL_DESKTOP_ID !== 'desktop-abc') {
-  throw new Error('remote desktop id was not exposed to the backend overlay');
-}
-
-services.rememberRuntimeSecretOverlay({ NVIDIA_API_KEY: 'nvidia-secret', IGNORED_SECRET: 'nope' });
-const localSecretPath = path.join(runtimeHome, 'local-runtime-secrets.json');
-const localSecretText = fs.readFileSync(localSecretPath, 'utf8');
-if (localSecretText.includes('nvidia-secret')) {
-  throw new Error('encrypted local runtime secret file contains the plaintext NVIDIA key');
-}
-const reloadedServices = createRemoteControlServices({
-  net: { fetch() { throw new Error('network should not be used'); } },
-  shell: { openExternal() {} },
-  safeStorage,
-  resolveRuntimeHome: () => runtimeHome,
-  saveSetup() {},
-  getBootstrapCache() { return {}; },
-});
-const reloadedOverlay = JSON.parse(reloadedServices.runtimeSecretOverlayEnvironment());
-if (reloadedOverlay.NVIDIA_API_KEY !== 'nvidia-secret') {
-  throw new Error('local NVIDIA key was not restored into the backend overlay');
-}
-if (reloadedOverlay.IGNORED_SECRET) {
-  throw new Error('unsupported local runtime secret was restored');
-}
-const runtimeSecretPreviews = reloadedServices.runtimeSecretOverlayPreviews();
-if (runtimeSecretPreviews.NVIDIA_API_KEY?.redacted_value !== 'nvidia...cret') {
-  throw new Error(`unexpected local runtime secret preview: ${runtimeSecretPreviews.NVIDIA_API_KEY?.redacted_value}`);
-}
-if (runtimeSecretPreviews.IGNORED_SECRET) {
-  throw new Error('unsupported local runtime secret preview was exposed');
+const previews = services.runtimeSecretOverlayPreviews();
+if (previews.NVIDIA_API_KEY?.redacted_value !== 'nvidia...cret') {
+  throw new Error(`unexpected local runtime secret preview: ${previews.NVIDIA_API_KEY?.redacted_value}`);
 }
 
 console.log(JSON.stringify({ ok: true, encryptedStorage: encryptedRecord.storage, overlay }));
@@ -164,7 +88,7 @@ console.log(JSON.stringify({ ok: true, encryptedStorage: encryptedRecord.storage
     )
 
     result = subprocess.run(
-        ["node", str(script_path), str(session_store_path), str(runtime_home), str(remote_control_services_path)],
+        ["node", str(script_path), str(session_store_path), str(runtime_home), str(control_services_path)],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,

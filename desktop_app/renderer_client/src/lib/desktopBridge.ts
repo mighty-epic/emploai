@@ -566,23 +566,6 @@ type DesktopBridge = {
   };
   remoteAuth?: {
     status: () => Promise<DesktopRemoteAuthStatus>;
-    listDesktops: () => Promise<DesktopRemoteAccountDesktop[]>;
-    login: (payload: DesktopRemoteAuthPayload) => Promise<DesktopRemoteAuthOtpChallenge>;
-    googleLogin: (payload?: Partial<DesktopRemoteAuthPayload>) => Promise<DesktopRemoteAuthStatus>;
-    register: (payload: DesktopRemoteAuthPayload) => Promise<DesktopRemoteAuthOtpChallenge>;
-    verifyOtp: (payload: { apiBaseUrl?: string | null; challengeId?: string; challenge_id?: string; code: string }) => Promise<DesktopRemoteAuthStatus>;
-    resendOtp: (payload: { apiBaseUrl?: string | null; challengeId?: string; challenge_id?: string }) => Promise<DesktopRemoteAuthOtpChallenge>;
-    logout: () => Promise<DesktopRemoteAuthStatus>;
-    createPairingToken: () => Promise<DesktopRemotePairingToken>;
-    listSecrets: (payload?: { namespace?: string }) => Promise<DesktopRemoteSecretsList>;
-    saveSetupSecrets: (payload: { values: Partial<DesktopSetupValues> }) => Promise<DesktopRemoteSecretsList>;
-    saveSecrets: (payload: { namespace: string; secrets: Record<string, string>; metadata?: Record<string, unknown> }) => Promise<DesktopRemoteSecretsList>;
-    applyAccountData: () => Promise<DesktopRemoteSecretsApplyResult>;
-    deleteSecret: (payload: { namespace: string; name: string; confirmationId?: string | null; confirmation_id?: string | null }) => Promise<{ ok?: boolean; deleted?: boolean }>;
-    deleteAccountData: (payload?: { confirmationId?: string | null; confirmation_id?: string | null }) => Promise<DesktopRemoteAccountDataDeleteResult>;
-    profile: () => Promise<DesktopRemoteAccountProfileResult>;
-    updateProfile: (payload: { profile: Record<string, unknown> }) => Promise<DesktopRemoteAccountProfileResult>;
-    applySetupSecrets: (payload?: { names?: string[] }) => Promise<DesktopRemoteSecretsApplyResult>;
   };
   fleet?: {
     snapshot: () => Promise<DesktopFleetSnapshot>;
@@ -794,137 +777,41 @@ export async function loadDesktopRemoteAuthStatus() {
   return bridge.remoteAuth.status();
 }
 
-export async function loginDesktopRemoteAuth(payload: DesktopRemoteAuthPayload) {
-  const bridge = getDesktopBridge();
-  if (!bridge?.remoteAuth?.login) {
-    return null;
-  }
-  return bridge.remoteAuth.login(payload);
-}
+export async function loginDesktopRemoteAuth(_payload: DesktopRemoteAuthPayload): Promise<DesktopRemoteAuthStatus | DesktopRemoteAuthOtpChallenge | null> { return null; }
 
-export async function loginDesktopRemoteGoogle(payload?: Partial<DesktopRemoteAuthPayload>) {
-  const bridge = getDesktopBridge();
-  if (!bridge?.remoteAuth?.googleLogin) {
-    return null;
-  }
-  return bridge.remoteAuth.googleLogin(payload || {});
-}
+export async function loginDesktopRemoteGoogle(_payload?: Partial<DesktopRemoteAuthPayload>): Promise<DesktopRemoteAuthStatus | null> { return null; }
 
-export async function registerDesktopRemoteAuth(payload: DesktopRemoteAuthPayload) {
-  const bridge = getDesktopBridge();
-  if (!bridge?.remoteAuth?.register) {
-    return null;
-  }
-  return bridge.remoteAuth.register(payload);
-}
+export async function registerDesktopRemoteAuth(_payload: DesktopRemoteAuthPayload): Promise<DesktopRemoteAuthStatus | DesktopRemoteAuthOtpChallenge | null> { return null; }
 
-export async function verifyDesktopRemoteAuthOtp(payload: { apiBaseUrl?: string | null; challengeId?: string; challenge_id?: string; code: string }) {
-  const bridge = getDesktopBridge();
-  if (!bridge?.remoteAuth?.verifyOtp) {
-    return null;
-  }
-  return bridge.remoteAuth.verifyOtp(payload);
-}
+export async function verifyDesktopRemoteAuthOtp(_payload: { apiBaseUrl?: string | null; challengeId?: string; challenge_id?: string; code: string }): Promise<DesktopRemoteAuthStatus | null> { return null; }
 
-export async function resendDesktopRemoteAuthOtp(payload: { apiBaseUrl?: string | null; challengeId?: string; challenge_id?: string }) {
-  const bridge = getDesktopBridge();
-  if (!bridge?.remoteAuth?.resendOtp) {
-    return null;
-  }
-  return bridge.remoteAuth.resendOtp(payload);
-}
+export async function resendDesktopRemoteAuthOtp(_payload: { apiBaseUrl?: string | null; challengeId?: string; challenge_id?: string }): Promise<DesktopRemoteAuthOtpChallenge | null> { return null; }
 
-export async function logoutDesktopRemoteAuth() {
-  const bridge = getDesktopBridge();
-  if (!bridge?.remoteAuth?.logout) {
-    return null;
-  }
-  return bridge.remoteAuth.logout();
-}
+export async function logoutDesktopRemoteAuth(): Promise<DesktopRemoteAuthStatus | null> { return loadDesktopRemoteAuthStatus(); }
 
-export async function createDesktopRemotePairingToken() {
-  const bridge = getDesktopBridge();
-  if (!bridge?.remoteAuth?.createPairingToken) {
-    return null;
-  }
-  return bridge.remoteAuth.createPairingToken();
-}
+export async function createDesktopRemotePairingToken(): Promise<DesktopRemotePairingToken | null> { return null; }
 
-export async function listDesktopRemoteSecrets(namespace = 'setup') {
-  const bridge = getDesktopBridge();
-  if (!bridge?.remoteAuth?.listSecrets) {
-    return null;
-  }
-  return bridge.remoteAuth.listSecrets({ namespace });
-}
+export async function listDesktopRemoteSecrets(_namespace = 'setup'): Promise<DesktopRemoteSecretsList | null> { return null; }
 
-export async function saveDesktopSetupSecrets(values: Partial<DesktopSetupValues>) {
-  const bridge = getDesktopBridge();
-  if (!bridge?.remoteAuth?.saveSetupSecrets) {
-    return null;
-  }
-  return bridge.remoteAuth.saveSetupSecrets({ values });
-}
+export async function saveDesktopSetupSecrets(_values: Partial<DesktopSetupValues>): Promise<DesktopRemoteSecretsList | null> { return null; }
 
 export async function saveDesktopRemoteSecrets(
-  namespace: string,
-  secrets: Record<string, string>,
-  metadata?: Record<string, unknown>,
-) {
-  const bridge = getDesktopBridge();
-  if (!bridge?.remoteAuth?.saveSecrets) {
-    return null;
-  }
-  return bridge.remoteAuth.saveSecrets({ namespace, secrets, metadata });
-}
+  _namespace: string,
+  _secrets: Record<string, string>,
+  _metadata?: Record<string, unknown>,
+): Promise<DesktopRemoteSecretsList | null> { return null; }
 
-export async function applyDesktopAccountData() {
-  const bridge = getDesktopBridge();
-  if (!bridge?.remoteAuth?.applyAccountData) {
-    return null;
-  }
-  return bridge.remoteAuth.applyAccountData();
-}
+export async function applyDesktopAccountData(): Promise<DesktopRemoteSecretsApplyResult | null> { return null; }
 
-export async function deleteDesktopRemoteSecret(namespace: string, name: string, confirmationId?: string | null) {
-  const bridge = getDesktopBridge();
-  if (!bridge?.remoteAuth?.deleteSecret) {
-    return null;
-  }
-  return bridge.remoteAuth.deleteSecret({ namespace, name, confirmationId });
-}
+export async function deleteDesktopRemoteSecret(_namespace: string, _name: string, _confirmationId?: string | null): Promise<{ ok?: boolean; deleted?: boolean } | null> { return null; }
 
-export async function deleteDesktopRemoteAccountData(confirmationId?: string | null) {
-  const bridge = getDesktopBridge();
-  if (!bridge?.remoteAuth?.deleteAccountData) {
-    return null;
-  }
-  return bridge.remoteAuth.deleteAccountData({ confirmationId });
-}
+export async function deleteDesktopRemoteAccountData(_confirmationId?: string | null): Promise<DesktopRemoteAccountDataDeleteResult | null> { return null; }
 
-export async function loadDesktopRemoteAccountProfile() {
-  const bridge = getDesktopBridge();
-  if (!bridge?.remoteAuth?.profile) {
-    return null;
-  }
-  return bridge.remoteAuth.profile();
-}
+export async function loadDesktopRemoteAccountProfile(): Promise<DesktopRemoteAccountProfileResult | null> { return null; }
 
-export async function updateDesktopRemoteAccountProfile(profile: Record<string, unknown>) {
-  const bridge = getDesktopBridge();
-  if (!bridge?.remoteAuth?.updateProfile) {
-    return null;
-  }
-  return bridge.remoteAuth.updateProfile({ profile });
-}
+export async function updateDesktopRemoteAccountProfile(_profile: Record<string, unknown>): Promise<DesktopRemoteAccountProfileResult | null> { return null; }
 
-export async function applyDesktopSetupSecrets(names?: string[]) {
-  const bridge = getDesktopBridge();
-  if (!bridge?.remoteAuth?.applySetupSecrets) {
-    return null;
-  }
-  return bridge.remoteAuth.applySetupSecrets({ names });
-}
+export async function applyDesktopSetupSecrets(_names?: string[]): Promise<DesktopRemoteSecretsApplyResult | null> { return null; }
 
 export async function loadDesktopFleetSnapshot() {
   const bridge = getDesktopBridge();
@@ -1329,12 +1216,8 @@ export function subscribeDesktopExitRequest(callback: (payload: Record<string, a
   return bridge?.shell?.onExitRequested?.(callback) || (() => undefined);
 }
 
-export async function listDesktopRemoteAccountDesktops() {
-  const bridge = getDesktopBridge();
-  if (!bridge?.remoteAuth?.listDesktops) {
-    return null;
-  }
-  return bridge.remoteAuth.listDesktops();
+export async function listDesktopRemoteAccountDesktops(): Promise<DesktopRemoteAccountDesktop[]> {
+  return [];
 }
 
 export async function createDesktopShortcut() {

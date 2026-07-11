@@ -15,7 +15,7 @@ export type AppConfig = {
   connectionMode: AppConnectionMode;
 };
 
-export const DEFAULT_REMOTE_API_BASE_URL = 'https://api.kraitos.app';
+export const DEFAULT_REMOTE_API_BASE_URL = 'http://127.0.0.1:8787';
 export const DESKTOP_RENDERER_RELEASE = {
   version: '0.1.0-beta.14.6',
   channel: 'beta',

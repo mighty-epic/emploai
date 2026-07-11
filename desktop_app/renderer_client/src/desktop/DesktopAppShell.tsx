@@ -46,6 +46,7 @@ import { createDesktopAppShellActions } from './DesktopAppShellActions';
 import { DesktopAppShellView } from './DesktopAppShellView';
 import { createLatestRequestGate } from './desktopAsyncCoordination';
 import type { DesktopMode, RemoteRuntimeSummary } from './models';
+import { remoteRuntimesFromFleetSnapshot } from './desktopRemoteRuntimes';
 import { profileToSharedSettingsDraft, type SharedSettingsDraft } from '@/lib/accountProfile';
 import {
   checkDesktopUpdates,
@@ -67,7 +68,6 @@ import {
   loginDesktopRemoteGoogle,
   logoutDesktopRemoteAuth,
   listDesktopRemoteSecrets,
-  listDesktopRemoteAccountDesktops,
   loadDesktopFleetSnapshot,
   openDesktopChromeExtensions,
   openDesktopPath,
@@ -1282,7 +1282,7 @@ export function DesktopAppShell() {
           return;
         }
         const message = userFacingError(authError, 'Sign-in status did not load.');
-        setRemoteAuthStatus({ signedIn: false, error: message, apiBaseUrl: 'https://api.kraitos.app' });
+        setRemoteAuthStatus({ signedIn: false, cloudDisabled: true, standalone: true, error: message, apiBaseUrl: 'http://127.0.0.1:8787' });
         setRemoteAuthMessage(message);
       })
       .finally(() => {
@@ -1512,56 +1512,21 @@ export function DesktopAppShell() {
 
   const [remoteRuntimes, setRemoteRuntimes] = useState<RemoteRuntimeSummary[]>([]);
   useEffect(() => {
-    if (!remoteAuthStatus?.signedIn) {
+    if (!bootstrap?.accessToken) {
       setRemoteRuntimes([]);
       return;
     }
     let disposed = false;
-    void Promise.all([
-      listDesktopRemoteAccountDesktops(),
-      loadDesktopFleetSnapshot(),
-    ]).then(([desktops, fleet]) => {
+    void loadDesktopFleetSnapshot().then((fleet) => {
       if (disposed) return;
-      const workers = Array.isArray(fleet?.workers) ? fleet.workers : [];
-      const tasks = Array.isArray(fleet?.tasks) ? fleet.tasks : [];
-      const reports = Array.isArray(fleet?.reports) ? fleet.reports : [];
-      setRemoteRuntimes((Array.isArray(desktops) ? desktops : []).map((desktop) => {
-        const desktopWorkers = workers.filter((worker) => worker.machine_desktop_id === desktop.desktop_id);
-        const workerIds = new Set(desktopWorkers.map((worker) => worker.worker_id));
-        const activeCount = tasks.filter((task) => workerIds.has(task.worker_id) && task.status === 'running').length;
-        const queuedCount = tasks.filter((task) => workerIds.has(task.worker_id) && task.status === 'queued').length;
-        const latestReport = reports.find((report) => workerIds.has(report.worker_id));
-        const connected = desktop.status === 'connected';
-        return {
-          id: String(desktop.desktop_id || ''),
-          name: desktop.display_name || 'Paired desktop',
-          hostLabel: desktop.last_seen_at ? `Last seen ${desktop.last_seen_at}` : 'No heartbeat yet',
-          status: connected ? 'connected' : 'offline',
-          detail: desktop.detail || `${desktopWorkers.length} workers · ${activeCount} active · ${queuedCount} queued`,
-          workerCount: desktopWorkers.length,
-          activeCount,
-          queuedCount,
-          latestReport: latestReport?.summary || null,
-          workers: desktopWorkers.map((worker) => ({
-            id: worker.worker_id,
-            name: worker.display_name,
-            status: worker.status,
-            activeTaskId: worker.active_task_id || null,
-          })),
-          preview: {
-            state: connected ? 'connecting' : 'offline',
-            message: connected ? 'Manual view-only previews are requested from a worker.' : 'Desktop is offline.',
-            updatedAt: null,
-          },
-        } as RemoteRuntimeSummary;
-      }));
+      setRemoteRuntimes(remoteRuntimesFromFleetSnapshot(fleet));
     }).catch((remoteError) => {
       if (!disposed) setNotice(userFacingError(remoteError, 'Paired desktops could not be loaded.'));
     });
     return () => {
       disposed = true;
     };
-  }, [remoteAuthStatus?.signedIn, activeTab]);
+  }, [activeTab, bootstrap?.accessToken]);
 
   const effectiveRuntimeStatus = runtimeStatus || bootstrap?.runtimeStatus || null;
 

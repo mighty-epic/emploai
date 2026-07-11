@@ -15,16 +15,14 @@ from app_backend.remote_control_store import RemoteControlPlaneStore
 
 def _store_with_desktop(tmp_path):
     store = RemoteControlPlaneStore(root_path=tmp_path)
-    user = store.register_user(email="broker@example.com", password="CorrectHorse!2026", display_name="Broker")
-    login = store.login(
-        email="broker@example.com",
-        password="CorrectHorse!2026",
-        actor_kind="desktop",
-        device_name="Broker Desktop",
+    user_id = 0
+    desktop = store.ensure_standalone_manager_desktop(
+        user_id=user_id,
+        display_name="Broker Desktop",
         device_platform="desktop",
         device_key="broker-desktop",
     )
-    return store, int(user["user_id"]), str(login["desktop"]["desktop_id"])
+    return store, user_id, str(desktop["desktop_id"])
 
 
 async def _complete_next_brokered_command(

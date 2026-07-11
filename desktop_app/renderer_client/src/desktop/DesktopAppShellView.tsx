@@ -15,6 +15,7 @@ import {
   subscribeDesktopExitRequest,
 } from '@/lib/desktopBridge';
 import { passwordRequirementStatus } from '@/lib/remoteAuthPasswordPolicy';
+import type { DesktopPressableState } from '../lib/pressableState';
 import { shortStatusText, userFacingError } from '../../lib/diagnostics';
 import { DesktopConversationView, type DesktopConversationHeaderControls } from './DesktopConversationView';
 import { DesktopSetupPanel } from './DesktopSetupPanel';
@@ -919,7 +920,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Toggle sidebar"
-            style={({ pressed, hovered }) => [
+            style={({ pressed, hovered }: DesktopPressableState) => [
               styles.windowChromeIconButton,
               hovered ? styles.windowChromeButtonHovered : null,
               pressed ? styles.windowChromeButtonPressed : null,
@@ -932,7 +933,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
             accessibilityRole="button"
             accessibilityLabel="Back"
             onPress={() => navigateWindowHistory('back')}
-            style={({ pressed, hovered }) => [
+            style={({ pressed, hovered }: DesktopPressableState) => [
               styles.windowChromeIconButton,
               styles.windowChromeButtonSubtle,
               hovered ? styles.windowChromeButtonHovered : null,
@@ -945,7 +946,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
             accessibilityRole="button"
             accessibilityLabel="Forward"
             onPress={() => navigateWindowHistory('forward')}
-            style={({ pressed, hovered }) => [
+            style={({ pressed, hovered }: DesktopPressableState) => [
               styles.windowChromeIconButton,
               styles.windowChromeButtonSubtle,
               hovered ? styles.windowChromeButtonHovered : null,
@@ -968,7 +969,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
                     accessibilityRole="tab"
                     accessibilityLabel={`Open ${item.label}`}
                     accessibilityState={{ selected }}
-                    style={({ pressed, hovered }) => [
+                    style={({ pressed, hovered }: DesktopPressableState) => [
                       styles.headerSurfaceTab,
                       hovered ? styles.headerSurfaceTabHovered : null,
                       selected ? styles.headerSurfaceTabActive : null,
@@ -987,7 +988,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Stop current identity"
-              style={({ pressed, hovered }) => [
+              style={({ pressed, hovered }: DesktopPressableState) => [
                 styles.headerIdentityStopButton,
                 hovered ? styles.headerIdentityStopButtonHovered : null,
                 pressed ? styles.windowChromeButtonPressed : null,
@@ -1000,7 +1001,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Open settings"
-            style={({ pressed, hovered }) => [
+            style={({ pressed, hovered }: DesktopPressableState) => [
               styles.windowChromeMenuButton,
               showSetup ? styles.windowChromeSettingsButtonActive : null,
               hovered ? styles.windowChromeMenuButtonHovered : null,
@@ -1014,7 +1015,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Install available update"
-              style={({ pressed, hovered }) => [
+              style={({ pressed, hovered }: DesktopPressableState) => [
                 styles.windowChromeIconButton,
                 styles.windowChromeUpdateButton,
                 hovered ? styles.windowChromeButtonHovered : null,

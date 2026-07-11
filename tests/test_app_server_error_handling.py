@@ -118,7 +118,8 @@ def test_cors_defaults_keep_localhost_outside_production(monkeypatch):
     origins = app_server._cors_allow_origins()
 
     assert "http://localhost:5173" in origins
-    assert "https://kraitos.app" in origins
+    assert "emploai://renderer" in origins
+    assert "https://kraitos.app" not in origins
 
 
 def test_cors_defaults_drop_localhost_in_production(monkeypatch):
@@ -127,8 +128,8 @@ def test_cors_defaults_drop_localhost_in_production(monkeypatch):
 
     origins = app_server._cors_allow_origins()
 
-    assert "https://kraitos.app" in origins
     assert "emploai://renderer" in origins
+    assert "https://kraitos.app" not in origins
     assert "http://localhost:5173" not in origins
     assert all(not origin.startswith("http://") for origin in origins)
 
@@ -146,88 +147,3 @@ def test_cors_accepts_https_and_desktop_origin_in_production(monkeypatch):
     monkeypatch.setenv(app_server.CORS_ORIGINS_ENV, "https://mobile.example.com/,emploai://renderer/")
 
     assert app_server._cors_allow_origins() == ["https://mobile.example.com", "emploai://renderer"]
-
-
-def test_auth_otp_email_allows_console_outside_production(monkeypatch, caplog):
-    monkeypatch.delenv(app_server.DEPLOYMENT_ENV_ENV, raising=False)
-    monkeypatch.setenv(app_server.AUTH_EMAIL_BACKEND_ENV, "console")
-
-    asyncio.run(
-        app_server._send_remote_auth_otp_email(
-            email="person@example.com",
-            code="123456",
-            purpose="login_verify",
-        )
-    )
-
-    assert "Auth OTP for person@example.com: 123456" in caplog.text
-
-
-def test_auth_otp_email_requires_configured_delivery(monkeypatch):
-    monkeypatch.delenv(app_server.DEPLOYMENT_ENV_ENV, raising=False)
-    monkeypatch.delenv(app_server.AUTH_EMAIL_BACKEND_ENV, raising=False)
-    monkeypatch.delenv(app_server.RESEND_API_KEY_ENV, raising=False)
-
-    with pytest.raises(RuntimeError, match="delivery is not configured"):
-        asyncio.run(
-            app_server._send_remote_auth_otp_email(
-                email="person@example.com",
-                code="123456",
-                purpose="login_verify",
-            )
-        )
-
-
-def test_auth_otp_email_uses_resend_when_api_key_is_present(monkeypatch):
-    monkeypatch.delenv(app_server.DEPLOYMENT_ENV_ENV, raising=False)
-    monkeypatch.delenv(app_server.AUTH_EMAIL_BACKEND_ENV, raising=False)
-    monkeypatch.setenv(app_server.RESEND_API_KEY_ENV, "resend-test-key")
-    sent_requests = []
-
-    class FakeResponse:
-        status_code = 202
-        text = ""
-
-    class FakeAsyncClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def post(self, url, *, headers=None, json=None):
-            sent_requests.append({"url": url, "headers": headers or {}, "json": json or {}})
-            return FakeResponse()
-
-    monkeypatch.setattr(app_server.httpx, "AsyncClient", FakeAsyncClient)
-
-    asyncio.run(
-        app_server._send_remote_auth_otp_email(
-            email="person@example.com",
-            code="123456",
-            purpose="signup_verify",
-        )
-    )
-
-    assert sent_requests
-    assert sent_requests[0]["url"] == "https://api.resend.com/emails"
-    assert sent_requests[0]["headers"]["Authorization"] == "Bearer resend-test-key"
-    assert sent_requests[0]["json"]["to"] == ["person@example.com"]
-
-
-def test_auth_otp_email_rejects_console_in_production(monkeypatch):
-    monkeypatch.setenv(app_server.DEPLOYMENT_ENV_ENV, "production")
-    monkeypatch.setenv(app_server.AUTH_EMAIL_BACKEND_ENV, "console")
-    monkeypatch.delenv(app_server.RESEND_API_KEY_ENV, raising=False)
-
-    with pytest.raises(RuntimeError, match=app_server.AUTH_EMAIL_BACKEND_ENV):
-        asyncio.run(
-            app_server._send_remote_auth_otp_email(
-                email="person@example.com",
-                code="123456",
-                purpose="login_verify",
-            )
-        )

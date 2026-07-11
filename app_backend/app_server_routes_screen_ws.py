@@ -2,7 +2,6 @@ from __future__ import annotations
 
 # Split from app_server.py; dependencies are injected by the app_server facade.
 from shared.provider_failures import get_failed_turn
-from shared.standalone_policy import mobile_connection_enabled
 
 def register_screen_ws_routes(app):
 
@@ -74,7 +73,7 @@ def register_screen_ws_routes(app):
 
             if _is_remote_session_auth(auth):
 
-                await _handle_remote_screen_ws(websocket, auth, send_lock)
+                await websocket.close(code=4403)
 
                 return
 
@@ -266,68 +265,6 @@ def register_screen_ws_routes(app):
 
             return
 
-    @app.websocket("/ws/remote/mobile")
-
-    async def remote_mobile_ws(websocket: WebSocket) -> None:
-
-        await websocket.accept()
-
-        if not mobile_connection_enabled():
-
-            await websocket.close(code=4404)
-
-            return
-
-        if not await _ensure_websocket_origin_allowed(websocket):
-
-            return
-
-        try:
-
-            auth = await _resolve_ws_token_or_close(websocket)
-
-            if auth is None:
-
-                return
-
-            if not _is_remote_mobile_session_auth(auth):
-
-                await websocket.close(code=4403)
-
-                return
-
-            await _handle_remote_chat_ws(websocket, auth)
-
-        except WebSocketDisconnect:
-
-            logger.info("[remote] mobile websocket disconnected")
-
-            return
-
-        except Exception:
-
-            logger.exception("[remote] mobile websocket failed")
-
-            try:
-
-                await websocket.send_json(
-
-                    RealtimeServerEvent(
-
-                        type="error",
-
-                        payload={"message": "Remote mobile websocket failed"},
-
-                    ).model_dump()
-
-                )
-
-            except Exception:
-
-                pass
-
-            return
-
     @app.websocket("/ws/app/chat")
 
     async def chat_ws(websocket: WebSocket) -> None:
@@ -388,13 +325,7 @@ def register_screen_ws_routes(app):
 
             if _is_remote_session_auth(auth):
 
-                if not _is_remote_mobile_session_auth(auth):
-
-                    await websocket.close(code=4403)
-
-                    return
-
-                await _handle_remote_chat_ws(websocket, auth)
+                await websocket.close(code=4403)
 
                 return
 

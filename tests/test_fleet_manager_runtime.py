@@ -5,59 +5,29 @@ from types import SimpleNamespace
 from app_backend import runtime
 
 
-def test_fleet_api_config_uses_local_control_plane_in_standalone_mode(monkeypatch):
-    monkeypatch.setattr(runtime, "standalone_desktop_enabled", lambda: True)
+def test_fleet_api_config_uses_local_control_plane(monkeypatch):
     monkeypatch.setattr(
         runtime,
-        "_local_api_config",
+        "_local_fleet_api_config",
         lambda: {
             "base_url": "http://127.0.0.1:8787",
             "token": "local-token",
             "desktop_id": "",
-            "transport": "local",
-        },
-    )
-    monkeypatch.setattr(
-        runtime,
-        "_remote_api_config",
-        lambda: {
-            "base_url": "https://api.example.test",
-            "token": "remote-token",
-            "desktop_id": "remote-desktop",
-            "transport": "remote",
         },
     )
 
-    assert runtime._fleet_api_config()["transport"] == "local"
-    assert runtime._fleet_api_config()["token"] == "local-token"
-
-
-def test_fleet_api_config_uses_remote_control_plane_when_cloud_mode_is_enabled(monkeypatch):
-    monkeypatch.setattr(runtime, "standalone_desktop_enabled", lambda: False)
-    monkeypatch.setattr(
-        runtime,
-        "_remote_api_config",
-        lambda: {
-            "base_url": "https://api.example.test",
-            "token": "remote-token",
-            "desktop_id": "remote-desktop",
-            "transport": "remote",
-        },
-    )
-
-    assert runtime._fleet_api_config()["transport"] == "remote"
+    assert runtime._local_fleet_api_config()["token"] == "local-token"
 
 
 def test_local_fleet_manager_context_is_enabled_without_remote_account(monkeypatch):
     session = object()
     monkeypatch.setattr(
         runtime,
-        "_fleet_api_config",
+        "_local_fleet_api_config",
         lambda: {
             "base_url": "http://127.0.0.1:8787",
             "token": "local-token",
             "desktop_id": "",
-            "transport": "local",
         },
     )
     monkeypatch.setattr(
@@ -79,7 +49,7 @@ def test_local_worker_identity_never_receives_manager_fleet_tools(monkeypatch):
     session = SimpleNamespace(fleet_identity_role="worker", fleet_worker_id="worker-1")
     monkeypatch.setattr(
         runtime,
-        "_fleet_api_config",
+        "_local_fleet_api_config",
         lambda: (_ for _ in ()).throw(AssertionError("worker must not resolve manager control credentials")),
     )
 

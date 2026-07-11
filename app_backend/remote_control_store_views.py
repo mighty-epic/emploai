@@ -10,16 +10,7 @@ FLEET_ENROLLMENT_TTL_SECONDS = 60 * 30
 
 class RemoteControlStoreViewMixin:
     def _next_user_id_locked(self) -> int:
-        row = self._conn.execute(
-            """
-            SELECT MAX(max_user_id) + 1 AS next_id
-            FROM (
-                SELECT COALESCE(MAX(user_id), 0) AS max_user_id FROM users
-                UNION ALL
-                SELECT COALESCE(MAX(user_id), 0) AS max_user_id FROM auth_otp_challenges
-            )
-            """
-        ).fetchone()
+        row = self._conn.execute("SELECT COALESCE(MAX(user_id), 0) + 1 AS next_id FROM users").fetchone()
         return int(row["next_id"] if row else 1)
 
     def _ensure_shared_state_locked(self, user_id: int) -> Dict[str, Any]:
@@ -92,11 +83,8 @@ class RemoteControlStoreViewMixin:
     def _user_view(self, user: sqlite3.Row | Dict[str, Any]) -> Dict[str, Any]:
         return {
             "user_id": int(user["user_id"]),
-            "email": str(user["email"] or ""),
             "display_name": user["display_name"],
             "created_at": _utc_iso(user["created_at"]),
-            "last_login_at": _utc_iso(user["last_login_at"]),
-            "email_verified_at": _utc_iso(user["email_verified_at"] if "email_verified_at" in user.keys() else None),
         }
 
     def _desktop_view(self, desktop: sqlite3.Row | Dict[str, Any]) -> Dict[str, Any]:
@@ -109,17 +97,6 @@ class RemoteControlStoreViewMixin:
             "created_at": _utc_iso(desktop["created_at"]),
             "last_seen_at": _utc_iso(desktop["last_seen_at"]),
             "last_heartbeat_at": _utc_iso(desktop["last_heartbeat_at"]),
-            "paired_mobile_ids": list(_json_loads(desktop["paired_mobile_ids"], [])),
-        }
-
-    def _mobile_view(self, mobile: sqlite3.Row | Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            "mobile_id": mobile["mobile_id"],
-            "device_name": mobile["device_name"],
-            "device_platform": mobile["device_platform"],
-            "paired_desktop_id": mobile["paired_desktop_id"],
-            "created_at": _utc_iso(mobile["created_at"]),
-            "last_used_at": _utc_iso(mobile["last_used_at"]),
         }
 
     def _audit_locked(
@@ -464,17 +441,6 @@ class RemoteControlStoreViewMixin:
             "decided_by_actor": row["decided_by_actor"],
         }
 
-    def _cloud_session_snapshot_view(self, row: sqlite3.Row | Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            "user_id": int(row["user_id"]),
-            "session_id": row["session_id"],
-            "status": row["status"],
-            "payload": _json_loads(row["payload"], {}),
-            "metadata": _json_loads(row["metadata"], {}),
-            "updated_at": _utc_iso(row["updated_at"]),
-            "archived_at": _utc_iso(row["archived_at"]),
-        }
-
     def _ensure_manager_instance_locked(
         self,
         *,
@@ -697,64 +663,41 @@ class RemoteControlStoreViewMixin:
         token_ttl_seconds: int,
         ensure_manager: bool = True,
     ) -> Dict[str, Any]:
-        if actor_kind not in {"mobile", "desktop"}:
-            raise ValueError("actor_kind must be mobile or desktop")
+        if actor_kind != "desktop":
+            raise ValueError("Fleet sessions are desktop-only")
 
         now = time.time()
         session_token = secrets.token_urlsafe(48)
         token_hash = _hash_token(session_token)
         normalized_key = (device_key or "").strip()[:MAX_DEVICE_KEY_CHARS] or None
-        normalized_name = (device_name or "").strip()[:MAX_DISPLAY_NAME_CHARS] or (
-            "EmploAI Desktop" if actor_kind == "desktop" else "EmploAI Mobile"
-        )
+        normalized_name = (device_name or "").strip()[:MAX_DISPLAY_NAME_CHARS] or "EmploAI Desktop"
         normalized_platform = (device_platform or "").strip()[:MAX_DEVICE_PLATFORM_CHARS] or None
-
-        desktop_id = None
-        mobile_id = None
-        if actor_kind == "desktop":
-            desktop_id = self._find_or_create_desktop_locked(
-                user_id=user_id,
-                display_name=normalized_name,
-                device_key=normalized_key,
-            )
-            self._conn.execute(
-                "UPDATE desktops SET display_name = ?, device_platform = ?, last_seen_at = ? WHERE desktop_id = ?",
-                (normalized_name, normalized_platform, now, desktop_id),
-            )
-            if ensure_manager:
-                self._ensure_manager_instance_locked(user_id=user_id, desktop_id=desktop_id, display_name=normalized_name)
-        else:
-            mobile_id = self._find_or_create_mobile_locked(
-                user_id=user_id,
-                device_name=normalized_name,
-                device_platform=normalized_platform,
-                device_key=normalized_key,
-            )
-            self._conn.execute(
-                "UPDATE mobiles SET device_name = ?, device_platform = ?, last_used_at = ? WHERE mobile_id = ?",
-                (normalized_name, normalized_platform, now, mobile_id),
-            )
-
-        self._conn.execute("UPDATE users SET last_login_at = ? WHERE user_id = ?", (now, user_id))
-        self._ensure_user_profile_locked(user_id)
+        desktop_id = self._find_or_create_desktop_locked(
+            user_id=user_id,
+            display_name=normalized_name,
+            device_key=normalized_key,
+        )
+        self._conn.execute(
+            "UPDATE desktops SET display_name = ?, device_platform = ?, last_seen_at = ? WHERE desktop_id = ?",
+            (normalized_name, normalized_platform, now, desktop_id),
+        )
+        if ensure_manager:
+            self._ensure_manager_instance_locked(user_id=user_id, desktop_id=desktop_id, display_name=normalized_name)
         self._conn.execute(
             """
             INSERT INTO remote_sessions(
                 token_hash, user_id, actor_kind, desktop_id, mobile_id, created_at, last_used_at, expires_at, revoked_at
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES(?, ?, 'desktop', ?, NULL, ?, ?, ?, NULL)
             """,
-            (token_hash, user_id, actor_kind, desktop_id, mobile_id, now, now, now + token_ttl_seconds, None),
+            (token_hash, user_id, desktop_id, now, now, now + token_ttl_seconds),
         )
         self._ensure_shared_state_locked(user_id)
-
         refreshed_user = self._conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
-        desktop = self._conn.execute("SELECT * FROM desktops WHERE desktop_id = ?", (desktop_id,)).fetchone() if desktop_id else None
-        mobile = self._conn.execute("SELECT * FROM mobiles WHERE mobile_id = ?", (mobile_id,)).fetchone() if mobile_id else None
+        desktop = self._conn.execute("SELECT * FROM desktops WHERE desktop_id = ?", (desktop_id,)).fetchone()
         return {
             "session_token": session_token,
             "expires_at": now + token_ttl_seconds,
             "user": self._user_view(refreshed_user),
-            "actor_kind": actor_kind,
-            "desktop": self._desktop_view(desktop) if desktop else None,
-            "mobile": self._mobile_view(mobile) if mobile else None,
+            "actor_kind": "desktop",
+            "desktop": self._desktop_view(desktop),
         }

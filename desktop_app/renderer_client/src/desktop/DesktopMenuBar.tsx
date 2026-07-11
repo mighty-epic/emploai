@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import type { DesktopPressableState } from '../lib/pressableState';
 import { DESKTOP_UI as UI } from './desktopUiTokens';
 
 type MenuName = 'File' | 'Edit' | 'View' | 'Help';
@@ -79,7 +80,7 @@ export function DesktopMenuBar({ menus }: { menus: Record<MenuName, MenuItem[]> 
                 if (key === 'ArrowLeft') switchMenu(menuName, -1);
               },
             } as any)}
-            style={({ hovered, pressed }) => [styles.trigger, (hovered || openMenu === menuName) ? styles.triggerActive : null, pressed ? styles.pressed : null]}
+            style={({ hovered, pressed }: DesktopPressableState) => [styles.trigger, (hovered || openMenu === menuName) ? styles.triggerActive : null, pressed ? styles.pressed : null]}
           >
             <Text style={styles.triggerText}>{menuName}</Text>
           </Pressable>
@@ -108,7 +109,7 @@ export function DesktopMenuBar({ menus }: { menus: Record<MenuName, MenuItem[]> 
                       if (key === 'Escape') { event.preventDefault?.(); closeMenu(true); }
                     },
                   } as any)}
-                  style={({ hovered, pressed }) => [styles.item, hovered ? styles.itemHovered : null, pressed ? styles.pressed : null, item.disabled ? styles.disabled : null]}
+                  style={({ hovered, pressed }: DesktopPressableState) => [styles.item, hovered ? styles.itemHovered : null, pressed ? styles.pressed : null, item.disabled ? styles.disabled : null]}
                 >
                   <Text style={styles.itemText}>{item.label}</Text>
                   {item.shortcut ? <Text style={styles.shortcut}>{item.shortcut}</Text> : null}

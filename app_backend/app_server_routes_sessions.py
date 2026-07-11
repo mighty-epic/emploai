@@ -695,21 +695,6 @@ def register_session_routes(app):
                 )
 
                 archive_id = str(archived_item.get("archive_id") or "").strip() or None
-
-                from shared.standalone_policy import cloud_backend_enabled
-
-                if cloud_backend_enabled():
-
-                    _get_remote_control_store().archive_cloud_session_snapshot(
-
-                        user_id=user_id,
-
-                        session_id=session_id,
-
-                        metadata={"archive_reason": "chat_delete"},
-
-                    )
-
             except Exception:
 
                 logger.exception("[recovery] failed archiving deleted chat")

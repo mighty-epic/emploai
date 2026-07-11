@@ -21,6 +21,7 @@ from shared.model_availability import (
 )
 from shared.model_defaults import default_model_pair_for_enabled_providers
 from shared.openai_codex_auth import codex_auth_status, is_codex_auth_configured
+from shared.fleet_connection import fleet_connection_configured
 from shared.tesseract_runtime import resolve_tesseract_runtime
 
 try:
@@ -39,16 +40,9 @@ EXTENSION_GUIDE_FILENAME = "HOW_TO_LOAD_BROWSER_EXTENSION.txt"
 TELEGRAM_REBIND_REQUIRED_STATE_KEY = "telegram_rebind_required"
 RUNTIME_DATA_SCHEMA_STATE_KEY = "runtime_data_schema_version"
 RUNTIME_DATA_SCHEMA_VERSION = 2
-REMOTE_ACCOUNT_SESSION_FILENAME = "remote-account-session.json"
-
 _ENV_ORDER = [
     "TELEGRAM_BOT_TOKEN",
     "ALLOWED_USER_IDS",
-    "EMPLOAI_REMOTE_CONTROL_BASE_URL",
-    "EMPLOAI_REMOTE_CONTROL_EMAIL",
-    "EMPLOAI_REMOTE_CONTROL_PASSWORD",
-    "EMPLOAI_REMOTE_DESKTOP_NAME",
-    "EMPLOAI_REMOTE_DESKTOP_KEY",
     "OPENAI_PROVIDER_MODE",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
@@ -82,12 +76,18 @@ _LOCAL_SECRET_ENV_FIELDS = frozenset(
         "GEMINI_API_KEY",
         "TELEGRAM_BOT_TOKEN",
         "EMPLOAI_TELEGRAM_BOT_TOKENS_JSON",
-        "EMPLOAI_REMOTE_CONTROL_PASSWORD",
-        "EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN",
         "GMAIL_LOGIN_EMAIL",
         "GMAIL_LOGIN_PASSWORD",
         "GMAIL_EMAIL",
         "GMAIL_PASSWORD",
+        # Removed hosted-account fields are retained only so upgrades scrub
+        # stale values from old .env files instead of preserving them.
+        "EMPLOAI_REMOTE_CONTROL_BASE_URL",
+        "EMPLOAI_REMOTE_CONTROL_EMAIL",
+        "EMPLOAI_REMOTE_CONTROL_PASSWORD",
+        "EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN",
+        "EMPLOAI_REMOTE_CONTROL_USER_ID",
+        "EMPLOAI_REMOTE_CONTROL_DESKTOP_ID",
     }
 )
 
@@ -144,11 +144,6 @@ VOICE_PACK_SELECTION_SCHEMA_VERSION = 1
 _SETUP_EDITABLE_FIELDS = [
     "TELEGRAM_BOT_TOKEN",
     "ALLOWED_USER_IDS",
-    "EMPLOAI_REMOTE_CONTROL_BASE_URL",
-    "EMPLOAI_REMOTE_CONTROL_EMAIL",
-    "EMPLOAI_REMOTE_CONTROL_PASSWORD",
-    "EMPLOAI_REMOTE_DESKTOP_NAME",
-    "EMPLOAI_REMOTE_DESKTOP_KEY",
     "DEFAULT_WORKSPACE",
     "PLANNER_MODEL",
     "INTERRUPT_POLICY_DEFAULT",
@@ -166,86 +161,6 @@ _PROVIDER_LABELS = {
     "NVIDIA_API_KEY": "NVIDIA NIM",
     "OPENROUTER_API_KEY": "OpenRouter",
 }
-
-_REMOTE_CONTROL_REQUIRED_FIELDS = (
-    "EMPLOAI_REMOTE_CONTROL_BASE_URL",
-    "EMPLOAI_REMOTE_CONTROL_EMAIL",
-    "EMPLOAI_REMOTE_CONTROL_PASSWORD",
-)
-REMOTE_CONTROL_BASE_URL_ENV = "EMPLOAI_REMOTE_CONTROL_BASE_URL"
-REMOTE_CONTROL_SESSION_TOKEN_ENV = "EMPLOAI_REMOTE_CONTROL_SESSION_TOKEN"
-REMOTE_CONTROL_USER_ID_ENV = "EMPLOAI_REMOTE_CONTROL_USER_ID"
-REMOTE_CONTROL_DESKTOP_ID_ENV = "EMPLOAI_REMOTE_CONTROL_DESKTOP_ID"
-
-
-def remote_account_session_path(home: Path) -> Path:
-    return home / REMOTE_ACCOUNT_SESSION_FILENAME
-
-
-def _read_remote_account_session_file_payload(home: Path) -> Dict[str, Any]:
-    path = remote_account_session_path(home)
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
-    if payload.get("storage") == "plain_json_fallback" and isinstance(payload.get("payload"), dict):
-        return dict(payload.get("payload") or {})
-    return payload
-
-
-def remote_account_session_payload(home: Path, values: Mapping[str, str] | None = None) -> Dict[str, Any]:
-    payload = dict(_read_remote_account_session_file_payload(home))
-    overrides = values or {}
-
-    def configured_value(key: str) -> str:
-        return str(overrides.get(key) or os.getenv(key, "") or "").strip()
-
-    base_url = str(
-        configured_value(REMOTE_CONTROL_BASE_URL_ENV)
-        or payload.get("apiBaseUrl")
-        or payload.get("api_base_url")
-        or ""
-    ).strip()
-    session_token = str(
-        configured_value(REMOTE_CONTROL_SESSION_TOKEN_ENV)
-        or payload.get("sessionToken")
-        or payload.get("session_token")
-        or ""
-    ).strip()
-    user_id = str(configured_value(REMOTE_CONTROL_USER_ID_ENV) or payload.get("user_id") or "").strip()
-    desktop_payload = payload.get("desktop") if isinstance(payload.get("desktop"), dict) else {}
-    desktop_id = str(
-        configured_value(REMOTE_CONTROL_DESKTOP_ID_ENV)
-        or desktop_payload.get("desktop_id")
-        or payload.get("desktop_id")
-        or ""
-    ).strip()
-
-    if base_url:
-        payload["apiBaseUrl"] = base_url
-    if session_token:
-        payload["sessionToken"] = session_token
-    if user_id:
-        user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
-        payload["user"] = {**user, "user_id": user_id}
-        payload["user_id"] = user_id
-    if desktop_id:
-        payload["desktop"] = {**desktop_payload, "desktop_id": desktop_id}
-        payload["desktop_id"] = desktop_id
-    return payload
-
-
-def remote_account_session_configured(home: Path, values: Mapping[str, str] | None = None) -> bool:
-    payload = remote_account_session_payload(home, values)
-    if not payload:
-        return False
-    return bool(
-        str(payload.get("apiBaseUrl") or payload.get("api_base_url") or "").strip()
-        and str(payload.get("sessionToken") or payload.get("session_token") or "").strip()
-    )
-
 
 def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
@@ -1203,42 +1118,6 @@ def run_first_run_setup(
         workspace = _prompt_with_default("Workspace root for file operations", workspace_default, input_fn)
         updates["DEFAULT_WORKSPACE"] = workspace
 
-        remote_url_default = existing.get("EMPLOAI_REMOTE_CONTROL_BASE_URL", "")
-        if remote_url_default:
-            updates["EMPLOAI_REMOTE_CONTROL_BASE_URL"] = _prompt_with_default(
-                "Remote control service URL",
-                remote_url_default,
-                input_fn,
-            )
-        else:
-            updates["EMPLOAI_REMOTE_CONTROL_BASE_URL"] = input_fn(
-                "Remote control service URL [optional; Enter=skip]: "
-            ).strip()
-
-        remote_email_default = existing.get("EMPLOAI_REMOTE_CONTROL_EMAIL", "")
-        if remote_email_default:
-            updates["EMPLOAI_REMOTE_CONTROL_EMAIL"] = _prompt_with_default(
-                "Remote control account email",
-                remote_email_default,
-                input_fn,
-            )
-        else:
-            updates["EMPLOAI_REMOTE_CONTROL_EMAIL"] = input_fn(
-                "Remote control account email [optional; Enter=skip]: "
-            ).strip()
-
-        updates["EMPLOAI_REMOTE_CONTROL_PASSWORD"] = ""
-        updates["EMPLOAI_REMOTE_DESKTOP_NAME"] = _prompt_with_default(
-            "Remote desktop display name",
-            existing.get("EMPLOAI_REMOTE_DESKTOP_NAME", "EmploAI Desktop"),
-            input_fn,
-        )
-        updates["EMPLOAI_REMOTE_DESKTOP_KEY"] = _prompt_with_default(
-            "Remote desktop stable key",
-            existing.get("EMPLOAI_REMOTE_DESKTOP_KEY", "desktop-default"),
-            input_fn,
-        )
-
         updates["OPENAI_API_KEY"] = _prompt_secret(
             "OpenAI API key",
             existing=existing.get("OPENAI_API_KEY", ""),
@@ -1431,10 +1310,6 @@ def validate_setup_values(values: Mapping[str, str]) -> list[str]:
         issues.append("Allowed Telegram user ID(s) are required when a Telegram bot token is configured.")
     if allowed_ids and not token:
         issues.append("Telegram bot token is required when allowed Telegram user ID(s) are configured.")
-
-    remote_url = normalized.get("EMPLOAI_REMOTE_CONTROL_BASE_URL", "").strip()
-    if remote_url and not (remote_url.startswith("https://") or remote_url.startswith("http://")):
-        issues.append("Remote control service URL must start with http:// or https://.")
 
     return issues
 
@@ -1631,11 +1506,7 @@ def build_setup_state(
     values[VOICE_DEFAULT_ENGINE_FIELD] = str(voice_config.get("default_engine") or VOICE_ENGINE_NONE)
     values[VOICE_ENGLISH_REQUESTED_FIELD] = _setting_bool(english_requested, False)
     values[VOICE_HEBREW_REQUESTED_FIELD] = _setting_bool(hebrew_requested, False)
-    legacy_remote_configured = bool(all(normalized.get(field, "").strip() for field in _REMOTE_CONTROL_REQUIRED_FIELDS))
-    legacy_remote_partial = bool(
-        any(normalized.get(field, "").strip() for field in _REMOTE_CONTROL_REQUIRED_FIELDS)
-    ) and not legacy_remote_configured
-    token_remote_configured = remote_account_session_configured(home, normalized)
+    fleet_transport_configured = fleet_connection_configured(home)
 
     return {
         "required": bool(blocking_validation_issues),
@@ -1655,8 +1526,8 @@ def build_setup_state(
         "telegramPartiallyConfigured": False if telegram_rebind_required else bool(
             bool(normalized.get("TELEGRAM_BOT_TOKEN")) ^ bool(normalized.get("ALLOWED_USER_IDS"))
         ),
-        "remoteControlConfigured": bool(token_remote_configured or legacy_remote_configured),
-        "remoteControlPartiallyConfigured": bool(not token_remote_configured and legacy_remote_partial),
+        "remoteControlConfigured": bool(fleet_transport_configured),
+        "remoteControlPartiallyConfigured": False,
         "telegramRebindRequired": telegram_rebind_required,
         "ocrAvailable": runtime.executable is not None,
         "ocrSource": runtime.source,

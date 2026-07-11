@@ -14,7 +14,6 @@ from app_backend.models import (
     FleetCreateEnrollmentResponse,
     FleetWorkerView,
     RemoteDesktopView,
-    RemoteUserView,
 )
 
 
@@ -101,7 +100,7 @@ def create_fleet_enrollment_router(deps: FleetEnrollmentRouterDeps) -> APIRouter
         return FleetCompleteEnrollmentResponse(
             session_token=str(result["session_token"]),
             expires_in_seconds=max(0, int(expires_at - time.time())),
-            user=RemoteUserView.model_validate(result["user"]),
+            user_id=int(result["user"]["user_id"]),
             desktop=RemoteDesktopView.model_validate(result["desktop"]),
             worker=FleetWorkerView.model_validate(result["worker"]),
         )

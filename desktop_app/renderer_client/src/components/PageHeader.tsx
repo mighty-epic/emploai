@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import { useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import type { DesktopPressableState } from '../lib/pressableState';
+
 type PageHeaderProps = {
   title: string;
   subtitle?: string;
@@ -32,7 +34,7 @@ export function PageHeader({
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Go back"
-        style={({ pressed, hovered }) => [
+        style={({ pressed, hovered }: DesktopPressableState) => [
           styles.backButton,
           hovered ? styles.backButtonHover : null,
           pressed ? styles.backButtonPressed : null,

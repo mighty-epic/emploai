@@ -53,13 +53,13 @@ def test_artifact_store_builds_index_and_retrieval(monkeypatch, tmp_path: Path) 
     assert "Should never appear" not in combined
 
 
-def test_generated_artifacts_are_cloud_mirrored_with_quota_metadata(monkeypatch, tmp_path: Path) -> None:
+def test_generated_artifacts_remain_local(monkeypatch, tmp_path: Path) -> None:
     runtime_home = tmp_path / "runtime"
     runtime_home.mkdir()
     monkeypatch.setenv("EMPLOAI_HOME", str(runtime_home))
     monkeypatch.setenv("EMPLOAI_CLOUD_BACKEND_ENABLED", "1")
 
-    store = ChatArtifactStore(user_id=77, session_id="sess-cloud")
+    store = ChatArtifactStore(user_id=77, session_id="sess-local")
     record = store.create_text_artifact(
         artifact_kind="command_output",
         title="Command output",
@@ -67,9 +67,10 @@ def test_generated_artifacts_are_cloud_mirrored_with_quota_metadata(monkeypatch,
         source_kind="agent",
     )
 
-    assert record.metadata["cloud_sync_status"] == "synced"
-    assert record.metadata["cloud_object_key"]
-    assert record.metadata["cloud_storage_backend"] == "vps_object_store"
+    assert "cloud_sync_status" not in record.metadata
+    assert "cloud_object_key" not in record.metadata
+    assert "cloud_storage_backend" not in record.metadata
+    assert (runtime_home / "data" / "user_77" / "artifacts" / "chats" / "sess-local" / record.payload_path).exists()
 
     upload = store.create_text_artifact(
         artifact_kind="upload",

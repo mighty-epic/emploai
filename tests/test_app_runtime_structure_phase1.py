@@ -290,30 +290,6 @@ def test_mobile_account_pairing_flow_routes_into_shared_surfaces():
     assert "return { config: await clearRemoteAccountConfig(), profile: null, changed: true }" in account_session
 
 
-def test_resolve_pairing_user_id_prefers_pairing_creator(monkeypatch):
-    class DummyStore:
-        def get_pairing(self, pairing_id: str):
-            assert pairing_id == "pair-1"
-            return {"created_by": "user:77"}
-
-    monkeypatch.setattr(app_server, "_get_auth_store", lambda: DummyStore())
-    monkeypatch.setattr(app_server, "_default_user_id", lambda: 11)
-
-    assert app_server._resolve_pairing_user_id("pair-1") == 77
-
-
-def test_resolve_pairing_user_id_falls_back_to_default(monkeypatch):
-    class DummyStore:
-        def get_pairing(self, pairing_id: str):
-            assert pairing_id == "pair-2"
-            return {"created_by": "service:bootstrap"}
-
-    monkeypatch.setattr(app_server, "_get_auth_store", lambda: DummyStore())
-    monkeypatch.setattr(app_server, "_default_user_id", lambda: 11)
-
-    assert app_server._resolve_pairing_user_id("pair-2") == 11
-
-
 def test_app_default_user_id_ignores_allowed_user_ids(monkeypatch):
     monkeypatch.setenv("ALLOWED_USER_IDS", "8562474049")
 

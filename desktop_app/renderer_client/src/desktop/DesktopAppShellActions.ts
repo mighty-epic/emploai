@@ -290,7 +290,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
         await stopDesktopRuntime().catch(() => null);
       }
       const status = await logoutDesktopRemoteAuth();
-      setRemoteAuthStatus(status || { signedIn: false, apiBaseUrl: 'https://api.kraitos.app' });
+      setRemoteAuthStatus(status || { signedIn: false, cloudDisabled: true, standalone: true, apiBaseUrl: 'http://127.0.0.1:8787' });
       setRemoteAuthPassword('');
       setRemoteAuthMessage('Signed out.');
       resetAccountStartupState();
