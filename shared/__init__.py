@@ -36,6 +36,7 @@ _LAZY_EXPORTS = {
     "SharedTurnResult": ("shared.channel_runtime", "SharedTurnResult"),
     "compact_session_history": ("shared.channel_runtime", "compact_session_history"),
     "begin_chat_turn": ("shared.channel_runtime", "begin_chat_turn"),
+    "reserve_failed_chat_turn_retry": ("shared.channel_runtime", "reserve_failed_chat_turn_retry"),
     "current_session_id": ("shared.channel_runtime", "current_session_id"),
     "merge_openai_tools": ("shared.channel_runtime", "merge_openai_tools"),
     "run_reserved_chat_turn": ("shared.channel_runtime", "run_reserved_chat_turn"),

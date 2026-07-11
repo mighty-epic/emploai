@@ -17,8 +17,8 @@ function wait(ms: number) {
     setTimeout(resolve, ms);
   });
 }
-import type { AppProfile, RemoteUser, RemoteDesktop, RemoteMobile, RemoteAuthLoginResult, RemoteAuthOtpChallengeResult, RemoteGoogleAuthStartResult, RemoteGoogleAuthPollResult, RemoteAccountCloudProfile, RemoteAccountProfile, RemoteAccountCloudProfileResult, RemoteAccountSecretItem, RemoteAccountSecretsListResult, RemoteAccountSecretsRevealResult, RemoteAuthLogoutResult, RemoteAccountDataDeleteResult, RemotePairStartResult, RemotePairCompleteResult, SessionSummary, SessionMessage, SessionTimelineEvent, SessionDetail, FleetIdentity, FleetWorker, FleetTask, FleetReport, FleetGroup, FleetToolGrant, FleetWorkspaceBinding, FleetSnapshot, ArtifactSummary, ArtifactDetail, DeleteSessionResult, SessionSearchResult, ScheduledJob, JobCreatePayload, CronFeedItem, AutomationEventRun, ProcessWait, PlannerContract, RecoveryArchiveItem, RecoveryListResponse, PendingConfirmation, ConfirmationCreatePayload, WorkspaceRestoreResponse, ModelProviderGroup, AgentHistoryItem, PendingFile, UploadResponse, ContextCompaction, ContextUsage, TaskBoardSubGoal, TaskBoard, HeartbeatStatus, MemorySummary, AnalyticsSummary, SecuritySummary, ConfigEntry, AgentOverview, TelegramBotConfig, RuntimeWorkerStatus, RuntimeOrchestratorStatus, WorkspaceGitState, SidebarProjectState, SidebarSessionState, SidebarState, SidebarStateResult, VoiceRuntimeStatus, TaskBoardArmResult, AgentConfigurePayload, ToolPackUpdatePayload, SessionBotAssignmentPayload, SessionHeadlessEligibilityPayload, SessionSecurityPermissionPayload, HeadlessConfigurePayload, AgentAction, BridgeStatus, SkillSummary, SkillDetail, SkillLearnResult, SkillValidation, SubAgentTask, SubAgentStatus, MemorySearchResult, MemoryOperation, MemoryOperationResult, MemoryFact } from './appApiTypes';
-export type { AppProfile, RemoteUser, RemoteDesktop, RemoteMobile, RemoteAuthLoginResult, RemoteAuthOtpChallengeResult, RemoteGoogleAuthStartResult, RemoteGoogleAuthPollResult, RemoteAccountCloudProfile, RemoteAccountProfile, RemoteAccountCloudProfileResult, RemoteAccountSecretItem, RemoteAccountSecretsListResult, RemoteAccountSecretsRevealResult, RemoteAuthLogoutResult, RemoteAccountDataDeleteResult, RemotePairStartResult, RemotePairCompleteResult, SessionSummary, SessionMessage, SessionTimelineEvent, SessionDetail, FleetIdentity, FleetWorker, FleetTask, FleetReport, FleetGroup, FleetToolGrant, FleetWorkspaceBinding, FleetSnapshot, ArtifactSummary, ArtifactDetail, DeleteSessionResult, SessionSearchResult, ScheduledJob, JobCreatePayload, CronFeedItem, AutomationEventRun, ProcessWait, PlannerContract, RecoveryArchiveItem, RecoveryListResponse, PendingConfirmation, ConfirmationCreatePayload, WorkspaceRestoreResponse, ModelProviderGroup, AgentHistoryItem, PendingFile, UploadResponse, ContextCompaction, ContextUsage, TaskBoardSubGoal, TaskBoard, HeartbeatStatus, MemorySummary, AnalyticsSummary, SecuritySummary, ConfigEntry, AgentOverview, TelegramBotConfig, RuntimeWorkerStatus, RuntimeOrchestratorStatus, WorkspaceGitState, SidebarProjectState, SidebarSessionState, SidebarState, SidebarStateResult, VoiceRuntimeStatus, TaskBoardArmResult, AgentConfigurePayload, ToolPackUpdatePayload, SessionBotAssignmentPayload, SessionHeadlessEligibilityPayload, SessionSecurityPermissionPayload, HeadlessConfigurePayload, AgentAction, BridgeStatus, SkillSummary, SkillDetail, SkillLearnResult, SkillValidation, SubAgentTask, SubAgentStatus, MemorySearchResult, MemoryOperation, MemoryOperationResult, MemoryFact } from './appApiTypes';
+import type { AppProfile, RemoteUser, RemoteDesktop, RemoteMobile, RemoteAuthLoginResult, RemoteAuthOtpChallengeResult, RemoteGoogleAuthStartResult, RemoteGoogleAuthPollResult, RemoteAccountCloudProfile, RemoteAccountProfile, RemoteAccountCloudProfileResult, RemoteAccountSecretItem, RemoteAccountSecretsListResult, RemoteAccountSecretsRevealResult, RemoteAuthLogoutResult, RemoteAccountDataDeleteResult, RemotePairStartResult, RemotePairCompleteResult, SessionSummary, SessionMessage, SessionTimelineEvent, SessionDetail, FleetIdentity, FleetWorker, FleetTask, FleetReport, FleetGroup, FleetToolGrant, FleetWorkspaceBinding, FleetSnapshot, ArtifactSummary, ArtifactDetail, DeleteSessionResult, SessionSearchResult, ScheduledJob, JobCreatePayload, CronFeedItem, AutomationEventRun, ProcessWait, PlannerContract, RecoveryArchiveItem, RecoveryListResponse, PendingConfirmation, ConfirmationCreatePayload, WorkspaceRestoreResponse, ModelProviderGroup, AgentHistoryItem, PendingFile, UploadResponse, ContextCompaction, ContextUsage, TaskBoardSubGoal, TaskBoard, HeartbeatStatus, MemorySummary, AnalyticsSummary, SecuritySummary, ConfigEntry, AgentOverview, TelegramBotConfig, RuntimeWorkerStatus, RuntimeOrchestratorStatus, WorkspaceGitState, SidebarProjectState, SidebarSessionState, SidebarState, SidebarStateResult, VoiceRuntimeStatus, TaskBoardArmResult, AgentConfigurePayload, ToolPackUpdatePayload, ProjectOnboardingProfile, ProjectOnboardingGuideMessage, ProjectOnboardingToolRequirement, ProjectOnboardingSavePayload, ProjectOnboardingSummarizePayload, ProjectOnboardingResponse, SessionBotAssignmentPayload, SessionHeadlessEligibilityPayload, SessionSecurityPermissionPayload, HeadlessConfigurePayload, AgentAction, BridgeStatus, SkillSummary, SkillDetail, SkillLearnResult, SkillValidation, SubAgentTask, SubAgentStatus, MemorySearchResult, MemoryOperation, MemoryOperationResult, MemoryFact } from './appApiTypes';
+export type { AppProfile, RemoteUser, RemoteDesktop, RemoteMobile, RemoteAuthLoginResult, RemoteAuthOtpChallengeResult, RemoteGoogleAuthStartResult, RemoteGoogleAuthPollResult, RemoteAccountCloudProfile, RemoteAccountProfile, RemoteAccountCloudProfileResult, RemoteAccountSecretItem, RemoteAccountSecretsListResult, RemoteAccountSecretsRevealResult, RemoteAuthLogoutResult, RemoteAccountDataDeleteResult, RemotePairStartResult, RemotePairCompleteResult, SessionSummary, SessionMessage, SessionTimelineEvent, SessionDetail, FleetIdentity, FleetWorker, FleetTask, FleetReport, FleetGroup, FleetToolGrant, FleetWorkspaceBinding, FleetSnapshot, ArtifactSummary, ArtifactDetail, DeleteSessionResult, SessionSearchResult, ScheduledJob, JobCreatePayload, CronFeedItem, AutomationEventRun, ProcessWait, PlannerContract, RecoveryArchiveItem, RecoveryListResponse, PendingConfirmation, ConfirmationCreatePayload, WorkspaceRestoreResponse, ModelProviderGroup, AgentHistoryItem, PendingFile, UploadResponse, ContextCompaction, ContextUsage, TaskBoardSubGoal, TaskBoard, HeartbeatStatus, MemorySummary, AnalyticsSummary, SecuritySummary, ConfigEntry, AgentOverview, TelegramBotConfig, RuntimeWorkerStatus, RuntimeOrchestratorStatus, WorkspaceGitState, SidebarProjectState, SidebarSessionState, SidebarState, SidebarStateResult, VoiceRuntimeStatus, TaskBoardArmResult, AgentConfigurePayload, ToolPackUpdatePayload, ProjectOnboardingProfile, ProjectOnboardingGuideMessage, ProjectOnboardingToolRequirement, ProjectOnboardingSavePayload, ProjectOnboardingSummarizePayload, ProjectOnboardingResponse, SessionBotAssignmentPayload, SessionHeadlessEligibilityPayload, SessionSecurityPermissionPayload, HeadlessConfigurePayload, AgentAction, BridgeStatus, SkillSummary, SkillDetail, SkillLearnResult, SkillValidation, SubAgentTask, SubAgentStatus, MemorySearchResult, MemoryOperation, MemoryOperationResult, MemoryFact } from './appApiTypes';
 
 
 function authHeaders(token: string): Record<string, string> {
@@ -653,6 +653,37 @@ export async function deleteSession(apiBaseUrl: string, token: string, sessionId
   });
 }
 
+export async function renameSession(apiBaseUrl: string, token: string, sessionId: string, name: string) {
+  return requestJson<SessionDetail>({
+    scope: 'sessions.rename',
+    url: `${apiBaseUrl}/api/app/sessions/${encodeURIComponent(sessionId)}`,
+    init: {
+      method: 'PUT',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function updateSessionModeState(
+  apiBaseUrl: string,
+  token: string,
+  sessionId: string,
+  payload: { action: 'exit_plan' | 'dismiss_plan' | 'clear_goal'; reason?: string | null },
+) {
+  return requestJson<SessionDetail>({
+    scope: 'sessions.mode',
+    url: `${apiBaseUrl}/api/app/sessions/${encodeURIComponent(sessionId)}/mode`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+    timeoutMs: 30000,
+  });
+}
+
 export async function fetchJobs(apiBaseUrl: string, token: string) {
   return requestJson<ScheduledJob[]>({
     scope: 'automations.list',
@@ -827,7 +858,7 @@ export async function denyPendingConfirmation(apiBaseUrl: string, token: string,
 }
 
 export async function restoreRecoveryItem(apiBaseUrl: string, token: string, archiveId: string) {
-  return requestJson<{ ok: boolean; action: string; item?: RecoveryArchiveItem }>({
+  return requestJson<{ ok: boolean; action: string; item?: RecoveryArchiveItem; restored_session_id?: string | null }>({
     scope: 'recovery.restore',
     url: `${apiBaseUrl}/api/app/recovery/${encodeURIComponent(archiveId)}/restore`,
     init: { method: 'POST', headers: authHeaders(token) },
@@ -938,6 +969,41 @@ export async function updateSessionToolPacks(apiBaseUrl: string, token: string, 
   return requestJson<SessionDetail>({
     scope: 'sessions.toolpacks',
     url: `${apiBaseUrl}/api/app/sessions/${encodeURIComponent(sessionId)}/tool-packs`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function fetchProjectOnboarding(apiBaseUrl: string, token: string, workspace: string) {
+  const query = new URLSearchParams({ workspace });
+  return requestJson<ProjectOnboardingResponse>({
+    scope: 'onboarding.get',
+    url: `${apiBaseUrl}/api/app/onboarding?${query.toString()}`,
+    init: {
+      headers: authHeaders(token),
+    },
+  });
+}
+
+export async function saveProjectOnboarding(apiBaseUrl: string, token: string, payload: ProjectOnboardingSavePayload) {
+  return requestJson<ProjectOnboardingResponse>({
+    scope: 'onboarding.save',
+    url: `${apiBaseUrl}/api/app/onboarding`,
+    init: {
+      method: 'PUT',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function summarizeProjectOnboarding(apiBaseUrl: string, token: string, payload: ProjectOnboardingSummarizePayload) {
+  return requestJson<ProjectOnboardingResponse>({
+    scope: 'onboarding.summarize',
+    url: `${apiBaseUrl}/api/app/onboarding/summarize`,
     init: {
       method: 'POST',
       headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
@@ -1615,6 +1681,39 @@ export async function controlAgentRun(
     init: {
       method: 'POST',
       headers: authHeaders(token),
+    },
+    timeoutMs: 30000,
+  });
+}
+
+export async function stopIdentityTree(
+  apiBaseUrl: string,
+  token: string,
+  payload: {
+    session_id?: string | null;
+    identity_id?: string | null;
+    identity_role?: string | null;
+    worker_id?: string | null;
+    reason?: string | null;
+  }
+) {
+  return requestJson<{
+    ok: boolean;
+    action: 'identity_stop';
+    message: string;
+    counts?: Record<string, number>;
+    fleet_results?: unknown[];
+    session_id?: string | null;
+  }>({
+    scope: 'agent.control.identity_stop',
+    url: `${apiBaseUrl}/api/app/agent/control/identity-stop`,
+    init: {
+      method: 'POST',
+      headers: {
+        ...authHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
     },
     timeoutMs: 30000,
   });

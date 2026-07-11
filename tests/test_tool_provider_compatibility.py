@@ -158,6 +158,12 @@ class DummyResponseOnceClient:
         self.chat = SimpleNamespace(completions=DummyCompletions())
 
 
+class OpenAICodexClient:
+    def __init__(self):
+        self.responses = DummyResponseOnce()
+        self.chat = SimpleNamespace(completions=DummyCompletions())
+
+
 def _openai_tool_names(tools):
     return [tool["function"]["name"] for tool in tools]
 
@@ -560,8 +566,39 @@ def test_create_openai_completion_uses_responses_api_for_responses_models():
     sent_tools = client.responses.last_kwargs["tools"]
     assert response.choices[0].message.content == "ready"
     assert client.responses.last_kwargs["max_output_tokens"] == 50
+    assert "store" not in client.responses.last_kwargs
     assert all(tool.get("type") == "function" and "name" in tool for tool in sent_tools)
     assert any(tool.get("name") == "desktop_status_probe" for tool in sent_tools)
+
+
+def test_create_openai_completion_disables_store_for_chatgpt_models():
+    client = DummyResponseOnceClient()
+
+    response = create_openai_completion(
+        client,
+        model_name="chatgpt/gpt-5.4-mini",
+        model_id="gpt-5.4-mini",
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=50,
+    )
+
+    assert response.choices[0].message.content == "ready"
+    assert client.responses.last_kwargs["store"] is False
+
+
+def test_create_openai_completion_disables_store_for_codex_client_even_with_plain_model_name():
+    client = OpenAICodexClient()
+
+    response = create_openai_completion(
+        client,
+        model_name="gpt-5.4-mini",
+        model_id="gpt-5.4-mini",
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=50,
+    )
+
+    assert response.choices[0].message.content == "ready"
+    assert client.responses.last_kwargs["store"] is False
 
 
 def test_build_tools_for_provider_respects_filtered_base_tool_set():

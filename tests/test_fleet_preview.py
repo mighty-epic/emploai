@@ -64,7 +64,19 @@ def test_request_fleet_worker_preview_dispatches_connected_remote_worker(tmp_pat
     store, user_id, manager_desktop_id = _store_with_manager(tmp_path)
     worker = _remote_worker(store, user_id=user_id, manager_desktop_id=manager_desktop_id)
     manager = _FakePreviewManager(
-        {"status": "acknowledged", "detail": "Preview accepted.", "command_id": "cmd_preview"}
+        {
+            "status": "captured",
+            "detail": "Preview captured.",
+            "command_id": "cmd_preview",
+            "capture": {
+                "mime_type": "image/jpeg",
+                "image_base64": "cmVtb3RlLXByZXZpZXc=",
+                "width": 640,
+                "height": 360,
+                "backend": "test",
+                "captured_at": 1.0,
+            },
+        }
     )
 
     result = asyncio.run(
@@ -78,17 +90,19 @@ def test_request_fleet_worker_preview_dispatches_connected_remote_worker(tmp_pat
         )
     )
 
-    assert result["dispatch_status"] == "acknowledged"
+    assert result["dispatch_status"] == "captured"
     assert result["command_id"] == "cmd_preview"
-    assert result["detail"] == "Preview accepted."
+    assert result["detail"] == "Preview captured."
+    assert result["capture"]["image_base64"] == "cmVtb3RlLXByZXZpZXc="
     assert manager.calls[0]["desktop_id"] == worker["machine_desktop_id"]
     assert manager.calls[0]["command_type"] == "fleet_worker_preview"
     assert manager.calls[0]["payload"]["preview_id"] == result["preview_id"]
     updated = store.get_worker(user_id=user_id, worker_id=worker["worker_id"])
-    assert updated["metadata"]["latest_preview_request"]["status"] == "acknowledged"
+    assert updated["metadata"]["latest_preview_request"]["status"] == "captured"
+    assert "image_base64" not in updated["metadata"]["latest_preview_request"]["metadata"]["capture"]
 
 
-def test_request_fleet_worker_preview_records_local_placeholder_without_dispatch(tmp_path):
+def test_request_fleet_worker_preview_captures_local_worker_without_remote_dispatch(tmp_path):
     store, user_id, manager_desktop_id = _store_with_manager(tmp_path)
     worker = store.create_local_worker(user_id=user_id, desktop_id=manager_desktop_id)
     manager = _FakePreviewManager()
@@ -101,11 +115,27 @@ def test_request_fleet_worker_preview_records_local_placeholder_without_dispatch
             worker=worker,
             requested_by="desktop",
             is_remote_session_active=lambda **_: True,
+            capture_local_preview=lambda **_: asyncio.sleep(
+                0,
+                result={
+                    "status": "captured",
+                    "detail": "Local preview captured.",
+                    "capture": {
+                        "mime_type": "image/jpeg",
+                        "image_base64": "bG9jYWwtcHJldmlldw==",
+                        "width": 800,
+                        "height": 450,
+                        "backend": "test",
+                        "captured_at": 1.0,
+                    },
+                },
+            ),
         )
     )
 
-    assert result["dispatch_status"] == "local_placeholder"
-    assert "Local logical workers" in result["detail"]
+    assert result["dispatch_status"] == "captured"
+    assert result["detail"] == "Local preview captured."
+    assert result["capture"]["image_base64"] == "bG9jYWwtcHJldmlldw=="
     assert manager.calls == []
 
 

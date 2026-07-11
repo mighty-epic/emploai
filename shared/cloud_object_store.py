@@ -3,16 +3,19 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from shared.runtime_paths import user_state_root
+from shared.atomic_io import atomic_write_bytes, atomic_write_json
 
 
 MAX_OBJECT_BYTES = 100 * 1024 * 1024
 MAX_ACCOUNT_BYTES = 2 * 1024 * 1024 * 1024
+_CLOUD_OBJECT_LOCK = threading.RLock()
 
 
 def _now() -> float:
@@ -59,6 +62,7 @@ class CloudObjectStore:
         self.root = (user_state_root(self.user_id) / "cloud_object_store").resolve()
         self.objects_dir = self.root / "objects"
         self.manifest_path = self.root / "manifest.json"
+        self.manifest_backup_path = self.root / ".recovery" / "manifest.json.bak"
         self.objects_dir.mkdir(parents=True, exist_ok=True)
 
     def _usage_bytes(self) -> int:
@@ -74,22 +78,52 @@ class CloudObjectStore:
         return total
 
     def _read_manifest(self) -> Dict[str, Any]:
-        if not self.manifest_path.exists():
+        if not self.manifest_path.exists() and not self.manifest_backup_path.exists():
             return {"objects": {}}
-        try:
-            payload = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-        except Exception:
-            return {"objects": {}}
-        if not isinstance(payload, dict):
-            return {"objects": {}}
-        payload.setdefault("objects", {})
-        return payload
+        for candidate in (self.manifest_path, self.manifest_backup_path):
+            try:
+                payload = json.loads(candidate.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            payload.setdefault("objects", {})
+            if candidate == self.manifest_backup_path:
+                atomic_write_json(
+                    self.manifest_path,
+                    payload,
+                    backup_path=self.manifest_backup_path,
+                    sort_keys=True,
+                )
+            return payload
+        return {"objects": {}}
 
     def _write_manifest(self, payload: Dict[str, Any]) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
-        self.manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        atomic_write_json(
+            self.manifest_path,
+            payload,
+            backup_path=self.manifest_backup_path,
+            sort_keys=True,
+        )
 
     def put_bytes(
+        self,
+        *,
+        data: bytes,
+        file_name: str,
+        content_type: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> CloudObjectResult:
+        with _CLOUD_OBJECT_LOCK:
+            return self._put_bytes_locked(
+                data=data,
+                file_name=file_name,
+                content_type=content_type,
+                metadata=metadata,
+            )
+
+    def _put_bytes_locked(
         self,
         *,
         data: bytes,
@@ -113,7 +147,7 @@ class CloudObjectStore:
             return CloudObjectResult(status="metadata_only", sha256=digest, size_bytes=size, reason="invalid_object_key")
         target.parent.mkdir(parents=True, exist_ok=True)
         if not target.exists():
-            target.write_bytes(raw)
+            atomic_write_bytes(target, raw)
 
         manifest = self._read_manifest()
         manifest["objects"][object_key] = {
@@ -141,6 +175,10 @@ class CloudObjectStore:
         return objects
 
     def delete_object(self, object_key: str) -> Dict[str, Any]:
+        with _CLOUD_OBJECT_LOCK:
+            return self._delete_object_locked(object_key)
+
+    def _delete_object_locked(self, object_key: str) -> Dict[str, Any]:
         key = str(object_key or "").strip()
         if not key:
             return {"deleted": False, "object_key": key, "reason": "missing_object_key"}

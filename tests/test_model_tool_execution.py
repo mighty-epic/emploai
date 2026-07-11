@@ -10,6 +10,8 @@ Run with:
 Logs are saved to: tests/test_logs/
 """
 
+__test__ = False  # Manual live-model harness; run this module directly.
+
 from dotenv import load_dotenv
 load_dotenv()
 

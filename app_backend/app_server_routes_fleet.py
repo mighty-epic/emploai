@@ -523,7 +523,7 @@ def register_fleet_routes(app):
 
         auth = _require_fleet_manager_auth(authorization)
 
-        if not request.display_name:
+        if not request.display_name and request.queue_policy is None:
 
             try:
 
@@ -537,15 +537,37 @@ def register_fleet_routes(app):
 
         try:
 
-            worker = _get_remote_control_store().rename_worker(
+            store = _get_remote_control_store()
 
-                user_id=int(auth["user_id"]),
+            worker = (
 
-                worker_id=worker_id,
+                store.rename_worker(
 
-                display_name=request.display_name,
+                    user_id=int(auth["user_id"]),
+
+                    worker_id=worker_id,
+
+                    display_name=request.display_name,
+
+                )
+
+                if request.display_name
+
+                else store.get_worker(user_id=int(auth["user_id"]), worker_id=worker_id)
 
             )
+
+            if request.queue_policy is not None:
+
+                worker = store.set_worker_queue_policy(
+
+                    user_id=int(auth["user_id"]),
+
+                    worker_id=worker_id,
+
+                    queue_policy=request.queue_policy,
+
+                )
 
         except KeyError as exc:
 
@@ -561,7 +583,13 @@ def register_fleet_routes(app):
 
             event_type="fleet_worker_presence",
 
-            payload={"worker": worker, "reason": "renamed"},
+            payload={
+
+                "worker": worker,
+
+                "reason": "queue_policy_updated" if request.queue_policy is not None else "renamed",
+
+            },
 
             origin_channel=str(auth.get("actor_kind") or "app"),
 
@@ -648,6 +676,8 @@ def register_fleet_routes(app):
             is_desktop_unavailable_error=_command_error_implies_desktop_unavailable,
 
             mark_desktop_offline=_mark_remote_desktop_offline_if_no_live_connection,
+
+            capture_local_preview=capture_local_worker_preview,
 
         )
 
@@ -1548,6 +1578,14 @@ def register_fleet_routes(app):
             payload={"report": report},
 
             origin_channel=str(auth.get("actor_kind") or "app"),
+
+        )
+
+        await _try_dispatch_next_fleet_worker_task(
+
+            user_id=int(auth["user_id"]),
+
+            worker_id=str(report.get("worker_id") or ""),
 
         )
 

@@ -686,6 +686,14 @@ async def _handle_remote_desktop_ws(websocket: WebSocket, auth: Dict[str, Any]) 
 
                         )
 
+                        await _try_dispatch_next_fleet_worker_task(
+
+                            user_id=user_id,
+
+                            worker_id=str(report.get("worker_id") or ""),
+
+                        )
+
                         try:
 
                             from shared.proactive_runtime import append_fleet_report_event

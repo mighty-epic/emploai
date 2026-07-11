@@ -1194,6 +1194,16 @@ async def _try_dispatch_fleet_worker_task(
 
         mark_desktop_offline=_mark_remote_desktop_offline_if_no_live_connection,
 
+        dispatch_local_task=lambda **kwargs: get_local_fleet_runtime().dispatch(
+
+            **kwargs,
+
+            bridge_factory=_bridge_for_user,
+
+            publish_fleet_delta=_publish_fleet_delta,
+
+        ),
+
     )
 
 async def _try_dispatch_next_fleet_worker_task(*, user_id: int, worker_id: str) -> Optional[Dict[str, Any]]:
@@ -1251,6 +1261,8 @@ async def _try_stop_fleet_worker_task(*, user_id: int, task: Dict[str, Any]) -> 
         is_desktop_unavailable_error=_command_error_implies_desktop_unavailable,
 
         mark_desktop_offline=_mark_remote_desktop_offline_if_no_live_connection,
+
+        stop_local_task=lambda **kwargs: get_local_fleet_runtime().stop(**kwargs),
 
     )
 

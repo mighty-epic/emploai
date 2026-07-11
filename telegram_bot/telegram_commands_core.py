@@ -377,7 +377,7 @@ def build_core_command_handlers(
         track_command_usage(session, "planner")
 
         supported = session.get_supported_planner_models(AVAILABLE_MODELS)
-        current = session.planner_model or "automatic cheapest supported planner"
+        current = session.planner_model or f"automatic ({session.current_model})"
 
         if not context.args or context.args[0].lower() in {"status", "list"}:
             lines = [
@@ -390,7 +390,7 @@ def build_core_command_handlers(
                 lines.extend([f"• {model}" for model in supported])
                 lines.extend([
                     "",
-                    "Use `/planner <model-id>` to pin one, or `/planner auto` to let the runtime choose automatically.",
+                    "Use `/planner <model-id>` to pin one, or `/planner auto` to mirror the main model.",
                 ])
             else:
                 lines.extend(["", "No supported planner models are available from the configured providers."])
@@ -401,7 +401,7 @@ def build_core_command_handlers(
         if arg in {"auto", "none", "default", "clear", "off"}:
             session.planner_model = None
             _publish_session_config_sync(session, "planner_model")
-            await safe_reply(update, "✅ Planner model reset to automatic cheapest supported selection.")
+            await safe_reply(update, "✅ Planner model set to automatic. It will mirror the main model.")
             return
 
         resolved = _resolve_planner_model(session, " ".join(context.args))

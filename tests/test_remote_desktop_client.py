@@ -49,7 +49,7 @@ def test_relay_local_chat_command_fails_fast_after_forwarding_local_error(monkey
         async def send(self, payload):
             remote_sent.append(json.loads(payload))
 
-    monkeypatch.setattr(remote_desktop_client.websockets, "connect", lambda *_args, **_kwargs: FakeConnect())
+    monkeypatch.setattr(remote_desktop_client, "websocket_connect", lambda *_args, **_kwargs: FakeConnect())
 
     async def scenario():
         with pytest.raises(RuntimeError, match="Provider authentication"):
@@ -119,8 +119,39 @@ def test_fleet_stop_task_records_pending_stop_without_active_session():
         remote_desktop_client.FLEET_STOP_REQUESTED_TASKS.clear()
 
 
-def test_fleet_worker_preview_command_acknowledges_request():
+def test_fleet_worker_preview_command_returns_screen_capture(monkeypatch):
     sent: list[dict] = []
+
+    capture = {
+        "mime_type": "image/jpeg",
+        "image_base64": "d29ya2VyLXByZXZpZXc=",
+        "width": 1280,
+        "height": 720,
+        "backend": "test",
+        "captured_at": 1.0,
+    }
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return capture
+
+    class FakeAsyncClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, *_args, **_kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(remote_desktop_client.httpx, "AsyncClient", FakeAsyncClient)
 
     class FakeRemoteWebSocket:
         async def send(self, payload):
@@ -144,7 +175,8 @@ def test_fleet_worker_preview_command_acknowledges_request():
 
     assert result["preview_id"] == "fpv_test"
     assert result["worker_id"] == "wrk_preview"
-    assert result["status"] == "acknowledged"
+    assert result["status"] == "captured"
+    assert result["capture"] == capture
     assert sent == [
         {
             "type": "status",
@@ -153,7 +185,7 @@ def test_fleet_worker_preview_command_acknowledges_request():
                 "fleet_preview": {
                     "preview_id": "fpv_test",
                     "worker_id": "wrk_preview",
-                    "status": "acknowledged",
+                    "status": "captured",
                     "detail": result["detail"],
                     "view_only": True,
                 },

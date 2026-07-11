@@ -2,13 +2,20 @@ import { useEffect, useRef } from 'react';
 import { Animated, Easing, Platform, Pressable, Text, View } from 'react-native';
 
 import { styles } from './DesktopAppShell.styles';
+import { useReducedMotion } from './useReducedMotion';
 
 export function StartupGlyph() {
+  const reducedMotion = useReducedMotion();
   const spin = useRef(new Animated.Value(0)).current;
   const pulse = useRef(new Animated.Value(0)).current;
   const useNativeDriver = Platform.OS !== 'web';
 
   useEffect(() => {
+    if (reducedMotion) {
+      spin.setValue(0);
+      pulse.setValue(0.5);
+      return;
+    }
     const spinLoop = Animated.loop(
       Animated.timing(spin, {
         toValue: 1,
@@ -41,7 +48,7 @@ export function StartupGlyph() {
       spinLoop.stop();
       pulseLoop.stop();
     };
-  }, [pulse, spin, useNativeDriver]);
+  }, [pulse, reducedMotion, spin, useNativeDriver]);
 
   const orbitRotation = spin.interpolate({
     inputRange: [0, 1],
@@ -143,10 +150,12 @@ function SkeletonBlock({ style, shimmerTranslate }: { style?: any; shimmerTransl
 }
 
 export function DesktopConversationSkeleton() {
+  const reducedMotion = useReducedMotion();
   const shimmer = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     shimmer.setValue(0);
+    if (reducedMotion) return;
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(shimmer, {
@@ -162,7 +171,7 @@ export function DesktopConversationSkeleton() {
     return () => {
       loop.stop();
     };
-  }, [shimmer]);
+  }, [reducedMotion, shimmer]);
 
   const shimmerTranslate = shimmer.interpolate({
     inputRange: [0, 1],

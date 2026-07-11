@@ -63,11 +63,28 @@ def test_desktop_model_provider_helpers_execute_with_typescript_transpile():
           ]),
         );
         assert.strictEqual(
+          JSON.stringify(providers.filterModelGroupsByConfiguredProviders(catalog, [
+            { provider: 'OpenAI', models: ['gpt-5.4-mini'] },
+            { provider: 'nvidia', models: ['mistralai/ministral-14b-instruct-2512'] },
+          ])),
+          JSON.stringify([
+            { provider: 'openai', models: ['gpt-5.4-mini'] },
+            { provider: 'nvidia', models: ['mistralai/ministral-14b-instruct-2512'] },
+          ]),
+        );
+        assert.strictEqual(
           JSON.stringify(providers.filterModelsByConfiguredList(
             ['claude-sonnet-4.5', 'gpt-5.4-mini', 'gemini-2.5-pro'],
             ['gpt-5.4-mini'],
           )),
           JSON.stringify(['gpt-5.4-mini']),
+        );
+        assert.strictEqual(
+          JSON.stringify(providers.filterModelsByConfiguredList(
+            ['gpt-5.4-mini'],
+            ['gpt-5.4-mini', 'mistralai/ministral-14b-instruct-2512'],
+          )),
+          JSON.stringify(['gpt-5.4-mini', 'mistralai/ministral-14b-instruct-2512']),
         );
         assert.strictEqual(providers.modelExistsInGroups('gpt-5.4-mini', catalog), true);
         assert.strictEqual(providers.modelExistsInGroups('claude-opus-4.5', [
@@ -78,6 +95,30 @@ def test_desktop_model_provider_helpers_execute_with_typescript_transpile():
         assert.strictEqual(providers.providerForModelName('google/diffusiongemma-26b-a4b-it', catalog), 'nvidia');
         assert.strictEqual(providers.providerForModelName('mistralai/ministral-14b-instruct-2512', catalog), 'nvidia');
         assert.strictEqual(providers.providerForModelName('vendor/custom-model', catalog), 'vendor');
+        assert.strictEqual(
+          JSON.stringify(providers.modelVariantOptionsForModel('gpt-5').map((option) => [option.id, option.label])),
+          JSON.stringify([['low', 'Light'], ['medium', 'Medium'], ['high', 'High']]),
+        );
+        assert.strictEqual(
+          JSON.stringify(providers.modelVariantOptionsForModel('gpt-5.2-codex').map((option) => option.id)),
+          JSON.stringify(['low', 'medium', 'high', 'xhigh']),
+        );
+        assert.strictEqual(
+          JSON.stringify(providers.modelVariantOptionsForModel('chatgpt/gpt-5.4').map((option) => option.id)),
+          JSON.stringify(['low', 'medium', 'high', 'xhigh']),
+        );
+        assert.strictEqual(
+          JSON.stringify(providers.modelVariantOptionsForModel('claude-sonnet-4.5').map((option) => option.id)),
+          JSON.stringify(['standard', 'thinking']),
+        );
+        assert.strictEqual(
+          JSON.stringify(providers.modelVariantOptionsForModel('claude-haiku-4.5').map((option) => option.id)),
+          JSON.stringify(['standard']),
+        );
+        assert.strictEqual(providers.normalizeModelVariantForModel('gpt-5', 'light'), 'low');
+        assert.strictEqual(providers.normalizeModelVariantForModel('chatgpt/gpt-5.4', 'high'), 'high');
+        assert.strictEqual(providers.shouldShowModelVariantControls('chatgpt/gpt-5.4'), true);
+        assert.strictEqual(providers.shouldShowModelVariantControls('claude-sonnet-4.5'), true);
 
         const grouped = providers.groupPlannerModelsByProvider(
           ['gemini-2.5-flash', 'claude-haiku', 'openrouter/mistral', 'google/diffusiongemma-26b-a4b-it', 'gpt-5.4-mini', 'chatgpt/gpt-5.5'],

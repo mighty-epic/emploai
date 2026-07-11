@@ -154,6 +154,40 @@ def _install_proactive_event_store_callback() -> None:
 
             metadata.setdefault("job_name", payload.get("automation_name"))
 
+        command_id = str(metadata.get("command_id") or "").strip()
+
+        process_wait_resume_disabled = False
+
+        process_wait_existing_status = ""
+
+        if event_source == "background_process" and command_id and event_type in {"process_completed", "process_failed"}:
+
+            existing_wait = next(
+
+                (
+
+                    item for item in store.list_process_waits(user_id=user_id, limit=1000)
+
+                    if str(item.get("command_id") or "").strip() == command_id
+
+                ),
+
+                None,
+
+            )
+
+            existing_status = str((existing_wait or {}).get("status") or "").strip().lower()
+
+            if existing_status in {"stopped", "canceled", "cancelled", "stop_failed"}:
+
+                process_wait_resume_disabled = True
+
+                process_wait_existing_status = existing_status
+
+                metadata["auto_resume"] = False
+
+                metadata["auto_resume_disabled_reason"] = "process_wait_stopped_by_user"
+
         event = store.append_automation_event(
 
             user_id=user_id,
@@ -184,7 +218,11 @@ def _install_proactive_event_store_callback() -> None:
 
         )
 
-        command_id = str(metadata.get("command_id") or "").strip()
+        if process_wait_resume_disabled:
+
+            event["auto_resume"] = False
+
+            event["auto_resume_disabled_reason"] = "process_wait_stopped_by_user"
 
         if event_source == "background_process" and command_id:
 
@@ -208,7 +246,7 @@ def _install_proactive_event_store_callback() -> None:
 
                 shell=metadata.get("shell"),
 
-                status=event_type or str(payload.get("status") or "waiting_on_process"),
+                status=process_wait_existing_status or event_type or str(payload.get("status") or "waiting_on_process"),
 
                 resume_policy=metadata.get("resume_policy"),
 

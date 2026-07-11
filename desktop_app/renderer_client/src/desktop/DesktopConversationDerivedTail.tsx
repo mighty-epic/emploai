@@ -1,10 +1,17 @@
 import type { DesktopConversationScope } from './DesktopConversationScope';
+import { DesktopModelPickerMenu } from './DesktopModelPickerMenu';
+import { DesktopFleetPreviewPanel } from './DesktopFleetPreviewPanel';
+import { fleetWorkerStatusLabel } from './desktopFleetWorkerState';
 import { useEffect } from 'react'; type NativeSyntheticEvent<T = any> = any; type ActiveCommandPanel = any; type ActivityItem = any; type AgentOverview = any; type ArtifactDetail = any; type ArtifactSummary = any; type ComposerInputOrigin = any; type ConversationSurfaceMode = any; type DesktopFleetEnrollment = any; type DesktopFleetIdentity = any; type DesktopFleetSnapshot = any; type DesktopFleetTask = any; type DesktopFleetWorker = any; type DesktopGitRepoState = any; type DesktopMessage = any; type DesktopPathStatus = any; type DesktopRuntimeStatus = any; type DesktopSidebarProjectActivity = any; type DesktopSidebarState = any; type DesktopVoicePackState = any; type DesktopVoiceRuntimeStatus = any; type InterruptPolicy = any; type JarvisSttBackend = any; type JarvisTtsBackend = any; type LayoutChangeEvent = any; type MessageSourceFormat = any; type ModelProviderGroup = any; type NativeScrollEvent = any; type PendingSearchJump = any; type QueuedComposerMessage = any; type QueuedMessage = any; type RealtimeChannel = any; type RealtimeEvent = any; type ReferenceEntry = any; type RuntimeOrchestratorStatus = any; type ScheduledJob = any; type SearchResultTarget = any; type SecurityPermissionMode = any; type SessionDetail = any; type SessionMessage = any; type SessionSearchResult = any; type SessionSummary = any; type SessionTimelineEvent = any; type SidebarChatTooltipState = any; type SidebarDragState = any; type SidebarDraftChat = any; type SidebarProjectGroup = any; type StartupReadinessState = any; type TaskBoard = any; type TelegramBotConfig = any; type TextInputContentSizeChangeEventData = any; type ToolPackInfoPopupState = any; type VoiceCaptureMode = any; type VoiceGateState = any;
+import { useReducedMotion } from './useReducedMotion';
 
 export function useDesktopConversationDerivedTail(scope: DesktopConversationScope) {
-  const { Animated, DESKTOP_COMMAND_SUGGESTIONS, Easing, JARVIS_ENGLISH_VOICE_PATH_ERROR, MAX_COMMAND_SUGGESTIONS, MonoIcon, Platform, Pressable, ScrollView, TOOL_PACK_DEFINITIONS, Text, TextInput, VOICE_ENGINE_ENGLISH, View, activeCommandPanel, activeFleetIdentity, activeToolPackInfo, activeToolPackInfoAvailable, activeToolPackInfoConfiguredEnabled, activeToolPackInfoDisabledReason, activeToolPackInfoId, activity, agentRunActive, alwaysOnEnabled, alwaysOnEnabledRef, apiBaseUrl, apiVoiceInputActive, artifacts, assignFleetGroupTask, assignFleetTask, assistantDraft, attachmentUploadInFlight, chooseDraftBranch, chooseDraftProject, chooseDraftProjectFolder, chooseDraftTelegramBot, closeSidebarSearchModal, commandSuggestionMenuRef, composerTextRegionRef, continueFleetQueue, conversationMode, copyFleetEnrollmentToken, createFleetEnrollment, createFleetGroupFromFirstWorker, createFleetLocalWorker, currentAvailableToolPacks, currentDisabledPackReasons, currentEnabledToolPacks, currentHeadlessBlockReason, currentJarvisSttLabel, currentModelLabel, currentVariantLabel, deleteFleetGroup, describeError, dismissedCommandSuggestionInput, draftBranchSearch, draftBranchTriggerRef, draftChat, draftGitRepoLoading, draftGitRepoState, draftProjectSearch, draftProjectTriggerRef, draftTelegramBotConfigId, draftTelegramTriggerRef, dragState, englishVoicePack, externalSidebarToggleSignalRef, fetchSessionArtifactBlob, fetchSessionArtifactDetail, fetchSessionArtifacts, filteredDraftBranchChoices, filteredDraftProjects, fleetChatPanelWidth, fleetDashboardCollapsed, fleetEnrollment, fleetError, fleetGroupNameDraft, fleetGroupTaskDrafts, fleetLoading, fleetRenameDrafts, fleetSnapshot, fleetStatus, fleetTaskDrafts, fleetWorkerNameDraft, floatingPanelRef, formatAbsoluteTime, formatToolPackLockReason, getCommandSuggestionQuery, handleComposerInputChange, handleComposerKeyPress, handleVoiceEngineSelection, hideToolPackInfoPopup, input, isJarvisMode, jarvisHoldToTalkMode, jarvisLatestSpokenText, jarvisLatestTranscript, jarvisMuted, jarvisPulseProgress, jarvisPushToTalkActiveRef, jarvisSpaceHotkeyActiveRef, jarvisTtsBackendLabel, jarvisWarmRequestedRef, labelForMessage, lastAssistantOutputAt, liveVoiceStatus, modelTriggerRef, moveProjectOrder, moveSessionOrder, normalizeWorkspacePath, openComposerAttachmentPicker, openFleetWorkerMenuId, openProjectMenuPath, openSession, openSessionMenuId, permissionsTriggerRef, pinnedToolPackInfoId, projectMenuRefs, projectMenuTriggerRefs, queueMessage, queuedComposerMessages, queuedComposerMessagesDisplay, referenceAutoOpenKeyRef, referenceDismissedKeyRef, referenceEntries, referenceRailKey, refreshFleetSnapshot, renameFleetWorker, requestFleetPreview, resetFleetWorker, resetFleetWorkerIdentity, revealProjectInSidebar, runControl, scheduleHideToolPackInfoPopup, selectFleetIdentity, selectedArtifactId, selectedVoiceEngine, selectedVoiceEngineState, sendButtonGlyph, sendButtonMode, sendQueuedComposerSlice, sendText, sessionId, sessionIdRef, sessionMenuRefs, sessionMenuTriggerRefs, sessions, setActiveCommandPanel, setArtifactDetailLoading, setArtifactError, setArtifacts, setArtifactsLoading, setDismissedCommandSuggestionInput, setDraftBranchSearch, setDraftProjectSearch, setDragState, setFleetChatPanelCollapsed, setFleetDashboardCollapsed, setFleetGroupNameDraft, setFleetGroupTaskDrafts, setFleetRenameDrafts, setFleetTaskDrafts, setFleetWorkerNameDraft, setHoveredToolPackInfoId, setJarvisHoldToTalkMode, setJarvisMuted, setJarvisStatusDrawerOpen, setJarvisVoiceSettingsOpen, setOpenFleetWorkerMenuId, setOpenProjectMenuPath, setOpenSessionMenuId, setPinnedToolPackInfoId, setQueuedComposerMessages, setSelectedArtifactDetail, setSelectedArtifactId, setShowArtifactRail, setShowReferenceRail, setShowVoicePanel, setSidebarExpanded, setSidebarSearchModalOpen, setStatus, setToolPackInfoButtonRef, setVoiceError, setVoiceMode, setVoicePanelHidden, setVoiceState, shortStatusText, shouldShowThinkingIndicator, showArtifactRail, showToolPackInfoPopup, sidebarExpanded, sidebarSearchLauncherRef, sidebarSearchModalOpen, sidebarSearchModalRef, sidebarToggleSignal, startAlwaysOnVoice, startJarvisPushToTalk, status, stopAllFleetWorkers, stopAlwaysOnVoice, stopFleetWorker, stopJarvisPushToTalk, styles, telegramBotConfigs, thinkingShineProgress, timelineEntries, toggleCurrentSessionToolPack, token, toolPackMutationInFlight, toolsTriggerRef, transcriptEntries, unavailableEnabledToolPackReason, useEffect, userFacingError, voiceDraft, voiceEngineChanging, voiceRecording, voiceRecordingRef, voiceRunning, voiceRunningRef, voiceState, warmSelectedVoicePath } = scope;
+  const reducedMotion = useReducedMotion();
+  const { Animated, DESKTOP_COMMAND_SUGGESTIONS, Easing, JARVIS_ENGLISH_VOICE_PATH_ERROR, MAX_COMMAND_SUGGESTIONS, MonoIcon, Platform, Pressable, ScrollView, TOOL_PACK_DEFINITIONS, Text, TextInput, VOICE_ENGINE_ENGLISH, View, activeCommandPanel, activeFleetIdentity, activeToolPackInfo, activeToolPackInfoAvailable, activeToolPackInfoConfiguredEnabled, activeToolPackInfoDisabledReason, activeToolPackInfoId, activity, agentRunActive, alwaysOnEnabled, alwaysOnEnabledRef, apiBaseUrl, apiVoiceInputActive, artifacts, assignFleetGroupTask, assignFleetTask, assistantDraft, attachmentUploadInFlight, beginNewChat, chooseDraftBranch, chooseDraftProject, chooseDraftProjectFolder, chooseDraftTelegramBot, chooseModel, choosePlannerModel, chooseVariant, closeSidebarSearchModal, commandSuggestionMenuRef, composerTextRegionRef, continueFleetQueue, conversationMode, copyFleetEnrollmentToken, createFleetEnrollment, createFleetGroupFromFirstWorker, createFleetLocalWorker, currentAvailableToolPacks, currentDisabledPackReasons, currentEnabledToolPacks, currentHeadlessBlockReason, currentJarvisSttLabel, currentModelLabel, currentPlannerLabel, currentVariant, currentVariantHasControls, currentVariantLabel, currentVariantOptions, deleteFleetGroup, describeError, dismissedCommandSuggestionInput, draftBranchSearch, draftBranchTriggerRef, draftChat, draftGitRepoLoading, draftGitRepoState, draftModelGroups, draftProjectSearch, draftProjectTriggerRef, draftTelegramBotConfigId, draftTelegramTriggerRef, dragState, englishVoicePack, expandedModelProviders, expandedPlannerProviders, externalSidebarToggleSignalRef, fetchSessionArtifactBlob, fetchSessionArtifactDetail, fetchSessionArtifacts, filteredDraftBranchChoices, filteredDraftProjects, fleetChatPanelWidth, fleetDashboardCollapsed, fleetEnrollment, fleetError, fleetGroupNameDraft, fleetGroupTaskDrafts, fleetLoading, fleetRenameDrafts, fleetSnapshot, fleetStatus, fleetTaskDrafts, fleetWorkerNameDraft, floatingPanelRef, formatAbsoluteTime, formatToolPackLockReason, getCommandSuggestionQuery, handleComposerInputChange, handleComposerKeyPress, handleVoiceEngineSelection, hideToolPackInfoPopup, input, isJarvisMode, jarvisHoldToTalkMode, jarvisLatestSpokenText, jarvisLatestTranscript, jarvisMuted, jarvisPulseProgress, jarvisPushToTalkActiveRef, jarvisSpaceHotkeyActiveRef, jarvisTtsBackendLabel, jarvisWarmRequestedRef, labelForMessage, lastAssistantOutputAt, liveVoiceStatus, modelTriggerRef, moveProjectOrder, moveSessionOrder, normalizeWorkspacePath, openComposerAttachmentPicker, openFleetWorkerMenuId, openProjectMenuPath, openSession, openSessionMenuId, permissionsTriggerRef, pinnedToolPackInfoId, plannerModelGroups, projectMenuRefs, projectMenuTriggerRefs, queueMessage, queuedComposerMessages, queuedComposerMessagesDisplay, referenceAutoOpenKeyRef, referenceDismissedKeyRef, referenceEntries, referenceRailKey, renameFleetWorker, requestFleetPreview, resetFleetWorker, resetFleetWorkerIdentity, revealProjectInSidebar, runControl, scheduleHideToolPackInfoPopup, selectFleetIdentity, selectedArtifactId, selectedVoiceEngine, selectedVoiceEngineState, sendButtonGlyph, sendButtonMode, sendQueuedComposerSlice, sendText, sessionId, sessionIdRef, sessionMenuRefs, sessionMenuTriggerRefs, sessions, setActiveCommandPanel, setArtifactDetailLoading, setArtifactError, setArtifacts, setArtifactsLoading, setDismissedCommandSuggestionInput, setDraftBranchSearch, setDraftProjectSearch, setDragState, setExpandedModelProviders, setExpandedPlannerProviders, setFleetChatPanelCollapsed, setFleetDashboardCollapsed, setFleetGroupNameDraft, setFleetGroupTaskDrafts, setFleetRenameDrafts, setFleetTaskDrafts, setFleetWorkerNameDraft, setHoveredToolPackInfoId, setJarvisHoldToTalkMode, setJarvisMuted, setJarvisStatusDrawerOpen, setJarvisVoiceSettingsOpen, setOpenFleetWorkerMenuId, setOpenProjectMenuPath, setOpenSessionMenuId, setPinnedToolPackInfoId, setQueuedComposerMessages, setSelectedArtifactDetail, setSelectedArtifactId, setShowArtifactRail, setShowReferenceRail, setShowVoicePanel, setSidebarExpanded, setSidebarSearchModalOpen, setStatus, setToolPackInfoButtonRef, setVoiceError, setVoiceMode, setVoicePanelHidden, setVoiceState, shortStatusText, shouldShowThinkingIndicator, showArtifactRail, showToolPackInfoPopup, sidebarExpanded, sidebarSearchLauncherRef, sidebarSearchModalOpen, sidebarSearchModalRef, sidebarToggleSignal, startAlwaysOnVoice, startJarvisPushToTalk, status, stopAllFleetWorkers, stopAlwaysOnVoice, stopFleetWorker, stopJarvisPushToTalk, styles, telegramBotConfigs, thinkingShineProgress, timelineEntries, toggleCurrentSessionToolPack, token, toolPackMutationInFlight, toolsTriggerRef, transcriptEntries, unavailableEnabledToolPackReason, useEffect, userFacingError, voiceDraft, voiceEngineChanging, voiceRecording, voiceRecordingRef, voiceRunning, voiceRunningRef, voiceState, warmSelectedVoicePath } = scope;
+  const jarvisWakeProfileReady = Boolean(scope.jarvisWakeProfileReady);
+  const setJarvisWakeEnrollmentOpen = scope.setJarvisWakeEnrollmentOpen as ((value: boolean) => void) | undefined;
 useEffect(() => {
-    const animate = conversationMode === 'jarvis' && (alwaysOnEnabled || voiceRecording || voiceRunning);
+    const animate = !reducedMotion && conversationMode === 'jarvis' && (alwaysOnEnabled || voiceRecording || voiceRunning);
     jarvisPulseProgress.stopAnimation();
     jarvisPulseProgress.setValue(0);
     if (!animate) {
@@ -32,13 +39,14 @@ useEffect(() => {
       jarvisPulseProgress.stopAnimation();
       jarvisPulseProgress.setValue(0);
     };
-  }, [alwaysOnEnabled, conversationMode, jarvisPulseProgress, voiceRecording, voiceRunning]);
+  }, [alwaysOnEnabled, conversationMode, jarvisPulseProgress, reducedMotion, voiceRecording, voiceRunning]);
 
   useEffect(() => {
     if (conversationMode !== 'jarvis') {
       jarvisWarmRequestedRef.current = false;
       setJarvisStatusDrawerOpen(false);
       setJarvisVoiceSettingsOpen(false);
+      setJarvisWakeEnrollmentOpen?.(false);
       setJarvisMuted(false);
       setJarvisHoldToTalkMode(false);
       setVoiceError((current: any) => (current === JARVIS_ENGLISH_VOICE_PATH_ERROR ? null : current));
@@ -85,6 +93,15 @@ useEffect(() => {
 
     setVoiceMode('always_on');
 
+    if (!jarvisWakeProfileReady) {
+      setJarvisWakeEnrollmentOpen?.(true);
+      setStatus('Train a local wake phrase before using Jarvis always-on listening');
+      if (alwaysOnEnabledRef.current) {
+        void stopAlwaysOnVoice();
+      }
+      return;
+    }
+
     if (
       !jarvisMuted
       && !jarvisPushToTalkActiveRef.current
@@ -93,6 +110,7 @@ useEffect(() => {
       && !voiceRecordingRef.current
       && voiceState !== 'connecting'
       && voiceState !== 'reconnecting'
+      && voiceState !== 'error'
     ) {
       void startAlwaysOnVoice();
     }
@@ -107,6 +125,7 @@ useEffect(() => {
     token,
     liveVoiceStatus?.tts_enabled,
     liveVoiceStatus?.tts_ready,
+    jarvisWakeProfileReady,
     voiceEngineChanging,
     voiceRecording,
     voiceRunning,
@@ -209,6 +228,12 @@ useEffect(() => {
       : floatingPanelKind === 'model'
         ? styles.commandPanelFloatingModel
         : styles.commandPanelFloatingRight;
+  const pendingRunMode = scope.pendingRunMode as 'plan' | 'goal' | 'normal' | null | undefined;
+  const planMode = (scope.planMode && typeof scope.planMode === 'object') ? scope.planMode as Record<string, any> : null;
+  const activeGoal = (scope.activeGoal && typeof scope.activeGoal === 'object') ? scope.activeGoal as Record<string, any> : null;
+  const setPendingRunMode = scope.setPendingRunMode as ((mode: 'plan' | 'goal' | 'normal' | null) => void) | undefined;
+  const exitPlanMode = scope.exitPlanMode as (() => void | Promise<void>) | undefined;
+  const clearActiveGoal = scope.clearActiveGoal as (() => void | Promise<void>) | undefined;
   const toolPackCommandPanelContent = (
     <>
       <View style={styles.commandPanelHeader}>
@@ -234,6 +259,43 @@ useEffect(() => {
         </Pressable>
       </View>
       <ScrollView style={styles.modelPickerScroll} contentContainerStyle={styles.modelPickerContent}>
+        <View style={styles.composerAttachmentSection}>
+          <Text style={styles.modelPickerSectionTitle}>Mode</Text>
+          <View style={styles.composerModeActionGrid}>
+            <Pressable
+              style={({ hovered }: any) => [
+                styles.composerModeAction,
+                hovered ? styles.composerModeActionHovered : null,
+                pendingRunMode === 'plan' || planMode ? styles.composerModeActionActive : null,
+              ]}
+              onPress={() => {
+                setPendingRunMode?.('plan');
+                setActiveCommandPanel(null);
+              }}
+            >
+              <Text style={styles.composerModeActionTitle}>Plan</Text>
+              <Text style={styles.composerModeActionText}>Inspect, ask, and produce a plan before edits.</Text>
+            </Pressable>
+            <Pressable
+              style={({ hovered }: any) => [
+                styles.composerModeAction,
+                hovered ? styles.composerModeActionHovered : null,
+                pendingRunMode === 'goal' ? styles.composerModeActionActive : null,
+                activeGoal ? styles.composerModeActionDisabled : null,
+              ]}
+              disabled={Boolean(activeGoal)}
+              onPress={() => {
+                setPendingRunMode?.('goal');
+                setActiveCommandPanel(null);
+              }}
+            >
+              <Text style={styles.composerModeActionTitle}>Goal</Text>
+              <Text style={styles.composerModeActionText}>
+                {activeGoal ? 'A goal is already active in this chat.' : 'Keep pursuing this objective until done.'}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
         <View style={styles.composerAttachmentSection}>
           <Text style={styles.modelPickerSectionTitle}>Attach</Text>
           <Pressable
@@ -595,7 +657,7 @@ useEffect(() => {
   useEffect(() => {
     thinkingShineProgress.stopAnimation();
     thinkingShineProgress.setValue(0);
-    if (!shouldShowThinkingIndicator) {
+    if (!shouldShowThinkingIndicator || reducedMotion) {
       return;
     }
     const animation = Animated.loop(
@@ -615,7 +677,7 @@ useEffect(() => {
       thinkingShineProgress.stopAnimation();
       thinkingShineProgress.setValue(0);
     };
-  }, [shouldShowThinkingIndicator, thinkingShineProgress]);
+  }, [reducedMotion, shouldShowThinkingIndicator, thinkingShineProgress]);
 
   useEffect(() => {
     if (agentRunActive || !sessionId) {
@@ -626,7 +688,7 @@ useEffect(() => {
       return;
     }
     setQueuedComposerMessages((current: any) => current.filter((item: any) => item.id !== nextQueuedMessage.id));
-    queueMessage(nextQueuedMessage.text, nextQueuedMessage.sourceFormat, nextQueuedMessage.sessionId, 'none');
+    queueMessage(nextQueuedMessage.text, nextQueuedMessage.sourceFormat, nextQueuedMessage.sessionId, 'none', nextQueuedMessage.modeOptions);
   }, [agentRunActive, queuedComposerMessages, sessionId]);
 
   useEffect(() => {
@@ -653,6 +715,8 @@ useEffect(() => {
     referenceDismissedKeyRef.current = null;
     setSidebarExpanded(true);
     setShowReferenceRail(true);
+    setShowArtifactRail(true);
+    void refreshArtifacts(sessionIdRef.current);
   };
 
   const closeReferenceRail = () => {
@@ -660,7 +724,7 @@ useEffect(() => {
     setShowReferenceRail(false);
   };
 
-  const refreshArtifacts = async (targetSessionId?: string | null) => {
+  async function refreshArtifacts(targetSessionId?: string | null) {
     const effectiveSessionId = String(targetSessionId || sessionIdRef.current || '').trim();
     if (!effectiveSessionId) {
       setArtifacts([]);
@@ -684,7 +748,7 @@ useEffect(() => {
     } finally {
       setArtifactsLoading(false);
     }
-  };
+  }
 
   const openArtifactRail = () => {
     setSidebarExpanded(true);
@@ -896,6 +960,7 @@ useEffect(() => {
     !apiBaseUrl
     || !token
     || voiceEngineChanging
+    || liveVoiceStatus?.input_ok === false
     || (!apiVoiceInputActive && selectedVoiceEngineState === 'warming')
     || voiceState === 'connecting'
     || voiceState === 'reconnecting'
@@ -1013,8 +1078,45 @@ useEffect(() => {
       </View>
 
       <View style={styles.fleetManagerChatHeader}>
-        <Text style={styles.fleetEyebrow}>{fleetManagerChatEyebrow}</Text>
-        <Text style={styles.fleetManagerChatTitle} numberOfLines={1}>{fleetManagerIdentityName}</Text>
+        <View style={styles.fleetManagerChatHeaderTop}>
+          <View style={styles.fleetManagerChatHeaderCopy}>
+            <Text style={styles.fleetEyebrow}>{fleetManagerChatEyebrow}</Text>
+            <Text style={styles.fleetManagerChatTitle} numberOfLines={1}>{fleetManagerIdentityName}</Text>
+          </View>
+          <View style={styles.fleetManagerChatActions}>
+            <Pressable
+              style={({ hovered }: any) => [
+                styles.fleetManagerChatActionButton,
+                hovered ? styles.fleetManagerChatActionButtonHovered : null,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Start a new fleet chat"
+              onPress={() => void beginNewChat()}
+            >
+              <MonoIcon name="compose" style={styles.fleetManagerChatActionIcon} />
+              <Text style={styles.fleetManagerChatActionText}>New</Text>
+            </Pressable>
+            <Pressable
+              ref={modelTriggerRef}
+              style={({ hovered }: any) => [
+                styles.fleetManagerChatModelButton,
+                hovered ? styles.fleetManagerChatActionButtonHovered : null,
+                activeCommandPanel?.kind === 'model' ? styles.fleetManagerChatActionButtonActive : null,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Change fleet chat model"
+              onPress={() => setActiveCommandPanel((current: any) => current?.kind === 'model' ? null : { kind: 'model' })}
+            >
+              <View style={styles.fleetManagerChatActionCopy}>
+                <Text style={styles.fleetManagerChatActionText}>Model</Text>
+                <Text style={styles.fleetManagerChatActionMeta} numberOfLines={1}>
+                  {currentModelLabel}{currentVariantLabel}
+                </Text>
+              </View>
+              <MonoIcon name={activeCommandPanel?.kind === 'model' ? 'chevron_up' : 'chevron_down'} style={styles.fleetManagerChatActionIcon} />
+            </Pressable>
+          </View>
+        </View>
         <View style={styles.fleetManagerChatMetaRow}>
           <Text style={styles.fleetManagerChatMeta} numberOfLines={1}>
             {currentModelLabel}{currentVariantLabel}
@@ -1107,6 +1209,50 @@ useEffect(() => {
       ) : null}
 
       <View style={styles.fleetManagerComposer}>
+        {activeCommandPanel?.kind === 'model' ? (
+          <View ref={floatingPanelRef} style={[styles.commandPanel, styles.commandPanelSlim, styles.fleetManagerComposerMenu]}>
+            <View style={styles.commandPanelHeader}>
+              <View style={styles.commandPanelHeaderCopy}>
+                <View style={styles.commandPanelHeaderLine}>
+                  <Text style={styles.commandPanelCompactTitle}>Model + Planner</Text>
+                  <Pressable
+                    style={styles.commandPanelInfoButton}
+                    accessibilityRole="button"
+                    accessibilityLabel="Fleet chat model information"
+                    accessibilityHint="This changes the main model and planner model for the current chat or draft chat."
+                    {...(Platform.OS === 'web' ? ({ title: 'This changes the main model and planner model for the current chat or draft chat.' } as any) : {})}
+                  >
+                    <MonoIcon name="info" style={styles.commandPanelInfoIcon} />
+                  </Pressable>
+                </View>
+              </View>
+              <Pressable style={styles.commandPanelCloseButton} onPress={() => setActiveCommandPanel(null)}>
+                <Text style={styles.commandPanelCloseText}>Close</Text>
+              </Pressable>
+            </View>
+            <DesktopModelPickerMenu
+              styles={styles}
+              MonoIcon={MonoIcon}
+              draftModelGroups={draftModelGroups}
+              currentModelLabel={currentModelLabel}
+              currentVariant={currentVariant}
+              currentVariantHasControls={currentVariantHasControls}
+              currentVariantOptions={currentVariantOptions}
+              currentPlannerLabel={currentPlannerLabel}
+              plannerModelGroups={plannerModelGroups}
+              expandedModelProviders={expandedModelProviders}
+              expandedPlannerProviders={expandedPlannerProviders}
+              setExpandedModelProviders={setExpandedModelProviders}
+              setExpandedPlannerProviders={setExpandedPlannerProviders}
+              chooseModel={chooseModel}
+              chooseVariant={chooseVariant}
+              choosePlannerModel={choosePlannerModel}
+              scrollStyle={styles.fleetModelPickerScroll}
+              emptyTitle="No configured models"
+              emptyText="Add a provider in settings, then reopen this picker."
+            />
+          </View>
+        ) : null}
         {activeCommandPanel?.kind === 'tools' && activeCommandPanel.source === 'fleet' ? (
           <View style={[styles.commandPanel, styles.commandPanelSlim, styles.fleetManagerComposerMenu]}>
             {toolPackCommandPanelContent}
@@ -1119,6 +1265,44 @@ useEffect(() => {
                 ) : !activeToolPackInfoAvailable && activeToolPackInfoConfiguredEnabled ? (
                   <Text style={styles.toolPackInfoWarning}>{unavailableEnabledToolPackReason}</Text>
                 ) : null}
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+        {pendingRunMode || planMode || activeGoal ? (
+          <View style={styles.composerModeTray}>
+            {pendingRunMode === 'plan' ? (
+              <View style={styles.composerModeChip}>
+                <Text style={styles.composerModeChipText}>Plan next message</Text>
+                <Pressable style={styles.composerModeChipClose} onPress={() => setPendingRunMode?.(null)}>
+                  <Text style={styles.composerModeChipCloseText}>x</Text>
+                </Pressable>
+              </View>
+            ) : null}
+            {pendingRunMode === 'goal' ? (
+              <View style={styles.composerModeChip}>
+                <Text style={styles.composerModeChipText}>Goal next message</Text>
+                <Pressable style={styles.composerModeChipClose} onPress={() => setPendingRunMode?.(null)}>
+                  <Text style={styles.composerModeChipCloseText}>x</Text>
+                </Pressable>
+              </View>
+            ) : null}
+            {planMode ? (
+              <View style={styles.composerModeChipActive}>
+                <Text style={styles.composerModeChipText}>Plan active</Text>
+                <Pressable style={styles.composerModeChipClose} onPress={() => void exitPlanMode?.()}>
+                  <Text style={styles.composerModeChipCloseText}>x</Text>
+                </Pressable>
+              </View>
+            ) : null}
+            {activeGoal ? (
+              <View style={styles.composerModeChipGoal}>
+                <Text style={styles.composerModeChipText} numberOfLines={1}>
+                  Goal · {String(activeGoal.objective || 'active')}
+                </Text>
+                <Pressable style={styles.composerModeChipClose} onPress={() => void clearActiveGoal?.()}>
+                  <Text style={styles.composerModeChipCloseText}>x</Text>
+                </Pressable>
               </View>
             ) : null}
           </View>
@@ -1186,13 +1370,6 @@ useEffect(() => {
             Manage worker identities, queues, reports, and device enrollment from one place.
           </Text>
         </View>
-        <Pressable
-          style={[styles.fleetIconAction, fleetLoading ? styles.fleetActionDisabled : null]}
-          disabled={fleetLoading}
-          onPress={() => void refreshFleetSnapshot()}
-        >
-          <Text style={styles.fleetIconActionText}>Refresh</Text>
-        </Pressable>
         <Pressable
           style={styles.panelCollapseButton}
           accessibilityRole="button"
@@ -1278,13 +1455,18 @@ useEffect(() => {
               const draft = fleetTaskDrafts[worker.worker_id] || '';
               const renameDraft = fleetRenameDrafts[worker.worker_id] || '';
               const workerMenuOpen = openFleetWorkerMenuId === worker.worker_id;
-              const showWorkerPreview = String(worker.kind || '').trim().toLowerCase() !== 'local';
+              const workerStatusLabel = fleetWorkerStatusLabel(worker, task);
+              const queuePolicy = worker.queue_policy === 'auto_continue_success' ? 'auto_continue_success' : 'review_required';
+              const awaitingReportReview = !task && queuedCount > 0 && Boolean(report);
+              const workerQueueLabel = awaitingReportReview
+                ? `Awaiting report review · ${queuedCount} task${queuedCount === 1 ? '' : 's'} queued`
+                : `${worker.kind} · ${workerStatusLabel}${queuedCount ? ` · ${queuedCount} queued` : ''}`;
               return (
                 <View key={worker.worker_id} style={styles.fleetWorkerCard}>
                   <View style={styles.fleetWorkerHeader}>
                     <View style={styles.fleetWorkerTitleBlock}>
                       <Text style={styles.fleetWorkerName} numberOfLines={1}>{worker.display_name}</Text>
-                      <Text style={styles.fleetWorkerMeta}>{worker.kind} · {worker.status}{queuedCount ? ` · ${queuedCount} queued` : ''}</Text>
+                      <Text accessibilityLiveRegion="polite" style={styles.fleetWorkerMeta}>{workerQueueLabel}</Text>
                     </View>
                     <Pressable
                       style={[styles.fleetWorkerMenuButton, workerMenuOpen ? styles.fleetWorkerMenuButtonActive : null]}
@@ -1318,18 +1500,37 @@ useEffect(() => {
                         </Pressable>
                       </View>
                       <View style={styles.fleetWorkerMenuActionGrid}>
-                        {showWorkerPreview ? (
-                          <Pressable
-                            style={[styles.fleetSecondaryAction, styles.fleetWorkerMenuAction, fleetLoading ? styles.fleetActionDisabled : null]}
-                            disabled={fleetLoading}
-                            onPress={() => {
-                              setOpenFleetWorkerMenuId(null);
-                              void requestFleetPreview(worker);
-                            }}
-                          >
-                            <Text style={styles.fleetSecondaryActionText}>Preview</Text>
-                          </Pressable>
-                        ) : null}
+                        <Pressable
+                          accessibilityRole="radio"
+                          accessibilityLabel="Require report review before starting the next task"
+                          accessibilityState={{ checked: queuePolicy === 'review_required', disabled: fleetLoading }}
+                          style={[styles.fleetSecondaryAction, styles.fleetWorkerMenuAction, queuePolicy === 'review_required' ? styles.fleetWorkerMenuButtonActive : null]}
+                          disabled={fleetLoading}
+                          onPress={() => void scope.updateFleetQueuePolicy?.(worker, 'review_required')}
+                        >
+                          <Text style={styles.fleetSecondaryActionText}>Review Reports</Text>
+                        </Pressable>
+                        <Pressable
+                          accessibilityRole="radio"
+                          accessibilityLabel="Automatically continue only safe successful reports"
+                          accessibilityHint="Failed, blocked, low-confidence, or malformed reports always pause."
+                          accessibilityState={{ checked: queuePolicy === 'auto_continue_success', disabled: fleetLoading }}
+                          style={[styles.fleetSecondaryAction, styles.fleetWorkerMenuAction, queuePolicy === 'auto_continue_success' ? styles.fleetWorkerMenuButtonActive : null]}
+                          disabled={fleetLoading}
+                          onPress={() => void scope.updateFleetQueuePolicy?.(worker, 'auto_continue_success')}
+                        >
+                          <Text style={styles.fleetSecondaryActionText}>Auto-continue Safe Success</Text>
+                        </Pressable>
+                        <Pressable
+                          style={[styles.fleetSecondaryAction, styles.fleetWorkerMenuAction, fleetLoading ? styles.fleetActionDisabled : null]}
+                          disabled={fleetLoading}
+                          onPress={() => {
+                            setOpenFleetWorkerMenuId(null);
+                            void requestFleetPreview(worker);
+                          }}
+                        >
+                          <Text style={styles.fleetSecondaryActionText}>Preview</Text>
+                        </Pressable>
                         <Pressable
                           style={[styles.fleetSmallDangerAction, styles.fleetWorkerMenuAction, (fleetLoading || !task) ? styles.fleetActionDisabled : null]}
                           disabled={fleetLoading || !task}
@@ -1364,16 +1565,29 @@ useEffect(() => {
                     </View>
                   ) : null}
 
+                  <DesktopFleetPreviewPanel
+                    preview={(scope.fleetPreview as any) || null}
+                    workerId={worker.worker_id}
+                    workerName={worker.display_name}
+                    onClose={() => scope.setFleetPreview?.(null)}
+                  />
+
                   <View style={styles.fleetWorkerInfoGrid}>
                     <View style={styles.fleetWorkerInfoTile}>
                       <Text style={styles.fleetInfoLabel}>Current Task</Text>
                       <Text style={styles.fleetInfoValue} numberOfLines={3}>{task?.prompt || 'Idle'}</Text>
                       <Text style={styles.fleetInfoMeta}>{task?.status || 'ready'}</Text>
                     </View>
-                    <View style={styles.fleetWorkerInfoTile}>
-                      <Text style={styles.fleetInfoLabel}>Latest Report</Text>
-                      <Text style={styles.fleetInfoValue} numberOfLines={3}>{report?.summary || 'No report yet'}</Text>
-                      <Text style={styles.fleetInfoMeta}>{report?.status || 'waiting'}</Text>
+                    <View style={styles.fleetWorkerInfoTile} accessibilityLiveRegion="polite">
+                      <Text style={styles.fleetInfoLabel}>Latest Report · {report?.confidence || 'unrated'} confidence</Text>
+                      <Text style={styles.fleetInfoValue} numberOfLines={5}>{report?.summary || 'No report yet'}</Text>
+                      <Text style={styles.fleetInfoMeta}>
+                        {report
+                          ? `${report.status} · ${(report.blockers || []).length} blocker${(report.blockers || []).length === 1 ? '' : 's'} · ${(report.evidence || []).length + (report.artifacts || []).length} evidence`
+                          : 'waiting'}
+                      </Text>
+                      {report?.blockers?.length ? <Text style={styles.fleetInfoMeta}>Blocked by: {report.blockers.map((item: any) => typeof item === 'string' ? item : item?.message || item?.detail || 'reported blocker').join('; ')}</Text> : null}
+                      {report?.next_suggested_action ? <Text style={styles.fleetInfoMeta}>Next: {report.next_suggested_action}</Text> : null}
                     </View>
                   </View>
 
@@ -1403,7 +1617,7 @@ useEffect(() => {
                       disabled={fleetLoading || Boolean(task)}
                       onPress={() => void continueFleetQueue(worker)}
                     >
-                      <Text style={styles.fleetSecondaryActionText}>Continue Queue</Text>
+                      <Text style={styles.fleetSecondaryActionText}>Approve Report & Start Next Task</Text>
                     </Pressable>
                   ) : null}
                 </View>

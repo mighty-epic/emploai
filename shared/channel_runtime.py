@@ -15,12 +15,15 @@ from runtime_support.hooks import HookEvent, HookType
 from cli.agent_tools.loop import LoopResult, run_tool_loop
 from cli.tui_constants import MODEL_CONFIGS
 from shared.channel_sync import get_channel_sync_hub
+from shared.edit_summary import build_workspace_edit_summary, capture_workspace_edit_baseline
 from shared.proactive_planner_contract import (
     build_pending_planner_contract,
     contract_system_message,
     record_planner_contract,
 )
 from shared.proactive_runtime import install_background_process_hooks
+from shared.provider_failures import consume_failed_turn_retry, record_failed_turn
+from shared.visual_monitor_runtime import install_visual_monitor_hooks
 from shared.security_policy import redact_json, redact_text
 from shared.session_timeline import (
     append_timeline_event,
@@ -202,6 +205,7 @@ class SharedTurnResult:
     total_tokens: int = 0
     context_compressed: bool = False
     context_compaction: Optional[Dict[str, Any]] = None
+    failure: Optional[Dict[str, Any]] = None
 
 
 
@@ -269,6 +273,8 @@ async def begin_chat_turn(
 
         session.current_task_id += 1
         task_id = session.current_task_id
+        session_id = current_session_id(session)
+        run_id = f"{session_id or 'session'}:{task_id}"
         session.start_browser_task(task_id, user_message)
         session.should_interrupt = False
         session.is_processing = True
@@ -278,6 +284,8 @@ async def begin_chat_turn(
             "role": "user",
             "content": user_message,
             "timestamp": timestamp,
+            "run_id": run_id,
+            "run_sequence": task_id,
         }
         message.update(payload)
 
@@ -337,13 +345,16 @@ async def begin_chat_turn(
                         "source_format": payload.get("source_format"),
                         "display_label": payload.get("display_label"),
                         "source_client_id": payload.get("source_client_id"),
+                        "run_id": run_id,
+                        "run_sequence": task_id,
+                        "task_id": task_id,
                     },
                 ),
             )
         return TurnReservation(
             busy=False,
             task_id=task_id,
-            session_id=current_session_id(session),
+            session_id=session_id,
             is_session_start=is_session_start,
             context_compressed=context_compressed,
             context_compaction=context_compaction,
@@ -352,7 +363,47 @@ async def begin_chat_turn(
                 "source_format": payload.get("source_format"),
                 "display_label": payload.get("display_label"),
                 "source_client_id": payload.get("source_client_id"),
+                "run_id": run_id,
+                "run_sequence": task_id,
+                "task_id": task_id,
             },
+        )
+
+
+async def reserve_failed_chat_turn_retry(session: Any, *, run_id: str) -> TurnReservation:
+    """Reserve one explicit replay without appending another user message."""
+    async with session.lock:
+        if session.is_processing:
+            return TurnReservation(busy=True, session_id=current_session_id(session))
+
+        record = consume_failed_turn_retry(session, run_id)
+        user_message = str(record.get("user_message") or "").strip()
+        if not user_message:
+            raise ValueError("The failed turn no longer contains a request to retry.")
+
+        session.current_task_id += 1
+        task_id = session.current_task_id
+        session_id = current_session_id(session)
+        session.start_browser_task(task_id, user_message)
+        session.should_interrupt = False
+        session.is_processing = True
+        session.last_user_message = user_message
+
+        original_meta = dict(record.get("event_meta") or {})
+        event_meta = {
+            **original_meta,
+            "run_id": str(run_id),
+            "run_sequence": task_id,
+            "task_id": task_id,
+            "retry_of_run_id": str(run_id),
+        }
+        session.save_session()
+        return TurnReservation(
+            busy=False,
+            task_id=task_id,
+            session_id=session_id,
+            is_session_start=False,
+            event_meta=event_meta,
         )
 
 
@@ -421,6 +472,7 @@ async def run_reserved_chat_turn(
 
         running_loop = asyncio.get_running_loop()
         artifact_store = _artifact_store_for_session(session, session_id=reservation.session_id)
+        edit_summary_baseline = capture_workspace_edit_baseline(getattr(session, "workspace", ""))
         touched_file_paths: set[Path] = set()
         turn_artifact_ids: List[str] = []
         tool_events_this_turn: List[Dict[str, Any]] = []
@@ -606,22 +658,30 @@ async def run_reserved_chat_turn(
             if file_snapshots_flushed:
                 return
             file_snapshots_flushed = True
-            artifact_ids = _snapshot_touched_file_artifact_ids(
-                session,
-                store=artifact_store,
-                touched_file_paths=touched_file_paths,
-                task_id=reservation.task_id,
-            )
-            turn_artifact_ids.extend(
-                artifact_id for artifact_id in artifact_ids if artifact_id not in turn_artifact_ids
-            )
-            _publish_artifact_created(
-                session,
-                reservation=reservation,
-                store=artifact_store,
-                artifact_ids=artifact_ids,
-                schedule_emit=_schedule_emit,
-            )
+            try:
+                artifact_ids = _snapshot_touched_file_artifact_ids(
+                    session,
+                    store=artifact_store,
+                    touched_file_paths=touched_file_paths,
+                    task_id=reservation.task_id,
+                )
+                turn_artifact_ids.extend(
+                    artifact_id for artifact_id in artifact_ids if artifact_id not in turn_artifact_ids
+                )
+                _publish_artifact_created(
+                    session,
+                    reservation=reservation,
+                    store=artifact_store,
+                    artifact_ids=artifact_ids,
+                    schedule_emit=_schedule_emit,
+                )
+            except Exception as exc:
+                _schedule_emit(
+                    {
+                        "type": "log",
+                        "message": f"File snapshot artifact capture skipped: {str(exc)[:240]}",
+                    }
+                )
 
         def on_tool_use_func(tool_name: str, tool_args: Dict[str, Any], tool_result: Any, dur_ms: float):
             _track_mutated_file_path(
@@ -685,6 +745,9 @@ async def run_reserved_chat_turn(
                         "tool_result": event_tool_result,
                         "duration_ms": dur_ms,
                         "artifact_ids": artifact_ids,
+                        "run_id": reservation.event_meta.get("run_id"),
+                        "run_sequence": reservation.event_meta.get("run_sequence"),
+                        "task_id": reservation.event_meta.get("task_id"),
                     },
                     event_meta=reservation.event_meta,
                 ),
@@ -697,6 +760,9 @@ async def run_reserved_chat_turn(
                     "tool_result": event_tool_result,
                     "duration_ms": dur_ms,
                     "artifact_ids": artifact_ids,
+                    "run_id": reservation.event_meta.get("run_id"),
+                    "run_sequence": reservation.event_meta.get("run_sequence"),
+                    "task_id": reservation.event_meta.get("task_id"),
                 }
             )
             _publish_artifact_created(
@@ -867,8 +933,10 @@ async def run_reserved_chat_turn(
                 "surface": reservation.event_meta.get("channel") or "app",
                 "session_id": current_session_id(session),
                 "identity_id": getattr(session, "fleet_identity_id", None),
+                "run_mode": getattr(session, "current_turn_run_mode", None),
             }
             install_background_process_hooks(session, event_loop=loop)
+            install_visual_monitor_hooks(session, event_loop=loop)
         result: LoopResult = await loop.run_in_executor(
             None,
             lambda: run_tool_loop(
@@ -893,6 +961,54 @@ async def run_reserved_chat_turn(
                 session_id=current_session_id(session),
             )
 
+        result_failure = getattr(result, "failure", None)
+        if result_failure:
+            failure = {
+                **dict(result_failure),
+                "run_id": str(reservation.event_meta.get("run_id") or ""),
+            }
+            record_failed_turn(
+                session,
+                failure=failure,
+                user_message=str(session.last_user_message or ""),
+                event_meta=reservation.event_meta,
+            )
+            failed_board = archive_active_task_board(
+                session,
+                status="failed",
+                summary=str(failure.get("user_message") or "The provider could not complete this turn."),
+            )
+            session.save_session()
+            _publish_sync_event(
+                session,
+                _turn_sync_event(
+                    event_type="run_failed",
+                    session_id=current_session_id(session),
+                    payload=failure,
+                    event_meta=reservation.event_meta,
+                ),
+            )
+            await _emit_event(event_sink, {"type": "run_failed", **failure})
+            if failed_board:
+                _publish_sync_event(
+                    session,
+                    _task_board_sync_event(
+                        session_id=current_session_id(session),
+                        board=None,
+                        completed_boards=completed_task_board_views(session),
+                        summary=failed_board.get("completion_summary"),
+                        event_meta=reservation.event_meta,
+                    ),
+                )
+            return SharedTurnResult(
+                ok=False,
+                session_id=current_session_id(session),
+                failure=failure,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+                total_tokens=result.total_tokens,
+            )
+
         raw_response = result.content or "".join(response_buffer)
         assistant_text = assistant_content_transform(raw_response) if assistant_content_transform else raw_response
         assistant_text = redact_text(assistant_text)
@@ -901,13 +1017,21 @@ async def run_reserved_chat_turn(
         finalized_task_board = finalize_task_board_turn(session, assistant_text or "")
         post_compaction_result = None
         _flush_file_snapshot_artifacts()
+        edit_summary = build_workspace_edit_summary(
+            getattr(session, "workspace", ""),
+            edit_summary_baseline,
+        )
         if assistant_text:
             assistant_message = {
                 "role": "assistant",
                 "content": assistant_text,
                 "timestamp": datetime.now().isoformat(),
                 "metadata": {
+                    "run_id": reservation.event_meta.get("run_id"),
+                    "run_sequence": reservation.event_meta.get("run_sequence"),
+                    "task_id": reservation.event_meta.get("task_id"),
                     "artifact_ids": list(turn_artifact_ids),
+                    **({"edit_summary": edit_summary} if edit_summary else {}),
                     **({"generated_from_tool_result": True} if not str(raw_response or "").strip() and tool_events_this_turn else {}),
                 },
             }
@@ -943,6 +1067,7 @@ async def run_reserved_chat_turn(
                         "output_tokens": result.output_tokens,
                         "total_tokens": result.total_tokens,
                         "artifact_ids": list(turn_artifact_ids),
+                        "edit_summary": edit_summary,
                     },
                 },
             )

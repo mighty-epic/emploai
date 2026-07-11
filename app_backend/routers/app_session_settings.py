@@ -9,6 +9,7 @@ from app_backend.models import (
     SessionBotAssignmentRequest,
     SessionDetailView,
     SessionHeadlessEligibilityRequest,
+    SessionModeActionRequest,
     SessionSecurityPermissionRequest,
     ToolPackUpdateRequest,
 )
@@ -89,6 +90,22 @@ def create_app_session_settings_router(deps: AppSessionSettingsRouterDeps) -> AP
             )
         bridge = deps.bridge_for_user(int(auth["user_id"]))
         session = bridge.update_session_security_permission_mode(session_id, request.security_permission_mode)
+        return SessionDetailView(**bridge.detailed_session_view(session))
+
+    @router.post("/api/app/sessions/{session_id}/mode", response_model=SessionDetailView)
+    async def update_session_mode_state(
+        session_id: str,
+        request: SessionModeActionRequest,
+        http_request: Request,
+        authorization: Optional[str] = Header(default=None),
+    ) -> SessionDetailView:
+        auth = _require_local_app_backend(deps, authorization)
+        _check_session_setting_rate_limit(deps, http_request, auth)
+        bridge = deps.bridge_for_user(int(auth["user_id"]))
+        try:
+            session = bridge.update_session_mode_state(session_id, request.action, request.reason)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return SessionDetailView(**bridge.detailed_session_view(session))
 
     return router

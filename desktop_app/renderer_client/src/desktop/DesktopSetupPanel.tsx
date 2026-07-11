@@ -4,15 +4,19 @@ import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { styles } from './DesktopSetupPanel.styles';
 import { DesktopSetupRecoverySection } from './DesktopSetupRecoverySection';
 import { DesktopSetupLocalIntelligenceSection } from './DesktopSetupLocalIntelligenceSection';
+import { DesktopSetupOnboardingSection } from './DesktopSetupOnboardingSection';
 import { DesktopSetupSharedSettingsSection } from './DesktopSetupSharedSettingsSection';
 import { DesktopSetupVoiceSection } from './DesktopSetupVoiceSection';
 import { VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW, VOICE_ENGINE_NONE } from './desktopVoicePolicy';
 import { configuredProviderChipLabels } from './setupValues';
+import { buildOnboardingSuggestion, type OnboardingSuggestion } from './desktopOnboardingStatus';
 import { PairingQrCode } from '../components/PairingQrCode';
 import { buildPairingQrValue } from '../lib/pairingQr';
 
 import {
+  fetchProjectOnboarding,
   type PendingConfirmation,
+  type ProjectOnboardingProfile,
   type RecoveryArchiveItem,
   type RuntimeOrchestratorStatus,
   type SessionSummary,
@@ -34,6 +38,7 @@ import type {
   DesktopVoicePackSummary,
 } from '@/lib/desktopBridge';
 import {
+  createDesktopShortcut,
   loadDesktopCodexAuthStatus,
   logoutDesktopCodexAuth,
   pollDesktopCodexDeviceLogin,
@@ -44,34 +49,12 @@ import { InfoHint } from '@/components/InfoHint';
 import { shortStatusText, userFacingError } from '../../lib/diagnostics';
 import type { SharedSettingsDraft } from '@/lib/accountProfile';
 
-const INTERRUPT_POLICY_OPTIONS: Array<{
-  key: DesktopSetupValues['INTERRUPT_POLICY_DEFAULT'];
-  label: string;
-  description: string;
-}> = [
-  {
-    key: 'none',
-    label: 'Queue',
-    description: 'Hold messages locally while a run is active. They can auto-send later or be steered from the queue.',
-  },
-  {
-    key: 'steer_now',
-    label: 'Steer Now',
-    description: 'Send messages during an active run as immediate steering instructions.',
-  },
-  {
-    key: 'after_tool',
-    label: 'After Tool',
-    description: 'Send messages during an active run at the next safe tool boundary.',
-  },
-];
-
 type Props = {
   setupState: DesktopSetupState;
   saving: boolean;
   voicePackBusyId?: string | null;
   voicePackProgress?: DesktopVoicePackInstallProgress | null;
-  onSave: (values: Partial<DesktopSetupValues>) => void;
+  onSave: (values: Partial<DesktopSetupValues>) => boolean | void | Promise<boolean | void>;
   onInstallVoicePack?: (packId: string) => void;
   onSelectTtsVoicePack?: (pack: DesktopVoicePackSummary) => void;
   onRemoveVoicePack?: (packId: string) => void;
@@ -83,7 +66,7 @@ type Props = {
   memoryLoading?: boolean;
   memorySaving?: boolean;
   onReloadMemory?: () => void;
-  onSaveMemory?: (content: string) => void;
+  onSaveMemory?: (content: string) => boolean | void | Promise<boolean | void>;
   localIntelligenceApi?: {
     apiBaseUrl?: string | null;
     token?: string | null;
@@ -133,13 +116,14 @@ type Props = {
   sharedSettingsSaving?: boolean;
   sharedSettingsStatus?: string | null;
   onSharedSettingsDraftChange?: (draft: SharedSettingsDraft) => void;
-  onSaveSharedSettings?: () => void;
+  onSaveSharedSettings?: () => boolean | void | Promise<boolean | void>;
 };
 
-type SettingsTabKey = 'general' | 'chrome' | 'remote' | 'telegram' | 'voice' | 'recovery';
+type SettingsTabKey = 'general' | 'onboarding' | 'chrome' | 'remote' | 'telegram' | 'voice' | 'recovery';
 
 const SETTINGS_TABS: Array<{ key: SettingsTabKey; label: string; description: string }> = [
   { key: 'general', label: 'General', description: 'Models, keys, workspace, memory' },
+  { key: 'onboarding', label: 'Onboarding', description: 'Project identity, tools, and workflows' },
   { key: 'chrome', label: 'Chrome Extension', description: 'Browser helper and screen reading' },
   { key: 'remote', label: 'Devices', description: 'Sign-in, phone pairing, other computers' },
   { key: 'telegram', label: 'Telegram', description: 'Bot connection and routing' },
@@ -156,6 +140,13 @@ const API_KEY_FIELDS: { key: keyof DesktopSetupValues; label: string }[] = [
   { key: 'NVIDIA_API_KEY', label: 'NVIDIA API key' },
   { key: 'OPENROUTER_API_KEY', label: 'OpenRouter API key' },
 ];
+
+function setupValuesWithoutPlannerOverride(values: DesktopSetupValues): DesktopSetupValues {
+  return {
+    ...values,
+    PLANNER_MODEL: '',
+  };
+}
 
 const LIVE_VALIDATION_FIELDS: Array<keyof DesktopSetupValues> = [
   'OPENAI_API_KEY',
@@ -215,12 +206,10 @@ export function DesktopSetupPanel({
   telegramBotConfigs = [],
   sessions = [],
   runtimeOrchestratorStatus,
-  currentMaxTurns = null,
   onCreateTelegramBotConfig,
   onUpdateTelegramBotConfig,
   onDeleteTelegramBotConfig,
   onConfigureRuntimeOrchestrator,
-  onUpdateGeneralAgentConfig,
   remoteAuthStatus,
   onRefreshRemoteAuth,
   onCreateRemotePairingToken,
@@ -249,7 +238,7 @@ export function DesktopSetupPanel({
   onSharedSettingsDraftChange,
   onSaveSharedSettings,
 }: Props) {
-  const [values, setValues] = useState<DesktopSetupValues>(setupState.values);
+  const [values, setValues] = useState<DesktopSetupValues>(() => setupValuesWithoutPlannerOverride(setupState.values));
   const [memoryDraft, setMemoryDraft] = useState(memoryState?.content || '');
   const [fieldValidation, setFieldValidation] = useState<Record<string, DesktopSetupFieldValidation>>({});
   const [newTelegramBotLabel, setNewTelegramBotLabel] = useState('');
@@ -258,9 +247,8 @@ export function DesktopSetupPanel({
   const [gmailLoginEmail, setGmailLoginEmail] = useState('');
   const [gmailLoginPassword, setGmailLoginPassword] = useState('');
   const [maxConcurrentChatsDraft, setMaxConcurrentChatsDraft] = useState(String(runtimeOrchestratorStatus?.max_concurrent_chats || 4));
-  const [maxTurnsDraft, setMaxTurnsDraft] = useState(String(currentMaxTurns || 80));
   const [activeTab, setActiveTab] = useState<SettingsTabKey>('general');
-  const [sleepModeConfirmationOpen, setSleepModeConfirmationOpen] = useState(false);
+  const [onboardingSuggestion, setOnboardingSuggestion] = useState<OnboardingSuggestion | null>(null);
   const [remoteBusy, setRemoteBusy] = useState(false);
   const [remotePairingToken, setRemotePairingToken] = useState('');
   const [remotePairingUri, setRemotePairingUri] = useState('');
@@ -271,13 +259,36 @@ export function DesktopSetupPanel({
   const [codexDeviceLogin, setCodexDeviceLogin] = useState<DesktopCodexDeviceLogin | null>(null);
   const [codexBusy, setCodexBusy] = useState(false);
   const [codexMessage, setCodexMessage] = useState('');
+  const [desktopShortcutBusy, setDesktopShortcutBusy] = useState(false);
+  const [desktopShortcutMessage, setDesktopShortcutMessage] = useState('');
+  const [desktopShortcutFailed, setDesktopShortcutFailed] = useState(false);
+  const [dismissPromptOpen, setDismissPromptOpen] = useState(false);
+  const [dismissSaveError, setDismissSaveError] = useState('');
   const validationTimersRef = useRef<Record<string, ReturnType<typeof setTimeout> | null>>({});
   const validationRunRef = useRef<Record<string, number>>({});
+  const editedValueKeysRef = useRef<Set<keyof DesktopSetupValues>>(new Set());
   const codexPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sharedSettingsBaselineRef = useRef(sharedSettingsDraft ? JSON.stringify(sharedSettingsDraft) : '');
+  const memoryBaselineRef = useRef(memoryState?.content || '');
 
   useEffect(() => {
-    setValues(setupState.values);
-    setFieldValidation({});
+    setValues((current) => {
+      const nextValues = setupValuesWithoutPlannerOverride(setupState.values);
+      editedValueKeysRef.current.forEach((fieldKey) => {
+        nextValues[fieldKey] = current[fieldKey];
+      });
+      return nextValues;
+    });
+    setFieldValidation((current) => {
+      const next: Record<string, DesktopSetupFieldValidation> = {};
+      editedValueKeysRef.current.forEach((fieldKey) => {
+        const validation = current[String(fieldKey)];
+        if (validation) {
+          next[String(fieldKey)] = validation;
+        }
+      });
+      return next;
+    });
     setCodexAuthStatus(setupState.codexAuth || null);
   }, [setupState]);
 
@@ -286,16 +297,44 @@ export function DesktopSetupPanel({
   }, [runtimeOrchestratorStatus?.max_concurrent_chats]);
 
   useEffect(() => {
-    setSleepModeConfirmationOpen(false);
-  }, [runtimeOrchestratorStatus?.headless_mode_enabled]);
-
-  useEffect(() => {
-    setMaxTurnsDraft(String(currentMaxTurns || 80));
-  }, [currentMaxTurns]);
-
-  useEffect(() => {
-    setMemoryDraft(memoryState?.content || '');
+    const nextContent = memoryState?.content || '';
+    memoryBaselineRef.current = nextContent;
+    setMemoryDraft(nextContent);
   }, [memoryState?.content, memoryState?.memoryFilePath]);
+
+  useEffect(() => {
+    if (String(sharedSettingsStatus || '').toLowerCase().includes('saved')) {
+      sharedSettingsBaselineRef.current = sharedSettingsDraft ? JSON.stringify(sharedSettingsDraft) : '';
+    }
+  }, [sharedSettingsDraft, sharedSettingsStatus]);
+
+  useEffect(() => {
+    const apiBaseUrl = localIntelligenceApi?.apiBaseUrl;
+    const token = localIntelligenceApi?.token;
+    const workspace = String(setupState.values.DEFAULT_WORKSPACE || '').trim();
+    if (!apiBaseUrl || !token || !workspace) {
+      setOnboardingSuggestion(null);
+      return;
+    }
+
+    let disposed = false;
+    void (async () => {
+      try {
+        const response = await fetchProjectOnboarding(apiBaseUrl, token, workspace);
+        if (!disposed) {
+          setOnboardingSuggestion(buildOnboardingSuggestion(response.profile, workspace));
+        }
+      } catch {
+        if (!disposed) {
+          setOnboardingSuggestion(null);
+        }
+      }
+    })();
+
+    return () => {
+      disposed = true;
+    };
+  }, [localIntelligenceApi?.apiBaseUrl, localIntelligenceApi?.token, setupState.values.DEFAULT_WORKSPACE, setupState.releaseVersion]);
 
   useEffect(() => {
     setActiveTab('general');
@@ -321,13 +360,22 @@ export function DesktopSetupPanel({
     }
   }, []);
 
-  const refreshCodexAuthStatus = async () => {
-    const status = await loadDesktopCodexAuthStatus();
-    if (status) {
-      setCodexAuthStatus(status);
-    }
-    return status;
-  };
+  useEffect(() => {
+    let disposed = false;
+    void (async () => {
+      try {
+        const status = await loadDesktopCodexAuthStatus();
+        if (!disposed && status) {
+          setCodexAuthStatus(status);
+        }
+      } catch {
+        // Keep setup usable if the local shell cannot inspect ChatGPT auth yet.
+      }
+    })();
+    return () => {
+      disposed = true;
+    };
+  }, [setupState.releaseVersion]);
 
   const scheduleCodexDevicePoll = (delaySeconds = 5) => {
     if (codexPollTimerRef.current) {
@@ -395,6 +443,24 @@ export function DesktopSetupPanel({
       setCodexMessage(userFacingError(error, 'Could not delete ChatGPT sign-in.'));
     } finally {
       setCodexBusy(false);
+    }
+  };
+
+  const addDesktopShortcut = async () => {
+    setDesktopShortcutBusy(true);
+    setDesktopShortcutMessage('');
+    setDesktopShortcutFailed(false);
+    try {
+      const result = await createDesktopShortcut();
+      if (!result) {
+        throw new Error('Desktop shortcut controls are unavailable in this shell.');
+      }
+      setDesktopShortcutMessage(result.message || `Desktop shortcut created: ${result.shortcutPath || 'EmploAI.lnk'}`);
+    } catch (error) {
+      setDesktopShortcutFailed(true);
+      setDesktopShortcutMessage(userFacingError(error, 'Desktop shortcut was not created.'));
+    } finally {
+      setDesktopShortcutBusy(false);
     }
   };
 
@@ -467,10 +533,16 @@ export function DesktopSetupPanel({
   };
 
   const updateValue = (key: keyof DesktopSetupValues, nextValue: string) => {
+    editedValueKeysRef.current.add(key);
     setValues((current) => ({ ...current, [key]: nextValue }));
     if (LIVE_VALIDATION_FIELDS.includes(key)) {
       scheduleFieldValidation(key, nextValue);
     }
+  };
+
+  const applyOnboardingProfileSuggestion = (profile: ProjectOnboardingProfile) => {
+    const workspace = String(profile.workspace || values.DEFAULT_WORKSPACE || setupState.values.DEFAULT_WORKSPACE || '').trim();
+    setOnboardingSuggestion(buildOnboardingSuggestion(profile, workspace));
   };
 
   const setupSecretByName = new Map(
@@ -478,6 +550,14 @@ export function DesktopSetupPanel({
       .filter((item) => item.namespace === 'setup')
       .map((item) => [item.name, item] as const),
   );
+  const codexConnected = Boolean(codexAuthStatus?.configured);
+  const openAiProviderMode = values.OPENAI_PROVIDER_MODE === 'chatgpt' ? 'chatgpt' : 'api_key';
+  const openAiApiKeyAvailable = Boolean(
+    setupSecretByName.get('OPENAI_API_KEY')
+    || String(setupState.localRuntimeSecrets?.OPENAI_API_KEY?.redacted_value || '').trim()
+    || String(values.OPENAI_API_KEY || '').trim()
+  );
+  const showOpenAiProviderMode = codexConnected && openAiApiKeyAvailable;
   const lockedProviderSecretNames = new Set<keyof DesktopSetupValues>(
     API_KEY_FIELDS
       .filter((field) => setupSecretByName.has(String(field.key)))
@@ -489,17 +569,25 @@ export function DesktopSetupPanel({
   );
   const visibleConfiguredProviders = (() => {
     const providers = [...displayedConfiguredProviders];
-    if (codexAuthStatus?.configured && !providers.includes('OpenAI Codex (ChatGPT)')) {
+    if (codexConnected && !providers.includes('OpenAI Codex (ChatGPT)')) {
       providers.push('OpenAI Codex (ChatGPT)');
     }
     return providers;
   })();
   const valuesWithoutLockedProviderKeys = () => {
-    const nextValues = { ...values };
+    const nextValues = setupValuesWithoutPlannerOverride(values);
     lockedProviderSecretNames.forEach((fieldKey) => {
       nextValues[fieldKey] = '';
     });
     return nextValues;
+  };
+  const saveEditedValues = async () => {
+    const nextValues = valuesWithoutLockedProviderKeys();
+    const saved = await onSave(nextValues);
+    if (saved === false) throw new Error('Setup values were not saved.');
+    editedValueKeysRef.current.clear();
+    setFieldValidation({});
+    return true;
   };
 
   const title = setupState.required ? 'Desktop setup is required' : 'Setup and settings';
@@ -527,8 +615,63 @@ export function DesktopSetupPanel({
       ? `${selectedVoicePack?.title || 'English voice pack'} ready (${voiceModel}${voiceDraftModel ? ` + ${voiceDraftModel}` : ''})`
       : `${selectedVoicePack?.title || 'Voice pack'} unavailable`;
   const visibleVoiceIssue = selectedVoiceEngine === VOICE_ENGINE_NONE ? null : voiceIssues[0];
-  const memoryDirty = memoryDraft !== (memoryState?.content || '');
-  const updateSummary = updateStatus?.updateAvailable
+  const memoryDirty = memoryDraft !== memoryBaselineRef.current;
+  const sharedSettingsDirty = Boolean(
+    sharedSettingsDraft
+    && JSON.stringify(sharedSettingsDraft) !== sharedSettingsBaselineRef.current
+  );
+  const settingsDirty = editedValueKeysRef.current.size > 0 || memoryDirty || sharedSettingsDirty;
+  const requestDismiss = () => {
+    if (!onDismiss) return;
+    if (settingsDirty) {
+      setDismissSaveError('');
+      setDismissPromptOpen(true);
+      return;
+    }
+    onDismiss();
+  };
+  const saveDirtySections = async () => {
+    setDismissSaveError('');
+    try {
+      if (editedValueKeysRef.current.size > 0) await saveEditedValues();
+      if (memoryDirty) {
+        if (!onSaveMemory) throw new Error('Memory saving is unavailable.');
+        const memorySaved = await onSaveMemory(memoryDraft);
+        if (memorySaved === false) throw new Error('Memory was not saved.');
+        memoryBaselineRef.current = memoryDraft;
+      }
+      if (sharedSettingsDirty) {
+        if (!onSaveSharedSettings) throw new Error('Shared settings saving is unavailable.');
+        const sharedSaved = await onSaveSharedSettings();
+        if (sharedSaved === false) throw new Error('Shared settings were not saved.');
+        sharedSettingsBaselineRef.current = sharedSettingsDraft ? JSON.stringify(sharedSettingsDraft) : '';
+      }
+      setDismissPromptOpen(false);
+      onDismiss?.();
+    } catch (saveError) {
+      setDismissSaveError(saveError instanceof Error ? saveError.message : 'Settings were not saved.');
+      setDismissPromptOpen(true);
+    }
+  };
+  const discardDirtySections = () => {
+    editedValueKeysRef.current.clear();
+    setValues(setupValuesWithoutPlannerOverride(setupState.values));
+    setFieldValidation({});
+    setMemoryDraft(memoryState?.content || '');
+    memoryBaselineRef.current = memoryState?.content || '';
+    if (sharedSettingsDraft && onSharedSettingsDraftChange && sharedSettingsBaselineRef.current) {
+      try {
+        onSharedSettingsDraftChange(JSON.parse(sharedSettingsBaselineRef.current));
+      } catch {
+        // Keep the current shared draft if its baseline is unavailable.
+      }
+    }
+    setDismissPromptOpen(false);
+    onDismiss?.();
+  };
+  const updateSummary = updateStatus?.message
+    ? updateStatus.message
+    : updateStatus?.updateAvailable
     ? `Update ready: ${updateStatus.update?.tagName || updateStatus.update?.version}`
     : updateStatus?.lastError
       ? `Check failed: ${updateStatus.lastError}`
@@ -560,31 +703,49 @@ export function DesktopSetupPanel({
       ))
     : SETTINGS_TABS;
   const selectedSettingsTab = settingsTabs.find((item) => item.key === activeTab) || settingsTabs[0];
-  const maxTurnsValue = Math.min(1000, Math.max(10, Number.parseInt(maxTurnsDraft || String(currentMaxTurns || 80), 10) || 80));
   const maxConcurrentValue = Math.min(12, Math.max(1, Number.parseInt(maxConcurrentChatsDraft || '4', 10) || 4));
-  const sleepModeEnabled = runtimeOrchestratorStatus?.headless_mode_enabled ?? false;
-  const codexConnected = Boolean(codexAuthStatus?.configured);
   const codexUserCode = codexDeviceLogin?.userCode || codexDeviceLogin?.user_code || '';
   const codexVerificationUri = codexDeviceLogin?.verificationUri || codexDeviceLogin?.verification_uri || 'https://auth.openai.com/codex/device';
-  const codexExpiresLabel = codexAuthStatus?.expiresAtIso
-    ? `Access token refreshes locally. Current token expires ${new Date(codexAuthStatus.expiresAtIso).toLocaleString()}.`
+  const codexExpiresAt = codexAuthStatus?.expiresAtIso ? new Date(codexAuthStatus.expiresAtIso) : null;
+  const codexExpiresAtLabel = codexExpiresAt && !Number.isNaN(codexExpiresAt.getTime())
+    ? codexExpiresAt.toLocaleString()
+    : '';
+  const codexTokenExpired = codexConnected && codexAuthStatus?.accessTokenUsable === false;
+  const codexCanRefreshToken = Boolean(codexAuthStatus?.hasRefreshToken);
+  const codexNeedsSignIn = !codexConnected || (codexTokenExpired && !codexCanRefreshToken);
+  const codexStatusTone = codexDeviceLogin
+    ? 'pending'
     : codexConnected
-      ? 'Access token refreshes locally when needed.'
-      : 'Not connected.';
-
-  const requestSleepModeChange = () => {
-    if (sleepModeEnabled) {
-      setSleepModeConfirmationOpen(false);
-      onConfigureRuntimeOrchestrator?.({ enabled: false });
-      return;
-    }
-    setSleepModeConfirmationOpen(true);
-  };
-
-  const confirmSleepMode = () => {
-    setSleepModeConfirmationOpen(false);
-    onConfigureRuntimeOrchestrator?.({ enabled: true });
-  };
+      ? codexTokenExpired
+        ? codexCanRefreshToken ? 'warning' : 'error'
+        : 'connected'
+      : 'offline';
+  const codexStatusLabel = codexDeviceLogin
+    ? 'Pending'
+    : codexConnected
+      ? codexTokenExpired ? 'Expired' : 'Connected'
+      : 'Not connected';
+  const codexPrimaryLabel = codexBusy
+    ? 'Working...'
+    : codexNeedsSignIn
+      ? codexConnected ? 'Sign In Again' : 'Sign In With ChatGPT'
+      : 'ChatGPT Connected';
+  const codexPrimaryDisabled = codexBusy || Boolean(codexDeviceLogin) || !codexNeedsSignIn;
+  const codexConnectionDetail = codexConnected
+    ? codexTokenExpired
+      ? codexCanRefreshToken
+        ? 'Current access token expired; it will refresh locally on the next ChatGPT request.'
+        : 'ChatGPT sign-in expired. Sign in again to use subscription models.'
+      : `${codexAuthStatus?.accountId ? `Account ${codexAuthStatus.accountId}. ` : ''}${codexExpiresAtLabel ? `Current token expires ${codexExpiresAtLabel}.` : 'Token refresh is handled locally when needed.'}`
+    : 'Not connected. Tokens are saved only on this computer after sign-in.';
+  const codexStatusMessage = codexMessage || codexConnectionDetail;
+  const codexStatusMessageStyle = codexStatusTone === 'connected'
+    ? styles.validationTextValid
+    : codexStatusTone === 'error'
+      ? styles.validationTextInvalid
+      : codexStatusTone === 'warning'
+        ? styles.validationTextError
+        : styles.validationTextChecking;
 
   const setVoiceDefaultEngine = (nextEngine: string) => {
     setValues((current) => {
@@ -637,7 +798,6 @@ export function DesktopSetupPanel({
     });
   };
 
-  const adjustMaxTurns = (delta: number) => setMaxTurnsDraft(String(Math.min(1000, Math.max(10, maxTurnsValue + delta))));
   const adjustMaxConcurrentChats = (delta: number) => setMaxConcurrentChatsDraft(String(Math.min(12, Math.max(1, maxConcurrentValue + delta))));
   const addTelegramUserId = () => {
     const nextId = newTelegramUserId.trim().replace(/^\+/, '');
@@ -736,7 +896,7 @@ export function DesktopSetupPanel({
       <View style={styles.settingsFrame}>
         <View style={styles.settingsSidebar}>
           {onDismiss ? (
-            <Pressable style={styles.backToAppButton} onPress={onDismiss} disabled={saving}>
+            <Pressable style={styles.backToAppButton} onPress={requestDismiss} disabled={saving}>
               <Text style={styles.backToAppButtonText}>Back to app</Text>
             </Pressable>
           ) : (
@@ -783,6 +943,24 @@ export function DesktopSetupPanel({
               </View>
             ) : null}
 
+            {onboardingSuggestion && activeTab !== 'onboarding' ? (
+              <View style={styles.onboardingSuggestionCard}>
+                <View style={styles.onboardingSuggestionCopy}>
+                  <Text style={styles.onboardingSuggestionEyebrow}>Optional setup suggestion</Text>
+                  <Text style={styles.onboardingSuggestionTitle}>{onboardingSuggestion.title}</Text>
+                  <Text style={styles.onboardingSuggestionText}>{onboardingSuggestion.message}</Text>
+                  {onboardingSuggestion.missingLabels.length ? (
+                    <Text style={styles.onboardingSuggestionMeta}>
+                      Missing: {onboardingSuggestion.missingLabels.join(', ')}
+                    </Text>
+                  ) : null}
+                </View>
+                <Pressable style={styles.compactActionButton} onPress={() => setActiveTab('onboarding')}>
+                  <Text style={styles.compactActionButtonText}>{onboardingSuggestion.actionLabel}</Text>
+                </Pressable>
+              </View>
+            ) : null}
+
             {activeTab === 'general' ? (
               <>
                 {sharedSettingsDraft && onSharedSettingsDraftChange && onSaveSharedSettings ? (
@@ -797,155 +975,64 @@ export function DesktopSetupPanel({
                 ) : null}
 
                 <View style={styles.section}>
-                  <Text style={styles.sectionTitle}>General</Text>
+                  <Text style={styles.sectionTitle}>Runtime workers</Text>
                   <Text style={styles.helperText}>
-                    Set the defaults EmploAI uses when you start new chats. Per-chat controls can still override these choices.
+                    Control how many independent chats may work at the same time when this desktop is not in a managed Fleet role.
                   </Text>
-
-                  <View style={styles.settingStack}>
-                    <View style={styles.settingCard}>
-                      <View style={styles.settingRow}>
-                        <View style={styles.settingRowCopy}>
-                          <Text style={styles.settingRowTitle}>Turn limit</Text>
-                          <Text style={styles.settingRowDescription}>
-                            Caps how long one agent run can continue before it must stop and hand control back.
-                          </Text>
-                        </View>
-                        <View style={styles.settingRowControls}>
-                          <View style={styles.stepperControl}>
-                            <Pressable style={styles.stepperButton} onPress={() => adjustMaxTurns(-10)}>
-                              <Text style={styles.stepperButtonText}>-</Text>
-                            </Pressable>
-                            <TextInput
-                              value={maxTurnsDraft}
-                              onChangeText={setMaxTurnsDraft}
-                              style={[styles.input, styles.numberInput]}
-                              placeholder="80"
-                              placeholderTextColor="#7f93b5"
-                              autoCapitalize="none"
-                              autoCorrect={false}
-                            />
-                            <Pressable style={styles.stepperButton} onPress={() => adjustMaxTurns(10)}>
-                              <Text style={styles.stepperButtonText}>+</Text>
-                            </Pressable>
-                          </View>
-                          <Pressable style={styles.compactActionButton} onPress={() => onUpdateGeneralAgentConfig?.({ max_turns: maxTurnsValue })}>
-                            <Text style={styles.compactActionButtonText}>Apply</Text>
+                  <View style={styles.settingCard}>
+                    <View style={styles.settingRow}>
+                      <View style={styles.settingRowCopy}>
+                        <Text style={styles.settingRowTitle}>Running chats</Text>
+                      </View>
+                      <View style={styles.settingRowControls}>
+                        <View style={styles.stepperControl}>
+                          <Pressable style={styles.stepperButton} onPress={() => adjustMaxConcurrentChats(-1)}>
+                            <Text style={styles.stepperButtonText}>-</Text>
+                          </Pressable>
+                          <TextInput
+                            value={maxConcurrentChatsDraft}
+                            onChangeText={setMaxConcurrentChatsDraft}
+                            style={[styles.input, styles.numberInput]}
+                            placeholder="4"
+                            placeholderTextColor="#7f93b5"
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                          />
+                          <Pressable style={styles.stepperButton} onPress={() => adjustMaxConcurrentChats(1)}>
+                            <Text style={styles.stepperButtonText}>+</Text>
                           </Pressable>
                         </View>
-                      </View>
-                    </View>
-
-                    <View style={styles.settingCard}>
-                      <View style={styles.settingRow}>
-                        <View style={styles.settingRowCopy}>
-                          <Text style={styles.settingRowTitle}>Running chats</Text>
-                          <Text style={styles.settingRowDescription}>
-                            Controls how many independent chats may work at the same time when the app is not in a managed Fleet role.
-                          </Text>
-                        </View>
-                        <View style={styles.settingRowControls}>
-                          <View style={styles.stepperControl}>
-                            <Pressable style={styles.stepperButton} onPress={() => adjustMaxConcurrentChats(-1)}>
-                              <Text style={styles.stepperButtonText}>-</Text>
-                            </Pressable>
-                            <TextInput
-                              value={maxConcurrentChatsDraft}
-                              onChangeText={setMaxConcurrentChatsDraft}
-                              style={[styles.input, styles.numberInput]}
-                              placeholder="4"
-                              placeholderTextColor="#7f93b5"
-                              autoCapitalize="none"
-                              autoCorrect={false}
-                            />
-                            <Pressable style={styles.stepperButton} onPress={() => adjustMaxConcurrentChats(1)}>
-                              <Text style={styles.stepperButtonText}>+</Text>
-                            </Pressable>
-                          </View>
-                          <Pressable
-                            style={styles.compactActionButton}
-                            onPress={() => onConfigureRuntimeOrchestrator?.({ default_max_concurrent_chats: maxConcurrentValue })}
-                          >
-                            <Text style={styles.compactActionButtonText}>Apply</Text>
-                          </Pressable>
-                        </View>
-                      </View>
-                    </View>
-
-                    <View style={[styles.settingCard, styles.sleepModeCard]}>
-                      <View style={styles.settingRow}>
-                        <View style={styles.settingRowCopy}>
-                          <Text style={styles.settingRowTitle}>Sleep mode</Text>
-                          <Text style={styles.settingRowDescription}>
-                            Hides the desktop window and keeps Telegram and local automations available until the desktop app is opened again.
-                          </Text>
-                        </View>
-                        <View style={[styles.sleepModeStatusBadge, sleepModeEnabled ? styles.sleepModeStatusActive : null]}>
-                          <Text style={styles.sleepModeStatusText}>{sleepModeEnabled ? 'Sleeping' : 'Desktop'}</Text>
-                        </View>
-                      </View>
-                      <View style={styles.sleepModeActionRow}>
                         <Pressable
-                          style={[
-                            styles.sleepModeActionButton,
-                            sleepModeEnabled ? styles.sleepModeActionButtonActive : null,
-                            !onConfigureRuntimeOrchestrator ? styles.buttonDisabled : null,
-                          ]}
-                          onPress={requestSleepModeChange}
+                          style={[styles.compactActionButton, !onConfigureRuntimeOrchestrator ? styles.buttonDisabled : null]}
+                          onPress={() => onConfigureRuntimeOrchestrator?.({ default_max_concurrent_chats: maxConcurrentValue })}
                           disabled={!onConfigureRuntimeOrchestrator}
                         >
-                          <Text style={[
-                            styles.sleepModeActionButtonText,
-                            sleepModeEnabled ? styles.sleepModeActionButtonTextActive : null,
-                          ]}>
-                            {sleepModeEnabled ? 'Wake Desktop Mode' : 'Prepare Sleep Mode'}
-                          </Text>
+                          <Text style={styles.compactActionButtonText}>Apply</Text>
                         </Pressable>
-                        {sleepModeConfirmationOpen ? (
-                          <Pressable style={styles.sleepModeSecondaryButton} onPress={() => setSleepModeConfirmationOpen(false)}>
-                            <Text style={styles.sleepModeSecondaryButtonText}>Cancel</Text>
-                          </Pressable>
-                        ) : null}
                       </View>
-                      {sleepModeConfirmationOpen ? (
-                        <View style={styles.sleepModeConfirmPanel}>
-                          <Text style={styles.sleepModeConfirmTitle}>Enable sleep mode?</Text>
-                          <Text style={styles.sleepModeConfirmText}>
-                            Telegram and local automations become the active control surfaces, this desktop window will hide, and every Telegram bot is limited to one designated sleep chat. Open the desktop app again when you want to reconnect the UI and turn sleep mode off.
-                          </Text>
-                          <Pressable style={styles.sleepModeConfirmButton} onPress={confirmSleepMode}>
-                            <Text style={styles.sleepModeConfirmButtonText}>I Understand, Enable Sleep</Text>
-                          </Pressable>
-                        </View>
-                      ) : null}
-                    </View>
-
-                    <View style={styles.settingCard}>
-                      <Text style={styles.settingCardTitle}>Active-run message behavior</Text>
-                      <Text style={styles.settingCardDescription}>
-                        Choose how a new text message should be handled when the agent is already working in the current chat.
-                      </Text>
-                      <View style={styles.voiceModeRow}>
-                        {INTERRUPT_POLICY_OPTIONS.map((option) => {
-                          const selected = (values.INTERRUPT_POLICY_DEFAULT || 'none') === option.key;
-                          return (
-                            <Pressable
-                              key={option.key}
-                              style={[styles.voiceModeButton, selected ? styles.voiceModeButtonActive : null]}
-                              onPress={() => updateValue('INTERRUPT_POLICY_DEFAULT', option.key)}
-                            >
-                              <Text style={[styles.voiceModeButtonText, selected ? styles.voiceModeButtonTextActive : null]}>
-                                {option.label}
-                              </Text>
-                            </Pressable>
-                          );
-                        })}
-                      </View>
-                      <Text style={styles.voiceModeHelper}>
-                        {INTERRUPT_POLICY_OPTIONS.find((option) => option.key === (values.INTERRUPT_POLICY_DEFAULT || 'none'))?.description}
-                      </Text>
                     </View>
                   </View>
+                </View>
+
+                <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>Desktop shortcut</Text>
+                  <Text style={styles.helperText}>
+                    Add a Windows desktop shortcut that starts this local Electron app through the repo startup script.
+                  </Text>
+                  <View style={styles.pathActions}>
+                    <Pressable
+                      style={[styles.pathButton, desktopShortcutBusy ? styles.buttonDisabled : null]}
+                      onPress={() => void addDesktopShortcut()}
+                      disabled={desktopShortcutBusy}
+                    >
+                      <Text style={styles.pathButtonText}>{desktopShortcutBusy ? 'Creating...' : 'Add Desktop Shortcut'}</Text>
+                    </Pressable>
+                  </View>
+                  {desktopShortcutMessage ? (
+                    <Text style={[styles.validationText, desktopShortcutFailed ? styles.validationTextError : styles.validationTextValid]}>
+                      {desktopShortcutMessage}
+                    </Text>
+                  ) : null}
                 </View>
 
                 <View style={styles.section}>
@@ -987,6 +1074,34 @@ export function DesktopSetupPanel({
                         </View>
                       ))}
                     </View>
+
+                    {showOpenAiProviderMode ? (
+                      <View style={styles.fieldBlock}>
+                        <Text style={styles.settingRowTitle}>OpenAI model source</Text>
+                        <Text style={styles.voiceModeHelper}>
+                          Both an OpenAI API key and ChatGPT sign-in are available. Choose which OpenAI source should be used for defaults and model lists.
+                        </Text>
+                        <View style={styles.voiceModeRow}>
+                          {[
+                            { value: 'api_key', label: 'API key' },
+                            { value: 'chatgpt', label: 'ChatGPT' },
+                          ].map((option) => {
+                            const selected = openAiProviderMode === option.value;
+                            return (
+                              <Pressable
+                                key={option.value}
+                                style={[styles.voiceModeButton, selected ? styles.voiceModeButtonActive : null]}
+                                onPress={() => updateValue('OPENAI_PROVIDER_MODE', option.value)}
+                              >
+                                <Text style={[styles.voiceModeButtonText, selected ? styles.voiceModeButtonTextActive : null]}>
+                                  {option.label}
+                                </Text>
+                              </Pressable>
+                            );
+                          })}
+                        </View>
+                      </View>
+                    ) : null}
 
                     {API_KEY_FIELDS.map((field) => {
                       const vaultItem = setupSecretByName.get(String(field.key));
@@ -1089,14 +1204,12 @@ export function DesktopSetupPanel({
                           Sign in with OpenAI in the browser to use the local Codex provider without an OpenAI API key.
                         </Text>
                       </View>
-                      <View style={[styles.sleepModeStatusBadge, codexConnected ? styles.sleepModeStatusActive : null]}>
-                        <Text style={styles.sleepModeStatusText}>{codexConnected ? 'Connected' : 'Local'}</Text>
+                      <View style={[styles.sleepModeStatusBadge, codexStatusTone === 'connected' ? styles.sleepModeStatusActive : null]}>
+                        <Text style={styles.sleepModeStatusText}>{codexStatusLabel}</Text>
                       </View>
                     </View>
                     <Text style={styles.voiceModeHelper}>
-                      {codexConnected
-                        ? `${codexAuthStatus?.accountId ? `Account ${codexAuthStatus.accountId}. ` : ''}${codexExpiresLabel}`
-                        : 'Tokens are saved only on this computer and can be deleted here.'}
+                      {codexConnectionDetail}
                     </Text>
                     {codexDeviceLogin ? (
                       <View style={styles.providerVaultStatus}>
@@ -1107,18 +1220,20 @@ export function DesktopSetupPanel({
                     ) : null}
                     <View style={styles.sleepModeActionRow}>
                       <Pressable
-                        style={[styles.sleepModeActionButton, codexBusy ? styles.buttonDisabled : null]}
+                        style={[styles.sleepModeActionButton, styles.codexAuthButton, codexPrimaryDisabled ? styles.buttonDisabled : null]}
                         onPress={beginCodexDeviceLogin}
-                        disabled={codexBusy}
+                        disabled={codexPrimaryDisabled}
                       >
-                        <Text style={styles.sleepModeActionButtonText}>{codexConnected ? 'Reconnect ChatGPT' : 'Sign In With ChatGPT'}</Text>
-                      </Pressable>
-                      <Pressable
-                        style={[styles.sleepModeSecondaryButton, codexBusy ? styles.buttonDisabled : null]}
-                        onPress={() => void refreshCodexAuthStatus()}
-                        disabled={codexBusy}
-                      >
-                        <Text style={styles.sleepModeSecondaryButtonText}>Refresh</Text>
+                        <View
+                          style={[
+                            styles.codexAuthStatusDot,
+                            codexStatusTone === 'connected' ? styles.codexAuthStatusDotConnected : null,
+                            codexStatusTone === 'pending' ? styles.codexAuthStatusDotPending : null,
+                            codexStatusTone === 'warning' ? styles.codexAuthStatusDotWarning : null,
+                            codexStatusTone === 'error' ? styles.codexAuthStatusDotError : null,
+                          ]}
+                        />
+                        <Text style={styles.sleepModeActionButtonText}>{codexPrimaryLabel}</Text>
                       </Pressable>
                       {codexConnected ? (
                         <Pressable
@@ -1130,11 +1245,9 @@ export function DesktopSetupPanel({
                         </Pressable>
                       ) : null}
                     </View>
-                    {codexMessage ? (
-                      <Text style={[styles.validationText, codexConnected ? styles.validationTextValid : styles.validationTextChecking]}>
-                        {codexMessage}
-                      </Text>
-                    ) : null}
+                    <Text style={[styles.validationText, codexStatusMessageStyle]}>
+                      {codexStatusMessage}
+                    </Text>
                   </View>
 
                   <View style={styles.settingCard}>
@@ -1187,30 +1300,12 @@ export function DesktopSetupPanel({
                     </Text>
                   </View>
 
-                  <View style={styles.settingCard}>
-                    <Text style={styles.settingCardTitle}>Planner model override</Text>
-                    <Text style={styles.settingCardDescription}>
-                      Optional. Choose a specific planner model instead of letting EmploAI pick the default planner automatically.
-                    </Text>
-                    <TextInput
-                      value={values.PLANNER_MODEL}
-                      onChangeText={(next) => updateValue('PLANNER_MODEL', next)}
-                      style={styles.input}
-                      placeholder="Leave blank for automatic cheapest supported planner"
-                      placeholderTextColor="#7f93b5"
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                    />
-                    <Text style={styles.helperText}>
-                      This sets the default planner for new chats. Individual chats can still use a different planner.
-                    </Text>
-                  </View>
                 </View>
 
                 <View style={styles.section}>
                   <Text style={styles.sectionTitle}>Desktop updates</Text>
                   <Text style={styles.helperText}>
-                    Check for release updates here. If an installer is available, EmploAI can launch it directly from this panel.
+                    Check the public Git repository for new commits, pull fast-forward updates, rebuild, and restart EmploAI.
                   </Text>
 
                   <View style={styles.pathActions}>
@@ -1221,13 +1316,13 @@ export function DesktopSetupPanel({
                     >
                       <Text style={styles.pathButtonText}>{checkingUpdates ? 'Checking...' : 'Check Updates'}</Text>
                     </Pressable>
-                    {updateStatus?.updateAvailable ? (
+                    {updateStatus?.updateAvailable && !updateStatus?.blocked ? (
                       <Pressable
                         style={[styles.pathButton, installingUpdate ? styles.buttonDisabled : null]}
                         onPress={() => onInstallUpdate?.()}
                         disabled={installingUpdate}
                       >
-                        <Text style={styles.pathButtonText}>{installingUpdate ? 'Launching...' : 'Update And Restart'}</Text>
+                        <Text style={styles.pathButtonText}>{installingUpdate ? 'Updating...' : 'Update And Restart'}</Text>
                       </Pressable>
                     ) : null}
                   </View>
@@ -1249,9 +1344,9 @@ export function DesktopSetupPanel({
                 </View>
 
                 <View style={styles.section}>
-                  <Text style={styles.sectionTitle}>Long-term memory</Text>
+                  <Text style={styles.sectionTitle}>Memory and local intelligence</Text>
                   <Text style={styles.helperText}>
-                    This is the curated `MEMORY.md` file injected into the agent prompt. Edit it here to inspect, add, delete, or correct durable memory directly.
+                    Edit the curated `MEMORY.md` and view local skills from one local intelligence surface.
                   </Text>
 
                   {memoryState ? (
@@ -1314,15 +1409,26 @@ export function DesktopSetupPanel({
                       </Pressable>
                     ) : null}
                   </View>
-                </View>
 
-                <DesktopSetupLocalIntelligenceSection
-                  apiBaseUrl={localIntelligenceApi?.apiBaseUrl}
-                  token={localIntelligenceApi?.token}
-                  sessionId={localIntelligenceApi?.sessionId}
-                  onOpenPath={onOpenPath}
-                />
+                  <DesktopSetupLocalIntelligenceSection
+                    apiBaseUrl={localIntelligenceApi?.apiBaseUrl}
+                    token={localIntelligenceApi?.token}
+                    sessionId={localIntelligenceApi?.sessionId}
+                    onOpenPath={onOpenPath}
+                    embedded
+                  />
+                </View>
               </>
+            ) : null}
+
+            {activeTab === 'onboarding' ? (
+              <DesktopSetupOnboardingSection
+                apiBaseUrl={localIntelligenceApi?.apiBaseUrl}
+                token={localIntelligenceApi?.token}
+                sessions={sessions}
+                defaultWorkspace={values.DEFAULT_WORKSPACE}
+                onProfileChange={applyOnboardingProfileSuggestion}
+              />
             ) : null}
 
             {activeTab === 'chrome' ? (
@@ -1818,15 +1924,38 @@ export function DesktopSetupPanel({
         </View>
       </View>
 
+      {dismissPromptOpen ? (
+        <View style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 90, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(2,7,15,0.72)', padding: 24 }}>
+          <View accessibilityRole="alert" style={{ width: '100%', maxWidth: 480, borderRadius: 14, borderWidth: 1, borderColor: '#3b516a', backgroundColor: '#0d1724', padding: 20, gap: 14 }}>
+            <Text style={{ color: '#f4f7fb', fontSize: 18, fontWeight: '800' }}>Save settings changes?</Text>
+            <Text style={{ color: '#aeb9ca', fontSize: 13, lineHeight: 19 }}>
+              Setup values, memory, or shared settings have unsaved changes. Save them, discard them, or return to Settings.
+            </Text>
+            {dismissSaveError ? <Text accessibilityLiveRegion="polite" style={{ color: '#ff9b9b', fontSize: 13 }}>{dismissSaveError}</Text> : null}
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'flex-end' }}>
+              <Pressable accessibilityRole="button" onPress={() => setDismissPromptOpen(false)} style={[styles.secondaryButton, { minHeight: 44, justifyContent: 'center' }]}>
+                <Text style={styles.secondaryButtonText}>Cancel</Text>
+              </Pressable>
+              <Pressable accessibilityRole="button" onPress={discardDirtySections} style={[styles.secondaryButton, { minHeight: 44, justifyContent: 'center' }]}>
+                <Text style={styles.secondaryButtonText}>Discard</Text>
+              </Pressable>
+              <Pressable accessibilityRole="button" onPress={() => void saveDirtySections()} style={[styles.primaryButton, { minHeight: 44, justifyContent: 'center' }]}>
+                <Text style={styles.primaryButtonText}>Save</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      ) : null}
+
       <View style={styles.footer}>
         {onDismiss ? (
-          <Pressable style={styles.secondaryButton} onPress={onDismiss} disabled={saving}>
+          <Pressable style={styles.secondaryButton} onPress={requestDismiss} disabled={saving}>
             <Text style={styles.secondaryButtonText}>Close</Text>
           </Pressable>
         ) : <View />}
         <Pressable
           style={[styles.primaryButton, saving ? styles.primaryButtonDisabled : null]}
-          onPress={() => onSave(valuesWithoutLockedProviderKeys())}
+          onPress={saveEditedValues}
           disabled={saving}
         >
           <Text style={styles.primaryButtonText}>{saving ? 'Saving...' : primaryActionLabel}</Text>

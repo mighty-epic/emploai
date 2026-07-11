@@ -1,8 +1,10 @@
 import { Platform, StyleSheet } from 'react-native';
 
+import { desktopAppShellVisualStyles } from './DesktopAppShell.visualStyles';
 import { DESKTOP_RECT_BUTTON_RADIUS } from './desktopUiTokens';
+import { mergeDesktopVisualStyles } from './mergeDesktopVisualStyles';
 
-export const styles = StyleSheet.create({
+const baseStyles = StyleSheet.create({
   page: {
     flex: 1,
     backgroundColor: '#050b14',
@@ -552,6 +554,58 @@ export const styles = StyleSheet.create({
     color: '#74e8ff',
     fontSize: 17,
     lineHeight: 19,
+    fontWeight: '900',
+  },
+  headerSurfaceTabs: {
+    height: 26,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    borderRadius: 8,
+    padding: 2,
+    backgroundColor: '#171717',
+    borderWidth: 1,
+    borderColor: '#343434',
+  },
+  headerSurfaceTab: {
+    height: 20,
+    minWidth: 50,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  headerSurfaceTabHovered: {
+    backgroundColor: '#2b2b2b',
+  },
+  headerSurfaceTabActive: {
+    backgroundColor: '#d4ff65',
+  },
+  headerSurfaceTabText: {
+    color: '#a8a8a8',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '800',
+  },
+  headerSurfaceTabTextActive: {
+    color: '#081324',
+  },
+  headerIdentityStopButton: {
+    minHeight: 26,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    justifyContent: 'center',
+    borderWidth: 1,
+    backgroundColor: '#4b1424',
+    borderColor: 'rgba(255, 64, 119, 0.5)',
+  },
+  headerIdentityStopButtonHovered: {
+    backgroundColor: '#67182d',
+    borderColor: 'rgba(255, 91, 143, 0.72)',
+  },
+  headerIdentityStopText: {
+    color: '#ffd1de',
+    fontSize: 12,
     fontWeight: '900',
   },
   windowChromeStopButton: {
@@ -1120,6 +1174,63 @@ export const styles = StyleSheet.create({
     color: '#a7bbdc',
     lineHeight: 21,
   },
+  remoteActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 6,
+  },
+  remotePrimaryButton: {
+    minHeight: 44,
+    justifyContent: 'center',
+    borderRadius: 10,
+    backgroundColor: '#17c8e8',
+    paddingHorizontal: 16,
+  },
+  remotePrimaryButtonText: {
+    color: '#061322',
+    fontWeight: '800',
+  },
+  remoteSecondaryButton: {
+    minHeight: 44,
+    justifyContent: 'center',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#34557f',
+    paddingHorizontal: 16,
+  },
+  remoteSecondaryButtonText: {
+    color: '#d8e9ff',
+    fontWeight: '700',
+  },
+  remoteEnrollment: {
+    marginTop: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#2f5974',
+    backgroundColor: '#0a1529',
+    padding: 12,
+    gap: 5,
+  },
+  remoteEnrollmentLabel: {
+    color: '#91aacd',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  remoteEnrollmentCode: {
+    color: '#70e4f6',
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: 1,
+  },
+  remoteEmpty: {
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#2a4165',
+    borderRadius: 16,
+    padding: 20,
+    gap: 6,
+  },
   remoteCard: {
     borderRadius: 20,
     backgroundColor: '#0f182e',
@@ -1164,4 +1275,65 @@ export const styles = StyleSheet.create({
     gap: 8,
     flexWrap: 'wrap',
   },
+  remoteReport: {
+    borderRadius: 10,
+    backgroundColor: '#111e35',
+    padding: 12,
+    gap: 5,
+  },
+  remoteSectionLabel: {
+    color: '#73d9eb',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+  remoteWorker: {
+    borderTopWidth: 1,
+    borderTopColor: '#21304e',
+    paddingTop: 12,
+    gap: 10,
+  },
+  remoteWorkerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    flexWrap: 'wrap',
+  },
+  remoteWorkerIdentity: {
+    flex: 1,
+    minWidth: 180,
+  },
+  remoteWorkerName: {
+    color: '#edf6ff',
+    fontWeight: '700',
+  },
+  remotePreviewButton: {
+    minHeight: 44,
+    justifyContent: 'center',
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: '#34557f',
+    paddingHorizontal: 14,
+  },
+  remoteButtonDisabled: {
+    opacity: 0.45,
+  },
+  remotePreviewPanel: {
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#091221',
+    padding: 10,
+    gap: 8,
+  },
+  remotePreviewImage: {
+    width: '100%',
+    height: 300,
+    backgroundColor: '#050b14',
+  },
+  remoteErrorText: {
+    color: '#ff9b9b',
+  },
 });
+
+export const styles = mergeDesktopVisualStyles(baseStyles, desktopAppShellVisualStyles);

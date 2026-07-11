@@ -281,6 +281,7 @@ class TelegramSession:
     task_board_armed_next_turn: bool = False
     active_skills: List[str] = field(default_factory=list)
     last_context_compaction: Optional[Dict[str, Any]] = None
+    failed_turns: List[Dict[str, Any]] = field(default_factory=list)
 
     # Wizard state
     wizard_state: Dict[str, Any] = field(default_factory=dict)
@@ -347,7 +348,7 @@ class TelegramSession:
         )
         if is_auto_model_setting(raw):
             current_model = str(model_name or getattr(self, "current_model", "") or "").strip()
-            return default_planner_for_model(
+            return current_model or default_planner_for_model(
                 current_model,
                 enabled_providers=self._configured_provider_keys(),
             )
@@ -452,7 +453,7 @@ class TelegramSession:
                 model=self.current_model,
                 variant=self.current_variant,
                 agent_mode="auto",
-                planner_model=self.planner_model or self.default_planner_model,
+                planner_model=self.planner_model,
                 enabled_tool_packs=list(getattr(self, "enabled_tool_packs", []) or default_enabled_tool_packs()),
                 telegram_bot_config_id=getattr(self, "telegram_bot_config_id", None),
                 headless_eligible=bool(getattr(self, "headless_eligible", False)),
@@ -475,7 +476,7 @@ class TelegramSession:
                 model=self.current_model,
                 variant=self.current_variant,
                 agent_mode="auto",
-                planner_model=self.planner_model or self.default_planner_model,
+                planner_model=self.planner_model,
                 enabled_tool_packs=list(getattr(self, "enabled_tool_packs", []) or default_enabled_tool_packs()),
                 telegram_bot_config_id=getattr(self, "telegram_bot_config_id", None),
                 headless_eligible=bool(getattr(self, "headless_eligible", False)),
@@ -753,6 +754,11 @@ class TelegramSession:
         variant_info = MODEL_VARIANTS.get(self.current_model, {"variants": ["standard"]})
         return variant_info.get("variants", ["standard"])
 
+    def get_default_variant(self, model: Optional[str] = None) -> str:
+        """Get the default variant for a model."""
+        variant_info = MODEL_VARIANTS.get(model or self.current_model, {"default": "standard"})
+        return variant_info.get("default", "standard")
+
     def get_enabled_providers(self) -> set[str]:
         """Return providers that currently have configured credentials."""
         return enabled_providers_from_clients(
@@ -856,7 +862,7 @@ class TelegramSession:
         self.current_model = preferred
         available_variants = self.get_available_variants()
         if self.current_variant not in available_variants:
-            self.current_variant = available_variants[0] if available_variants else "standard"
+            self.current_variant = self.get_default_variant(self.current_model)
         self.ensure_planner_model_available(candidate_models)
         return True
 
@@ -928,7 +934,7 @@ class TelegramSession:
                 model=self.current_model,
                 variant=self.current_variant,
                 agent_mode=self.agent_mode,
-                planner_model=self.planner_model or self.default_planner_model,
+                planner_model=self.planner_model,
                 workspace=self._preferred_session_workspace(),
                 enabled_tool_packs=list(getattr(self, "enabled_tool_packs", []) or []),
                 telegram_bot_config_id=getattr(self, "telegram_bot_config_id", None),
@@ -951,6 +957,7 @@ class TelegramSession:
         session_obj.task_board_armed_next_turn = bool(self.task_board_armed_next_turn)
         session_obj.active_skills = self.active_skills
         session_obj.last_context_compaction = self.last_context_compaction
+        session_obj.failed_turns = list(getattr(self, "failed_turns", []) or [])
 
         # Save to disk
         self.session_manager.save_session(session_obj)
@@ -991,6 +998,7 @@ class TelegramSession:
         self.task_board_armed_next_turn = bool(getattr(session_obj, "task_board_armed_next_turn", False))
         self.active_skills = session_obj.active_skills
         self.last_context_compaction = session_obj.last_context_compaction
+        self.failed_turns = list(getattr(session_obj, "failed_turns", []) or [])
         self.shared_current_session_id = str(session_obj.id or "").strip() or self.shared_current_session_id
 
         # Clear specific agent histories to avoid context leaks

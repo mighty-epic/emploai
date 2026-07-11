@@ -11,6 +11,7 @@ export type DesktopRuntimeStatus = {
   detail?: string | null;
   process_id?: number | null;
   processId?: number | null;
+  runtimeProcessDetected?: boolean;
 };
 
 export type DesktopTelegramStatus = {
@@ -189,6 +190,7 @@ export type DesktopFleetWorker = {
   created_at?: string | null;
   updated_at?: string | null;
   last_seen_at?: string | null;
+  queue_policy?: 'review_required' | 'auto_continue_success' | string;
 };
 
 export type DesktopFleetIdentity = {
@@ -270,6 +272,7 @@ export type DesktopSetupValues = {
   DEFAULT_WORKSPACE: string;
   PLANNER_MODEL: string;
   INTERRUPT_POLICY_DEFAULT: string;
+  OPENAI_PROVIDER_MODE: string;
   OPENAI_API_KEY: string;
   ANTHROPIC_API_KEY: string;
   GOOGLE_API_KEY: string;
@@ -416,9 +419,48 @@ export type DesktopUpdateStatus = {
     assetName: string;
     assetUrl: string;
     publishedAt?: string | null;
+    commit?: string | null;
   } | null;
   lastCheckedAt?: string | null;
   lastError?: string | null;
+  message?: string | null;
+  branch?: string | null;
+  upstream?: string | null;
+  currentCommit?: string | null;
+  latestCommit?: string | null;
+  aheadCount?: number;
+  behindCount?: number;
+  dirty?: boolean;
+  dirtyCount?: number;
+  blocked?: boolean;
+};
+
+export type DesktopFleetPreviewCapture = {
+  mime_type: string;
+  image_base64: string;
+  width: number;
+  height: number;
+  backend: string;
+  captured_at: number;
+};
+
+export type DesktopFleetPreviewResult = {
+  ok: boolean;
+  preview_id: string;
+  worker_id: string;
+  display_name?: string | null;
+  desktop_id?: string | null;
+  dispatch_status: string;
+  command_id?: string | null;
+  detail?: string | null;
+  capture?: DesktopFleetPreviewCapture | null;
+};
+
+export type DesktopShortcutResult = {
+  ok: boolean;
+  shortcutPath?: string | null;
+  target?: string | null;
+  message?: string | null;
 };
 
 export type DesktopBootstrap = {
@@ -506,7 +548,7 @@ export type DesktopGitRepoState = {
 };
 
 type DesktopBridge = {
-  bootstrap: (payload?: { deferServices?: boolean; launchIfNeeded?: boolean }) => Promise<DesktopBootstrap>;
+  bootstrap: (payload?: { force?: boolean; deferServices?: boolean; launchIfNeeded?: boolean }) => Promise<DesktopBootstrap>;
   getRuntimeStatus: () => Promise<DesktopRuntimeStatus>;
   runtime?: {
     start: (payload?: { attachTimeoutSeconds?: number; restartAttachTimeoutSeconds?: number; deferServices?: boolean }) => Promise<DesktopBootstrap>;
@@ -524,6 +566,7 @@ type DesktopBridge = {
   };
   remoteAuth?: {
     status: () => Promise<DesktopRemoteAuthStatus>;
+    listDesktops: () => Promise<DesktopRemoteAccountDesktop[]>;
     login: (payload: DesktopRemoteAuthPayload) => Promise<DesktopRemoteAuthOtpChallenge>;
     googleLogin: (payload?: Partial<DesktopRemoteAuthPayload>) => Promise<DesktopRemoteAuthStatus>;
     register: (payload: DesktopRemoteAuthPayload) => Promise<DesktopRemoteAuthOtpChallenge>;
@@ -547,12 +590,12 @@ type DesktopBridge = {
     setIdentityActiveChat: (payload: { identityId?: string; identity_id?: string; chatId?: string | null; chat_id?: string | null; source?: string }) => Promise<Record<string, unknown>>;
     createLocalWorker: (payload?: { displayName?: string | null; display_name?: string | null; metadata?: Record<string, unknown> }) => Promise<DesktopFleetWorker>;
     createEnrollment: (payload?: { displayName?: string | null; display_name?: string | null; expiresInSeconds?: number | null; expires_in_seconds?: number | null; metadata?: Record<string, unknown> }) => Promise<DesktopFleetEnrollment>;
-    renameWorker: (payload: { workerId?: string; worker_id?: string; displayName?: string; display_name?: string; metadata?: Record<string, unknown> }) => Promise<DesktopFleetWorker>;
+    renameWorker: (payload: { workerId?: string; worker_id?: string; displayName?: string; display_name?: string; queuePolicy?: string; queue_policy?: string; metadata?: Record<string, unknown> }) => Promise<DesktopFleetWorker>;
     resetWorker: (payload: { workerId?: string; worker_id?: string; reason?: string | null; metadata?: Record<string, unknown>; confirmationId?: string | null; confirmation_id?: string | null }) => Promise<Record<string, unknown>>;
     deleteWorker: (payload: { workerId?: string; worker_id?: string; wipeState?: boolean; wipe_state?: boolean; confirmationId?: string | null; confirmation_id?: string | null }) => Promise<Record<string, unknown>>;
     stopWorker: (payload: { workerId?: string; worker_id?: string; reason?: string | null; metadata?: Record<string, unknown> }) => Promise<Record<string, unknown>>;
     stopAll: (payload?: { reason?: string | null; metadata?: Record<string, unknown>; confirmationId?: string | null; confirmation_id?: string | null }) => Promise<Record<string, unknown>>;
-    requestWorkerPreview: (payload: { workerId?: string; worker_id?: string }) => Promise<Record<string, unknown>>;
+    requestWorkerPreview: (payload: { workerId?: string; worker_id?: string }) => Promise<DesktopFleetPreviewResult>;
     createGroup: (payload: { displayName?: string; display_name?: string; workerIds?: string[]; worker_ids?: string[]; description?: string | null; metadata?: Record<string, unknown> }) => Promise<Record<string, unknown>>;
     updateGroup: (payload: { groupId?: string; group_id?: string; displayName?: string; display_name?: string; workerIds?: string[]; worker_ids?: string[]; description?: string | null; metadata?: Record<string, unknown> }) => Promise<Record<string, unknown>>;
     deleteGroup: (payload: { groupId?: string; group_id?: string; confirmationId?: string | null; confirmation_id?: string | null }) => Promise<Record<string, unknown>>;
@@ -580,6 +623,12 @@ type DesktopBridge = {
   shell?: {
     openPath: (targetPath: string) => Promise<string>;
     openChromeExtensions: () => Promise<string>;
+    createDesktopShortcut?: () => Promise<DesktopShortcutResult>;
+    editCommand?: (payload: { command: string; query?: string; findNext?: boolean }) => Promise<Record<string, any>>;
+    zoom?: (payload: { command: 'in' | 'out' | 'reset' }) => Promise<Record<string, any>>;
+    diagnostics?: () => Promise<Record<string, any>>;
+    requestExit?: (payload: { mode: 'default' | 'keep_running' | 'stop_everything' | 'force' | 'cancel' }) => Promise<Record<string, any>>;
+    onExitRequested?: (callback: (payload: Record<string, any>) => void) => () => void;
   };
   clipboard?: {
     writeText: (textValue: string) => Promise<Record<string, any>>;
@@ -611,6 +660,22 @@ declare global {
 
 let bootstrapPromise: Promise<DesktopBootstrap> | null = null;
 
+export function normalizeDesktopBootstrapRuntimeStatus(payload: DesktopBootstrap): DesktopBootstrap {
+  if (!payload.runtimeStatus || typeof payload.runtimeProcessDetected !== 'boolean') {
+    return payload;
+  }
+  if (payload.runtimeStatus.runtimeProcessDetected === payload.runtimeProcessDetected) {
+    return payload;
+  }
+  return {
+    ...payload,
+    runtimeStatus: {
+      ...payload.runtimeStatus,
+      runtimeProcessDetected: payload.runtimeProcessDetected,
+    },
+  };
+}
+
 export function getDesktopBridge(): DesktopBridge | undefined {
   if (typeof window === 'undefined') {
     return undefined;
@@ -632,9 +697,10 @@ export async function loadDesktopBootstrap(options?: { force?: boolean; deferSer
   }
   if (!bootstrapPromise) {
     const request = bridge.bootstrap({
+      force: Boolean(options?.force),
       deferServices: Boolean(options?.deferServices),
       launchIfNeeded: Boolean(options?.launchIfNeeded),
-    });
+    }).then(normalizeDesktopBootstrapRuntimeStatus);
     bootstrapPromise = request;
     request.finally(() => {
       if (bootstrapPromise === request) {
@@ -650,7 +716,7 @@ export async function startDesktopRuntime(options?: { attachTimeoutSeconds?: num
   if (!bridge?.runtime?.start) {
     return null;
   }
-  const payload = await bridge.runtime.start(options);
+  const payload = normalizeDesktopBootstrapRuntimeStatus(await bridge.runtime.start(options));
   bootstrapPromise = Promise.resolve(payload);
   return payload;
 }
@@ -660,7 +726,7 @@ export async function stopDesktopRuntime() {
   if (!bridge?.runtime?.stop) {
     return null;
   }
-  const payload = await bridge.runtime.stop();
+  const payload = normalizeDesktopBootstrapRuntimeStatus(await bridge.runtime.stop());
   bootstrapPromise = Promise.resolve(payload);
   return payload;
 }
@@ -673,7 +739,9 @@ export async function saveDesktopSetup(
   if (!bridge?.setup?.save) {
     return null;
   }
-  const payload = await bridge.setup.save({ values, restart_policy: options?.restartPolicy });
+  const payload = normalizeDesktopBootstrapRuntimeStatus(
+    await bridge.setup.save({ values, restart_policy: options?.restartPolicy })
+  );
   bootstrapPromise = Promise.resolve(payload);
   return payload;
 }
@@ -941,7 +1009,7 @@ export async function stopAllDesktopFleetWorkers(reason?: string | null, metadat
   return bridge.fleet.stopAll({ reason: reason || null, metadata, confirmationId });
 }
 
-export async function requestDesktopFleetWorkerPreview(workerId: string) {
+export async function requestDesktopFleetWorkerPreview(workerId: string): Promise<DesktopFleetPreviewResult | null> {
   const bridge = getDesktopBridge();
   if (!bridge?.fleet?.requestWorkerPreview) {
     return null;
@@ -1228,6 +1296,53 @@ export async function openDesktopChromeExtensions() {
     return null;
   }
   return bridge.shell.openChromeExtensions();
+}
+
+export async function updateDesktopFleetWorkerQueuePolicy(workerId: string, queuePolicy: 'review_required' | 'auto_continue_success') {
+  const bridge = getDesktopBridge();
+  if (!bridge?.fleet?.renameWorker) return null;
+  return bridge.fleet.renameWorker({ workerId, queuePolicy, metadata: { updated_from: 'desktop_fleet_panel' } });
+}
+
+export async function runDesktopEditCommand(command: string, query?: string) {
+  const bridge = getDesktopBridge();
+  return bridge?.shell?.editCommand?.({ command, query });
+}
+
+export async function runDesktopZoomCommand(command: 'in' | 'out' | 'reset') {
+  const bridge = getDesktopBridge();
+  return bridge?.shell?.zoom?.({ command });
+}
+
+export async function loadDesktopDiagnostics() {
+  const bridge = getDesktopBridge();
+  return bridge?.shell?.diagnostics?.();
+}
+
+export async function requestDesktopExit(mode: 'default' | 'keep_running' | 'stop_everything' | 'force' | 'cancel') {
+  const bridge = getDesktopBridge();
+  return bridge?.shell?.requestExit?.({ mode });
+}
+
+export function subscribeDesktopExitRequest(callback: (payload: Record<string, any>) => void) {
+  const bridge = getDesktopBridge();
+  return bridge?.shell?.onExitRequested?.(callback) || (() => undefined);
+}
+
+export async function listDesktopRemoteAccountDesktops() {
+  const bridge = getDesktopBridge();
+  if (!bridge?.remoteAuth?.listDesktops) {
+    return null;
+  }
+  return bridge.remoteAuth.listDesktops();
+}
+
+export async function createDesktopShortcut() {
+  const bridge = getDesktopBridge();
+  if (!bridge?.shell?.createDesktopShortcut) {
+    return null;
+  }
+  return bridge.shell.createDesktopShortcut();
 }
 
 export async function copyDesktopText(textValue: string) {

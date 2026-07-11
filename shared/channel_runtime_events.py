@@ -190,6 +190,15 @@ def _append_and_publish_timeline_event(
     event_meta: Optional[Dict[str, Any]] = None,
     save_session: bool = False,
 ) -> Dict[str, Any]:
+    if event_meta:
+        event = dict(event)
+        metadata = dict(event.get("metadata") or {})
+        for key in ("run_id", "run_sequence", "task_id", "display_label", "source_client_id"):
+            value = event_meta.get(key)
+            if value not in (None, "") and key not in metadata:
+                metadata[key] = value
+        if metadata:
+            event["metadata"] = metadata
     stored = append_timeline_event(session, event=event)
     if save_session:
         session.save_session()

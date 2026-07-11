@@ -56,11 +56,21 @@ def register_voice_ws_routes(app):
 
             draft = _new_voice_draft_state()
 
-            active_session_id = websocket.query_params.get("session_id")
+            socket_session_id = str(websocket.query_params.get("session_id") or "").strip()
+
+            active_session_id = socket_session_id or None
 
             active_surface_mode = str(websocket.query_params.get("surface_mode") or "").strip().lower()
 
+            active_capture_mode = str(websocket.query_params.get("capture_mode") or "").strip().lower()
+
+            active_wake_phrase = str(websocket.query_params.get("wake_phrase") or "").strip()
+
+            active_wake_verified_locally = False
+
             active_utterance_id: Optional[str] = None
+
+            active_voice_sequence = 0
 
             voice_agent_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 
@@ -178,6 +188,12 @@ def register_voice_ws_routes(app):
 
                 start_audio_task: Optional[asyncio.Task] = None
 
+                is_jarvis_turn = str(turn.get("surface_mode") or "").strip().lower() == "jarvis"
+
+                tool_update_count = 0
+
+                tool_update_every = _jarvis_tool_update_every() if is_jarvis_turn else 0
+
                 async def send_start_task_audio() -> None:
 
                     start_text = _jarvis_start_task_message(turn_text)
@@ -262,19 +278,55 @@ def register_voice_ws_routes(app):
 
                     )
 
-                if (
-
-                    str(turn.get("surface_mode") or "").strip().lower() == "jarvis"
-
-                    and _jarvis_voice_turn_is_task_like(turn_text)
-
-                ):
+                if is_jarvis_turn and _jarvis_voice_turn_is_task_like(turn_text):
 
                     start_audio_task = asyncio.create_task(send_start_task_audio())
 
                     track_background_task(start_audio_task)
 
+                async def send_tool_update_audio(update_text: str) -> None:
+
+                    if not update_text:
+
+                        return
+
+                    try:
+
+                        update_audio = await loop.run_in_executor(None, _synthesize_assistant_audio_sync, update_text)
+
+                    except Exception:
+
+                        logger.exception("[app] Jarvis tool update audio failed")
+
+                        return
+
+                    if not update_audio:
+
+                        return
+
+                    update_audio["turn_id"] = turn_id
+
+                    update_audio["phase"] = "tool_update"
+
+                    update_audio["text"] = update_text
+
+                    await send_model(
+
+                        RealtimeServerEvent(
+
+                            type="assistant_audio",
+
+                            session_id=turn_session_id,
+
+                            payload=update_audio,
+
+                        )
+
+                    )
+
                 async def emit(event_data: dict) -> None:
+
+                    nonlocal tool_update_count
 
                     kind = event_data.get("type")
 
@@ -304,7 +356,7 @@ def register_voice_ws_routes(app):
 
                         )
 
-                        if confirmation and str(turn.get("surface_mode") or "").strip().lower() == "jarvis":
+                        if confirmation and is_jarvis_turn:
 
                             confirmation_key = str(turn_session_id or "__current__")
 
@@ -363,6 +415,24 @@ def register_voice_ws_routes(app):
                                 except Exception:
 
                                     logger.exception("[app] Jarvis confirmation audio failed")
+
+                        if is_jarvis_turn and not confirmation and tool_update_every > 0:
+
+                            tool_update_count += 1
+
+                            if tool_update_count % tool_update_every == 0:
+
+                                update_text = _jarvis_tool_update_message(
+
+                                    tool_update_count,
+
+                                    str(event_data.get("tool_name") or ""),
+
+                                )
+
+                                update_audio_task = asyncio.create_task(send_tool_update_audio(update_text))
+
+                                track_background_task(update_audio_task)
 
                         if not runtime.verbose_mode:
 
@@ -700,7 +770,7 @@ def register_voice_ws_routes(app):
 
                         "voice_state",
 
-                        {"state": "synthesizing", "turn_id": turn_id},
+                        {"state": "synthesizing", "turn_id": turn_id, "phase": "final"},
 
                         session_id=final_session_id,
 
@@ -732,13 +802,15 @@ def register_voice_ws_routes(app):
 
                         "voice_state",
 
-                        {"state": "speaking", "turn_id": turn_id},
+                        {"state": "speaking", "turn_id": turn_id, "phase": "final"},
 
                         session_id=final_session_id,
 
                     )
 
                     assistant_audio["turn_id"] = turn_id
+
+                    assistant_audio["phase"] = "final"
 
                     await send_model(
 
@@ -989,6 +1061,120 @@ def register_voice_ws_routes(app):
                     confirmation_key = str(turn_session_id or "__current__")
 
                     pending_confirmation = pending_jarvis_confirmations.get(confirmation_key)
+
+                    if (
+
+                        not pending_confirmation
+
+                        and str(turn.get("capture_mode") or "").strip().lower() == "always_on"
+
+                        and turn.get("auto_send") is not False
+
+                        and not bool(turn.get("barge_in_candidate"))
+
+                    ):
+
+                        wake_phrase = str(turn.get("wake_phrase") or _jarvis_wake_phrase()).strip()
+
+                        if bool(turn.get("wake_verified_locally")):
+
+                            wake_matched, wake_request = True, draft_text
+
+                        else:
+
+                            wake_matched, wake_request = _jarvis_extract_wake_request(draft_text, wake_phrase)
+
+                        if not wake_matched:
+
+                            logger.info("[app] ignored Jarvis always-on speech without wake phrase: %r", draft_text)
+
+                            committed_draft.reset()
+
+                            await send_voice_event(
+
+                                "status",
+
+                                {
+
+                                    "message": f'Ignored until wake phrase "{wake_phrase}" is heard',
+
+                                    "turn_id": turn_id,
+
+                                    "wake_phrase_required": True,
+
+                                },
+
+                                session_id=turn_session_id,
+
+                            )
+
+                            await send_voice_event(
+
+                                "voice_state",
+
+                                {
+
+                                    "state": "idle",
+
+                                    "turn_id": turn_id,
+
+                                    "ignored": "wake_phrase_missing",
+
+                                    "wake_phrase_required": True,
+
+                                },
+
+                                session_id=turn_session_id,
+
+                            )
+
+                            return
+
+                        if not wake_request:
+
+                            committed_draft.reset()
+
+                            await send_voice_event(
+
+                                "status",
+
+                                {
+
+                                    "message": f'Wake phrase "{wake_phrase}" heard. Say the request after it.',
+
+                                    "turn_id": turn_id,
+
+                                    "wake_phrase_required": True,
+
+                                },
+
+                                session_id=turn_session_id,
+
+                            )
+
+                            await send_voice_event(
+
+                                "voice_state",
+
+                                {
+
+                                    "state": "idle",
+
+                                    "turn_id": turn_id,
+
+                                    "ignored": "wake_phrase_only",
+
+                                    "wake_phrase_required": True,
+
+                                },
+
+                                session_id=turn_session_id,
+
+                            )
+
+                            return
+
+                        draft_text = wake_request
 
                     confirmation_intent = _jarvis_confirmation_intent(draft_text) if pending_confirmation else None
 
@@ -1294,6 +1480,16 @@ def register_voice_ws_routes(app):
 
                 committed_draft.reset()
 
+                if bool(turn.get("barge_in_candidate")):
+
+                    turn["interrupt_policy"] = "steer_now"
+
+                    barge_in_task = asyncio.create_task(run_voice_agent_turn(turn))
+
+                    track_background_task(barge_in_task)
+
+                    return
+
                 await voice_agent_queue.put(turn)
 
                 if voice_agent_queue.qsize() > 1:
@@ -1330,15 +1526,91 @@ def register_voice_ws_routes(app):
 
                 raw = await websocket.receive_text()
 
-                event = VoiceClientEvent.model_validate_json(raw)
+                if len(raw) > 4_000_000:
 
-                if event.session_id:
+                    await send_voice_event("error", {"message": "Voice event is too large"})
 
-                    active_session_id = event.session_id
+                    continue
+
+                try:
+
+                    event = VoiceClientEvent.model_validate_json(raw)
+
+                except Exception:
+
+                    await send_voice_event("error", {"message": "Voice event is malformed or unsupported"})
+
+                    continue
+
+                event_session_id = str(event.session_id or "").strip()
+
+                if socket_session_id and event_session_id and event_session_id != socket_session_id:
+
+                    await send_voice_event(
+
+                        "error",
+
+                        {"message": "Voice event session does not match this connection"},
+
+                        session_id=socket_session_id,
+
+                    )
+
+                    continue
+
+                event_utterance_id = str(event.utterance_id or "").strip()
+
+                if event.type != "voice_start":
+
+                    if not active_utterance_id:
+
+                        await send_voice_event(
+
+                            "warning",
+
+                            {"message": "Voice event ignored because no utterance is active"},
+
+                        )
+
+                        continue
+
+                    if event_utterance_id and event_utterance_id != active_utterance_id:
+
+                        await send_voice_event(
+
+                            "warning",
+
+                            {
+
+                                "message": "Stale voice event ignored",
+
+                                "turn_id": event_utterance_id,
+
+                            },
+
+                        )
+
+                        continue
+
+                if event_session_id:
+
+                    active_session_id = event_session_id
 
                 if event.surface_mode:
 
                     active_surface_mode = str(event.surface_mode or "").strip().lower()
+
+                if event.capture_mode:
+
+                    active_capture_mode = str(event.capture_mode or "").strip().lower()
+
+                if event.wake_phrase is not None:
+
+                    active_wake_phrase = str(event.wake_phrase or "").strip()
+
+                if event.wake_verified_locally is not None:
+
+                    active_wake_verified_locally = bool(event.wake_verified_locally)
 
                 if event.utterance_id:
 
@@ -1348,21 +1620,57 @@ def register_voice_ws_routes(app):
 
                     active_utterance_id = str(event.utterance_id or "").strip() or secrets.token_hex(8)
 
+                    active_voice_sequence = 0
+
+                    active_capture_mode = str(event.capture_mode or active_capture_mode or "").strip().lower()
+
+                    active_wake_phrase = str(event.wake_phrase or active_wake_phrase or "").strip()
+
+                    active_wake_verified_locally = bool(event.wake_verified_locally)
+
                     draft.reset()
 
                     draft.state = "listening"
 
-                    preconnect = getattr(draft, "preconnect", None)
+                    await send_voice_event(
 
-                    if callable(preconnect):
+                        "voice_state",
 
-                        preconnect_task = asyncio.create_task(preconnect())
+                        {
 
-                        draft.register_task(preconnect_task)
+                            "state": "listening",
 
-                    await send_voice_event("voice_state", {"state": "listening", "turn_id": active_utterance_id})
+                            "turn_id": active_utterance_id,
+
+                            "capture_mode": active_capture_mode or None,
+
+                        },
+
+                    )
 
                 elif event.type == "voice_chunk":
+
+                    chunk_sequence_value = int(event.sequence or (active_voice_sequence + 1))
+
+                    if chunk_sequence_value <= active_voice_sequence:
+
+                        await send_voice_event(
+
+                            "warning",
+
+                            {
+
+                                "message": "Duplicate or out-of-order voice chunk ignored",
+
+                                "turn_id": active_utterance_id,
+
+                            },
+
+                        )
+
+                        continue
+
+                    active_voice_sequence = chunk_sequence_value
 
                     chunk_draft = draft
 
@@ -1376,7 +1684,7 @@ def register_voice_ws_routes(app):
 
                     chunk_mime_type = event.mime_type
 
-                    chunk_sequence = event.sequence
+                    chunk_sequence = chunk_sequence_value
 
                     async def process_chunk() -> None:
 
@@ -1448,6 +1756,30 @@ def register_voice_ws_routes(app):
 
                 elif event.type == "voice_commit":
 
+                    if bool(event.barge_in_candidate):
+
+                        draft.reset()
+
+                        active_utterance_id = None
+
+                        active_capture_mode = ""
+
+                        active_wake_verified_locally = False
+
+                        active_voice_sequence = 0
+
+                        await send_voice_event(
+
+                            "voice_state",
+
+                            {"state": "idle", "ignored": "barge_in_disabled"},
+
+                            session_id=active_session_id,
+
+                        )
+
+                        continue
+
                     committed_draft = draft
 
                     turn_id = str(event.utterance_id or active_utterance_id or secrets.token_hex(8)).strip()
@@ -1461,6 +1793,12 @@ def register_voice_ws_routes(app):
                         "session_id": active_session_id,
 
                         "surface_mode": active_surface_mode or None,
+
+                        "capture_mode": str(event.capture_mode or active_capture_mode or "").strip().lower() or None,
+
+                        "wake_phrase": str(event.wake_phrase or active_wake_phrase or _jarvis_wake_phrase()).strip(),
+
+                        "wake_verified_locally": bool(event.wake_verified_locally or active_wake_verified_locally),
 
                         "interrupt_policy": event.interrupt_policy or "none",
 
@@ -1480,6 +1818,12 @@ def register_voice_ws_routes(app):
 
                     active_utterance_id = None
 
+                    active_capture_mode = ""
+
+                    active_wake_verified_locally = False
+
+                    active_voice_sequence = 0
+
                     task = asyncio.create_task(finalize_voice_turn(turn))
 
                     track_background_task(task)
@@ -1491,6 +1835,10 @@ def register_voice_ws_routes(app):
                     cancelled_turn_id = str(event.utterance_id or active_utterance_id or "").strip()
 
                     active_utterance_id = None
+
+                    active_capture_mode = ""
+
+                    active_voice_sequence = 0
 
                     await send_voice_event("voice_state", {"state": "cancelled", "turn_id": cancelled_turn_id})
 
@@ -1524,9 +1872,7 @@ def register_voice_ws_routes(app):
 
                         payload={
 
-                            "message": f"Voice websocket failed: {str(exc)}",
-
-                            "detail": traceback.format_exc(),
+                            "message": "Voice connection failed",
 
                         },
 

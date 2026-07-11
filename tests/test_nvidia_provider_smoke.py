@@ -22,6 +22,7 @@ def test_verify_nvidia_provider_accepts_catalog_only_without_key(monkeypatch):
 
 def test_verify_nvidia_provider_requires_key_when_requested(monkeypatch):
     monkeypatch.setattr(verify_nvidia_provider, "fetch_live_model_ids", lambda timeout=30.0: list(NVIDIA_MODEL_IDS))
+    monkeypatch.setattr(verify_nvidia_provider, "_load_dotenv", lambda: None)
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
 
     assert verify_nvidia_provider.main(["--require-key"]) == 2

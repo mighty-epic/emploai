@@ -2,7 +2,46 @@ const fs = require('fs');
 const path = require('path');
 
 const ENCRYPTED_STORAGE_KIND = 'electron_safe_storage';
+const UNAVAILABLE_STORAGE_KIND = 'secure_storage_unavailable';
 const ENVELOPE_VERSION = 2;
+
+function atomicWriteUtf8(filePath, text) {
+  const directory = path.dirname(filePath);
+  const temporaryPath = path.join(
+    directory,
+    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`,
+  );
+  fs.mkdirSync(directory, { recursive: true });
+  let fileDescriptor = null;
+  try {
+    fileDescriptor = fs.openSync(temporaryPath, 'wx', 0o600);
+    fs.writeFileSync(fileDescriptor, text, 'utf-8');
+    fs.fsyncSync(fileDescriptor);
+    fs.closeSync(fileDescriptor);
+    fileDescriptor = null;
+    fs.renameSync(temporaryPath, filePath);
+    try {
+      fs.chmodSync(filePath, 0o600);
+    } catch (_error) {
+      // Windows ACLs are inherited; chmod is best-effort here.
+    }
+  } finally {
+    if (fileDescriptor !== null) {
+      try {
+        fs.closeSync(fileDescriptor);
+      } catch (_error) {
+        // Best-effort cleanup after a failed write.
+      }
+    }
+    try {
+      if (fs.existsSync(temporaryPath)) {
+        fs.unlinkSync(temporaryPath);
+      }
+    } catch (_error) {
+      // Best-effort cleanup after a failed rename.
+    }
+  }
+}
 
 function createRemoteAccountSessionStore({
   resolveRuntimeHome,
@@ -15,6 +54,10 @@ function createRemoteAccountSessionStore({
 
   function resolvePath() {
     return path.join(resolveRuntimeHome(), filename);
+  }
+
+  function resolveBackupPath() {
+    return `${resolvePath()}.bak`;
   }
 
   function encryptionAvailable() {
@@ -56,10 +99,10 @@ function createRemoteAccountSessionStore({
     }
 
     if (record.storage === 'plain_json_fallback' && record.payload && typeof record.payload === 'object') {
-      return { payload: record.payload, legacy: false };
+      return { payload: encryptionAvailable() ? record.payload : null, legacy: true };
     }
 
-    return { payload: record, legacy: true };
+    return { payload: encryptionAvailable() ? record : null, legacy: true };
   }
 
   function encodePayload(payload) {
@@ -73,11 +116,7 @@ function createRemoteAccountSessionStore({
       };
     }
 
-    return {
-      version: ENVELOPE_VERSION,
-      storage: 'plain_json_fallback',
-      payload,
-    };
+    throw new Error('Secure credential storage is unavailable; refusing to persist plaintext secrets.');
   }
 
   function write(payload) {
@@ -86,33 +125,40 @@ function createRemoteAccountSessionStore({
     if (!normalized) {
       throw new Error('Remote account session payload must be an object.');
     }
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, `${JSON.stringify(encodePayload(normalized), null, 2)}\n`, 'utf-8');
-    try {
-      fs.chmodSync(filePath, 0o600);
-    } catch (_error) {
-      // Windows ACLs are inherited; chmod is best-effort here.
-    }
+    const encoded = encodePayload(normalized);
+    const serialized = `${JSON.stringify(encoded, null, 2)}\n`;
+    atomicWriteUtf8(filePath, serialized);
+    atomicWriteUtf8(resolveBackupPath(), serialized);
     return normalized;
   }
 
   function read() {
     const filePath = resolvePath();
     try {
-      if (!fs.existsSync(filePath)) {
+      const backupPath = resolveBackupPath();
+      if (!fs.existsSync(filePath) && !fs.existsSync(backupPath)) {
         return null;
       }
-      const record = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-      const decoded = decodeEnvelope(record);
-      const payload = normalizePayload(decoded.payload);
-      if (payload && decoded.legacy && encryptionAvailable()) {
+      for (const candidate of [filePath, backupPath]) {
         try {
-          write(payload);
+          if (!fs.existsSync(candidate)) {
+            continue;
+          }
+          const record = JSON.parse(fs.readFileSync(candidate, 'utf-8'));
+          const decoded = decodeEnvelope(record);
+          const payload = normalizePayload(decoded.payload);
+          if (!payload) {
+            continue;
+          }
+          if (candidate === backupPath || (decoded.legacy && encryptionAvailable())) {
+            write(payload);
+          }
+          return payload;
         } catch (_error) {
-          // Reading a legacy session should still succeed if migration fails.
+          // Try the durable backup before treating the session as unavailable.
         }
       }
-      return payload;
+      return null;
     } catch (_error) {
       return null;
     }
@@ -124,13 +170,17 @@ function createRemoteAccountSessionStore({
       if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
       }
+      const backupPath = resolveBackupPath();
+      if (fs.existsSync(backupPath)) {
+        fs.unlinkSync(backupPath);
+      }
     } catch (_error) {
       // no-op
     }
   }
 
   function storageKind() {
-    return encryptionAvailable() ? ENCRYPTED_STORAGE_KIND : 'plain_json_fallback';
+    return encryptionAvailable() ? ENCRYPTED_STORAGE_KIND : UNAVAILABLE_STORAGE_KIND;
   }
 
   return {
@@ -145,4 +195,5 @@ function createRemoteAccountSessionStore({
 module.exports = {
   createRemoteAccountSessionStore,
   ENCRYPTED_STORAGE_KIND,
+  UNAVAILABLE_STORAGE_KIND,
 };

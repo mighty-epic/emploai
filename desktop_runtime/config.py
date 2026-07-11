@@ -17,6 +17,7 @@ from shared.model_availability import (
     enabled_providers_from_env,
     filter_models_by_provider_access,
     group_models_by_provider,
+    normalize_openai_provider_mode,
 )
 from shared.model_defaults import default_model_pair_for_enabled_providers
 from shared.openai_codex_auth import codex_auth_status, is_codex_auth_configured
@@ -48,6 +49,7 @@ _ENV_ORDER = [
     "EMPLOAI_REMOTE_CONTROL_PASSWORD",
     "EMPLOAI_REMOTE_DESKTOP_NAME",
     "EMPLOAI_REMOTE_DESKTOP_KEY",
+    "OPENAI_PROVIDER_MODE",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "GOOGLE_API_KEY",
@@ -100,6 +102,7 @@ TTS_BACKEND_KYUTAI = "pocket"
 STT_BACKEND_LOCAL_WHISPER = "local_whisper"
 STT_BACKEND_OPENAI = "openai"
 STT_BACKEND_OPENAI_REALTIME = "openai_realtime"
+STT_BACKEND_GEMINI = "gemini"
 VOICE_DEFAULT_ENGINE_FIELD = "VOICE_DEFAULT_ENGINE"
 VOICE_ENGLISH_REQUESTED_FIELD = "VOICE_ENGLISH_REQUESTED"
 VOICE_HEBREW_REQUESTED_FIELD = "VOICE_HEBREW_REQUESTED"
@@ -149,6 +152,7 @@ _SETUP_EDITABLE_FIELDS = [
     "DEFAULT_WORKSPACE",
     "PLANNER_MODEL",
     "INTERRUPT_POLICY_DEFAULT",
+    "OPENAI_PROVIDER_MODE",
     *_PROVIDER_KEY_FIELDS,
     *_VOICE_SETUP_FIELDS,
 ]
@@ -253,7 +257,7 @@ def bundle_root() -> Path:
         if meipass:
             return Path(meipass).resolve()
         return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[1]
 
 
 def configure_ssl_certificate_environment() -> str | None:
@@ -1355,6 +1359,7 @@ def _normalized_existing_values(existing: Mapping[str, str]) -> Dict[str, str]:
         values["DEFAULT_WORKSPACE"] = str(default_workspace())
     if values.get("INTERRUPT_POLICY_DEFAULT", "").strip().lower() not in {"none", "steer_now", "after_tool"}:
         values["INTERRUPT_POLICY_DEFAULT"] = "none"
+    values["OPENAI_PROVIDER_MODE"] = normalize_openai_provider_mode(values.get("OPENAI_PROVIDER_MODE"))
     if not values.get("GOOGLE_API_KEY") and values.get("GEMINI_API_KEY"):
         values["GOOGLE_API_KEY"] = values["GEMINI_API_KEY"]
     if not values.get("EMPLOAI_REMOTE_DESKTOP_NAME"):
@@ -1454,13 +1459,19 @@ def resolve_voice_runtime_status(*, include_pack_status: bool = True) -> Dict[st
         os.getenv("EMPLO_APP_STT_BACKEND", STT_BACKEND_LOCAL_WHISPER).strip().lower().replace("-", "_")
         or STT_BACKEND_LOCAL_WHISPER
     )
-    api_stt_backend = stt_backend in {STT_BACKEND_OPENAI, STT_BACKEND_OPENAI_REALTIME}
+    if stt_backend in {"google", "google_gemini", "gemini_api"}:
+        stt_backend = STT_BACKEND_GEMINI
+    api_stt_backend = stt_backend in {STT_BACKEND_OPENAI, STT_BACKEND_OPENAI_REALTIME, STT_BACKEND_GEMINI}
     stt_model = os.getenv("EMPLO_APP_STT_MODEL", "base.en-q5_1").strip() or "base.en-q5_1"
     draft_model = os.getenv("EMPLO_APP_STT_DRAFT_MODEL", "tiny.en").strip() or "tiny.en"
     realtime_stt_model = (
         os.getenv("EMPLO_APP_STT_REALTIME_TRANSCRIPTION_MODEL", "").strip()
         or os.getenv("EMPLO_APP_STT_REALTIME_MODEL", "gpt-realtime-whisper").strip()
         or "gpt-realtime-whisper"
+    )
+    gemini_stt_model = (
+        os.getenv("EMPLO_APP_STT_GEMINI_MODEL", "").strip()
+        or "gemini-3.5-flash"
     )
     binary_flavor = os.getenv("EMPLO_APP_STT_BINARY_FLAVOR", "blas").strip() or "blas"
     tts_enabled = os.getenv("EMPLO_APP_TTS_ENABLED", "1").strip().lower() not in {"0", "false", "off", "no"}
@@ -1492,7 +1503,13 @@ def resolve_voice_runtime_status(*, include_pack_status: bool = True) -> Dict[st
 
     input_issues: list[str] = []
     if default_engine == VOICE_ENGINE_NONE and not api_stt_backend:
-        input_issues.append("Voice input is disabled in setup and settings.")
+        if not english_pack_ready and not hebrew_pack_ready:
+            input_issues.append("No local voice packs are installed. Open setup or choose an API voice input engine.")
+        else:
+            input_issues.append("Voice input is disabled in setup and settings.")
+    elif stt_backend == STT_BACKEND_GEMINI:
+        if not (os.getenv("GOOGLE_API_KEY", "").strip() or os.getenv("GEMINI_API_KEY", "").strip()):
+            input_issues.append("GOOGLE_API_KEY or GEMINI_API_KEY is not configured, so Gemini voice transcription is unavailable.")
     elif api_stt_backend:
         if not os.getenv("OPENAI_API_KEY", "").strip():
             input_issues.append("OPENAI_API_KEY is not configured, so app voice transcription is unavailable.")
@@ -1527,6 +1544,8 @@ def resolve_voice_runtime_status(*, include_pack_status: bool = True) -> Dict[st
             if stt_backend == STT_BACKEND_OPENAI_REALTIME
             else os.getenv("EMPLO_APP_STT_MODEL", "gpt-4o-mini-transcribe")
             if stt_backend == STT_BACKEND_OPENAI
+            else gemini_stt_model
+            if stt_backend == STT_BACKEND_GEMINI
             else str(hebrew_pack_status.get("model_dir") or "")
             if default_engine == VOICE_ENGINE_HEBREW
             else stt_model
@@ -1669,6 +1688,7 @@ def save_setup_values(
     if interrupt_policy_default not in {"none", "steer_now", "after_tool"}:
         interrupt_policy_default = "none"
     merged["INTERRUPT_POLICY_DEFAULT"] = interrupt_policy_default
+    merged["OPENAI_PROVIDER_MODE"] = normalize_openai_provider_mode(merged.get("OPENAI_PROVIDER_MODE"))
 
     issues = validate_setup_values(merged)
     if issues:

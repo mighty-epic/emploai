@@ -284,7 +284,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
     setRemoteAuthBusy(true);
     setError(null);
     setNotice(null);
-    setRemoteAuthMessage('Signing out...');
+    setRemoteAuthMessage('Signing out…');
     try {
       if (runtimeProcessDetected || localRuntimeReady) {
         await stopDesktopRuntime().catch(() => null);
@@ -331,7 +331,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
       return;
     }
     setRemoteSecretsBusy(true);
-    setRemoteSecretsMessage('Deleting saved account data...');
+    setRemoteSecretsMessage('Deleting saved account data…');
     try {
       const result = await deleteDesktopRemoteAccountData(confirmationId);
       if (!result) {
@@ -392,7 +392,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
       },
     };
     setRecoveryBusyId('cloud_chat_backup');
-    setRecoveryMessage(enabled ? 'Enabling cloud chat backup...' : 'Disabling cloud chat backup...');
+    setRecoveryMessage(enabled ? 'Enabling cloud chat backup…' : 'Disabling cloud chat backup…');
     try {
       const result = await updateDesktopRemoteAccountProfile(nextProfile);
       if (!result) {
@@ -416,16 +416,16 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
     const validationError = validateSharedSettingsDraft(sharedSettingsDraft);
     if (validationError) {
       setSharedSettingsStatus(validationError);
-      return;
+      return false;
     }
     const cloudAccountEnabled = Boolean(remoteAuthStatus?.signedIn && !remoteAuthStatus?.cloudDisabled);
     const standaloneMode = Boolean(remoteAuthStatus?.cloudDisabled || remoteAuthStatus?.standalone);
     if (!cloudAccountEnabled && !standaloneMode) {
       setSharedSettingsStatus('Sign in before saving shared settings.');
-      return;
+      return false;
     }
     setSharedSettingsSaving(true);
-    setSharedSettingsStatus(standaloneMode ? 'Saving local settings...' : 'Saving shared settings...');
+    setSharedSettingsStatus(standaloneMode ? 'Saving local settings…' : 'Saving shared settings…');
     try {
       const maxTurns = sharedMaxTurnsFromDraft(sharedSettingsDraft);
       const runtimePayload = {
@@ -453,6 +453,15 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
         throw new Error('Start the local desktop runtime before saving local settings.');
       }
 
+      const setupPayload = await saveDesktopSetup(
+        { INTERRUPT_POLICY_DEFAULT: sharedSettingsDraft.interruptPolicy } as Partial<DesktopSetupValues>,
+        { restartPolicy: 'never' },
+      );
+      if (!setupPayload) {
+        throw new Error('Desktop setup controls are unavailable in this shell.');
+      }
+      applyBootstrap(setupPayload, { preserveLoadingState: true });
+
       if (bootstrap?.apiBaseUrl && bootstrap?.accessToken) {
         const runtimeTasks = [
           configureAgent(
@@ -478,8 +487,10 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
         setSharedSettingsDraft((current: any) => current ? { ...current, cloudChatBackupEnabled: false } : current);
       }
       setSharedSettingsStatus(standaloneMode ? 'Local settings saved on this computer.' : 'Shared settings saved.');
+      return true;
     } catch (profileError) {
       setSharedSettingsStatus(userFacingError(profileError, standaloneMode ? 'Local settings were not saved.' : 'Shared settings were not saved.'));
+      return false;
     } finally {
       setSharedSettingsSaving(false);
     }
@@ -488,7 +499,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
   const approveSharedConfirmation = async (confirmationId: string) => {
     if (!bootstrap?.apiBaseUrl || !bootstrap?.accessToken) return;
     setRecoveryBusyId(confirmationId);
-    setRecoveryMessage('Approving confirmation...');
+    setRecoveryMessage('Approving confirmation…');
     try {
       await approvePendingConfirmation(bootstrap.apiBaseUrl, bootstrap.accessToken, confirmationId, 'desktop');
       await refreshRecovery();
@@ -503,7 +514,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
   const denySharedConfirmation = async (confirmationId: string) => {
     if (!bootstrap?.apiBaseUrl || !bootstrap?.accessToken) return;
     setRecoveryBusyId(confirmationId);
-    setRecoveryMessage('Denying confirmation...');
+    setRecoveryMessage('Denying confirmation…');
     try {
       await denyPendingConfirmation(bootstrap.apiBaseUrl, bootstrap.accessToken, confirmationId, 'desktop');
       await refreshRecovery();
@@ -518,7 +529,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
   const restoreArchivedItem = async (archiveId: string) => {
     if (!bootstrap?.apiBaseUrl || !bootstrap?.accessToken) return;
     setRecoveryBusyId(archiveId);
-    setRecoveryMessage('Restoring archived item...');
+    setRecoveryMessage('Restoring archived item…');
     try {
       await restoreRecoveryItem(bootstrap.apiBaseUrl, bootstrap.accessToken, archiveId);
       await refreshRecovery();
@@ -541,7 +552,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
     });
     if (!confirmed) return;
     setRecoveryBusyId(archiveId);
-    setRecoveryMessage('Deleting archived item...');
+    setRecoveryMessage('Deleting archived item…');
     try {
       const confirmation = await createPendingConfirmation(bootstrap.apiBaseUrl, bootstrap.accessToken, {
         action_kind: 'recovery_permanent_delete',
@@ -566,7 +577,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
   const restoreManagedWorkspace = async () => {
     if (!bootstrap?.apiBaseUrl || !bootstrap?.accessToken) return;
     setRecoveryBusyId('workspace_restore');
-    setRecoveryMessage('Restoring cloud-known workspace files...');
+    setRecoveryMessage('Restoring cloud-known workspace files…');
     try {
       const response = await restoreWorkspaceFiles(bootstrap.apiBaseUrl, bootstrap.accessToken, {});
       setRecoveryMessage(response.restored_files.length ? 'Workspace files restored.' : 'No files to restore.');
@@ -610,7 +621,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
       return;
     }
     setRemoteSecretsBusy(true);
-    setRemoteSecretsMessage(`Deleting saved ${secretLabel}...`);
+    setRemoteSecretsMessage(`Deleting saved ${secretLabel}…`);
     try {
       await deleteDesktopRemoteSecret(cleanNamespace, cleanName, confirmationId);
       remoteAccountHydratedKeyRef.current = null;
@@ -707,7 +718,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
       return;
     }
     setRemoteSecretsBusy(true);
-    setRemoteSecretsMessage('Saving setup values...');
+    setRemoteSecretsMessage('Saving setup values…');
     try {
       const result = await saveDesktopSetupSecrets(values);
       const primaryTelegramToken = String(values.TELEGRAM_BOT_TOKEN || '').trim();
@@ -748,7 +759,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
       return;
     }
     setRemoteSecretsBusy(true);
-    setRemoteSecretsMessage('Saving Gmail login...');
+    setRemoteSecretsMessage('Saving Gmail login…');
     try {
       await saveDesktopRemoteSecrets('login_credentials', secrets, {
         GMAIL_EMAIL: { label: 'Gmail address', kind: 'login_email', service: 'gmail' },
@@ -803,7 +814,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
       return;
     }
     setRemoteSecretsBusy(true);
-    setRemoteSecretsMessage('Filling saved setup values...');
+    setRemoteSecretsMessage('Filling saved setup values…');
     try {
       const result = await applyDesktopAccountData();
       if (!result) {
@@ -847,7 +858,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
           if (refreshed) {
             applyBootstrap(refreshed, { keepSetupClosed: true });
             if (!refreshed.setupState?.required) {
-              setNotice('Setup is complete. Continuing startup...');
+              setNotice('Setup is complete. Continuing startup…');
               await beginStartup({ forceBootstrap: true });
             } else {
               setShowSetup(true);
@@ -1013,9 +1024,9 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
       const reconnected = Boolean(finalPayload.accessToken && finalPayload.runtimeStatus?.ok);
       const shouldResumeStartup = startupPhaseRef.current !== 'ready' && !finalPayload.setupState?.required;
       if (shouldResumeStartup) {
-        setNotice(hasSecretValues ? 'Settings and API keys saved. Continuing startup...' : 'Settings saved. Continuing startup...');
+        setNotice(hasSecretValues ? 'Settings and API keys saved. Continuing startup…' : 'Settings saved. Continuing startup…');
         await beginStartup({ forceBootstrap: true });
-        return;
+        return true;
       }
       const liveIssueSuffix = liveApplyIssues.length ? ` ${liveApplyIssues.join(' ')}` : '';
       if (runtimeWasRunning && restartRequired) {
@@ -1038,6 +1049,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
         );
       }
       await refreshUpdateStatus(true);
+      return true;
     } catch (saveError) {
       const detail = userFacingError(saveError, 'Settings were not saved.');
       setError(detail);
@@ -1045,6 +1057,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
         setStartupPhase('setup_required');
         setLoadingState('Setup required');
       }
+      return false;
     } finally {
       setSavingSetup(false);
     }
@@ -1072,12 +1085,14 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
       const next = await saveDesktopMemory(content);
       if (!next) {
         setError('Desktop memory controls are unavailable in this shell.');
-        return;
+        return false;
       }
       setMemoryState(next);
       setNotice('Memory saved.');
+      return true;
     } catch (memoryError) {
       setError(userFacingError(memoryError, 'Memory was not saved.'));
+      return false;
     } finally {
       setMemorySaving(false);
     }
@@ -1090,11 +1105,11 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
       packId,
       state: 'starting',
       phase: 'prepare',
-      message: `Preparing ${packLabel} voice pack install...`,
+      message: `Preparing ${packLabel} voice pack install…`,
       percent: 0,
     });
     setError(null);
-    setNotice(`Preparing ${packLabel} voice pack install...`);
+    setNotice(`Preparing ${packLabel} voice pack install…`);
     try {
       let payload = await installDesktopVoicePack(packId);
       if (!payload) {
@@ -1111,10 +1126,10 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
           packId,
           state: 'warming',
           phase: 'warmup',
-          message: 'Warming Hebrew voice path so first capture is ready immediately...',
+          message: 'Warming Hebrew voice path so first capture is ready immediately…',
           percent: 96,
         });
-        setNotice('Warming Hebrew voice path so first capture is ready immediately...');
+        setNotice('Warming Hebrew voice path so first capture is ready immediately…');
         const warmedVoiceStatus = await warmVoiceRuntime(payload.apiBaseUrl, payload.accessToken);
         const warmupError = String(
           warmedVoiceStatus?.warmup?.['error']
@@ -1172,7 +1187,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
     setVoicePackBusyId(packId);
     setVoicePackProgress(null);
     setError(null);
-    setNotice(`Switching Jarvis voice to ${packLabel}...`);
+    setNotice(`Switching Jarvis voice to ${packLabel}…`);
     try {
       const nextStatus = await configureVoiceTtsBackend(bootstrap.apiBaseUrl, bootstrap.accessToken, backend);
       const switchError = nextStatus.tts_switch?.ok === false
@@ -1238,7 +1253,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
     setVoicePackBusyId(packId);
     setVoicePackProgress(null);
     setError(null);
-    setNotice(`Removing ${packLabel} voice pack...`);
+    setNotice(`Removing ${packLabel} voice pack…`);
     try {
       const payload = await removeDesktopVoicePack(packId);
       if (!payload) {
@@ -1256,7 +1271,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
 
   const selectVoiceEngine = async (engine: string) => {
     setError(null);
-    setNotice(`Switching voice path to ${engine === 'hebrew_local' ? 'Hebrew' : engine === 'english_local' ? 'English' : 'off'}...`);
+    setNotice(`Switching voice path to ${engine === 'hebrew_local' ? 'Hebrew' : engine === 'english_local' ? 'English' : 'off'}…`);
     try {
       const payload = await setDesktopVoiceDefaultEngine(engine);
       if (!payload) {
@@ -1281,10 +1296,10 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
   const installUpdateNow = async () => {
     setInstallingUpdate(true);
     setError(null);
-    setNotice('Preparing desktop update...');
+    setNotice('Preparing desktop update…');
     try {
       if (bootstrap?.apiBaseUrl && bootstrap?.accessToken) {
-        setNotice('Stopping local agent work before updating...');
+        setNotice('Stopping local agent work before updating…');
         try {
           await controlAgentRun(
             bootstrap.apiBaseUrl,
@@ -1299,10 +1314,14 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
           }
         }
       }
-      setNotice('Starting desktop update. EmploAI will close and reopen when the installer finishes.');
+      setNotice('Pulling the desktop update. EmploAI will close and reopen when the new commit is ready.');
       const result = await installDesktopUpdate();
       if (result && result.message && !result.launched) {
-        setError(userFacingError(result.message, 'Desktop update did not start.'));
+        if (result.ok) {
+          setNotice(result.message);
+        } else {
+          setError(userFacingError(result.message, 'Desktop update did not start.'));
+        }
       }
     } catch (installError) {
       setError(userFacingError(installError, 'Desktop update did not start.'));

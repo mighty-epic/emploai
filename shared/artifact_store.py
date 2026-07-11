@@ -4,6 +4,7 @@ import base64
 import json
 import mimetypes
 import re
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from shared.cloud_object_store import CloudObjectStore
+from shared.atomic_io import atomic_write_bytes, atomic_write_json
 from shared.runtime_paths import user_state_root
 from shared.standalone_policy import cloud_backend_enabled
 
@@ -32,6 +34,7 @@ _CLOUD_SYNC_ARTIFACT_KINDS = {
     "screen_description",
     "screenshot",
 }
+_ARTIFACT_INDEX_LOCK = threading.RLock()
 
 
 def _now_iso() -> str:
@@ -233,24 +236,29 @@ class ChatArtifactStore:
         self.base_path = (user_state_root(self.user_id) / "artifacts" / "chats" / self.session_id).resolve()
         self.payloads_dir = self.base_path / "payloads"
         self.index_path = self.base_path / "index.json"
+        self.index_backup_path = self.base_path / ".recovery" / "index.json.bak"
         self.payloads_dir.mkdir(parents=True, exist_ok=True)
 
     def _read(self) -> Dict[str, Any]:
-        if not self.index_path.exists():
+        if not self.index_path.exists() and not self.index_backup_path.exists():
             return {"items": []}
-        try:
-            payload = json.loads(self.index_path.read_text(encoding="utf-8"))
-        except Exception:
-            return {"items": []}
-        if not isinstance(payload, dict):
-            return {"items": []}
-        payload.setdefault("items", [])
-        return payload
+        for candidate in (self.index_path, self.index_backup_path):
+            try:
+                payload = json.loads(candidate.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            payload.setdefault("items", [])
+            if candidate == self.index_backup_path:
+                atomic_write_json(self.index_path, payload, backup_path=self.index_backup_path)
+            return payload
+        return {"items": []}
 
     def _write(self, payload: Dict[str, Any]) -> None:
         self.base_path.mkdir(parents=True, exist_ok=True)
         self.payloads_dir.mkdir(parents=True, exist_ok=True)
-        self.index_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(self.index_path, payload, backup_path=self.index_backup_path)
 
     def list_records(self, *, descending: bool = True) -> List[ArtifactRecord]:
         items = [ArtifactRecord.from_dict(item) for item in list(self._read().get("items", []))]
@@ -280,12 +288,13 @@ class ChatArtifactStore:
         }
 
     def _persist_record(self, record: ArtifactRecord) -> ArtifactRecord:
-        payload = self._read()
-        items = [item for item in list(payload.get("items", [])) if str(item.get("artifact_id") or "") != record.artifact_id]
-        items.append(record.to_dict())
-        items.sort(key=lambda item: str(item.get("created_at") or ""))
-        payload["items"] = items[-2000:]
-        self._write(payload)
+        with _ARTIFACT_INDEX_LOCK:
+            payload = self._read()
+            items = [item for item in list(payload.get("items", [])) if str(item.get("artifact_id") or "") != record.artifact_id]
+            items.append(record.to_dict())
+            items.sort(key=lambda item: str(item.get("created_at") or ""))
+            payload["items"] = items[-2000:]
+            self._write(payload)
         return record
 
     def create_bytes_artifact(
@@ -314,7 +323,7 @@ class ChatArtifactStore:
         relative_payload = Path("payloads") / f"{artifact_id}-{_safe_slug(payload_name, fallback='payload')}"
         absolute_payload = self.base_path / relative_payload
         absolute_payload.parent.mkdir(parents=True, exist_ok=True)
-        absolute_payload.write_bytes(data)
+        atomic_write_bytes(absolute_payload, data)
         metadata_payload = dict(metadata or {})
         workspace_id = str(metadata_payload.get("workspace_id") or "").strip() or None
         if _should_cloud_sync_artifact(source_kind=source_kind, artifact_kind=artifact_kind, metadata=metadata_payload):

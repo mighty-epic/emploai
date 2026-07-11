@@ -209,6 +209,8 @@ def test_begin_chat_turn_publishes_user_message_with_channel_metadata(monkeypatc
                         "role": "user",
                         "content": "hello from telegram",
                         "timestamp": runtime.chat_history[0]["timestamp"],
+                        "run_id": "sess-1:1",
+                        "run_sequence": 1,
                         "channel": "telegram",
                         "source_format": "telegram_text",
                         "display_label": "Telegram",

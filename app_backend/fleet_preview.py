@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 from app_backend.fleet_policy import FLEET_PREVIEW_MODE, preview_dispatch_target
 from app_backend.remote_command_broker import request_remote_desktop_command_via_broker
@@ -12,6 +12,22 @@ from app_backend.remote_control_runtime import remote_control_sqlite_broker_enab
 SessionActiveChecker = Callable[..., bool]
 DesktopUnavailableChecker = Callable[[str], bool]
 DesktopOfflineMarker = Callable[..., None]
+LocalPreviewCapture = Callable[..., Awaitable[Dict[str, Any]]]
+
+
+async def capture_local_worker_preview(*, worker: Dict[str, Any]) -> Dict[str, Any]:
+    from app_backend.capture_runtime import capture_screen_snapshot
+
+    loop = asyncio.get_running_loop()
+    capture = await loop.run_in_executor(
+        None,
+        lambda: capture_screen_snapshot(max_width=1280, jpeg_quality=68),
+    )
+    return {
+        "status": "captured",
+        "detail": f"Captured the current desktop used by {worker.get('display_name') or 'the local worker'}.",
+        "capture": capture,
+    }
 
 
 async def request_fleet_worker_preview(
@@ -24,6 +40,7 @@ async def request_fleet_worker_preview(
     is_remote_session_active: SessionActiveChecker,
     is_desktop_unavailable_error: Optional[DesktopUnavailableChecker] = None,
     mark_desktop_offline: Optional[DesktopOfflineMarker] = None,
+    capture_local_preview: Optional[LocalPreviewCapture] = None,
     timeout_seconds: float = 10.0,
 ) -> Dict[str, Any]:
     preview_id = f"fpv_{secrets.token_hex(8)}"
@@ -40,8 +57,16 @@ async def request_fleet_worker_preview(
         "mode": FLEET_PREVIEW_MODE,
     }
     if str(worker.get("kind") or "") != "remote":
-        dispatch_status = "local_placeholder"
-        detail = "Local logical workers do not expose a remote screen preview yet."
+        try:
+            local_capture = capture_local_preview or capture_local_worker_preview
+            result = await local_capture(worker=worker)
+            dispatch_status = str(result.get("status") or "captured").strip()[:80] or "captured"
+            detail = str(result.get("detail") or "Local worker preview captured.").strip()
+            if isinstance(result.get("capture"), dict):
+                payload["capture"] = dict(result["capture"])
+        except Exception as exc:
+            dispatch_status = "failed"
+            detail = f"Local worker preview failed: {type(exc).__name__}: {exc}"
     elif not desktop_id:
         dispatch_status = "missing_desktop"
         detail = "Worker does not have an enrolled desktop identity."
@@ -78,8 +103,10 @@ async def request_fleet_worker_preview(
                 raise RuntimeError(str(reply.get("error") or "Worker desktop rejected the preview request"))
             result = dict(reply.get("result") or {})
             command_id = str(result.get("command_id") or "").strip() or None
-            dispatch_status = str(result.get("status") or "acknowledged").strip()[:80] or "acknowledged"
-            detail = str(result.get("detail") or "Worker desktop acknowledged the preview request.").strip()
+            dispatch_status = str(result.get("status") or "captured").strip()[:80] or "captured"
+            detail = str(result.get("detail") or "Worker desktop preview captured.").strip()
+            if isinstance(result.get("capture"), dict):
+                payload["capture"] = dict(result["capture"])
         except asyncio.TimeoutError:
             dispatch_status = "timeout"
             detail = "Worker desktop did not acknowledge the preview request in time."
@@ -111,5 +138,12 @@ async def request_fleet_worker_preview(
         mode=FLEET_PREVIEW_MODE,
         command_id=command_id,
         detail=detail,
+        metadata={
+            "capture": {
+                key: value
+                for key, value in dict(payload.get("capture") or {}).items()
+                if key != "image_base64"
+            }
+        } if payload.get("capture") else None,
     )
     return {"ok": True, **payload, "preview": preview_state.get("preview")}

@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -6,6 +7,12 @@ from cli.models.session import Session
 from shared.context_loader import ContextLoader
 from shared.memory import MemoryManager
 from local_agent_runtime.browser_tool import ARIA_SNAPSHOT_JS
+from telegram_bot.telegram_runtime_tools import _execute_update_memory
+
+
+@pytest.fixture(autouse=True)
+def _isolate_memory_runtime_home(monkeypatch):
+    monkeypatch.delenv("EMPLOAI_HOME", raising=False)
 
 
 def test_memory_prompt_context_includes_long_term_and_recent_sections(tmp_path):
@@ -100,6 +107,18 @@ def test_local_fact_memory_delete_removes_fact(tmp_path):
     assert manager.fact_store.remove_fact(fact["id"]) is True
     assert manager.fact_store.remove_fact(fact["id"]) is False
     assert manager.fact_store.search("Temporary local fact") == []
+
+
+def test_update_memory_tool_respects_write_disabled():
+    session = SimpleNamespace(
+        live_config={"memory.write_enabled": False},
+        session_context=SimpleNamespace(can_write_memory=True),
+        memory_manager=object(),
+    )
+
+    result = _execute_update_memory(session, {"section": "Context", "content": "- Save this."})
+
+    assert result == "Memory writing is disabled in settings."
 
 
 def test_memory_manager_uses_runtime_home_when_present(monkeypatch, tmp_path):

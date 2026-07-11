@@ -1,1 +1,56 @@
-export const DESKTOP_RECT_BUTTON_RADIUS = 10;
+export const DESKTOP_UI = {
+  color: {
+    canvas: '#080b11',
+    chrome: '#0b0f15',
+    sidebar: '#0b1118',
+    surface: '#101720',
+    surfaceRaised: '#141d28',
+    surfaceMuted: '#0d141c',
+    surfaceHover: '#18222e',
+    border: '#222d3a',
+    borderStrong: '#344356',
+    text: '#eef3f8',
+    textMuted: '#a1adbc',
+    textSubtle: '#748194',
+    accent: '#5cc8d7',
+    accentStrong: '#78d8e4',
+    accentInk: '#071419',
+    accentSoft: 'rgba(92, 200, 215, 0.12)',
+    accentBorder: 'rgba(92, 200, 215, 0.34)',
+    success: '#75c69a',
+    successSoft: 'rgba(117, 198, 154, 0.12)',
+    warning: '#d7ae6a',
+    warningSoft: 'rgba(215, 174, 106, 0.12)',
+    danger: '#e07884',
+    dangerSoft: 'rgba(224, 120, 132, 0.12)',
+    overlay: 'rgba(4, 7, 11, 0.78)',
+    shadow: '#02050a',
+  },
+  radius: {
+    small: 6,
+    control: 8,
+    panel: 12,
+    large: 16,
+    pill: 999,
+  },
+  type: {
+    sans: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    mono: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
+  },
+  elevation: {
+    low: {
+      shadowColor: '#02050a',
+      shadowOpacity: 0.16,
+      shadowRadius: 12,
+      shadowOffset: { width: 0, height: 6 },
+    },
+    high: {
+      shadowColor: '#02050a',
+      shadowOpacity: 0.32,
+      shadowRadius: 28,
+      shadowOffset: { width: 0, height: 18 },
+    },
+  },
+} as const;
+
+export const DESKTOP_RECT_BUTTON_RADIUS = DESKTOP_UI.radius.control;

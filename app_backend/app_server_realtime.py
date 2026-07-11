@@ -394,7 +394,7 @@ def _load_session_search_entry(
 
             for index, item in enumerate(payload.get("chat_history", []))
 
-            if str(item.get("content", "")).strip()
+            if str(item.get("content", "")).strip() and not bool(item.get("hidden_from_app"))
 
         ],
 
@@ -735,6 +735,18 @@ def _sync_event_to_realtime_event(
         return RealtimeServerEvent(
 
             type="assistant_final",
+
+            session_id=event_session_id,
+
+            payload=payload,
+
+        )
+
+    if event_type == "run_failed":
+
+        return RealtimeServerEvent(
+
+            type="run_failed",
 
             session_id=event_session_id,
 

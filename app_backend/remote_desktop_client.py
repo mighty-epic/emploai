@@ -6,17 +6,17 @@ import base64
 import json
 import logging
 import os
-import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import httpx
-import websockets
-from websockets.client import WebSocketClientProtocol
+from websockets.asyncio.client import ClientConnection, connect as websocket_connect
 
 from app_backend.local_runtime_server import start_runtime_context
+from app_backend.fleet_worker_report import extract_worker_report
+from shared.atomic_io import atomic_write_json
 from shared.runtime_paths import runtime_home
 
 
@@ -52,86 +52,6 @@ _FORWARDED_RESPONSE_HEADERS = {
     "etag",
     "last-modified",
 }
-
-
-_WORKER_REPORT_FIELDS = {
-    "status",
-    "summary",
-    "evidence",
-    "artifacts",
-    "blockers",
-    "confidence",
-    "next_suggested_action",
-}
-
-
-def _coerce_report_list(value: Any) -> list[Any]:
-    if isinstance(value, list):
-        return value
-    if value in (None, ""):
-        return []
-    if isinstance(value, str):
-        chunks = [item.strip(" -\t") for item in re.split(r"\n|;", value) if item.strip(" -\t")]
-        return chunks or [value.strip()]
-    return [value]
-
-
-def _extract_worker_report(text: str) -> Dict[str, Any]:
-    raw_text = str(text or "").strip()
-    if not raw_text:
-        return {}
-
-    candidates: list[str] = []
-    fenced = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", raw_text, flags=re.IGNORECASE | re.DOTALL)
-    candidates.extend(fenced)
-    first_brace = raw_text.find("{")
-    last_brace = raw_text.rfind("}")
-    if first_brace >= 0 and last_brace > first_brace:
-        candidates.append(raw_text[first_brace:last_brace + 1])
-    candidates.append(raw_text)
-
-    for candidate in candidates:
-        try:
-            parsed = json.loads(candidate)
-        except Exception:
-            continue
-        if isinstance(parsed, dict) and _WORKER_REPORT_FIELDS.intersection(parsed.keys()):
-            return {
-                "status": str(parsed.get("status") or "").strip() or None,
-                "summary": str(parsed.get("summary") or "").strip() or None,
-                "evidence": _coerce_report_list(parsed.get("evidence")),
-                "artifacts": _coerce_report_list(parsed.get("artifacts")),
-                "blockers": _coerce_report_list(parsed.get("blockers")),
-                "confidence": str(parsed.get("confidence") or "").strip() or None,
-                "next_suggested_action": str(parsed.get("next_suggested_action") or "").strip() or None,
-                "raw": {"worker_report": parsed},
-            }
-
-    labeled: Dict[str, Any] = {}
-    current_key: Optional[str] = None
-    for raw_line in raw_text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        match = re.match(r"^(status|summary|evidence|artifacts|blockers|confidence|next_suggested_action)\s*:\s*(.*)$", line, flags=re.IGNORECASE)
-        if match:
-            current_key = match.group(1).lower()
-            labeled[current_key] = match.group(2).strip()
-            continue
-        if current_key:
-            labeled[current_key] = f"{labeled.get(current_key, '')}\n{line}".strip()
-    if _WORKER_REPORT_FIELDS.intersection(labeled.keys()):
-        return {
-            "status": str(labeled.get("status") or "").strip() or None,
-            "summary": str(labeled.get("summary") or "").strip() or None,
-            "evidence": _coerce_report_list(labeled.get("evidence")),
-            "artifacts": _coerce_report_list(labeled.get("artifacts")),
-            "blockers": _coerce_report_list(labeled.get("blockers")),
-            "confidence": str(labeled.get("confidence") or "").strip() or None,
-            "next_suggested_action": str(labeled.get("next_suggested_action") or "").strip() or None,
-            "raw": {"worker_report": labeled},
-        }
-    return {}
 
 
 @dataclass
@@ -174,7 +94,7 @@ def _write_remote_status(
         payload["desktopName"] = desktop_name
     if ready:
         payload["readyAt"] = datetime.now(timezone.utc).isoformat()
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    atomic_write_json(path, payload)
 
 
 def _normalize_base_url(value: str) -> str:
@@ -410,7 +330,7 @@ async def _collect_local_snapshot(local_api_base_url: str, local_token: str) -> 
         }
 
 
-async def _send_json(ws: WebSocketClientProtocol, send_lock: asyncio.Lock, payload: Dict[str, Any]) -> None:
+async def _send_json(ws: ClientConnection, send_lock: asyncio.Lock, payload: Dict[str, Any]) -> None:
     async with send_lock:
         await ws.send(json.dumps(payload))
 
@@ -423,6 +343,7 @@ def _map_local_ws_event_to_sync_event(data: Dict[str, Any]) -> Optional[Dict[str
         "user_message",
         "assistant_delta",
         "assistant_final",
+        "run_failed",
         "tool_event",
         "log",
         "status",
@@ -470,14 +391,14 @@ async def _relay_local_chat_command(
     source_format: str,
     interrupt_policy: str,
     source_client_id: Optional[str],
-    remote_ws: WebSocketClientProtocol,
+    remote_ws: ClientConnection,
     send_lock: asyncio.Lock,
 ) -> Dict[str, Any]:
     params = [f"token={local_token}", f"client_id={REMOTE_CLIENT_ID}"]
     if session_id:
         params.append(f"session_id={session_id}")
     local_ws_url = _ws_url_from_base(local_api_base_url, f"ws/app/chat?{'&'.join(params)}")
-    async with websockets.connect(local_ws_url, max_size=16 * 1024 * 1024) as local_ws:
+    async with websocket_connect(local_ws_url, max_size=16 * 1024 * 1024) as local_ws:
         await local_ws.send(
             json.dumps(
                 {
@@ -491,6 +412,7 @@ async def _relay_local_chat_command(
         )
         seen_assistant_final = False
         assistant_final_payload: Dict[str, Any] = {}
+        provider_failure_payload: Dict[str, Any] = {}
         final_session_id = session_id
         while True:
             try:
@@ -521,6 +443,10 @@ async def _relay_local_chat_command(
                 seen_assistant_final = True
                 assistant_final_payload = dict(data.get("payload") or {})
                 final_session_id = str(data.get("session_id") or final_session_id or "").strip() or final_session_id
+            elif event_type == "run_failed":
+                provider_failure_payload = dict(data.get("payload") or {})
+                final_session_id = str(data.get("session_id") or final_session_id or "").strip() or final_session_id
+                break
             elif seen_assistant_final and event_type == "session_sync":
                 break
             terminal_error = _terminal_local_chat_event_error(data)
@@ -530,6 +456,7 @@ async def _relay_local_chat_command(
             "session_id": final_session_id,
             "assistant_text": str(assistant_final_payload.get("text") or ""),
             "assistant_final": assistant_final_payload,
+            "failure": provider_failure_payload or None,
         }
 
 
@@ -539,7 +466,7 @@ async def _handle_command(
     payload: Dict[str, Any],
     local_api_base_url: str,
     local_token: str,
-    remote_ws: WebSocketClientProtocol,
+    remote_ws: ClientConnection,
     send_lock: asyncio.Lock,
 ) -> Optional[Dict[str, Any]]:
     timeout = httpx.Timeout(120.0, connect=30.0, read=120.0, write=120.0)
@@ -593,6 +520,20 @@ async def _handle_command(
             response = await client.delete(
                 f"{local_api_base_url}/api/app/sessions/{session_id}",
                 headers={"Authorization": f"Bearer {local_token}"},
+            )
+            response.raise_for_status()
+            result = response.json()
+            return result if isinstance(result, dict) else {}
+
+        if command_name == "rename_session":
+            session_id = str(payload.get("session_id") or "").strip()
+            name = str(payload.get("name") or "").strip()
+            if not session_id or not name:
+                return None
+            response = await client.put(
+                f"{local_api_base_url}/api/app/sessions/{session_id}",
+                headers={"Authorization": f"Bearer {local_token}"},
+                json={"name": name},
             )
             response.raise_for_status()
             result = response.json()
@@ -702,8 +643,36 @@ async def _handle_command(
                     send_lock=send_lock,
                 )
                 stop_requested = task_id in FLEET_STOP_REQUESTED_TASKS
+                provider_failure = result.get("failure") if isinstance(result.get("failure"), dict) else None
+                if provider_failure and not stop_requested:
+                    report_payload = {
+                        "task_id": task_id,
+                        "worker_id": worker_id,
+                        "status": "failed",
+                        "summary": str(provider_failure.get("user_message") or "The provider could not complete this worker task."),
+                        "evidence": [],
+                        "artifacts": [],
+                        "blockers": [{
+                            "code": str(provider_failure.get("code") or "provider_failed"),
+                            "provider_id": provider_failure.get("provider_id"),
+                            "model_id": provider_failure.get("model_id"),
+                        }],
+                        "confidence": "low",
+                        "next_suggested_action": "Switch to an available provider and explicitly retry the failed task.",
+                        "raw": {
+                            "session_id": result.get("session_id") or session_id,
+                            "provider_failure": provider_failure,
+                        },
+                    }
+                    await _send_json(remote_ws, send_lock, {"type": "fleet_task_report", "payload": report_payload})
+                    return {
+                        "task_id": task_id,
+                        "worker_id": worker_id,
+                        "session_id": result.get("session_id") or session_id,
+                        "failure": provider_failure,
+                    }
                 summary = str(result.get("assistant_text") or "").strip() or "Task completed."
-                parsed_report = _extract_worker_report(summary)
+                parsed_report = extract_worker_report(summary)
                 report_payload = {
                     "task_id": task_id,
                     "worker_id": worker_id,
@@ -734,6 +703,17 @@ async def _handle_command(
                         **dict(report_payload.get("raw") or {}),
                         **dict(parsed_report.get("raw") or {}),
                     }
+                elif not stop_requested:
+                    report_payload.update({
+                        "status": "needs_review",
+                        "summary": summary,
+                        "blockers": [{
+                            "kind": "report_validation",
+                            "message": "The worker response did not contain the required structured report fields.",
+                        }],
+                        "confidence": "low",
+                        "next_suggested_action": "Review the worker transcript and retry with corrected report instructions.",
+                    })
                 await _send_json(remote_ws, send_lock, {"type": "fleet_task_report", "payload": report_payload})
                 return {
                     "task_id": task_id,
@@ -772,7 +752,16 @@ async def _handle_command(
             worker_name = str(payload.get("display_name") or payload.get("worker_name") or "").strip() or "Worker"
             if not preview_id or not worker_id:
                 raise ValueError("preview_id and worker_id are required")
-            detail = "Worker desktop acknowledged preview request; live preview capture is not enabled in this runtime yet."
+            response = await client.get(
+                f"{local_api_base_url}/api/app/screenshot/current",
+                headers={"Authorization": f"Bearer {local_token}"},
+                params={"max_width": 1280, "quality": 68},
+            )
+            response.raise_for_status()
+            capture = response.json()
+            if not isinstance(capture, dict) or not str(capture.get("image_base64") or "").strip():
+                raise RuntimeError("Worker desktop returned an empty preview capture")
+            detail = f"Captured the current desktop used by {worker_name}."
             await _send_json(
                 remote_ws,
                 send_lock,
@@ -783,7 +772,7 @@ async def _handle_command(
                         "fleet_preview": {
                             "preview_id": preview_id,
                             "worker_id": worker_id,
-                            "status": "acknowledged",
+                            "status": "captured",
                             "detail": detail,
                             "view_only": True,
                         },
@@ -793,8 +782,9 @@ async def _handle_command(
             return {
                 "preview_id": preview_id,
                 "worker_id": worker_id,
-                "status": "acknowledged",
+                "status": "captured",
                 "detail": detail,
+                "capture": capture,
             }
 
         if command_name == "fleet_stop_task":
@@ -863,7 +853,7 @@ async def _handle_command(
 
 
 async def _snapshot_loop(
-    ws: WebSocketClientProtocol,
+    ws: ClientConnection,
     *,
     send_lock: asyncio.Lock,
     local_api_base_url: str,
@@ -906,7 +896,7 @@ async def _snapshot_loop(
 
 
 async def _send_snapshot_once(
-    ws: WebSocketClientProtocol,
+    ws: ClientConnection,
     *,
     send_lock: asyncio.Lock,
     local_api_base_url: str,
@@ -936,7 +926,7 @@ async def _send_snapshot_once(
 
 
 async def _send_command_result(
-    ws: WebSocketClientProtocol,
+    ws: ClientConnection,
     send_lock: asyncio.Lock,
     *,
     command_id: Optional[str],
@@ -997,7 +987,7 @@ async def run_remote_desktop_client() -> None:
 
     while True:
         try:
-            async with websockets.connect(remote_ws_url, max_size=REMOTE_WS_MAX_SIZE_BYTES) as ws:
+            async with websocket_connect(remote_ws_url, max_size=REMOTE_WS_MAX_SIZE_BYTES) as ws:
                 _write_remote_status(
                     state="running",
                     detail="Desktop is connected to the EmploAI remote control plane.",

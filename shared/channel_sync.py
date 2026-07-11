@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional
 
+from shared.atomic_io import atomic_write_json
 from shared.runtime_paths import channel_sync_root
 
 logger = logging.getLogger(__name__)
@@ -72,9 +73,7 @@ class ChannelSyncHub:
         payload["event_id"] = event_id
         filename = f"{time.time_ns()}_{event_id}.json"
         target_path = event_dir / filename
-        temp_path = event_dir / f".{filename}.{uuid.uuid4().hex}.tmp"
-        temp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        temp_path.replace(target_path)
+        atomic_write_json(target_path, payload, indent=None)
         self._prune_event_files(event_dir)
         return filename
 

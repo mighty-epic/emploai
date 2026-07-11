@@ -7,7 +7,12 @@ import time
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
+from cli.tui_constants import MODEL_CONFIGS
+from shared.channel_sync import get_channel_sync_hub
 from shared.cron_feed_store import CronFeedStore
+from shared.openai_api import create_openai_completion
+from shared.runtime_attention import hidden_runtime_planner, queue_runtime_system_context
+from shared.session_timeline import append_timeline_event, create_timeline_event
 
 
 _EVENT_STORE_CALLBACK: Optional[Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = None
@@ -50,7 +55,23 @@ Background command:
 Recent captured output:
 {output}
 
-Continue the original task from this event. Do not final-answer just because the process exited; verify the user's success criteria if a safe verification path exists. If the process failed, diagnose the failure and take the next safe corrective action instead of repeating the same failed method unchanged."""
+Runtime note:
+{runtime_note}
+
+Continue the original task from this event. Do not final-answer just because the process exited; verify the user's success criteria if a safe verification path exists. If the process failed, diagnose the failure and take the next safe corrective action instead of repeating the same failed method unchanged. If the process is still running, decide whether to keep waiting cheaply, inspect with command_status, send input, stop it, or continue other useful work."""
+
+
+def _queue_active_run_process_context(session: Any, prompt: str) -> bool:
+    return queue_runtime_system_context(
+        session,
+        headline=(
+            "A background command event fired while this agent turn was still running. "
+            "This is runtime context, not a new user request."
+        ),
+        prompt=prompt,
+        merge_marker="background command event",
+        additional_label="ADDITIONAL BACKGROUND COMMAND EVENT",
+    )
 
 
 def _session_user_id(session: Any) -> int:
@@ -183,6 +204,9 @@ def append_event(
             )
             if isinstance(durable_item, dict):
                 feed_item["durable_event_id"] = durable_item.get("event_id") or durable_item.get("id")
+                if durable_item.get("auto_resume") is False:
+                    feed_item["auto_resume"] = False
+                    feed_item["auto_resume_disabled_reason"] = durable_item.get("auto_resume_disabled_reason")
         except Exception:
             pass
     return feed_item
@@ -235,6 +259,12 @@ def build_process_event_content(event: Dict[str, Any]) -> str:
     status = str(event.get("status") or "process_completed")
     if status == "waiting_on_process":
         prefix = "Background process started"
+    elif status == "process_running":
+        prefix = "Background process is still running"
+    elif status == "process_output":
+        prefix = "Background process output updated"
+    elif status == "process_no_progress":
+        prefix = "Background process is taking longer than expected"
     elif status == "process_ready":
         prefix = "Background process reported ready"
     elif status == "process_meaningful_output":
@@ -249,46 +279,92 @@ def build_process_event_content(event: Dict[str, Any]) -> str:
     return f"{prefix}: {command_id} exited with {exit_code}. {output_note}. Command: {command}"
 
 
-async def handle_background_process_event(session: Any, event: Dict[str, Any]) -> Dict[str, Any]:
-    """Record and optionally resume a task when a background command emits an event."""
+def _process_timeline_tone(status: str, exit_code: Any) -> str:
+    if status == "process_failed" or exit_code not in (None, 0):
+        return "error"
+    if status in {"process_running", "process_output", "process_no_progress", "process_ready", "process_meaningful_output"}:
+        return "warn"
+    return "accent" if status == "process_completed" else "neutral"
+
+
+def _append_process_timeline_event(session: Any, event: Dict[str, Any], *, status: str) -> Optional[Dict[str, Any]]:
+    command_id = str(event.get("command_id") or "").strip()
+    if not command_id:
+        return None
     user_id = _session_user_id(session)
     session_id = current_session_id(session)
-    event = dict(event or {})
+    command = str(event.get("command") or "").strip()
     exit_code = event.get("exit_code")
-    raw_status = str(event.get("status") or "").strip()
-    if raw_status in {"waiting_on_process", "waiting_on_ready_signal", "process_ready", "process_meaningful_output", "process_failed", "process_completed", "process_still_running"}:
-        status = raw_status
-    else:
-        status = "process_failed" if exit_code not in (None, 0) else "process_completed"
-    event["status"] = status
-    feed_item = append_event(
+    metadata = _safe_json(event)
+    metadata.update(
+        {
+            "live_command": True,
+            "command_id": command_id,
+            "process_wait_id": metadata.get("process_wait_id") or f"proc_{int(user_id or 0)}_{command_id}",
+            "status": status,
+            "output": str(event.get("output") or "")[-8000:],
+        }
+    )
+    timeline_event = create_timeline_event(
+        kind="command",
+        title=f"Command · {command_id}",
+        content=command or build_process_event_content(event),
+        tone=_process_timeline_tone(status, exit_code),
+        channel="app",
+        source_format="app_runtime",
+        metadata=metadata,
+    )
+    stored = append_timeline_event(session, event=timeline_event)
+    save_session = getattr(session, "save_session", None)
+    if callable(save_session):
+        try:
+            save_session()
+        except Exception:
+            pass
+    get_channel_sync_hub().publish(
         user_id=user_id,
-        kind=status,
-        event_type=status,
-        event_source="background_process",
-        content=build_process_event_content(event),
+        event={
+            "type": "timeline_event",
+            "session_id": session_id,
+            "origin_channel": "app",
+            "payload": {"event": stored},
+        },
+    )
+    return stored
+
+
+def _build_process_resume_prompt(
+    event: Dict[str, Any],
+    *,
+    status: str,
+    exit_code: Any = None,
+    runtime_note: str = "",
+) -> str:
+    return PROCESS_RESUME_PROMPT.format(
+        original_task=str(event.get("original_user_task") or event.get("task_prompt") or "Continue the previous task.").strip(),
+        command_id=str(event.get("command_id") or ""),
+        pid=str(event.get("pid") or ""),
+        shell=str(event.get("shell") or ""),
+        cwd=str(event.get("cwd") or ""),
+        visible_terminal=bool(event.get("visible_terminal")),
         status=status,
-        session_id=session_id,
-        session_name=_session_name(session),
-        automation_id=str(event.get("command_id") or "") or None,
-        automation_name=str(event.get("command") or "")[:120] or "Background process",
-        importance="important" if status == "process_failed" else "normal",
-        metadata=event,
+        exit_code="" if exit_code is None else str(exit_code),
+        output=str(event.get("output") or "(no captured output)")[:6000],
+        runtime_note=str(runtime_note or "(none)")[:1200],
     )
 
-    if status in {"waiting_on_process", "waiting_on_ready_signal", "process_still_running"}:
-        return {"feed_item": feed_item, "resumed": False, "reason": status}
-    if not bool(event.get("auto_resume", True)):
-        return {"feed_item": feed_item, "resumed": False, "reason": "auto_resume_disabled"}
-    resume_policy = str(event.get("resume_policy") or "on_exit").strip().lower()
-    if resume_policy in {"manual", "none", "off"}:
-        return {"feed_item": feed_item, "resumed": False, "reason": "manual_resume_policy"}
-    if status == "process_ready" and resume_policy != "on_ready":
-        return {"feed_item": feed_item, "resumed": False, "reason": "ready_not_requested"}
-    if status == "process_meaningful_output" and resume_policy not in {"on_meaningful_output", "on_ready"}:
-        return {"feed_item": feed_item, "resumed": False, "reason": "meaningful_output_not_requested"}
-    if status in {"process_completed", "process_failed"} and resume_policy not in {"on_exit", "on_ready", "on_meaningful_output"}:
-        return {"feed_item": feed_item, "resumed": False, "reason": "exit_not_requested"}
+
+async def _resume_background_process_event(
+    session: Any,
+    event: Dict[str, Any],
+    feed_item: Dict[str, Any],
+    *,
+    status: str,
+    exit_code: Any = None,
+    runtime_note: str = "",
+) -> Dict[str, Any]:
+    user_id = _session_user_id(session)
+    session_id = current_session_id(session)
     resume_count_attr = "_proactive_process_resume_count"
     resume_count = int(getattr(session, resume_count_attr, 0) or 0)
     if resume_count >= 8:
@@ -307,6 +383,9 @@ async def handle_background_process_event(session: Any, event: Dict[str, Any]) -
             importance="important",
         )
         return {"feed_item": feed_item, "resumed": False, "reason": "resume_cap_reached"}
+
+    prompt = _build_process_resume_prompt(event, status=status, exit_code=exit_code, runtime_note=runtime_note)
+
     if bool(getattr(session, "is_processing", False)):
         append_event(
             user_id=user_id,
@@ -321,24 +400,8 @@ async def handle_background_process_event(session: Any, event: Dict[str, Any]) -
             automation_name=str(event.get("command") or "")[:120] or "Background process",
             metadata={"command_event_id": feed_item.get("id")},
         )
-        for _attempt in range(150):
-            await asyncio.sleep(2)
-            if not bool(getattr(session, "is_processing", False)):
-                break
-        if bool(getattr(session, "is_processing", False)):
-            return {"feed_item": feed_item, "resumed": False, "reason": "session_still_busy"}
-
-    prompt = PROCESS_RESUME_PROMPT.format(
-        original_task=str(event.get("original_user_task") or event.get("task_prompt") or "Continue the previous task.").strip(),
-        command_id=str(event.get("command_id") or ""),
-        pid=str(event.get("pid") or ""),
-        shell=str(event.get("shell") or ""),
-        cwd=str(event.get("cwd") or ""),
-        visible_terminal=bool(event.get("visible_terminal")),
-        status=status,
-        exit_code="" if exit_code is None else str(exit_code),
-        output=str(event.get("output") or "(no captured output)")[:6000],
-    )
+        queued = _queue_active_run_process_context(session, prompt)
+        return {"feed_item": feed_item, "resumed": False, "queued": queued, "reason": "queued_for_active_run"}
 
     # Reuse the same unified loop path as scheduled automations. It is intentionally
     # imported lazily to avoid pulling Telegram/runtime modules into lightweight tests.
@@ -368,6 +431,230 @@ async def handle_background_process_event(session: Any, event: Dict[str, Any]) -
         return {"feed_item": feed_item, "resumed": True, "result": result}
     finally:
         setattr(session, "is_processing", False)
+
+
+async def _handle_process_no_progress_event(session: Any, event: Dict[str, Any], feed_item: Dict[str, Any]) -> Dict[str, Any]:
+    if feed_item.get("auto_resume") is False:
+        return {
+            "feed_item": feed_item,
+            "resumed": False,
+            "reason": feed_item.get("auto_resume_disabled_reason") or "auto_resume_disabled",
+        }
+    if not bool(event.get("auto_resume", True)):
+        return {"feed_item": feed_item, "resumed": False, "reason": "auto_resume_disabled"}
+    if bool(event.get("persistent")):
+        return {"feed_item": feed_item, "resumed": False, "reason": "persistent_command"}
+    resume_policy = str(event.get("resume_policy") or "on_exit").strip().lower()
+    if resume_policy in {"manual", "none", "off"}:
+        return {"feed_item": feed_item, "resumed": False, "reason": "manual_resume_policy"}
+
+    decision = await _hidden_process_no_progress_decision(session, event)
+    if decision.get("action") != "wake_agent":
+        return {
+            "feed_item": feed_item,
+            "resumed": False,
+            "reason": "planner_kept_waiting",
+            "planner_decision": decision,
+        }
+    note = f"Hidden background-command planner reason: {decision.get('reason') or 'command is taking too long'}"
+    return await _resume_background_process_event(
+        session,
+        {**event, "planner_decision": decision},
+        feed_item,
+        status="process_no_progress",
+        exit_code=None,
+        runtime_note=note,
+    )
+
+
+async def _hidden_process_no_progress_decision(session: Any, event: Dict[str, Any]) -> Dict[str, Any]:
+    owner = f"background_process:{event.get('command_id') or 'unknown'}"
+    with hidden_runtime_planner(session, owner=owner) as acquired:
+        if not acquired:
+            return {"action": "keep_waiting", "reason": "another hidden runtime planner is already active"}
+        try:
+            raw = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: _hidden_process_planner_completion(session, event),
+            )
+            parsed = _extract_json_object(raw or "")
+            if not parsed:
+                return {"action": "wake_agent", "reason": "planner returned no parseable decision"}
+            action = str(parsed.get("action") or "").strip()
+            if action not in {"keep_waiting", "wake_agent"}:
+                action = "wake_agent"
+            return {"action": action, "reason": str(parsed.get("reason") or "")[:800]}
+        except Exception as exc:
+            return {"action": "wake_agent", "reason": f"hidden process planner failed: {exc}"[:800]}
+
+
+def _hidden_process_planner_completion(session: Any, event: Dict[str, Any]) -> Optional[str]:
+    model_name = _planner_model_name(session)
+    client, provider = session.get_client_for_specific_model(model_name)
+    if client is None:
+        return None
+    model_id = MODEL_CONFIGS.get(model_name, {}).get("id", model_name)
+    payload = {
+        "command": {
+            "command_id": event.get("command_id"),
+            "command": event.get("command"),
+            "pid": event.get("pid"),
+            "shell": event.get("shell"),
+            "cwd": event.get("cwd"),
+            "resume_policy": event.get("resume_policy"),
+            "visible_terminal": bool(event.get("visible_terminal")),
+            "persistent": bool(event.get("persistent")),
+            "started_at": event.get("started_at"),
+            "elapsed_seconds": event.get("no_progress_seconds"),
+            "deadline_seconds": event.get("deadline_seconds"),
+            "total_lines": event.get("total_lines"),
+            "output_tail": str(event.get("output") or "")[-6000:],
+        },
+        "original_user_task": event.get("original_user_task") or event.get("task_prompt"),
+        "recent_context": _recent_context(session),
+        "agent_is_processing": bool(getattr(session, "is_processing", False)),
+    }
+    system_prompt = (
+        "You are a hidden background-command planner for EmploAI. "
+        "You do not talk to the user, use tools, stop processes, or change command settings. "
+        "Decide whether a long-running background command checkpoint should wake or notify the main agent now. "
+        "Return JSON only with action equal to keep_waiting or wake_agent, and a short reason. "
+        "Wake the agent if the output suggests a hang, prompt for input, error, blocked install/build/test, "
+        "or if active reasoning is needed to decide whether to inspect, send input, kill, retry, or verify. "
+        "Keep waiting if the command still appears to be making normal progress or is expected to take this long."
+    )
+    user_prompt = json.dumps(payload, ensure_ascii=True, indent=2)
+    if provider in {"openai", "openai-codex", "xai", "deepseek", "openrouter", "nvidia", "google"}:
+        response = create_openai_completion(
+            client,
+            model_name=model_name,
+            model_id=model_id,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=350,
+        )
+        return str(response.choices[0].message.content or "") if response.choices else None
+    if provider == "anthropic":
+        response = client.messages.create(
+            model=model_id,
+            max_tokens=350,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        parts = getattr(response, "content", None) or []
+        return "\n".join(str(getattr(part, "text", "") or "") for part in parts).strip() or None
+    return None
+
+
+def _planner_model_name(session: Any) -> str:
+    configured = str(getattr(session, "planner_model", "") or "").strip()
+    current = str(getattr(session, "current_model", "") or "").strip()
+    default = str(getattr(session, "default_planner_model", "") or "").strip()
+    model_name = configured or current or default
+    if not model_name:
+        raise RuntimeError("No planner model is available")
+    return model_name
+
+
+def _recent_context(session: Any) -> list[Dict[str, str]]:
+    history = list(getattr(session, "chat_history", []) or [])[-8:]
+    context: list[Dict[str, str]] = []
+    for message in history:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "")[:40]
+        content = str(message.get("content") or "").replace("\r", " ").strip()
+        if len(content) > 1200:
+            content = content[:1197] + "..."
+        if role and content:
+            context.append({"role": role, "content": content})
+    return context
+
+
+def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
+    cleaned = str(text or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:].strip()
+    try:
+        parsed = json.loads(cleaned)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        pass
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            parsed = json.loads(cleaned[start : end + 1])
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            return None
+    return None
+
+
+async def handle_background_process_event(session: Any, event: Dict[str, Any]) -> Dict[str, Any]:
+    """Record and optionally resume a task when a background command emits an event."""
+    user_id = _session_user_id(session)
+    session_id = current_session_id(session)
+    event = dict(event or {})
+    exit_code = event.get("exit_code")
+    raw_status = str(event.get("status") or "").strip()
+    if raw_status in {"waiting_on_process", "waiting_on_ready_signal", "process_running", "process_output", "process_no_progress", "process_ready", "process_meaningful_output", "process_failed", "process_completed", "process_still_running"}:
+        status = raw_status
+    else:
+        status = "process_failed" if exit_code not in (None, 0) else "process_completed"
+    event["status"] = status
+    if status == "process_output":
+        timeline_event = _append_process_timeline_event(session, event, status=status)
+        return {"feed_item": timeline_event, "resumed": False, "reason": status}
+    feed_item = append_event(
+        user_id=user_id,
+        kind=status,
+        event_type=status,
+        event_source="background_process",
+        content=build_process_event_content(event),
+        status=status,
+        session_id=session_id,
+        session_name=_session_name(session),
+        automation_id=str(event.get("command_id") or "") or None,
+        automation_name=str(event.get("command") or "")[:120] or "Background process",
+        importance="important" if status == "process_failed" else "normal",
+        metadata=event,
+    )
+
+    if status in {"process_running", "process_no_progress", "process_ready", "process_meaningful_output", "process_failed", "process_completed"}:
+        _append_process_timeline_event(session, event, status=status)
+    if status == "process_no_progress":
+        return await _handle_process_no_progress_event(session, event, feed_item)
+    if status in {"waiting_on_process", "waiting_on_ready_signal", "process_running", "process_still_running"}:
+        return {"feed_item": feed_item, "resumed": False, "reason": status}
+    if feed_item.get("auto_resume") is False:
+        return {
+            "feed_item": feed_item,
+            "resumed": False,
+            "reason": feed_item.get("auto_resume_disabled_reason") or "auto_resume_disabled",
+        }
+    if not bool(event.get("auto_resume", True)):
+        return {"feed_item": feed_item, "resumed": False, "reason": "auto_resume_disabled"}
+    resume_policy = str(event.get("resume_policy") or "on_exit").strip().lower()
+    if resume_policy in {"manual", "none", "off"}:
+        return {"feed_item": feed_item, "resumed": False, "reason": "manual_resume_policy"}
+    if status == "process_ready" and resume_policy != "on_ready":
+        return {"feed_item": feed_item, "resumed": False, "reason": "ready_not_requested"}
+    if status == "process_meaningful_output" and resume_policy not in {"on_meaningful_output", "on_ready"}:
+        return {"feed_item": feed_item, "resumed": False, "reason": "meaningful_output_not_requested"}
+    if status in {"process_completed", "process_failed"} and resume_policy not in {"on_exit", "on_ready", "on_meaningful_output"}:
+        return {"feed_item": feed_item, "resumed": False, "reason": "exit_not_requested"}
+    return await _resume_background_process_event(
+        session,
+        event,
+        feed_item,
+        status=status,
+        exit_code=exit_code,
+    )
 
 
 def install_background_process_hooks(session: Any, *, event_loop: asyncio.AbstractEventLoop) -> None:

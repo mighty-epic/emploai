@@ -154,11 +154,15 @@ const COMMAND_HELP: Record<string, string> = {
   config: 'View or edit config: `/config`, `/config <key>`, `/config <key> <value>`.',
 };
 
-export const DESKTOP_COMMAND_SUGGESTIONS = Object.entries(COMMAND_HELP).map(([name, description]) => ({
-  name,
-  command: `/${name}`,
-  description,
-}));
+const HIDDEN_LEGACY_COMMANDS = new Set(['continue', 'mode']);
+
+export const DESKTOP_COMMAND_SUGGESTIONS = Object.entries(COMMAND_HELP)
+  .filter(([name]) => !HIDDEN_LEGACY_COMMANDS.has(name))
+  .map(([name, description]) => ({
+    name,
+    command: `/${name}`,
+    description,
+  }));
 
 const HELP_SECTIONS = [
   {
@@ -176,7 +180,6 @@ const HELP_SECTIONS = [
     items: [
       '/pause - Pause running task',
       '/stop - Stop running task',
-      '/continue - Disabled legacy resume command',
       '/spawn <prompt> - Spawn parallel sub-agent',
       '/subagents - List running sub-agents',
     ],
@@ -253,7 +256,6 @@ const HELP_SECTIONS = [
     items: [
       '/start - Show the current agent state',
       '/help - Show available commands',
-      '/mode - Auto mode compatibility stub',
     ],
   },
   {
@@ -355,7 +357,7 @@ function formatModelGroups(overview: AgentOverview) {
 
 function formatPlannerModels(overview: AgentOverview) {
   const available = overview.available_planner_models || [];
-  const plannerLabel = overview.planner_model || 'automatic cheapest supported planner';
+  const plannerLabel = overview.planner_model || `automatic (${overview.current_model})`;
   if (!available.length) {
     return [
       `Current planner: ${plannerLabel}`,
@@ -369,7 +371,7 @@ function formatPlannerModels(overview: AgentOverview) {
     'Supported planner models:',
     ...available.map((model) => `- ${model}`),
     '',
-    'Use /planner <model-id> to pin one, or /planner auto to let the runtime choose the cheapest supported planner.',
+    'Use /planner <model-id> to pin one, or /planner auto to mirror the main model.',
   ].join('\n');
 }
 
@@ -398,7 +400,7 @@ function resolveModel(overview: AgentOverview, raw: string) {
 }
 
 function resolveVariant(overview: AgentOverview, raw: string) {
-  const target = normalize(raw);
+  const target = normalize(raw) === 'light' ? 'low' : normalize(raw);
   return overview.available_variants.find((item) => normalize(item) === target) || null;
 }
 
@@ -733,7 +735,7 @@ export async function runDesktopSlashCommand(input: string, context: CommandCont
         await configureAgent(apiBaseUrl, token, { planner_model: null }, sessionId);
         return {
           handled: true,
-          output: 'Planner model reset to automatic cheapest supported selection.',
+          output: 'Planner model set to automatic. It will mirror the main model.',
           status: 'planner auto',
           refresh: true,
         };

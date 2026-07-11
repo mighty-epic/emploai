@@ -418,7 +418,7 @@ def build_callback_handlers(
                 session.current_model = model
                 available = session.get_available_variants()
                 if session.current_variant not in available:
-                    session.current_variant = available[0] if available else "standard"
+                    session.current_variant = session.get_default_variant(model)
 
                 _publish_session_config_sync(session, "model")
                 await safe_edit(query, f"✅ Model switched to: **{model}**")

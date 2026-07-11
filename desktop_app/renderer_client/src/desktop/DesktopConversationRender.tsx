@@ -1,71 +1,156 @@
+import { useEffect, useState } from 'react';
 import { Animated, Image, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
 import { DESKTOP_COMMAND_PLACEHOLDER } from '@/desktop/desktopCommands';
+import { DesktopModelPickerMenu } from '@/desktop/DesktopModelPickerMenu';
 import { labelForMessage } from '@/desktop/desktopMessages';
-import { modelProviderKey } from '@/desktop/modelProviders';
 import { taskBoardStatusLabel } from '@/desktop/desktopTaskBoard';
-import {
-  jarvisSttBackendLabel,
-  jarvisTtsBackendLabel,
-  type JarvisSttBackend,
-  type JarvisTtsBackend,
-} from '@/desktop/desktopVoicePolicy';
 import { FoldSection, MonoIcon } from './DesktopConversationView.components';
 import { COMPOSER_MAX_HEIGHT } from './DesktopConversationView.styleConstants';
 import { styles } from './DesktopConversationView.styles';
+import { DesktopConversationJarvisStage } from './DesktopConversationJarvisStage';
 import { DesktopConversationOverlays } from './DesktopConversationOverlays';
 import { DesktopConversationSidebarDock } from './DesktopConversationSidebarDock';
+import { DesktopLiveCommandCard } from './DesktopLiveCommandCard';
+import { DesktopProviderFailureCard } from './DesktopProviderFailureCard';
+import { DesktopArchiveUndoToast } from './DesktopArchiveUndoToast';
 import type { DesktopConversationScope } from './DesktopConversationScope';
+import { extractProposedPlan, planQuestionFromMessage, visiblePlanText, modeStatusLabel } from './desktopChatModes';
 
 type DesktopConversationRenderProps = {
   scope: DesktopConversationScope;
 };
 
+function timelineEventDisplayParts(entry: any) {
+  const entryKind = String(entry.eyebrow || '').toLowerCase();
+  const isToolEntry = entryKind === 'tool';
+  const isCommandEntry = entryKind === 'command';
+  const isLiveCommandEntry = isCommandEntry && entry.metadata?.live_command === true;
+  const toolSections = isToolEntry ? String(entry.body || '').split(/\n(?:->|→)\s*/) : [];
+  const commandText = isToolEntry
+    ? (toolSections[0] || entry.body)
+    : isCommandEntry
+      ? String(entry.label || '').replace(/^command\s*·\s*/i, '').trim() || entry.label
+      : entry.body;
+  const resultText = isToolEntry
+    ? (toolSections.length > 1 ? toolSections.slice(1).join('\n-> ') : '')
+    : isCommandEntry
+      ? entry.body
+      : '';
+  const toolContextText = resultText
+    ? `${commandText}\n\nCommand Result\n${resultText}`
+    : commandText;
+  return {
+    entryKind,
+    isToolEntry,
+    isCommandEntry,
+    isLiveCommandEntry,
+    commandText: String(commandText || ''),
+    resultText: String(resultText || ''),
+    toolContextText: String(toolContextText || ''),
+    eyebrowLabel: isToolEntry || isCommandEntry ? 'Command' : entry.label,
+  };
+}
+
+function pluralizeRunCount(count: number, singular: string) {
+  return `${count} ${singular}${count === 1 ? '' : 's'}`;
+}
+
+function formatDurationMs(durationMs: number) {
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) {
+    return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+}
+
+function runDurationLabel(entry: any, isActive: boolean) {
+  const events = Array.isArray(entry.events) ? entry.events : [];
+  const firstTime = Date.parse(events[0]?.timestamp || entry.timestamp || '');
+  const lastEventTime = Date.parse(events[events.length - 1]?.timestamp || entry.timestamp || '');
+  if (!Number.isFinite(firstTime)) {
+    return isActive ? 'Working' : 'Worked';
+  }
+  const endTime = isActive ? Date.now() : (Number.isFinite(lastEventTime) ? lastEventTime : firstTime);
+  return `${isActive ? 'Working' : 'Worked'} for ${formatDurationMs(endTime - firstTime)}`;
+}
+
+function compactRunActivityLabel(entry: any) {
+  const parts = [
+    entry.commandCount ? pluralizeRunCount(entry.commandCount, 'command') : null,
+    entry.toolCount && entry.toolCount !== entry.commandCount ? pluralizeRunCount(entry.toolCount, 'tool') : null,
+    entry.errorCount ? pluralizeRunCount(entry.errorCount, 'error') : null,
+  ].filter(Boolean);
+  return parts.length ? `Ran ${parts.join(' · ')}` : `${pluralizeRunCount(entry.eventCount || 0, 'event')}`;
+}
+
+function editSummaryFromMessage(message: any) {
+  const metadata = (message?.raw?.metadata || {}) as Record<string, any>;
+  const summary = metadata.edit_summary || message?.raw?.edit_summary;
+  if (!summary || typeof summary !== 'object' || !Array.isArray(summary.files) || !summary.files.length) {
+    return null;
+  }
+  const files = summary.files
+    .map((file: any) => ({
+      path: String(file?.path || '').trim(),
+      additions: Number(file?.additions || 0),
+      deletions: Number(file?.deletions || 0),
+      binary: Boolean(file?.binary),
+    }))
+    .filter((file: any) => file.path);
+  if (!files.length) {
+    return null;
+  }
+  return {
+    fileCount: Number(summary.file_count || files.length),
+    additions: Number(summary.additions || 0),
+    deletions: Number(summary.deletions || 0),
+    files,
+    truncated: Boolean(summary.truncated),
+  };
+}
+
 export function DesktopConversationRender({ scope }: DesktopConversationRenderProps) {
-    const { STT_BACKEND_LOCAL_WHISPER, STT_BACKEND_OPENAI_REALTIME, TTS_BACKEND_KOKORO, TTS_BACKEND_KYUTAI, activeCommandPanel, activePermissionInfo, activePermissionInfoId, activeTaskBoard, activeToolPackInfo, activeToolPackInfoAvailable, activeToolPackInfoConfiguredEnabled, activeToolPackInfoDisabledReason, askForProjectFolderChoice, assistantDraft, beginHorizontalResize, chatSettingsBotConfigId, chatSettingsSession, chatSettingsSleepSessionId, chooseModel, choosePlannerModel, clearToolPackInfoHideTimer, commandSuggestionMenuRef, commandSuggestions, completedTaskBoards, composerInputHeight, composerTextRegionRef, confirmPendingSessionSwitch, confirmationDialog, contextBreakdownLabel, contextPercent, contextPercentLabel, contextStateLabel, contextTokenLabel, contextUsage, contextUsageHoverLabel, contextUsageHovered, contextUsageRatio, conversationMode, createAutomaticProjectFolderPath, currentJarvisSttBackend, currentJarvisSttLabel, currentJarvisTtsBackend, currentJarvisTtsLabel, currentModelLabel, currentPlannerLabel, currentSecurityPermissionLabel, currentSessionQueuedMessages, currentVariantLabel, dismissPendingSessionSwitch, draftBranchCommandPanel, draftBranchLabel, draftBranchTriggerRef, draftChat, draftFolderLabel, draftGitRepoLoading, draftGitRepoState, draftModelGroups, draftPlannerModels, draftProjectCommandPanel, draftProjectTriggerRef, draftTelegramBotLabel, draftTelegramCommandPanel, draftTelegramTriggerRef, emptyConversationProjectName, expandedCompletedTaskIds, expandedModelProviders, expandedPlannerProviders, fleetChatPanelCollapsed, fleetChatPanelWidth, fleetManagerChatPanel, fleetSidebarPanel, floatingPanelKind, floatingPanelPositionStyle, floatingPanelRef, folderChoiceBusy, formatAbsoluteTime, formatRelativeTime, handleComposerContentSizeChange, handleComposerInputChange, handleComposerKeyPress, handleComposerMeasureLayout, handleJarvisSttBackendSelection, handleJarvisTtsBackendSelection, handleTranscriptScroll, hasCompletedTaskBoards, highlightedMessageIndex, id, input, isCenteredDraftComposerStage, isFleetMode, isJarvisMode, jarvisCircleMuted, jarvisHoldCaptureDetail, jarvisHoldCaptureDisabled, jarvisHoldCaptureValue, jarvisHoldToTalkMode, jarvisInputSummary, jarvisMuteButtonMuted, jarvisPulseOpacity, jarvisPulseScale, jarvisSpokenOutput, jarvisStatusDrawerOpen, jarvisToolActivity, jarvisToolSummary, jarvisTranscriptOutput, jarvisTtsSummary, jarvisVoiceSettingsOpen, liveVoiceStatus, messages, modelTriggerRef, openDraftChat, openReferenceRail, overview, pendingSessionSwitch, pendingSwitchTargetLabel, permissionSettingsDraftMode, permissionSettingsIsDraft, permissionSettingsSession, permissionsTriggerRef, pinnedToolPackInfoId, plannerModelGroups, promptForProjectFolder, queuedComposerMessagesDisplay, referenceEntries, refreshFleetSnapshot, runControl, runSlashCommandFromComposer, runVerboseCommand, scheduleHideToolPackInfoPopup, scrollRef, securityPermissionOptions, selectCommandSuggestion, sendButtonGlyph, sendButtonMode, sendQueuedComposerSlice, sendText, sessionId, sessionSettingsMutationInFlight, setActiveCommandPanel, setActivePermissionInfoId, setContextUsageHovered, setConversationMode, setDismissedCommandSuggestionInput, setExpandedCompletedTaskIds, setExpandedModelProviders, setExpandedPlannerProviders, setFleetChatPanelCollapsed, setFleetChatPanelWidth, setFolderChoiceBusy, setHoveredToolPackInfoId, setJarvisPushToTalkMode, setJarvisStatusDrawerOpen, setJarvisVoiceSettingsOpen, setSleepChatForBot, setTaskBoardCollapsed, shellRef, shouldRenderGlobalFloatingPanel, shouldShowThinkingIndicator, showFolderComposerMeta, showReferenceRail, showVoiceBanner, startJarvisPushToTalk, status, stopJarvisPushToTalk, sttBackendChanging, taskBoardCollapsed, taskBoardStatusText, taskBoardStepPrefix, taskBoardSummary, taskBoardTone, taskBoardUpdatedLabel, telegramBotConfigs, thinkingShineTranslate, thinkingTextCounterTranslate, title, toggleJarvisMute, toolPackCommandPanelContent, toolPackInfoPopup, toolsTriggerRef, transcriptMessageLayoutRef, transcriptTimelineEntries, ttsBackendChanging, unavailableEnabledToolPackReason, updateChatHeadlessEligibility, updateChatSecurityPermissionMode, updateChatTelegramBotAssignment, updateDraftSecurityPermissionMode, verboseModeOn, voiceBannerText, voiceError, voiceRecording, voiceRunning, voiceStartInFlightRef } = scope;
+    const { STT_BACKEND_LOCAL_WHISPER, STT_BACKEND_OPENAI_REALTIME, TTS_BACKEND_KOKORO, TTS_BACKEND_KYUTAI, activeCommandPanel, activePermissionInfo, activePermissionInfoId, activeTaskBoard, activeToolPackInfo, activeToolPackInfoAvailable, activeToolPackInfoConfiguredEnabled, activeToolPackInfoDisabledReason, askForProjectFolderChoice, assistantDraft, beginHorizontalResize, chatSettingsBotConfigId, chatSettingsSession, chatSettingsSleepSessionId, chooseModel, choosePlannerModel, chooseVariant, clearToolPackInfoHideTimer, commandSuggestionMenuRef, commandSuggestions, completedTaskBoards, composerInputHeight, composerTextRegionRef, confirmPendingSessionSwitch, confirmationDialog, contextBreakdownLabel, contextPercent, contextPercentLabel, contextStateLabel, contextTokenLabel, contextUsage, contextUsageHoverLabel, contextUsageHovered, contextUsageRatio, conversationMode, createAutomaticProjectFolderPath, currentJarvisSttBackend, currentJarvisSttLabel, currentJarvisTtsBackend, currentJarvisTtsLabel, currentModelLabel, currentPlannerLabel, currentSecurityPermissionLabel, currentSessionQueuedMessages, currentVariant, currentVariantHasControls, currentVariantLabel, currentVariantOptions, dismissPendingSessionSwitch, draftBranchCommandPanel, draftBranchLabel, draftBranchTriggerRef, draftChat, draftFolderLabel, draftGitRepoLoading, draftGitRepoState, draftModelGroups, draftPlannerModels, draftProjectCommandPanel, draftProjectTriggerRef, draftTelegramBotLabel, draftTelegramCommandPanel, draftTelegramTriggerRef, emptyConversationProjectName, expandedCompletedTaskIds, expandedModelProviders, expandedPlannerProviders, fleetChatPanelCollapsed, fleetChatPanelWidth, fleetManagerChatPanel, fleetSidebarPanel, floatingPanelKind, floatingPanelPositionStyle, floatingPanelRef, folderChoiceBusy, formatAbsoluteTime, formatRelativeTime, handleComposerContentSizeChange, handleComposerInputChange, handleComposerKeyPress, handleComposerMeasureLayout, handleJarvisSttBackendSelection, handleJarvisTtsBackendSelection, handleTranscriptScroll, hasCompletedTaskBoards, highlightedMessageIndex, id, input, isCenteredDraftComposerStage, isFleetMode, isJarvisMode, jarvisCircleMuted, jarvisHoldCaptureDetail, jarvisHoldCaptureDisabled, jarvisHoldCaptureValue, jarvisHoldToTalkMode, jarvisInputSummary, jarvisMuteButtonMuted, jarvisPulseOpacity, jarvisPulseScale, jarvisSpokenOutput, jarvisStatusDrawerOpen, jarvisToolActivity, jarvisToolSummary, jarvisTranscriptOutput, jarvisTtsSummary, jarvisVoiceSettingsOpen, killLiveCommand, liveVoiceStatus, messages, modelTriggerRef, openDraftChat, openMessageContextMenu, openReferenceRail, openToolContextMenu, overview, pendingSessionSwitch, pendingSwitchTargetLabel, permissionSettingsDraftMode, permissionSettingsIsDraft, permissionSettingsSession, permissionsTriggerRef, pinnedToolPackInfoId, plannerModelGroups, promptForProjectFolder, queuedComposerMessagesDisplay, referenceEntries, refreshFleetSnapshot, runControl, runSlashCommandFromComposer, runVerboseCommand, scheduleHideToolPackInfoPopup, scrollRef, securityPermissionOptions, selectCommandSuggestion, sendButtonGlyph, sendButtonMode, sendQueuedComposerSlice, sendText, sessionId, sessionSettingsMutationInFlight, setActiveCommandPanel, setActivePermissionInfoId, setContextUsageHovered, setConversationMode, setDismissedCommandSuggestionInput, setExpandedCompletedTaskIds, setExpandedModelProviders, setExpandedPlannerProviders, setFleetChatPanelCollapsed, setFleetChatPanelWidth, setFolderChoiceBusy, setHoveredToolPackInfoId, setJarvisPushToTalkMode, setJarvisStatusDrawerOpen, setJarvisVoiceSettingsOpen, setSleepChatForBot, setTaskBoardCollapsed, shellRef, shortStatusText, shouldRenderGlobalFloatingPanel, shouldShowThinkingIndicator, showFolderComposerMeta, showReferenceRail, showVoiceBanner, startJarvisPushToTalk, status, stopCurrentIdentity, stopJarvisPushToTalk, sttBackendChanging, taskBoardCollapsed, taskBoardStatusText, taskBoardStepPrefix, taskBoardSummary, taskBoardTone, taskBoardUpdatedLabel, telegramBotConfigs, thinkingShineTranslate, thinkingTextCounterTranslate, title, toggleJarvisMute, toolPackCommandPanelContent, toolPackInfoPopup, toolsTriggerRef, transcriptMessageLayoutRef, transcriptTimelineEntries, ttsBackendChanging, unavailableEnabledToolPackReason, updateChatHeadlessEligibility, updateChatSecurityPermissionMode, updateChatTelegramBotAssignment, updateDraftSecurityPermissionMode, verboseModeOn, voiceBannerText, voiceError, voiceRecording, voiceRunning, voiceStartInFlightRef } = scope;
+  const activeVisualMonitorCount = Number(overview?.active_visual_monitors || 0);
+  const identityStopActive = Boolean(scope.agentRunActive || activeVisualMonitorCount > 0 || scope.hasActiveFleetTask);
+  const pendingRunMode = scope.pendingRunMode as 'plan' | 'goal' | 'normal' | null | undefined;
+  const planMode = (scope.planMode && typeof scope.planMode === 'object') ? scope.planMode as Record<string, any> : null;
+  const activeGoal = (scope.activeGoal && typeof scope.activeGoal === 'object') ? scope.activeGoal as Record<string, any> : null;
+  const setPendingRunMode = scope.setPendingRunMode as ((mode: 'plan' | 'goal' | 'normal' | null) => void) | undefined;
+  const approveProposedPlan = scope.approveProposedPlan as ((planText: string) => void | Promise<void>) | undefined;
+  const answerPlanQuestion = scope.answerPlanQuestion as ((questionId: string, answerText: string, optionId?: string | null) => void | Promise<void>) | undefined;
+  const dismissPlanMode = scope.dismissPlanMode as (() => void | Promise<void>) | undefined;
+  const exitPlanMode = scope.exitPlanMode as (() => void | Promise<void>) | undefined;
+  const clearActiveGoal = scope.clearActiveGoal as (() => void | Promise<void>) | undefined;
+  const setComposerInputValue = scope.setComposerInputValue as ((nextInput: string, options?: any) => void) | undefined;
+  const [expandedRunIds, setExpandedRunIds] = useState<Record<string, boolean>>({});
+  const [expandedEditSummaryIds, setExpandedEditSummaryIds] = useState<Record<string, boolean>>({});
+  const [transcriptWindowSize, setTranscriptWindowSize] = useState(200);
+  const transcriptWindowStart = Math.max(0, transcriptTimelineEntries.length - transcriptWindowSize);
+  const visibleTranscriptTimelineEntries = transcriptTimelineEntries.slice(transcriptWindowStart);
+  useEffect(() => setTranscriptWindowSize(200), [sessionId]);
+  const latestRunId = [...(transcriptTimelineEntries || [])]
+    .reverse()
+    .find((entry: any) => entry.kind === 'run')?.runId || null;
 
   return (
     <View ref={shellRef} style={styles.shell}>
+      {scope.archiveUndo ? (
+        <DesktopArchiveUndoToast
+          name={String(scope.archiveUndo.sessionName || 'Chat')}
+          onUndo={() => void scope.undoArchiveChat?.()}
+        />
+      ) : null}
       {confirmationDialog}
       <View style={[styles.conversationColumn, isCenteredDraftComposerStage && !isJarvisMode && !isFleetMode ? styles.conversationColumnDraftStage : null]}>
-        <View style={[styles.centeredConversationBlock, styles.surfaceModeTabsRow]}>
-          <View style={styles.surfaceModeTabs}>
-            <Pressable
-              style={({ hovered }: any) => [
-                styles.surfaceModeTab,
-                hovered ? styles.surfaceModeTabHovered : null,
-                conversationMode === 'chat' ? styles.surfaceModeTabActive : null,
-              ]}
-              onPress={() => setConversationMode('chat')}
-            >
-              <Text style={[styles.surfaceModeTabText, conversationMode === 'chat' ? styles.surfaceModeTabTextActive : null]}>Chat</Text>
-            </Pressable>
-            <Pressable
-              style={({ hovered }: any) => [
-                styles.surfaceModeTab,
-                hovered ? styles.surfaceModeTabHovered : null,
-                isJarvisMode ? styles.surfaceModeTabActive : null,
-              ]}
-              onPress={() => setConversationMode('jarvis')}
-            >
-              <Text style={[styles.surfaceModeTabText, isJarvisMode ? styles.surfaceModeTabTextActive : null]}>Jarvis</Text>
-            </Pressable>
-            <Pressable
-              style={({ hovered }: any) => [
-                styles.surfaceModeTab,
-                hovered ? styles.surfaceModeTabHovered : null,
-                isFleetMode ? styles.surfaceModeTabActive : null,
-              ]}
-              onPress={() => {
-                setConversationMode('fleet');
-                void refreshFleetSnapshot({ quiet: true });
-              }}
-            >
-              <Text style={[styles.surfaceModeTabText, isFleetMode ? styles.surfaceModeTabTextActive : null]}>Fleet</Text>
-            </Pressable>
-          </View>
-        </View>
-
         {isFleetMode ? (
           <View style={[styles.centeredConversationBlock, styles.fleetWorkspace]}>
             <ScrollView
@@ -88,7 +173,6 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
               </View>
             ) : (
               <>
-                {fleetManagerChatPanel}
                 <Pressable
                   style={({ hovered }: any) => [
                     styles.verticalPanelResizeHandle,
@@ -98,8 +182,8 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
                   accessibilityLabel="Resize fleet chat panel"
                   onPressIn={(event: any) => beginHorizontalResize(event, {
                     startWidth: fleetChatPanelWidth,
-                    minWidth: 280,
-                    maxWidth: 540,
+                    minWidth: 300,
+                    maxWidth: 760,
                     invert: true,
                     setWidth: setFleetChatPanelWidth,
                   })}
@@ -110,370 +194,12 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
                   </View>
                   )}
                 </Pressable>
+                {fleetManagerChatPanel}
               </>
             )}
           </View>
         ) : isJarvisMode ? (
-          <View style={[styles.centeredConversationBlock, styles.jarvisStage]}>
-              <View style={styles.jarvisDashboard}>
-              <View style={styles.jarvisPeripheralRail}>
-                <View
-                  style={[
-                    styles.jarvisModule,
-                    styles.jarvisControlTile,
-                    styles.jarvisTalkButton,
-                    jarvisHoldToTalkMode ? styles.jarvisTalkButtonSelected : null,
-                    voiceRecording ? styles.jarvisTalkButtonActive : null,
-                  ]}
-                >
-                  <View style={styles.jarvisTileHeader}>
-                    <Text style={styles.jarvisDrawerLabel}>Push To Talk</Text>
-                    <Text style={styles.jarvisTileSignal}>01</Text>
-                  </View>
-                  <Pressable
-                    disabled={voiceStartInFlightRef.current}
-                    style={({ hovered }: any) => [
-                      styles.jarvisPttToggleRow,
-                      hovered ? styles.jarvisPttToggleRowHovered : null,
-                    ]}
-                    onPress={() => {
-                      void setJarvisPushToTalkMode(!jarvisHoldToTalkMode);
-                    }}
-                  >
-                    <View style={styles.jarvisPttToggleCopy}>
-                      <Text style={styles.jarvisHoldModeText}>Push to talk</Text>
-                      <Text style={[styles.jarvisTalkButtonDetail, jarvisHoldToTalkMode ? styles.jarvisHoldModeDetailActive : null]}>
-                        {jarvisHoldToTalkMode ? 'Mute stays on between holds' : 'Normal always-on listening'}
-                      </Text>
-                    </View>
-                    <View style={[styles.jarvisPttSwitchTrack, jarvisHoldToTalkMode ? styles.jarvisPttSwitchTrackActive : null]}>
-                      <View style={[styles.jarvisPttSwitchKnob, jarvisHoldToTalkMode ? styles.jarvisPttSwitchKnobActive : null]} />
-                    </View>
-                  </Pressable>
-                  <Pressable
-                    disabled={jarvisHoldCaptureDisabled}
-                    style={({ hovered, pressed }: any) => [
-                      styles.jarvisHoldCaptureButton,
-                      voiceRecording ? styles.jarvisHoldCaptureButtonActive : null,
-                      hovered && !jarvisHoldCaptureDisabled ? styles.jarvisHoldCaptureButtonHovered : null,
-                      pressed && !jarvisHoldCaptureDisabled ? styles.jarvisHoldCaptureButtonPressed : null,
-                      jarvisHoldCaptureDisabled ? styles.jarvisHoldCaptureButtonDisabled : null,
-                    ]}
-                    onPressIn={() => {
-                      void startJarvisPushToTalk();
-                    }}
-                    onPressOut={() => {
-                      void stopJarvisPushToTalk();
-                    }}
-                  >
-                    <Text style={styles.jarvisHoldCaptureText}>{jarvisHoldCaptureValue}</Text>
-                    <Text style={styles.jarvisHoldCaptureDetail}>{jarvisHoldCaptureDetail}</Text>
-                  </Pressable>
-                  <View style={styles.jarvisShortcutHint}>
-                    <Text style={styles.jarvisShortcutHintText}>Hotkey</Text>
-                    <Text style={styles.jarvisShortcutKey}>Space</Text>
-                  </View>
-                </View>
-
-                <View style={[styles.jarvisModule, styles.jarvisControlTile, styles.jarvisContextTile]}>
-                  <View style={styles.jarvisTileHeader}>
-                    <Text style={styles.jarvisDrawerLabel}>Context</Text>
-                    <Text style={styles.jarvisTileSignal}>{contextPercentLabel}</Text>
-                  </View>
-                  <Text style={styles.jarvisDrawerValue}>{contextTokenLabel}</Text>
-                  <View style={styles.jarvisContextMeterTrack}>
-                    <View
-                      style={[
-                        styles.jarvisContextMeterFill,
-                        contextUsage?.compaction_state === 'needs_compaction'
-                          ? styles.jarvisContextMeterFillWarn
-                          : contextUsage?.compaction_state === 'compacted'
-                            ? styles.jarvisContextMeterFillCompact
-                            : null,
-                        { width: `${Math.max(contextPercent, contextPercent > 0 ? 4 : 0)}%` },
-                      ]}
-                    />
-                  </View>
-                  <Text style={styles.jarvisContextMeta} numberOfLines={2}>
-                    {contextBreakdownLabel || contextStateLabel}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={styles.jarvisCenterStack}>
-                <Pressable
-                  style={({ hovered }: any) => [
-                    styles.jarvisModule,
-                    styles.jarvisOutputModule,
-                    hovered ? styles.jarvisToolOutputHovered : null,
-                  ]}
-                  onPress={() => setJarvisStatusDrawerOpen((current: any) => !current)}
-                >
-                  <View style={styles.jarvisToolHeader}>
-                    <View style={styles.jarvisToolHeaderCopy}>
-                      <Text style={styles.jarvisModuleLabel}>Tool Output</Text>
-                      <Text style={styles.jarvisToolSummary} numberOfLines={2}>
-                        {jarvisToolSummary}
-                      </Text>
-                    </View>
-                    <Text style={styles.jarvisToolToggle}>{jarvisStatusDrawerOpen ? 'Hide' : 'Show'}</Text>
-                  </View>
-                  {activeTaskBoard ? (
-                    <View style={styles.jarvisDrawerNotice}>
-                      <Text style={styles.jarvisDrawerLabel}>Managed Task</Text>
-                      <Text style={styles.jarvisDrawerNoticeText} numberOfLines={3}>
-                        {taskBoardSummary || activeTaskBoard.main_goal}
-                      </Text>
-                    </View>
-                  ) : null}
-                  {jarvisStatusDrawerOpen ? (
-                    jarvisToolActivity.length ? (
-                      <View style={styles.jarvisActivityList}>
-                        {jarvisToolActivity.map((item: any) => (
-                          <View
-                            key={`jarvis-tool-${item.id}`}
-                            style={[
-                              styles.jarvisActivityItem,
-                              item.tone === 'warn'
-                                ? styles.jarvisActivityItemWarn
-                                : item.tone === 'error'
-                                  ? styles.jarvisActivityItemError
-                                  : item.tone === 'accent'
-                                    ? styles.jarvisActivityItemAccent
-                                    : null,
-                            ]}
-                          >
-                            <Text style={styles.jarvisActivityText} numberOfLines={2}>{item.text}</Text>
-                          </View>
-                        ))}
-                      </View>
-                    ) : (
-                      <Text style={styles.jarvisDrawerEmpty}>No tool output yet.</Text>
-                    )
-                  ) : null}
-                </Pressable>
-
-                <View style={styles.jarvisCoreModule}>
-                <View style={styles.jarvisCoreFrame}>
-                  <View pointerEvents="none" style={styles.jarvisHudBackdrop}>
-                    <View style={[styles.jarvisCorner, styles.jarvisCornerTopLeft]} />
-                    <View style={[styles.jarvisCorner, styles.jarvisCornerTopRight]} />
-                    <View style={[styles.jarvisCorner, styles.jarvisCornerBottomLeft]} />
-                    <View style={[styles.jarvisCorner, styles.jarvisCornerBottomRight]} />
-                    <View style={styles.jarvisScanline} />
-                  </View>
-                  <View style={styles.jarvisOrbWrap}>
-                    <View pointerEvents="none" style={styles.jarvisOuterRing} />
-                    <View pointerEvents="none" style={styles.jarvisFineRing} />
-                    <View pointerEvents="none" style={styles.jarvisTickRing}>
-                      {Array.from({ length: 72 }).map((_: any, item: any) => (
-                        <View
-                          key={`jarvis-tick-${item}`}
-                          style={[
-                            styles.jarvisTickRay,
-                            { transform: [{ rotate: `${item * 5}deg` }] },
-                          ]}
-                        >
-                          <View style={[styles.jarvisTick, item % 6 === 0 ? styles.jarvisTickMajor : null]} />
-                        </View>
-                      ))}
-                    </View>
-                    <View pointerEvents="none" style={styles.jarvisReticleHorizontal} />
-                    <View pointerEvents="none" style={styles.jarvisReticleVertical} />
-                    <Animated.View
-                      pointerEvents="none"
-                      style={[
-                        styles.jarvisOrbPulse,
-                        {
-                          opacity: jarvisPulseOpacity,
-                          transform: [{ scale: jarvisPulseScale }],
-                        },
-                      ]}
-                    />
-                    <View
-                      style={[
-                        styles.jarvisOrb,
-                        voiceRecording ? styles.jarvisOrbListening : null,
-                        voiceRunning && !voiceRecording ? styles.jarvisOrbWorking : null,
-                        jarvisCircleMuted ? styles.jarvisOrbMuted : null,
-                        voiceError ? styles.jarvisOrbError : null,
-                      ]}
-                    >
-                      <View pointerEvents="none" style={styles.jarvisOrbRingA} />
-                      <View pointerEvents="none" style={styles.jarvisOrbRingB} />
-                      <View pointerEvents="none" style={styles.jarvisOrbRingC} />
-                      <View style={styles.jarvisOrbCore}>
-                        {[0, 1, 2, 3, 4, 5, 6].map((item: any) => (
-                          <Animated.View
-                            key={`jarvis-wave-${item}`}
-                            style={[
-                              styles.jarvisWaveBar,
-                              {
-                                height: voiceRecording
-                                  ? 28 + Math.abs(item - 3) * 4 + item * 3
-                                  : voiceRunning
-                                    ? 24 + Math.abs(item - 3) * 3 + item * 2
-                                    : 14 + Math.abs(item - 3) * 2 + item,
-                                opacity: jarvisCircleMuted ? 0.28 : 0.78,
-                              },
-                            ]}
-                          />
-                        ))}
-                      </View>
-                    </View>
-                  </View>
-                </View>
-              </View>
-
-                <View style={styles.jarvisBottomRail}>
-                  <Pressable
-                    style={({ hovered }: any) => [
-                      styles.jarvisMuteButton,
-                      jarvisMuteButtonMuted ? styles.jarvisMuteButtonActive : null,
-                      hovered ? styles.jarvisMuteButtonHovered : null,
-                    ]}
-                    onPress={toggleJarvisMute}
-                  >
-                    <Text style={[styles.jarvisMuteButtonText, jarvisMuteButtonMuted ? styles.jarvisMuteButtonTextActive : null]}>
-                      {jarvisMuteButtonMuted ? 'Unmute' : 'Mute'}
-                    </Text>
-                  </Pressable>
-                  <View style={[styles.jarvisModule, styles.jarvisVoiceOutputModule]}>
-                    <View style={styles.jarvisVoiceOutputColumn}>
-                      <Text style={styles.jarvisDrawerLabel}>Transcription</Text>
-                      <Text style={styles.jarvisVoiceOutputText} numberOfLines={2}>
-                        {jarvisTranscriptOutput}
-                      </Text>
-                    </View>
-                    <View style={styles.jarvisVoiceOutputDivider} />
-                    <View style={styles.jarvisVoiceOutputColumn}>
-                      <Text style={styles.jarvisDrawerLabel}>TTS</Text>
-                      <Text style={styles.jarvisVoiceOutputText} numberOfLines={2}>
-                        {jarvisSpokenOutput}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-              </View>
-
-              <View style={styles.jarvisPeripheralRail}>
-                <View style={[styles.jarvisModule, styles.jarvisControlTile]}>
-                  <View style={styles.jarvisTileHeader}>
-                    <Text style={styles.jarvisDrawerLabel}>Speech</Text>
-                    <Text style={styles.jarvisTileSignal}>02</Text>
-                  </View>
-                  <Text style={styles.jarvisDrawerValue}>{jarvisInputSummary}</Text>
-                </View>
-
-                <Pressable
-                  style={({ hovered }: any) => [
-                    styles.jarvisModule,
-                    styles.jarvisControlTile,
-                    hovered ? styles.jarvisToolOutputHovered : null,
-                  ]}
-                  onPress={() => setJarvisVoiceSettingsOpen((current: any) => !current)}
-                >
-                  <View style={styles.jarvisTileHeader}>
-                    <Text style={styles.jarvisDrawerLabel}>Voice Setup</Text>
-                    <Text style={styles.jarvisTileSignal}>{jarvisVoiceSettingsOpen ? 'Hide' : 'Show'}</Text>
-                  </View>
-                  <Text style={styles.jarvisDrawerValue} numberOfLines={2}>
-                    Input: {currentJarvisSttLabel} · Voice: {currentJarvisTtsLabel}
-                  </Text>
-                </Pressable>
-
-                {jarvisVoiceSettingsOpen ? (
-                  <>
-                    <View style={[styles.jarvisModule, styles.jarvisVoiceEngineModule]}>
-                      <View style={styles.jarvisTtsSwitchCopy}>
-                        <Text style={styles.jarvisModuleLabel}>Input Engine</Text>
-                        <Text style={styles.jarvisDrawerValue}>
-                          {sttBackendChanging ? `Switching to ${jarvisSttBackendLabel(sttBackendChanging)}` : currentJarvisSttLabel}
-                        </Text>
-                      </View>
-                      <View style={styles.jarvisTtsSwitchButtons}>
-                        {[
-                          { backend: STT_BACKEND_OPENAI_REALTIME as JarvisSttBackend, label: 'Realtime API' },
-                          { backend: STT_BACKEND_LOCAL_WHISPER as JarvisSttBackend, label: 'Local Whisper' },
-                        ].map((item: any) => {
-                          const active = currentJarvisSttBackend === item.backend;
-                          const changing = sttBackendChanging === item.backend;
-                          const disabled = Boolean(sttBackendChanging || voiceRecording);
-                          return (
-                            <Pressable
-                              key={`jarvis-stt-${item.backend}`}
-                              disabled={disabled}
-                              style={({ hovered }: any) => [
-                                styles.jarvisTtsSwitchButton,
-                                active ? styles.jarvisTtsSwitchButtonActive : null,
-                                hovered && !disabled ? styles.jarvisTtsSwitchButtonHovered : null,
-                                disabled && !changing ? styles.jarvisTtsSwitchButtonDisabled : null,
-                              ]}
-                              onPress={() => {
-                                void handleJarvisSttBackendSelection(item.backend);
-                              }}
-                            >
-                              <Text style={[
-                                styles.jarvisTtsSwitchButtonText,
-                                active ? styles.jarvisTtsSwitchButtonTextActive : null,
-                              ]}>
-                                {changing ? 'Switching' : item.label}
-                              </Text>
-                            </Pressable>
-                          );
-                        })}
-                      </View>
-                    </View>
-
-                    <View style={[styles.jarvisModule, styles.jarvisVoiceEngineModule]}>
-                      <View style={styles.jarvisTtsSwitchCopy}>
-                        <Text style={styles.jarvisModuleLabel}>Voice Engine</Text>
-                        <Text style={styles.jarvisDrawerValue}>
-                          {ttsBackendChanging
-                            ? `Switching to ${jarvisTtsBackendLabel(ttsBackendChanging)}`
-                            : liveVoiceStatus?.tts_ready === false
-                              ? jarvisTtsSummary
-                              : currentJarvisTtsLabel}
-                        </Text>
-                      </View>
-                      <View style={styles.jarvisTtsSwitchButtons}>
-                        {[
-                          { backend: TTS_BACKEND_KOKORO as JarvisTtsBackend, label: 'Kokoro' },
-                          { backend: TTS_BACKEND_KYUTAI as JarvisTtsBackend, label: 'Kyutai clone' },
-                        ].map((item: any) => {
-                          const active = currentJarvisTtsBackend === item.backend;
-                          const changing = ttsBackendChanging === item.backend;
-                          const disabled = Boolean(ttsBackendChanging);
-                          return (
-                            <Pressable
-                              key={`jarvis-tts-${item.backend}`}
-                              disabled={disabled}
-                              style={({ hovered }: any) => [
-                                styles.jarvisTtsSwitchButton,
-                                active ? styles.jarvisTtsSwitchButtonActive : null,
-                                hovered && !disabled ? styles.jarvisTtsSwitchButtonHovered : null,
-                                disabled && !changing ? styles.jarvisTtsSwitchButtonDisabled : null,
-                              ]}
-                              onPress={() => {
-                                void handleJarvisTtsBackendSelection(item.backend);
-                              }}
-                            >
-                              <Text style={[
-                                styles.jarvisTtsSwitchButtonText,
-                                active ? styles.jarvisTtsSwitchButtonTextActive : null,
-                              ]}>
-                                {changing ? 'Switching' : item.label}
-                              </Text>
-                            </Pressable>
-                          );
-                        })}
-                      </View>
-                    </View>
-                  </>
-                ) : null}
-              </View>
-            </View>
-          </View>
+          <DesktopConversationJarvisStage scope={scope} />
         ) : (
           <>
         <ScrollView
@@ -493,13 +219,13 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
           {referenceEntries.length > 0 ? (
             <View style={styles.referenceMovedCard}>
               <View style={styles.referenceMovedCopy}>
-                <Text style={styles.referenceMovedTitle}>Reference note moved to the history sidebar</Text>
+                <Text style={styles.referenceMovedTitle}>Reference note moved to History & Artifacts</Text>
                 <Text style={styles.referenceMovedText}>
-                  Long structured overview content and runtime history are tucked into the collapsible sidebar so the main chat stays readable.
+                  Long structured overview content, runtime history, and saved artifacts are tucked into the collapsible sidebar so the main chat stays readable.
                 </Text>
               </View>
               <Pressable style={styles.referenceMovedButton} onPress={openReferenceRail}>
-                <Text style={styles.referenceMovedButtonText}>{showReferenceRail ? 'History Open' : 'Open History'}</Text>
+                <Text style={styles.referenceMovedButtonText}>{showReferenceRail ? 'Panel Open' : 'Open Panel'}</Text>
               </Pressable>
             </View>
           ) : null}
@@ -544,7 +270,7 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
                       }}
                     >
                       <Text style={styles.emptyFolderActionButtonText}>
-                        {folderChoiceBusy === 'auto' ? 'Creating...' : 'Automatic folder'}
+                        {folderChoiceBusy === 'auto' ? 'Creating…' : 'Automatic folder'}
                       </Text>
                     </Pressable>
                     <Pressable
@@ -563,7 +289,7 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
                       }}
                     >
                       <Text style={[styles.emptyFolderActionButtonText, styles.emptyFolderActionButtonTextSecondary]}>
-                        {folderChoiceBusy === 'choose' ? 'Opening...' : 'Choose location'}
+                        {folderChoiceBusy === 'choose' ? 'Opening…' : 'Choose location'}
                       </Text>
                     </Pressable>
                   </View>
@@ -572,7 +298,18 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
             </View>
           ) : null}
 
-          {transcriptTimelineEntries.map((entry: any, index: any) => {
+          {transcriptWindowStart > 0 ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Show ${Math.min(200, transcriptWindowStart)} earlier conversation items`}
+              style={styles.referenceMovedButton}
+              onPress={() => setTranscriptWindowSize((current) => current + 200)}
+            >
+              <Text style={styles.referenceMovedButtonText}>Show earlier conversation</Text>
+            </Pressable>
+          ) : null}
+
+          {visibleTranscriptTimelineEntries.map((entry: any, index: any) => {
             if (entry.kind === 'message') {
               const message = messages[entry.sourceMessageIndex];
               if (!message) {
@@ -580,12 +317,27 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
               }
               const fullIndex = entry.sourceMessageIndex;
               const messageOnLightSurface = message.role === 'user';
+              const planQuestion = planQuestionFromMessage(message);
+              const proposedPlan = message.role === 'assistant' ? extractProposedPlan(message.content) : null;
+              const displayContent = planQuestion ? '' : (proposedPlan ? visiblePlanText(message.content) : message.content);
+              const editSummary = message.role === 'assistant' ? editSummaryFromMessage(message) : null;
+              const editSummaryKey = message.messageKey || `${message.timestamp || 'message'}-${fullIndex}`;
+              const editSummaryExpanded = Boolean(expandedEditSummaryIds[editSummaryKey]);
+              const editSummaryFiles = editSummary
+                ? (editSummaryExpanded ? editSummary.files : editSummary.files.slice(0, 3))
+                : [];
+              const hiddenEditSummaryCount = editSummary
+                ? Math.max(0, editSummary.files.length - editSummaryFiles.length)
+                : 0;
               return (
                 <View
                   key={message.messageKey || `${message.timestamp || 'ts'}-${fullIndex}-${index}`}
                   onLayout={(event: any) => {
                     transcriptMessageLayoutRef.current[fullIndex] = event.nativeEvent.layout.y;
                   }}
+                  {...(Platform.OS === 'web' && (message.role === 'user' || message.role === 'assistant')
+                    ? ({ onContextMenu: (event: any) => openMessageContextMenu(event, message) } as any)
+                    : {})}
                   style={[
                     styles.messageBubble,
                     message.role === 'assistant'
@@ -605,31 +357,232 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
                       {message.timestamp ? formatAbsoluteTime(message.timestamp) : 'pending'}
                     </Text>
                   </View>
-                  <Text style={[styles.messageText, messageOnLightSurface ? styles.messageTextOnLight : null]}>
-                    {message.content}
-                  </Text>
+                  {displayContent ? (
+                    <Text style={[styles.messageText, messageOnLightSurface ? styles.messageTextOnLight : null]}>
+                      {displayContent}
+                    </Text>
+                  ) : null}
+                  {planQuestion ? (
+                    <View style={styles.planQuestionCard}>
+                      <Text style={styles.planCardEyebrow}>{planQuestion.header || 'Plan'}</Text>
+                      <Text style={styles.planCardTitle}>{planQuestion.question}</Text>
+                      <View style={styles.planQuestionOptions}>
+                        {planQuestion.options.map((option: any, optionIndex: number) => (
+                          <Pressable
+                            key={`${planQuestion.question_id}-${option.id}`}
+                            style={({ hovered }: any) => [
+                              styles.planQuestionOption,
+                              hovered ? styles.planQuestionOptionHovered : null,
+                            ]}
+                            onPress={() => {
+                              void answerPlanQuestion?.(
+                                planQuestion.question_id,
+                                `${option.label}${option.description ? `: ${option.description}` : ''}`,
+                                option.id,
+                              );
+                            }}
+                          >
+                            <Text style={styles.planQuestionOptionIndex}>{optionIndex + 1}</Text>
+                            <View style={styles.planQuestionOptionCopy}>
+                              <Text style={styles.planQuestionOptionLabel}>{option.label}</Text>
+                              {option.description ? (
+                                <Text style={styles.planQuestionOptionDescription}>{option.description}</Text>
+                              ) : null}
+                            </View>
+                          </Pressable>
+                        ))}
+                      </View>
+                      <View style={styles.planCardActions}>
+                        <Pressable
+                          style={styles.planCardSecondaryAction}
+                          onPress={() => {
+                            setPendingRunMode?.('plan');
+                            setComposerInputValue?.('', { origin: 'manual', syncVoiceBase: false });
+                          }}
+                        >
+                          <Text style={styles.planCardSecondaryActionText}>Tell Differently</Text>
+                        </Pressable>
+                        <Pressable style={styles.planCardSecondaryAction} onPress={() => void dismissPlanMode?.()}>
+                          <Text style={styles.planCardSecondaryActionText}>Dismiss</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  ) : null}
+                  {proposedPlan ? (
+                    <View style={styles.proposedPlanCard}>
+                      <Text style={styles.planCardEyebrow}>Plan</Text>
+                      <Text style={styles.planCardTitle}>Proposed Plan</Text>
+                      <Text style={styles.proposedPlanText}>{proposedPlan}</Text>
+                      <View style={styles.planCardActions}>
+                        <Pressable style={styles.planCardPrimaryAction} onPress={() => void approveProposedPlan?.(proposedPlan)}>
+                          <Text style={styles.planCardPrimaryActionText}>Implement This Plan</Text>
+                        </Pressable>
+                        <Pressable style={styles.planCardSecondaryAction} onPress={() => void dismissPlanMode?.()}>
+                          <Text style={styles.planCardSecondaryActionText}>Dismiss</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  ) : null}
+                  {editSummary ? (
+                    <View style={styles.editSummaryCard}>
+                      <View style={styles.editSummaryHeader}>
+                        <View style={styles.editSummaryIconBox}>
+                          <Text style={styles.editSummaryIcon}>+/-</Text>
+                        </View>
+                        <View style={styles.editSummaryHeaderCopy}>
+                          <Text style={styles.editSummaryTitle}>
+                            Edited {editSummary.fileCount} {editSummary.fileCount === 1 ? 'file' : 'files'}
+                          </Text>
+                          <Text style={styles.editSummaryTotals}>
+                            <Text style={styles.editSummaryAdditions}>+{editSummary.additions}</Text>
+                            {' '}
+                            <Text style={styles.editSummaryDeletions}>-{editSummary.deletions}</Text>
+                          </Text>
+                        </View>
+                      </View>
+                      <View style={styles.editSummaryFileList}>
+                        {editSummaryFiles.map((file: any) => (
+                          <View key={file.path} style={styles.editSummaryFileRow}>
+                            <Text style={styles.editSummaryPath} numberOfLines={1}>{file.path}</Text>
+                            {file.binary ? (
+                              <Text style={styles.editSummaryBinary}>binary</Text>
+                            ) : (
+                              <Text style={styles.editSummaryFileCounts}>
+                                <Text style={styles.editSummaryAdditions}>+{file.additions}</Text>
+                                {' '}
+                                <Text style={styles.editSummaryDeletions}>-{file.deletions}</Text>
+                              </Text>
+                            )}
+                          </View>
+                        ))}
+                      </View>
+                      {editSummary.files.length > 3 ? (
+                        <Pressable
+                          style={({ hovered }: any) => [
+                            styles.editSummaryToggle,
+                            hovered ? styles.editSummaryToggleHovered : null,
+                          ]}
+                          accessibilityRole="button"
+                          onPress={() => {
+                            setExpandedEditSummaryIds((previous) => ({
+                              ...previous,
+                              [editSummaryKey]: !editSummaryExpanded,
+                            }));
+                          }}
+                        >
+                          <Text style={styles.editSummaryToggleText}>
+                            {editSummaryExpanded ? 'Show fewer files' : `Show ${hiddenEditSummaryCount} more ${hiddenEditSummaryCount === 1 ? 'file' : 'files'}`}
+                          </Text>
+                          <Text style={styles.editSummaryToggleChevron}>{editSummaryExpanded ? '^' : 'v'}</Text>
+                        </Pressable>
+                      ) : null}
+                    </View>
+                  ) : null}
                 </View>
               );
             }
 
-            const entryKind = entry.eyebrow.toLowerCase();
-            const isToolEntry = entryKind === 'tool';
-            const isCommandEntry = entryKind === 'command';
-            const toolSections = isToolEntry ? entry.body.split(/\n(?:->|→)\s*/) : [];
-            const commandText = isToolEntry
-              ? (toolSections[0] || entry.body)
-              : isCommandEntry
-                ? entry.label.replace(/^command\s*·\s*/i, '').trim() || entry.label
-                : entry.body;
-            const resultText = isToolEntry
-              ? (toolSections.length > 1 ? toolSections.slice(1).join('\n-> ') : '')
-              : isCommandEntry
-                ? entry.body
-                : '';
-            const eyebrowLabel = isToolEntry || isCommandEntry ? 'Command' : entry.label;
+            if (entry.kind === 'run') {
+              const hasManualExpansion = Object.prototype.hasOwnProperty.call(expandedRunIds, entry.runId);
+              const expanded = hasManualExpansion
+                ? Boolean(expandedRunIds[entry.runId])
+                : Boolean(scope.agentRunActive && entry.runId === latestRunId);
+              const runIsActive = Boolean(scope.agentRunActive && entry.runId === latestRunId);
+              const runLabel = runDurationLabel(entry, runIsActive);
+              const runActivityLabel = compactRunActivityLabel(entry);
+              return (
+                <View
+                  key={`${entry.id}-${index}`}
+                  style={[
+                    styles.timelineRunDisclosure,
+                    entry.tone === 'warn' ? styles.timelineRunDisclosureWarn : null,
+                    entry.tone === 'error' ? styles.timelineRunDisclosureError : null,
+                  ]}
+                >
+                  <Pressable
+                    style={({ hovered }: any) => [
+                      styles.timelineRunHeader,
+                      hovered ? styles.timelineRunHeaderHovered : null,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${entry.label}`}
+                    onPress={() => {
+                      setExpandedRunIds((previous) => ({
+                        ...previous,
+                        [entry.runId]: !expanded,
+                      }));
+                    }}
+                  >
+                    <View style={styles.timelineRunHeaderCopy}>
+                      <Text style={styles.timelineRunTitle}>{runLabel}</Text>
+                    </View>
+                    <Text style={styles.timelineRunToggle}>{expanded ? '^' : 'v'}</Text>
+                  </Pressable>
+                  {!expanded ? (
+                    <View style={styles.timelineRunCollapsedRow}>
+                      <Text style={styles.timelineRunCollapsedIcon}>-</Text>
+                      <Text style={styles.timelineRunPreview} numberOfLines={1}>{runActivityLabel}</Text>
+                    </View>
+                  ) : (
+                    <View style={styles.timelineRunEventList}>
+                      {entry.events.map((runEvent: any, runEventIndex: number) => {
+                        const parts = timelineEventDisplayParts(runEvent);
+                        return (
+                          <View
+                            key={`${runEvent.id}-${runEventIndex}`}
+                            {...(Platform.OS === 'web' && parts.isToolEntry
+                              ? ({ onContextMenu: (event: any) => openToolContextMenu(event, parts.toolContextText) } as any)
+                              : {})}
+                            style={[
+                              styles.timelineRunEventRow,
+                              runEvent.tone === 'warn' ? styles.timelineRunEventRowWarn : null,
+                              runEvent.tone === 'error' ? styles.timelineRunEventRowError : null,
+                            ]}
+                          >
+                            <View style={styles.timelineRunEventHeader}>
+                              <Text style={styles.timelineRunEventEyebrow}>{parts.eyebrowLabel}</Text>
+                              <Text style={styles.timelineRunEventTime}>
+                                {runEvent.timestamp ? formatAbsoluteTime(runEvent.timestamp) : 'event'}
+                              </Text>
+                            </View>
+                            <Text style={styles.timelineRunEventBody} numberOfLines={5}>{parts.commandText}</Text>
+                            {parts.resultText ? (
+                              <Text style={styles.timelineRunEventResult} numberOfLines={5}>{parts.resultText}</Text>
+                            ) : null}
+                          </View>
+                        );
+                      })}
+                    </View>
+                  )}
+                </View>
+              );
+            }
+
+            const {
+              isToolEntry,
+              isLiveCommandEntry,
+              commandText,
+              resultText,
+              toolContextText,
+              eyebrowLabel,
+            } = timelineEventDisplayParts(entry);
+            if (isLiveCommandEntry) {
+              return (
+                <DesktopLiveCommandCard
+                  key={`${entry.id}-${index}`}
+                  entry={entry}
+                  formatAbsoluteTime={formatAbsoluteTime}
+                  openToolContextMenu={openToolContextMenu}
+                  killLiveCommand={killLiveCommand}
+                />
+              );
+            }
             return (
               <View
                 key={`${entry.id}-${index}`}
+                {...(Platform.OS === 'web' && isToolEntry
+                  ? ({ onContextMenu: (event: any) => openToolContextMenu(event, toolContextText) } as any)
+                  : {})}
                 style={[
                   styles.timelineTranscriptCard,
                   entry.tone === 'accent'
@@ -647,16 +600,25 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
                     {entry.timestamp ? formatAbsoluteTime(entry.timestamp) : 'event'}
                   </Text>
                 </View>
-                <Text style={styles.timelineTranscriptBody}>{commandText}</Text>
+                <Text style={styles.timelineTranscriptBody} numberOfLines={10}>{commandText}</Text>
                 {resultText ? (
                   <View style={styles.timelineTranscriptResultBlock}>
                     <Text style={styles.timelineTranscriptResultEyebrow}>Command Result</Text>
-                    <Text style={styles.timelineTranscriptResultText}>{resultText}</Text>
+                    <Text style={styles.timelineTranscriptResultText} numberOfLines={8}>{resultText}</Text>
                   </View>
                 ) : null}
               </View>
             );
           })}
+
+          {scope.providerFailure ? (
+            <DesktopProviderFailureCard
+              failure={scope.providerFailure}
+              modelGroups={Array.isArray(scope.draftModelGroups) ? scope.draftModelGroups : []}
+              onRetry={(providerId, modelId) => scope.retryFailedTurn?.(scope.providerFailure, providerId, modelId)}
+              onOpenSettings={() => scope.onOpenSetup?.()}
+            />
+          ) : null}
 
           {assistantDraft ? (
             <View style={[styles.messageBubble, styles.messageBubbleAssistant, styles.messageBubbleDraft]}>
@@ -1035,8 +997,8 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
                           style={styles.commandPanelInfoButton}
                           accessibilityRole="button"
                           accessibilityLabel="Model and planner information"
-                          accessibilityHint={`The main model handles the chat. Planner is currently set to ${currentPlannerLabel} for task decomposition and reassessment.`}
-                          {...(Platform.OS === 'web' ? ({ title: `The main model handles the chat. Planner is currently set to ${currentPlannerLabel} for task decomposition and reassessment.` } as any) : {})}
+                          accessibilityHint={`The main model handles the chat. Planner is currently set to ${currentPlannerLabel === 'auto' ? `automatic, mirroring ${currentModelLabel}` : currentPlannerLabel} for task decomposition and reassessment.`}
+                          {...(Platform.OS === 'web' ? ({ title: `The main model handles the chat. Planner is currently set to ${currentPlannerLabel === 'auto' ? `automatic, mirroring ${currentModelLabel}` : currentPlannerLabel} for task decomposition and reassessment.` } as any) : {})}
                         >
                           <MonoIcon name="info" style={styles.commandPanelInfoIcon} />
                         </Pressable>
@@ -1046,168 +1008,26 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
                         <Text style={styles.commandPanelCloseText}>Close</Text>
                       </Pressable>
                     </View>
-                    {draftModelGroups.length || draftPlannerModels.length ? (
-                      <ScrollView style={styles.modelPickerScroll} contentContainerStyle={styles.modelPickerContent}>
-                        {draftModelGroups.length ? (
-                          <View style={styles.modelPickerSection}>
-                            <View style={styles.modelPickerSectionHeader}>
-                              <Text style={styles.modelPickerSectionTitle}>Main Model</Text>
-                              <Text style={styles.modelPickerSectionMeta} numberOfLines={1}>{currentModelLabel}</Text>
-                            </View>
-                            <View style={styles.modelProviderDropdownList}>
-                              {draftModelGroups.map((group: any) => {
-                                const providerKey = modelProviderKey(group.provider);
-                                const expanded = Boolean(expandedModelProviders[providerKey]);
-                                const selectedModel = group.models.find((model: any) => model === currentModelLabel) || null;
-                                return (
-                                  <View key={group.provider} style={styles.modelProviderDropdown}>
-                                    <Pressable
-                                      style={({ hovered }: any) => [
-                                        styles.modelProviderDropdownHeader,
-                                        hovered ? styles.modelProviderDropdownHeaderHovered : null,
-                                        selectedModel ? styles.modelProviderDropdownHeaderActive : null,
-                                      ]}
-                                      onPress={() => setExpandedModelProviders((current: any) => ({
-                                        ...current,
-                                        [providerKey]: !current[providerKey],
-                                      }))}
-                                    >
-                                      <View style={styles.modelProviderDropdownCopy}>
-                                        <Text style={styles.modelProviderDropdownTitle}>{group.provider}</Text>
-                                        <Text style={styles.modelProviderDropdownMeta} numberOfLines={1}>
-                                          {selectedModel || `${group.models.length} models`}
-                                        </Text>
-                                      </View>
-                                      <MonoIcon name={expanded ? 'chevron_up' : 'chevron_down'} style={styles.modelProviderDropdownChevron} />
-                                    </Pressable>
-                                    {expanded ? (
-                                      <View style={styles.modelProviderDropdownBody}>
-                                        {group.models.map((model: any) => {
-                                          const selected = model === currentModelLabel;
-                                          return (
-                                            <Pressable
-                                              key={`${group.provider}-${model}`}
-                                              style={({ hovered }: any) => [
-                                                styles.modelListItem,
-                                                styles.modelNestedListItem,
-                                                hovered ? styles.modelListItemHovered : null,
-                                                selected ? styles.modelListItemActive : null,
-                                              ]}
-                                              onPress={() => void chooseModel(model)}
-                                            >
-                                              <View style={styles.modelListItemCopy}>
-                                                <Text style={[styles.modelListItemTitle, selected ? styles.modelListItemTitleActive : null]} numberOfLines={1}>
-                                                  {model}
-                                                </Text>
-                                              </View>
-                                              <Text style={[styles.modelListItemMeta, selected ? styles.modelListItemMetaActive : null]}>
-                                                {selected ? 'Current' : 'Select'}
-                                              </Text>
-                                            </Pressable>
-                                          );
-                                        })}
-                                      </View>
-                                    ) : null}
-                                  </View>
-                                );
-                              })}
-                            </View>
-                          </View>
-                        ) : null}
-                        <View style={styles.modelPickerSection}>
-                          <View style={styles.modelPickerSectionHeader}>
-                            <Text style={styles.modelPickerSectionTitle}>Planner</Text>
-                            <Text style={styles.modelPickerSectionMeta} numberOfLines={1}>{currentPlannerLabel}</Text>
-                          </View>
-                          <Text style={styles.modelProviderCaption}>
-                            Automatic uses the cheapest supported planner for this session.
-                          </Text>
-                          <View style={styles.modelProviderDropdownList}>
-                            <Pressable
-                              style={({ hovered }: any) => [
-                                styles.modelListItem,
-                                styles.modelAutoListItem,
-                                hovered ? styles.modelListItemHovered : null,
-                                currentPlannerLabel === 'auto' ? styles.modelListItemActive : null,
-                              ]}
-                              onPress={() => void choosePlannerModel(null)}
-                            >
-                              <View style={styles.modelListItemCopy}>
-                                <Text style={[styles.modelListItemTitle, currentPlannerLabel === 'auto' ? styles.modelListItemTitleActive : null]}>
-                                  Automatic
-                                </Text>
-                              </View>
-                              <Text style={[styles.modelListItemMeta, currentPlannerLabel === 'auto' ? styles.modelListItemMetaActive : null]}>
-                                {currentPlannerLabel === 'auto' ? 'Current' : 'Select'}
-                              </Text>
-                            </Pressable>
-                            {plannerModelGroups.map((group: any) => {
-                              const providerKey = modelProviderKey(group.provider);
-                              const expanded = Boolean(expandedPlannerProviders[providerKey]);
-                              const selectedPlannerModel = group.models.find((model: any) => model === currentPlannerLabel) || null;
-                              return (
-                                <View key={`planner-provider-${group.provider}`} style={styles.modelProviderDropdown}>
-                                  <Pressable
-                                    style={({ hovered }: any) => [
-                                      styles.modelProviderDropdownHeader,
-                                      hovered ? styles.modelProviderDropdownHeaderHovered : null,
-                                      selectedPlannerModel ? styles.modelProviderDropdownHeaderActive : null,
-                                    ]}
-                                    onPress={() => setExpandedPlannerProviders((current: any) => ({
-                                      ...current,
-                                      [providerKey]: !current[providerKey],
-                                    }))}
-                                  >
-                                    <View style={styles.modelProviderDropdownCopy}>
-                                      <Text style={styles.modelProviderDropdownTitle}>{group.provider}</Text>
-                                      <Text style={styles.modelProviderDropdownMeta} numberOfLines={1}>
-                                        {selectedPlannerModel || `${group.models.length} models`}
-                                      </Text>
-                                    </View>
-                                    <MonoIcon name={expanded ? 'chevron_up' : 'chevron_down'} style={styles.modelProviderDropdownChevron} />
-                                  </Pressable>
-                                  {expanded ? (
-                                    <View style={styles.modelProviderDropdownBody}>
-                                      {group.models.map((model: any) => {
-                                        const selected = model === currentPlannerLabel;
-                                        return (
-                                          <Pressable
-                                            key={`planner-inline-${model}`}
-                                            style={({ hovered }: any) => [
-                                              styles.modelListItem,
-                                              styles.modelNestedListItem,
-                                              hovered ? styles.modelListItemHovered : null,
-                                              selected ? styles.modelListItemActive : null,
-                                            ]}
-                                            onPress={() => void choosePlannerModel(model)}
-                                          >
-                                            <View style={styles.modelListItemCopy}>
-                                              <Text style={[styles.modelListItemTitle, selected ? styles.modelListItemTitleActive : null]} numberOfLines={1}>
-                                                {model}
-                                              </Text>
-                                            </View>
-                                            <Text style={[styles.modelListItemMeta, selected ? styles.modelListItemMetaActive : null]}>
-                                              {selected ? 'Current' : 'Select'}
-                                            </Text>
-                                          </Pressable>
-                                        );
-                                      })}
-                                    </View>
-                                  ) : null}
-                                </View>
-                              );
-                            })}
-                          </View>
-                        </View>
-                      </ScrollView>
-                    ) : (
-                      <View style={styles.commandPanelEmpty}>
-                        <Text style={styles.commandPanelEmptyTitle}>No configured model providers</Text>
-                        <Text style={styles.commandPanelEmptyText}>
-                          Add an API key in setup/settings, then reopen the model chooser.
-                        </Text>
-                      </View>
-                    )}
+                    <DesktopModelPickerMenu
+                      styles={styles}
+                      MonoIcon={MonoIcon}
+                      draftModelGroups={draftModelGroups}
+                      currentModelLabel={currentModelLabel}
+                      currentVariant={currentVariant}
+                      currentVariantHasControls={currentVariantHasControls}
+                      currentVariantOptions={currentVariantOptions}
+                      currentPlannerLabel={currentPlannerLabel}
+                      plannerModelGroups={plannerModelGroups}
+                      expandedModelProviders={expandedModelProviders}
+                      expandedPlannerProviders={expandedPlannerProviders}
+                      setExpandedModelProviders={setExpandedModelProviders}
+                      setExpandedPlannerProviders={setExpandedPlannerProviders}
+                      chooseModel={chooseModel}
+                      chooseVariant={chooseVariant}
+                      choosePlannerModel={choosePlannerModel}
+                      emptyTitle="No configured model providers"
+                      emptyText="Add an API key in setup/settings, then reopen the model chooser."
+                    />
                   </View>
                 ) : null}
                 {floatingPanelKind === 'tools' ? (
@@ -1553,6 +1373,44 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
           ) : null}
 
           <View ref={composerTextRegionRef} style={styles.composerTextRegion}>
+            {pendingRunMode || planMode || activeGoal ? (
+              <View style={styles.composerModeTray}>
+                {pendingRunMode === 'plan' ? (
+                  <View style={styles.composerModeChip}>
+                    <Text style={styles.composerModeChipText}>Plan next message</Text>
+                    <Pressable style={styles.composerModeChipClose} onPress={() => setPendingRunMode?.(null)}>
+                      <Text style={styles.composerModeChipCloseText}>x</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+                {pendingRunMode === 'goal' ? (
+                  <View style={styles.composerModeChip}>
+                    <Text style={styles.composerModeChipText}>Goal next message</Text>
+                    <Pressable style={styles.composerModeChipClose} onPress={() => setPendingRunMode?.(null)}>
+                      <Text style={styles.composerModeChipCloseText}>x</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+                {planMode ? (
+                  <View style={styles.composerModeChipActive}>
+                    <Text style={styles.composerModeChipText}>Plan · {modeStatusLabel(planMode)}</Text>
+                    <Pressable style={styles.composerModeChipClose} onPress={() => void exitPlanMode?.()}>
+                      <Text style={styles.composerModeChipCloseText}>x</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+                {activeGoal ? (
+                  <View style={styles.composerModeChipGoal}>
+                    <Text style={styles.composerModeChipText} numberOfLines={1}>
+                      Goal · {String(activeGoal.objective || 'active')}
+                    </Text>
+                    <Pressable style={styles.composerModeChipClose} onPress={() => void clearActiveGoal?.()}>
+                      <Text style={styles.composerModeChipCloseText}>x</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
             {Platform.OS === 'web' ? (
               <View pointerEvents="none" style={styles.composerInputMeasureShell}>
                 <Text
@@ -1612,6 +1470,13 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
                   </Text>
                   <MonoIcon name={activeCommandPanel?.kind === 'permissions' ? 'chevron_up' : 'chevron_down'} style={styles.composerInlineChevron} />
                 </Pressable>
+                <Text
+                  style={styles.composerStatusText}
+                  numberOfLines={1}
+                  accessibilityLiveRegion="polite"
+                >
+                  {shortStatusText(status)}
+                </Text>
               </View>
 
               <View style={styles.composerFooterActions}>

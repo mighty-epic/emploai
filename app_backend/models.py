@@ -59,6 +59,7 @@ class SessionMessageView(BaseModel):
     channel: Optional[ChannelType] = None
     source_format: Optional[str] = None
     display_label: Optional[str] = None
+    run_mode: Optional[Literal["normal", "plan", "goal"]] = None
     raw: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -80,6 +81,7 @@ class SessionSummaryView(BaseModel):
     created_at: str
     updated_at: str
     model: str
+    variant: str = "standard"
     message_count: int
     workspace: str = ""
     latest_preview: Optional[str] = None
@@ -99,6 +101,8 @@ class SessionSummaryView(BaseModel):
     fleet_worker_id: Optional[str] = None
     account_user_id: Optional[int] = None
     account_email: Optional[str] = None
+    plan_mode: Optional[Dict[str, Any]] = None
+    active_goal: Optional[Dict[str, Any]] = None
     artifact_count: int = 0
     latest_artifact_at: Optional[str] = None
 
@@ -133,8 +137,15 @@ class SessionDetailView(BaseModel):
     fleet_worker_id: Optional[str] = None
     account_user_id: Optional[int] = None
     account_email: Optional[str] = None
+    plan_mode: Optional[Dict[str, Any]] = None
+    active_goal: Optional[Dict[str, Any]] = None
     artifact_count: int = 0
     latest_artifact_at: Optional[str] = None
+
+
+class SessionModeActionRequest(BaseModel):
+    action: Literal["exit_plan", "dismiss_plan", "clear_goal"]
+    reason: Optional[str] = None
 
 
 class ArtifactSummaryView(BaseModel):
@@ -179,9 +190,14 @@ class CreateSessionResponse(BaseModel):
     session: SessionDetailView
 
 
+class RenameSessionRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+
+
 class DeleteSessionResponse(BaseModel):
     deleted_session_id: str
     current_session_id: Optional[str] = None
+    archive_id: Optional[str] = None
 
 
 class TaskBoardArmRequest(BaseModel):
@@ -435,6 +451,7 @@ class RecoveryActionResponse(BaseModel):
     action: str
     item: Optional[RecoveryArchiveItemView] = None
     purged: Optional[int] = None
+    restored_session_id: Optional[str] = None
 
 
 class ConfirmationView(BaseModel):
@@ -713,6 +730,7 @@ class AgentOverviewView(BaseModel):
     security: SecuritySummaryView = Field(default_factory=SecuritySummaryView)
     config_preview: List[ConfigEntryView] = Field(default_factory=list)
     run_state: Literal["idle", "running"] = "idle"
+    active_visual_monitors: int = 0
     task_board: Optional[TaskBoardView] = None
     completed_task_boards: List[TaskBoardView] = Field(default_factory=list)
     task_board_armed_next_turn: bool = False
@@ -821,6 +839,14 @@ class AgentActionResponse(BaseModel):
     message: Optional[str] = None
 
 
+class IdentityStopRequest(BaseModel):
+    session_id: Optional[str] = None
+    identity_id: Optional[str] = None
+    identity_role: Optional[str] = None
+    worker_id: Optional[str] = None
+    reason: Optional[str] = None
+
+
 class MemorySearchRequest(BaseModel):
     query: str
 
@@ -899,6 +925,12 @@ class VoiceSttConfigureRequest(BaseModel):
         "realtime",
         "realtime_api",
         "realtime-api",
+        "gemini",
+        "gemini_api",
+        "gemini-api",
+        "google",
+        "google_gemini",
+        "google-gemini",
     ]
 
 
@@ -1010,6 +1042,9 @@ class VoiceClientEvent(BaseModel):
     interrupt_policy: Optional[InterruptPolicy] = None
     auto_send: Optional[bool] = None
     surface_mode: Optional[str] = None
+    capture_mode: Optional[str] = None
+    wake_phrase: Optional[str] = None
+    wake_verified_locally: Optional[bool] = None
     utterance_id: Optional[str] = None
     barge_in_candidate: Optional[bool] = None
     barge_in_reference_text: Optional[str] = None
@@ -1265,6 +1300,7 @@ class FleetWorkerView(BaseModel):
     group_id: Optional[str] = None
     active_task_id: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    queue_policy: Literal["review_required", "auto_continue_success"] = "review_required"
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     last_seen_at: Optional[str] = None
@@ -1405,6 +1441,7 @@ class FleetCreateEnrollmentResponse(BaseModel):
 
 class FleetWorkerUpdateRequest(BaseModel):
     display_name: Optional[str] = Field(default=None, min_length=1, max_length=160)
+    queue_policy: Optional[Literal["review_required", "auto_continue_success"]] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -1543,3 +1580,66 @@ class SidebarStateRequest(BaseModel):
 class SidebarStateResponse(BaseModel):
     state: Dict[str, Any] = Field(default_factory=dict)
     shared_state: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ProjectOnboardingGuideMessage(BaseModel):
+    role: Literal["assistant", "user", "system"] = "user"
+    content: str = ""
+    created_at: Optional[str] = None
+
+
+class ProjectOnboardingToolRequirement(BaseModel):
+    tool_pack_id: str
+    label: str = ""
+    status: Literal["enabled", "available", "missing"] = "available"
+    reason: Optional[str] = None
+
+
+class ProjectOnboardingProfile(BaseModel):
+    workspace: str = ""
+    workspace_key: str = ""
+    workspace_id: Optional[str] = None
+    enabled: bool = False
+    role_identity: str = ""
+    job_mission: str = ""
+    required_tools: List[str] = Field(default_factory=list)
+    workflows: List[str] = Field(default_factory=list)
+    constraints: str = ""
+    communication_style: str = ""
+    raw_notes: str = ""
+    desired_tool_packs: List[str] = Field(default_factory=list)
+    missing_requirements: List[str] = Field(default_factory=list)
+    guided_transcript: List[ProjectOnboardingGuideMessage] = Field(default_factory=list)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    prompt_preview: str = ""
+
+
+class ProjectOnboardingSaveRequest(BaseModel):
+    workspace: str = Field(min_length=1, max_length=2000)
+    workspace_id: Optional[str] = Field(default=None, max_length=256)
+    enabled: bool = True
+    role_identity: str = ""
+    job_mission: str = ""
+    required_tools: List[str] = Field(default_factory=list)
+    workflows: List[str] = Field(default_factory=list)
+    constraints: str = ""
+    communication_style: str = ""
+    raw_notes: str = ""
+    desired_tool_packs: List[str] = Field(default_factory=list)
+    missing_requirements: List[str] = Field(default_factory=list)
+    guided_transcript: List[ProjectOnboardingGuideMessage] = Field(default_factory=list)
+    apply_tool_packs: bool = True
+
+
+class ProjectOnboardingSummarizeRequest(BaseModel):
+    workspace: str = Field(min_length=1, max_length=2000)
+    answers: Dict[str, Any] = Field(default_factory=dict)
+    guided_transcript: List[ProjectOnboardingGuideMessage] = Field(default_factory=list)
+
+
+class ProjectOnboardingResponse(BaseModel):
+    profile: ProjectOnboardingProfile
+    tool_requirements: List[ProjectOnboardingToolRequirement] = Field(default_factory=list)
+    updated_session_ids: List[str] = Field(default_factory=list)
+    message: Optional[str] = None

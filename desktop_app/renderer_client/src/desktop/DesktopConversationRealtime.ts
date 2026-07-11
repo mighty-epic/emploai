@@ -8,10 +8,27 @@ import type {
 } from '@/lib/appApi';
 import type { DesktopFleetSnapshot } from '@/lib/desktopBridge';
 import { composeVoiceDraftInput } from '@/desktop/desktopVoicePolicy';
+import type { DesktopRealtimeEvent, RealtimeChannel } from './desktopRealtimeProtocol';
 
 type DesktopConversationRealtimeContext = DesktopConversationScope;
 
-export function handleDesktopConversationRealtimeEvent(context: DesktopConversationRealtimeContext, event: any, channel: any) {
+const realtimeVoiceSetupMessage = 'Realtime voice needs a valid OpenAI API key. Add or replace OPENAI_API_KEY in Settings, or switch Jarvis input to Local Whisper or Gemini.';
+
+function isTerminalVoiceSetupError(message: string) {
+  const normalized = String(message || '').toLowerCase();
+  return (
+    normalized.includes('invalid api key')
+    || normalized.includes('error.invalid api key')
+    || normalized.includes('openai_api_key is not configured')
+    || normalized.includes('openai_api_key is required')
+  );
+}
+
+export function handleDesktopConversationRealtimeEvent(
+  context: DesktopConversationRealtimeContext,
+  event: DesktopRealtimeEvent,
+  channel: RealtimeChannel,
+) {
     const { acceptJarvisBargeInTranscript, activeVoiceUtteranceIdRef, alwaysOnEnabledRef, appendLocalSystemMessage, appendTimelineEvent, appendVoiceTranscriptSegment, applySessionSync, artifacts, assistantDeltaBufferRef, assistantDeltaFlushTimerRef, clearAssistantDeltaFlushTimer, clearConversationSelection, clearJarvisBargeInCandidate, conversationModeRef, createLocalToolTimelineEvent, drainDeferredAlwaysOnFrames, flushAssistantDeltaBuffer, id, lastComposerInputOriginRef, normalizeCompletedTaskBoards, playAssistantAudio, pushActivity, refreshOverviewState, refreshSidebarCollections, refreshSidebarState, remoteAuthStatus, resolveTaskBoardState, run_state, selectedArtifactId, sessionIdRef, setArtifacts, setAssistantDraft, setChatRunActive, setCompletedTaskBoards, setComposerInputValue, setFleetError, setFleetSnapshot, setFleetStatus, setInput, setJarvisLatestTranscript, setLastAssistantOutputAt, setMessages, setOverview, setRuntimeRunState, setSelectedArtifactId, setSessionId, setSocketState, setStatus, setTaskBoard, setTaskBoardArmedNextTurnState, setThinking, setVoiceDraft, setVoiceError, setVoiceRecording, setVoiceRunning, setVoiceState, shouldAutoSendAlwaysOnVoice, status, summarizeToolPayload, toLiveDesktopMessage, voiceComposerBaseInputRef, voiceComposerDraftRef, voiceRecordingRef, voiceRunningRef } = context;
     const payload = (event.payload || {}) as Record<string, any>;
     const payloadTurnId = typeof payload.turn_id === 'string' ? payload.turn_id.trim() : '';
@@ -134,6 +151,35 @@ export function handleDesktopConversationRealtimeEvent(context: DesktopConversat
       return;
     }
 
+    if (event.type === 'session_config') {
+      if (ignoreIfNotSelectedSession()) return;
+      setOverview((previous: any) => (
+        previous
+          ? {
+              ...previous,
+              current_model: String(payload.model || previous.current_model || ''),
+              current_variant: String(payload.variant || previous.current_variant || ''),
+              planner_model: payload.planner_model ?? null,
+              max_turns: typeof payload.max_turns === 'number' ? payload.max_turns : previous.max_turns,
+              auto_reply_enabled: typeof payload.auto_reply_enabled === 'boolean'
+                ? payload.auto_reply_enabled
+                : previous.auto_reply_enabled,
+              verbose_mode: typeof payload.verbose_mode === 'boolean'
+                ? payload.verbose_mode
+                : previous.verbose_mode,
+              bridge_enabled: typeof payload.bridge_enabled === 'boolean'
+                ? payload.bridge_enabled
+                : previous.bridge_enabled,
+              headless_mode: payload.headless_mode || previous.headless_mode,
+              enabled_tool_packs: Array.isArray(payload.enabled_tool_packs)
+                ? payload.enabled_tool_packs
+                : previous.enabled_tool_packs,
+            }
+          : previous
+      ));
+      return;
+    }
+
     if (event.type === 'user_message') {
       if (ignoreIfNotSelectedSession()) return;
       const message = payload.message as SessionMessage | undefined;
@@ -170,6 +216,7 @@ export function handleDesktopConversationRealtimeEvent(context: DesktopConversat
 
     if (event.type === 'assistant_final') {
       if (ignoreIfNotSelectedSession()) return;
+      context.setProviderFailure?.(null);
       const finalText = String(payload.text || '');
       const message = payload.message as SessionMessage | undefined;
       assistantDeltaBufferRef.current = '';
@@ -220,12 +267,24 @@ export function handleDesktopConversationRealtimeEvent(context: DesktopConversat
       return;
     }
 
+    if (event.type === 'run_failed') {
+      if (ignoreIfNotSelectedSession()) return;
+      context.setProviderFailure?.(payload);
+      const message = String(payload.user_message || 'The selected provider could not complete this turn.');
+      setAssistantDraft('');
+      setThinking('');
+      setChatRunActive(false);
+      setRuntimeRunState('idle');
+      setStatus(`Provider blocked · ${message}`);
+      setOverview((previous: any) => (
+        previous ? { ...previous, run_state: 'idle', provider_blocked: payload } : previous
+      ));
+      pushActivity(message, 'error');
+      return;
+    }
+
     if (event.type === 'assistant_audio') {
       if (ignoreIfNotSelectedSession()) return;
-      if (conversationModeRef.current === 'jarvis' && voiceRecordingRef.current) {
-        pushActivity('Assistant audio skipped because you started speaking again.', 'neutral');
-        return;
-      }
       void playAssistantAudio(
         String(payload.audio_base64 || ''),
         String(payload.mime_type || 'audio/mpeg'),
@@ -440,7 +499,9 @@ export function handleDesktopConversationRealtimeEvent(context: DesktopConversat
 
     if (event.type === 'error') {
       if (ignoreIfNotSelectedSession()) return;
-      const message = String(payload.message || event.message || 'runtime error');
+      const rawMessage = String(payload.message || event.message || 'runtime error');
+      const terminalVoiceSetupError = channel === 'voice' && isTerminalVoiceSetupError(rawMessage);
+      const message = terminalVoiceSetupError ? realtimeVoiceSetupMessage : rawMessage;
       if (String(payload.code || '') === 'session_unavailable') {
         clearConversationSelection(null, { clearSidebarProject: false });
         void refreshSidebarState(null, true);
@@ -449,6 +510,22 @@ export function handleDesktopConversationRealtimeEvent(context: DesktopConversat
         return;
       }
       clearJarvisBargeInCandidate(payloadTurnId);
+      if (terminalVoiceSetupError) {
+        alwaysOnEnabledRef.current = false;
+        context.setAlwaysOnEnabled?.(false);
+        context.voicePressActiveRef.current = false;
+        context.stopVoiceTracks?.();
+        context.resetVoiceCaptureBuffers?.();
+        context.setJarvisMuted?.(true);
+        context.setVoiceMode?.('push_to_talk');
+        context.setLiveVoiceStatus?.((previous: any) => ({
+          ...(previous || {}),
+          ok: false,
+          input_ok: false,
+          issues: [message],
+          selected_engine_state: 'error',
+        }));
+      }
       setStatus(message);
       setAssistantDraft('');
       setThinking('');

@@ -475,6 +475,7 @@ def _snapshot_touched_file_artifact_ids(
         return []
     artifact_ids: List[str] = []
     workspace = str(getattr(session, "workspace", "") or "").strip() or None
+    workspace_id = str(getattr(session, "workspace_id", "") or "").strip() or None
     task_id_text = str(task_id) if task_id is not None else None
     for path in sorted(touched_file_paths, key=lambda item: str(item)):
         try:

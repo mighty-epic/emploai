@@ -9,8 +9,17 @@ from app_backend import runtime as app_runtime
 from shared import channel_runtime
 from shared.task_board import TASK_BOARD_INTERNAL_TOOL_NAME
 from shared.task_intent import request_requires_tool_evidence
-from shared.tool_packs import PACK_BROWSER_ISOLATED, PACK_INTERACTIVE_DESKTOP, PACK_WORKSPACE_READ
-from telegram_bot.telegram_unified_agent import build_unified_system_prompt
+from shared.tool_packs import (
+    PACK_APP_RUNTIME,
+    PACK_BROWSER_ISOLATED,
+    PACK_INTERACTIVE_DESKTOP,
+    PACK_WORKSPACE_READ,
+    PACK_WORKSPACE_WRITE,
+    build_tool_pack_prompt,
+    filter_openai_tools_by_enabled_packs,
+    tools_for_enabled_packs,
+)
+from telegram_bot.telegram_unified_agent import build_unified_system_prompt, get_auto_mode_extra_tools, get_auto_mode_tool_handlers
 
 
 def test_unified_prompt_blocks_browser_tools_for_user_chrome_without_extension():
@@ -37,6 +46,21 @@ def test_unified_prompt_adds_reflection_and_identity_safety_rules():
         "Do NOT create accounts, send messages, make purchases, or submit other irreversible identity-sensitive actions "
         "unless the user explicitly asked for that outcome."
     ) in UNIFIED_AGENT_PROMPT
+
+
+def test_memory_tools_are_available_when_app_runtime_pack_is_enabled():
+    allowed_names = tools_for_enabled_packs([PACK_APP_RUNTIME])
+    extra_tools = filter_openai_tools_by_enabled_packs(get_auto_mode_extra_tools(), [PACK_APP_RUNTIME])
+    extra_tool_names = {
+        str(tool.get("function", {}).get("name") or tool.get("name") or "")
+        for tool in extra_tools
+    }
+    handler_names = set(get_auto_mode_tool_handlers(SimpleNamespace()).keys())
+
+    assert "search_memory" in allowed_names
+    assert "update_memory" in allowed_names
+    assert {"search_memory", "update_memory"}.issubset(extra_tool_names)
+    assert {"search_memory", "update_memory"}.issubset(handler_names)
 
 
 def test_current_task_contract_is_compact_and_restates_observable_goal():
@@ -238,6 +262,28 @@ def test_kickstart_and_contract_are_pack_aware_for_read_only_chat():
     assert "completion requires the exact saved artifact to be visibly open" in contract
     assert "Preserve user-provided identifiers exactly" in contract
     assert "Report the actual completion state" in contract
+
+
+def test_tool_pack_prompt_adds_coding_contract_once_for_workspace_packs():
+    prompt = build_tool_pack_prompt([PACK_WORKSPACE_READ, PACK_WORKSPACE_WRITE])
+
+    assert "## Coding Agent Contract" in prompt
+    assert prompt.count("CODING CONTRACT - DISCOVERY") == 1
+    assert prompt.count("CODING CONTRACT - EDITING") == 1
+    assert prompt.count("CODING CONTRACT - VERIFICATION") == 1
+    assert "Read before editing or proposing code changes." in prompt
+    assert "Use fast discovery tools first" in prompt
+    assert "routes, imports, callers, data flow, tests, UI state, public APIs, and persisted data" in prompt
+    assert "Separate new code or features when that keeps files clearer" in prompt
+    assert "Preserve user work. Never overwrite, revert, or discard unrelated changes" in prompt
+    assert "Do not commit, push, create branches, or open PRs unless the user asks." in prompt
+    assert "Review the diff before reporting back." in prompt
+
+    read_only_prompt = build_tool_pack_prompt([PACK_WORKSPACE_READ])
+    assert "CODING CONTRACT - DISCOVERY" in read_only_prompt
+    assert "CODING CONTRACT - VERIFICATION" in read_only_prompt
+    assert "CODING CONTRACT - EDITING" not in read_only_prompt
+    assert "In this read-only tool-pack configuration" in read_only_prompt
 
 
 def test_kickstart_and_contract_add_browser_and_desktop_fallback_only_when_enabled():

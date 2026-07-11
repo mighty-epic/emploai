@@ -43,7 +43,7 @@ def test_remote_control_release_defaults_are_broker_ready():
 
 def test_remote_control_release_defaults_list_all_model_provider_keys():
     module = _load_release_hygiene_module()
-    env_path = REPO_ROOT / "deploy" / "vps" / "linux" / "remote_control.env.example"
+    env_path = REPO_ROOT / "deploy" / "legacy_vps" / "linux" / "remote_control.env.example"
     values = module._load_env_file(env_path)
 
     assert module.REMOTE_CONTROL_PROVIDER_ENV_VARS <= set(values)

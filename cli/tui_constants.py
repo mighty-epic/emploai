@@ -164,7 +164,7 @@ You operate across four distinct environments. Each environment has its own tool
 
 ### Action: Execute a task
 1. `run_command` — for quick tasks under 30 seconds (`pip install`, `git status`, `dir`)
-2. `run_background_command` — for anything long-running or uncertain (dev servers, builds, test suites, npm install)
+2. `run_background_command` — for anything long-running or uncertain (dev servers, builds, test suites, npm install). Background commands may keep running after your turn; the runtime can wake you on exit/readiness/meaningful output or no-progress checkpoints.
 
 ### Action: Get information from the web
 1. `web_search` — fastest, no browser needed
@@ -173,7 +173,7 @@ You operate across four distinct environments. Each environment has its own tool
 
 ### Background Command Rules
 - `run_command` has a 30s timeout. If unsure, use `run_background_command`.
-- After `run_background_command`, do NOT call `command_status` in the same turn. Wait at least 5-10 seconds or do other useful work first.
+- After `run_background_command`, do NOT call `command_status` in the same turn. Wait at least 5-10 seconds, do other useful work, or leave it running for the runtime to resume you later.
 - Always `kill_command` when done. Don't leave servers running.
 - Use `send_input` for interactive prompts instead of restarting with flags.
 
@@ -845,13 +845,13 @@ MODEL_VARIANTS = {
     # OpenAI GPT-5 series - reasoning models with effort levels
     "gpt-5": {"variants": ["low", "medium", "high"], "default": "medium"},
     "gpt-5.1": {"variants": ["low", "medium", "high"], "default": "medium"},
-    "gpt-5.2": {"variants": ["low", "medium", "high"], "default": "medium"},
-    "gpt-5.5": {"variants": ["standard"], "default": "standard"},
-    "gpt-5.4": {"variants": ["standard"], "default": "standard"},
-    "gpt-5.4-mini": {"variants": ["standard"], "default": "standard"},
-    "chatgpt/gpt-5.5": {"variants": ["standard"], "default": "standard"},
-    "chatgpt/gpt-5.4": {"variants": ["standard"], "default": "standard"},
-    "chatgpt/gpt-5.4-mini": {"variants": ["standard"], "default": "standard"},
+    "gpt-5.2": {"variants": ["low", "medium", "high", "xhigh"], "default": "medium"},
+    "gpt-5.5": {"variants": ["low", "medium", "high", "xhigh"], "default": "medium"},
+    "gpt-5.4": {"variants": ["low", "medium", "high", "xhigh"], "default": "medium"},
+    "gpt-5.4-mini": {"variants": ["low", "medium", "high", "xhigh"], "default": "medium"},
+    "chatgpt/gpt-5.5": {"variants": ["low", "medium", "high", "xhigh"], "default": "medium"},
+    "chatgpt/gpt-5.4": {"variants": ["low", "medium", "high", "xhigh"], "default": "medium"},
+    "chatgpt/gpt-5.4-mini": {"variants": ["low", "medium", "high", "xhigh"], "default": "medium"},
     # OpenAI Codex series - agentic coding models with xhigh support
     "gpt-5.1-codex-max": {"variants": ["low", "medium", "high", "xhigh"], "default": "medium"},
     "gpt-5.2-codex": {"variants": ["low", "medium", "high", "xhigh"], "default": "medium"},

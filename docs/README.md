@@ -5,11 +5,13 @@ EmploAI is currently a local-first desktop app. The desktop UI and local runtime
 ## Start Here
 
 - [../README.md](../README.md) - quick start and current product summary
+- [running_desktop_and_system.md](running_desktop_and_system.md) - complete setup, launch, runtime, Jarvis, Fleet, testing, and recovery command runbook
 - [repository_map.md](repository_map.md) - current folder map and legacy naming notes
 - [local_artifacts.md](local_artifacts.md) - ignored runtime folders, caches, and generated local state
 - [product/main_vision.md](product/main_vision.md) - fleet-scale product north star
 - [product/fleet_system_details.md](product/fleet_system_details.md) - practical Fleet behavior spec
 - [yggdrasil_fleet_transport.md](yggdrasil_fleet_transport.md) - Fleet workers without an EmploAI VPS/domain
+- [android_yggdrasil_mobile_pairing.md](android_yggdrasil_mobile_pairing.md) - future Android mobile pairing without EmploAI cloud
 - [hermes_local_first_features.md](hermes_local_first_features.md) - Hermes features worth carrying into EmploAI
 
 ## Main Runtime Areas

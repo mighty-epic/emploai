@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
+const { mergeBootstrapCache } = require('./bootstrap_cache');
 const { createRemoteControlServices } = require('./remote_control_services');
 
 protocol.registerSchemesAsPrivileged([
@@ -30,6 +31,11 @@ const packagedRuntimeHomeName =
 const backendHelperDefaultTimeoutMs = 120000;
 const backendBootstrapTimeoutMs = 30000;
 const runtimeSecretOverlayEnv = 'EMPLOAI_DESKTOP_RUNTIME_SECRET_OVERLAY_JSON';
+const appUserModelId = 'com.mightyepic.emploai';
+const gitUpdateCheckIntervalMs = 60 * 60 * 1000;
+const gitCommandTimeoutMs = 120000;
+const updateCommandTimeoutMs = 10 * 60 * 1000;
+const automaticProjectParentName = 'EmploAI Chats';
 
 let mainWindow = null;
 let bootstrapCache = null;
@@ -39,7 +45,12 @@ let startLocalRuntimePromise = null;
 let runtimeStatusPromise = null;
 let shutdownForQuitPromise = null;
 let quitAfterManagedShutdown = false;
+let rendererExitPromptPending = false;
 let resolvedDevBackendCommand = null;
+let gitAutoUpdateStartupTimer = null;
+let gitAutoUpdateTimer = null;
+let gitAutoUpdateInFlight = false;
+let gitUpdateInstallPromise = null;
 
 function desktopDebugShortcutsEnabled() {
   return (
@@ -51,6 +62,10 @@ function desktopDebugShortcutsEnabled() {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
   process.exit(0);
+}
+
+if (process.platform === 'win32') {
+  app.setAppUserModelId(appUserModelId);
 }
 
 app.on('second-instance', () => {
@@ -401,17 +416,30 @@ function attachLocalRuntimeSecretPreviews(payload) {
   return payload;
 }
 
-function updateBootstrapCaches(payload) {
+function updateBootstrapCaches(payload, options = {}) {
   const nextPayload = attachLocalRuntimeSecretPreviews(payload);
-  bootstrapCache = nextPayload;
+  bootstrapCache = mergeBootstrapCache(bootstrapCache, nextPayload, options);
   runtimeStatusCache = nextPayload?.runtimeStatus || null;
+  return bootstrapCache;
 }
 
 async function bootstrapRuntime(options = {}) {
   if (bootstrapRuntimePromise) {
-    return bootstrapRuntimePromise;
+    if (!options?.force) {
+      return bootstrapRuntimePromise;
+    }
+    const pendingBootstrap = bootstrapRuntimePromise;
+    try {
+      await pendingBootstrap;
+    } catch (_error) {
+      // A forced bootstrap must run against current account/runtime state even
+      // when the previous request failed.
+    }
+    if (bootstrapRuntimePromise === pendingBootstrap) {
+      bootstrapRuntimePromise = null;
+    }
   }
-  bootstrapRuntimePromise = (async () => {
+  const currentBootstrap = (async () => {
   emitRuntimeEvent({ type: 'bootstrap_start' });
   const args = ['bootstrap'];
   if (options?.deferServices) {
@@ -429,10 +457,13 @@ async function bootstrapRuntime(options = {}) {
   });
   return payload;
   })();
+  bootstrapRuntimePromise = currentBootstrap;
   try {
-    return await bootstrapRuntimePromise;
+    return await currentBootstrap;
   } finally {
-    bootstrapRuntimePromise = null;
+    if (bootstrapRuntimePromise === currentBootstrap) {
+      bootstrapRuntimePromise = null;
+    }
   }
 }
 
@@ -476,7 +507,7 @@ async function startLocalRuntime(options = {}) {
 async function stopLocalRuntime() {
   emitRuntimeEvent({ type: 'runtime_stopping' });
   const payload = await runBackendJson(['stop']);
-  updateBootstrapCaches(payload);
+  updateBootstrapCaches(payload, { preserveConnectedSession: false });
   emitRuntimeEvent({
     type: 'runtime_stopped',
     payload,
@@ -586,20 +617,474 @@ async function setDefaultVoiceEngine(engine) {
   return next;
 }
 
-async function checkUpdates(force = false) {
-  return runBackendJson(force ? ['check-updates', '--force'] : ['check-updates']);
+function runLocalCommand(command, args = [], options = {}) {
+  const timeoutMs = Number.isFinite(Number(options.timeoutMs))
+    ? Math.max(1000, Math.trunc(Number(options.timeoutMs)))
+    : gitCommandTimeoutMs;
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timeout = null;
+    const child = execFile(
+      command,
+      args,
+      {
+        cwd: options.cwd || repoRoot,
+        env: options.env || process.env,
+        maxBuffer: options.maxBuffer || 8 * 1024 * 1024,
+        windowsHide: true,
+      },
+      (error, stdout, stderr) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+        if (error) {
+          const detail = String(stderr || stdout || error.message || '').trim();
+          const failure = new Error(detail || `${command} ${args.join(' ')} failed`);
+          failure.code = error.code;
+          failure.stdout = stdout;
+          failure.stderr = stderr;
+          reject(failure);
+          return;
+        }
+        resolve({
+          stdout: String(stdout || ''),
+          stderr: String(stderr || ''),
+        });
+      }
+    );
+
+    timeout = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      try {
+        child.kill();
+      } catch (_error) {
+        // The process may have already exited.
+      }
+      reject(new Error(`${command} timed out after ${Math.round(timeoutMs / 1000)}s`));
+    }, timeoutMs);
+  });
+}
+
+async function runGit(args, options = {}) {
+  const result = await runLocalCommand('git', args, {
+    cwd: repoRoot,
+    timeoutMs: options.timeoutMs || gitCommandTimeoutMs,
+    maxBuffer: options.maxBuffer,
+  });
+  return result.stdout.trim();
+}
+
+function resolveNpmCommand() {
+  return process.platform === 'win32' ? 'npm.cmd' : 'npm';
+}
+
+function shortCommit(commit) {
+  return String(commit || '').trim().slice(0, 8);
+}
+
+function pluralizeCommit(count) {
+  const value = Number(count || 0);
+  return `${value} commit${value === 1 ? '' : 's'}`;
+}
+
+function currentDesktopVersion(currentCommit = '') {
+  const version = app.getVersion() || 'dev';
+  const commit = shortCommit(currentCommit);
+  return commit ? `${version} (${commit})` : version;
+}
+
+async function getGitRemoteUrl() {
+  try {
+    return await runGit(['config', '--get', 'remote.origin.url']);
+  } catch (_error) {
+    return repoRoot;
+  }
+}
+
+async function getCurrentGitBranch() {
+  try {
+    return await runGit(['branch', '--show-current']);
+  } catch (_error) {
+    return '';
+  }
+}
+
+async function gitRefExists(refName) {
+  if (!refName) {
+    return false;
+  }
+  try {
+    await runGit(['rev-parse', '--verify', `${refName}^{commit}`]);
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+async function resolveGitUpdateTarget(branch) {
+  const candidates = [];
+  try {
+    const upstream = await runGit(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+    if (upstream) {
+      candidates.push(upstream);
+    }
+  } catch (_error) {
+    // Local development branches may not have an upstream yet.
+  }
+  if (branch) {
+    candidates.push(`origin/${branch}`);
+  }
+  candidates.push('origin/HEAD');
+
+  for (const candidate of candidates) {
+    if (await gitRefExists(candidate)) {
+      return candidate;
+    }
+  }
+  return '';
+}
+
+async function getGitAheadBehind(targetRef) {
+  try {
+    const output = await runGit(['rev-list', '--left-right', '--count', `HEAD...${targetRef}`]);
+    const [aheadText, behindText] = output.split(/\s+/);
+    return {
+      ahead: Math.max(0, Number.parseInt(aheadText || '0', 10) || 0),
+      behind: Math.max(0, Number.parseInt(behindText || '0', 10) || 0),
+    };
+  } catch (_error) {
+    return { ahead: 0, behind: 0 };
+  }
+}
+
+async function getGitDirtyState() {
+  try {
+    const output = await runGit(['status', '--porcelain'], { maxBuffer: 2 * 1024 * 1024 });
+    const entries = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    return {
+      dirty: entries.length > 0,
+      count: entries.length,
+    };
+  } catch (_error) {
+    return {
+      dirty: false,
+      count: 0,
+    };
+  }
+}
+
+function gitUpdateErrorStatus(error) {
+  const message = error instanceof Error ? error.message : String(error || 'Update check failed.');
+  return {
+    ok: false,
+    currentVersion: currentDesktopVersion(),
+    releaseTag: 'git',
+    channel: 'git',
+    repo: repoRoot,
+    source: 'git',
+    intervalHours: 1,
+    checked: true,
+    updateAvailable: false,
+    update: null,
+    lastCheckedAt: new Date().toISOString(),
+    lastError: message,
+    message,
+  };
+}
+
+async function checkUpdates(_force = false) {
+  const checkedAt = new Date().toISOString();
+  if (!fs.existsSync(path.join(repoRoot, '.git'))) {
+    return {
+      ...gitUpdateErrorStatus(new Error('This desktop app is not running from a Git checkout.')),
+      lastCheckedAt: checkedAt,
+    };
+  }
+  if (!commandAvailable('git', ['--version'])) {
+    return {
+      ...gitUpdateErrorStatus(new Error('Git is not available on PATH.')),
+      lastCheckedAt: checkedAt,
+    };
+  }
+
+  try {
+    await runGit(['fetch', '--quiet', '--all', '--prune'], { timeoutMs: 3 * 60 * 1000 });
+    const branch = await getCurrentGitBranch();
+    const targetRef = await resolveGitUpdateTarget(branch);
+    if (!targetRef) {
+      throw new Error('No remote branch was found for update checks.');
+    }
+
+    const currentCommit = await runGit(['rev-parse', 'HEAD']);
+    const latestCommit = await runGit(['rev-parse', targetRef]);
+    const { ahead, behind } = await getGitAheadBehind(targetRef);
+    const dirtyState = await getGitDirtyState();
+    const repo = await getGitRemoteUrl();
+    const updateAvailable = behind > 0 || (behind === 0 && ahead === 0 && currentCommit !== latestCommit);
+    const diverged = ahead > 0 && behind > 0;
+    const pullTarget = parseRemoteBranch(targetRef);
+    const blocked = Boolean(updateAvailable && (dirtyState.dirty || diverged || !pullTarget));
+    const updateLabel = behind > 0 ? pluralizeCommit(behind) : shortCommit(latestCommit);
+    const message = updateAvailable
+      ? dirtyState.dirty
+        ? `Update ready (${updateLabel}), but ${dirtyState.count} local change${dirtyState.count === 1 ? '' : 's'} must be committed or stashed first.`
+        : diverged
+          ? `Update ready (${updateLabel}), but this branch has local commits and cannot fast-forward cleanly.`
+          : !pullTarget
+            ? `Update ready (${updateLabel}), but no pullable remote branch is configured for this checkout.`
+            : `Update ready: ${updateLabel}.`
+      : ahead > 0
+        ? `No update pending; this checkout is ${pluralizeCommit(ahead)} ahead.`
+        : 'No update pending.';
+
+    return {
+      ok: true,
+      currentVersion: currentDesktopVersion(currentCommit),
+      releaseTag: branch || targetRef || shortCommit(currentCommit),
+      channel: 'git',
+      repo,
+      source: 'git',
+      intervalHours: 1,
+      checked: true,
+      updateAvailable,
+      update: updateAvailable
+        ? {
+            version: shortCommit(latestCommit),
+            tagName: `${targetRef} ${shortCommit(latestCommit)}`,
+            assetName: 'Git commit',
+            assetUrl: repo,
+            publishedAt: checkedAt,
+            commit: latestCommit,
+          }
+        : null,
+      lastCheckedAt: checkedAt,
+      lastError: null,
+      message,
+      branch,
+      upstream: targetRef,
+      currentCommit,
+      latestCommit,
+      aheadCount: ahead,
+      behindCount: behind,
+      dirty: dirtyState.dirty,
+      dirtyCount: dirtyState.count,
+      blocked,
+    };
+  } catch (error) {
+    return {
+      ...gitUpdateErrorStatus(error),
+      lastCheckedAt: checkedAt,
+    };
+  }
+}
+
+function parseRemoteBranch(refName) {
+  const ref = String(refName || '').trim();
+  const slash = ref.indexOf('/');
+  if (slash <= 0 || ref.endsWith('/HEAD')) {
+    return null;
+  }
+  return {
+    remote: ref.slice(0, slash),
+    branch: ref.slice(slash + 1),
+  };
+}
+
+async function gitChangedFiles(fromCommit, toCommit) {
+  if (!fromCommit || !toCommit || fromCommit === toCommit) {
+    return [];
+  }
+  try {
+    const output = await runGit(['diff', '--name-only', `${fromCommit}..${toCommit}`], {
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    return output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  } catch (_error) {
+    return [];
+  }
+}
+
+function changedFilesInclude(changedFiles, candidates) {
+  const normalized = new Set(changedFiles.map((item) => item.replace(/\\/g, '/')));
+  return candidates.some((candidate) => normalized.has(candidate));
+}
+
+async function installNpmDependenciesForUpdate(changedFiles) {
+  const npmCommand = resolveNpmCommand();
+  if (changedFilesInclude(changedFiles, ['desktop_app/package.json', 'desktop_app/package-lock.json'])) {
+    await runLocalCommand(npmCommand, ['--prefix', desktopRoot, 'install'], {
+      cwd: repoRoot,
+      timeoutMs: updateCommandTimeoutMs,
+    });
+  }
+  if (changedFilesInclude(changedFiles, [
+    'desktop_app/renderer_client/package.json',
+    'desktop_app/renderer_client/package-lock.json',
+  ])) {
+    await runLocalCommand(npmCommand, ['--prefix', path.join(desktopRoot, 'renderer_client'), 'install'], {
+      cwd: repoRoot,
+      timeoutMs: updateCommandTimeoutMs,
+    });
+  }
+}
+
+async function rebuildRendererForUpdate() {
+  await runLocalCommand(resolveNpmCommand(), ['--prefix', desktopRoot, 'run', 'build:renderer'], {
+    cwd: repoRoot,
+    timeoutMs: updateCommandTimeoutMs,
+  });
+}
+
+function resolvePowerShellExecutable() {
+  const systemRoot = process.env.SystemRoot || 'C:\\Windows';
+  const candidate = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  return fs.existsSync(candidate) ? candidate : 'powershell.exe';
+}
+
+function resolveDesktopStartScript() {
+  return path.join(repoRoot, 'scripts', 'desktop', 'start.ps1');
+}
+
+function relaunchDesktopApp() {
+  const startScript = resolveDesktopStartScript();
+  if (!app.isPackaged && process.platform === 'win32' && fs.existsSync(startScript)) {
+    app.relaunch({
+      execPath: resolvePowerShellExecutable(),
+      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', startScript, '-Fast'],
+    });
+  } else {
+    app.relaunch();
+  }
+  setTimeout(() => app.quit(), 250);
 }
 
 async function installUpdate() {
-  const args = ['install-update'];
-  if (app.isPackaged && process.execPath) {
-    args.push('--restart-executable', process.execPath);
+  if (gitUpdateInstallPromise) {
+    return gitUpdateInstallPromise;
   }
-  const result = await runBackendJson(args);
-  if (result?.launched) {
-    setTimeout(() => app.quit(), 250);
+
+  gitUpdateInstallPromise = (async () => {
+    const status = await checkUpdates(true);
+    if (!status.ok) {
+      return {
+        ok: false,
+        launched: false,
+        message: status.message || status.lastError || 'Update check failed.',
+        status,
+      };
+    }
+    if (!status.updateAvailable) {
+      return {
+        ok: true,
+        launched: false,
+        message: status.message || 'No update pending.',
+        status,
+      };
+    }
+    if (status.blocked) {
+      return {
+        ok: false,
+        launched: false,
+        blocked: true,
+        message: status.message || 'Update is blocked by local Git state.',
+        status,
+      };
+    }
+
+    const beforeCommit = status.currentCommit || '';
+    const remoteBranch = parseRemoteBranch(status.upstream);
+    const pullArgs = remoteBranch
+      ? ['pull', '--ff-only', remoteBranch.remote, remoteBranch.branch]
+      : ['pull', '--ff-only'];
+    await runGit(pullArgs, { timeoutMs: 5 * 60 * 1000 });
+    const afterCommit = await runGit(['rev-parse', 'HEAD']);
+    const changedFiles = await gitChangedFiles(beforeCommit, afterCommit);
+    await installNpmDependenciesForUpdate(changedFiles);
+    await rebuildRendererForUpdate();
+    relaunchDesktopApp();
+    return {
+      ok: true,
+      launched: true,
+      pulled: true,
+      restarted: true,
+      previousCommit: beforeCommit,
+      currentCommit: afterCommit,
+      changedFiles,
+      message: `Updated to ${shortCommit(afterCommit)}. Restarting EmploAI.`,
+    };
+  })().finally(() => {
+    gitUpdateInstallPromise = null;
+  });
+
+  return gitUpdateInstallPromise;
+}
+
+async function runAutomaticGitUpdateCheck(reason) {
+  if (gitAutoUpdateInFlight || gitUpdateInstallPromise) {
+    return;
   }
-  return result;
+  gitAutoUpdateInFlight = true;
+  try {
+    const status = await checkUpdates(reason === 'startup');
+    emitRuntimeEvent({
+      type: 'update_status',
+      payload: status,
+    });
+    if (status.ok && status.updateAvailable && !status.blocked) {
+      emitRuntimeEvent({
+        type: 'update_installing',
+        payload: { reason },
+      });
+      const result = await installUpdate();
+      emitRuntimeEvent({
+        type: 'update_install_result',
+        payload: result,
+      });
+    }
+  } catch (error) {
+    emitRuntimeEvent({
+      type: 'update_status',
+      payload: gitUpdateErrorStatus(error),
+    });
+  } finally {
+    gitAutoUpdateInFlight = false;
+  }
+}
+
+function scheduleGitAutoUpdateChecks() {
+  if (gitAutoUpdateStartupTimer) {
+    clearTimeout(gitAutoUpdateStartupTimer);
+  }
+  if (gitAutoUpdateTimer) {
+    clearInterval(gitAutoUpdateTimer);
+  }
+  gitAutoUpdateStartupTimer = setTimeout(() => {
+    gitAutoUpdateStartupTimer = null;
+    void runAutomaticGitUpdateCheck('startup');
+  }, 5000);
+  gitAutoUpdateTimer = setInterval(() => {
+    void runAutomaticGitUpdateCheck('hourly');
+  }, gitUpdateCheckIntervalMs);
+}
+
+function stopGitAutoUpdateChecks() {
+  if (gitAutoUpdateStartupTimer) {
+    clearTimeout(gitAutoUpdateStartupTimer);
+    gitAutoUpdateStartupTimer = null;
+  }
+  if (!gitAutoUpdateTimer) {
+    return;
+  }
+  clearInterval(gitAutoUpdateTimer);
+  gitAutoUpdateTimer = null;
 }
 
 async function openManagedPath(targetPath) {
@@ -630,6 +1115,45 @@ async function openChromeExtensionsPage() {
     return '';
   }
   return shell.openExternal(target);
+}
+
+function createDesktopShortcut() {
+  if (process.platform !== 'win32') {
+    throw new Error('Desktop shortcut creation is currently supported on Windows only.');
+  }
+
+  const shortcutPath = path.join(app.getPath('desktop'), 'EmploAI.lnk');
+  const startScript = resolveDesktopStartScript();
+  const options = app.isPackaged && process.execPath
+    ? {
+        target: process.execPath,
+        cwd: path.dirname(process.execPath),
+        description: 'Start EmploAI Desktop',
+        icon: process.execPath,
+        appUserModelId,
+      }
+    : {
+        target: resolvePowerShellExecutable(),
+        args: `-NoProfile -ExecutionPolicy Bypass -File "${startScript}"`,
+        cwd: repoRoot,
+        description: 'Start EmploAI Desktop',
+        appUserModelId,
+      };
+
+  if (!app.isPackaged && !fs.existsSync(startScript)) {
+    throw new Error(`Desktop startup script was not found: ${startScript}`);
+  }
+
+  const created = shell.writeShortcutLink(shortcutPath, 'create', options);
+  if (!created) {
+    throw new Error('Windows did not create the desktop shortcut.');
+  }
+  return {
+    ok: true,
+    shortcutPath,
+    target: options.target,
+    message: 'Desktop shortcut created.',
+  };
 }
 
 async function copyManagedText(textValue) {
@@ -1029,6 +1553,101 @@ function runGitCommand(targetPath, gitArgs) {
   };
 }
 
+function gitExcludePatternForPath(repoRootPath, targetPath) {
+  const relativePath = path.relative(path.resolve(repoRootPath), path.resolve(targetPath));
+  if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    return null;
+  }
+
+  const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+  return normalized ? `/${normalized}/` : null;
+}
+
+function addGitInfoExclude(targetPath, excludeTargetPath) {
+  const topLevel = runGitCommand(targetPath, ['rev-parse', '--show-toplevel']);
+  if (!topLevel.ok || !topLevel.stdout) {
+    return false;
+  }
+
+  const gitDir = runGitCommand(targetPath, ['rev-parse', '--absolute-git-dir']);
+  if (!gitDir.ok || !gitDir.stdout) {
+    return false;
+  }
+
+  const pattern = gitExcludePatternForPath(topLevel.stdout, excludeTargetPath);
+  if (!pattern) {
+    return false;
+  }
+
+  const excludePath = path.join(path.resolve(gitDir.stdout), 'info', 'exclude');
+  fs.mkdirSync(path.dirname(excludePath), { recursive: true });
+
+  const existing = fs.existsSync(excludePath)
+    ? fs.readFileSync(excludePath, 'utf-8')
+    : '';
+  const existingLines = existing
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (existingLines.includes(pattern)) {
+    return true;
+  }
+
+  const prefix = existing && !existing.endsWith('\n') ? '\n' : '';
+  const comment = existingLines.includes('# EmploAI automatic chat folders')
+    ? ''
+    : '# EmploAI automatic chat folders\n';
+  fs.appendFileSync(excludePath, `${prefix}${comment}${pattern}\n`, 'utf-8');
+  return true;
+}
+
+function addGitIgnoreEntry(targetPath, excludeTargetPath) {
+  const topLevel = runGitCommand(targetPath, ['rev-parse', '--show-toplevel']);
+  if (!topLevel.ok || !topLevel.stdout) {
+    return false;
+  }
+
+  const repoRoot = path.resolve(topLevel.stdout);
+  const pattern = gitExcludePatternForPath(repoRoot, excludeTargetPath);
+  if (!pattern) {
+    return false;
+  }
+
+  const gitignorePath = path.join(repoRoot, '.gitignore');
+  const existing = fs.existsSync(gitignorePath)
+    ? fs.readFileSync(gitignorePath, 'utf-8')
+    : '';
+  const existingLines = existing
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (existingLines.includes(pattern)) {
+    return true;
+  }
+
+  const prefix = existing && !existing.endsWith('\n') ? '\n' : '';
+  const comment = existingLines.includes('# EmploAI automatic chat folders')
+    ? ''
+    : '# EmploAI automatic chat folders\n';
+  fs.appendFileSync(gitignorePath, `${prefix}${comment}${pattern}\n`, 'utf-8');
+  return true;
+}
+
+function protectSidebarFolderFromGit(parentPath, createdPath) {
+  try {
+    const resolvedParent = path.resolve(parentPath);
+    const protectedPath = path.basename(resolvedParent).toLowerCase() === automaticProjectParentName.toLowerCase()
+      ? resolvedParent
+      : path.resolve(createdPath);
+    addGitIgnoreEntry(createdPath, protectedPath);
+    addGitInfoExclude(createdPath, protectedPath);
+  } catch (_error) {
+    // Folder creation should not fail just because Git is missing or unavailable.
+  }
+}
+
 function getSidebarGitRepoInfo(targetPath) {
   const candidate = String(targetPath || '').trim();
   if (!candidate) {
@@ -1182,6 +1801,7 @@ function createSidebarFolder(payload = {}) {
     suffix += 1;
   }
   fs.mkdirSync(candidate);
+  protectSidebarFolderFromGit(parentPath, candidate);
 
   return {
     path: path.resolve(candidate),
@@ -1209,7 +1829,7 @@ function backendEnvironment() {
   const runtimeSecretOverlayJson = remoteControlServices().runtimeSecretOverlayEnvironment();
   if (runtimeSecretOverlayJson) {
     env[runtimeSecretOverlayEnv] = runtimeSecretOverlayJson;
-  } else {
+  } else if (!String(process.env[runtimeSecretOverlayEnv] || '').trim()) {
     delete env[runtimeSecretOverlayEnv];
   }
   return env;
@@ -1251,6 +1871,104 @@ async function shutdownManagedProcessesForQuit() {
   })();
 
   return shutdownForQuitPromise;
+}
+
+function activeWebContents() {
+  return mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null;
+}
+
+function runManagedEditCommand(command, payload = {}) {
+  const contents = activeWebContents();
+  if (!contents) return { ok: false, detail: 'Desktop window is not available.' };
+  const action = String(command || '').trim().toLowerCase();
+  const operations = {
+    undo: () => contents.undo(),
+    redo: () => contents.redo(),
+    cut: () => contents.cut(),
+    copy: () => contents.copy(),
+    paste: () => contents.paste(),
+    select_all: () => contents.selectAll(),
+  };
+  if (operations[action]) {
+    operations[action]();
+    return { ok: true, command: action };
+  }
+  if (action === 'find') {
+    const query = String(payload.query || '').trim();
+    if (!query) {
+      contents.stopFindInPage('clearSelection');
+      return { ok: false, command: action, detail: 'Enter text to find.' };
+    }
+    const requestId = contents.findInPage(query, { findNext: Boolean(payload.findNext) });
+    return { ok: true, command: action, requestId };
+  }
+  return { ok: false, command: action, detail: 'Unsupported edit command.' };
+}
+
+function runManagedZoomCommand(command) {
+  const contents = activeWebContents();
+  if (!contents) return { ok: false, detail: 'Desktop window is not available.' };
+  const action = String(command || '').trim().toLowerCase();
+  const current = Number(contents.getZoomFactor() || 1);
+  const next = action === 'in'
+    ? Math.min(2, current + 0.1)
+    : action === 'out'
+      ? Math.max(0.5, current - 0.1)
+      : action === 'reset'
+        ? 1
+        : current;
+  if (!['in', 'out', 'reset'].includes(action)) {
+    return { ok: false, detail: 'Unsupported zoom command.', zoomFactor: current };
+  }
+  contents.setZoomFactor(next);
+  return { ok: true, command: action, zoomFactor: next };
+}
+
+function desktopDiagnostics() {
+  return {
+    appVersion: app.getVersion(),
+    platform: process.platform,
+    architecture: process.arch,
+    electronVersion: process.versions.electron,
+    chromeVersion: process.versions.chrome,
+    nodeVersion: process.versions.node,
+    runtimeStatus: runtimeStatusCache || null,
+    capturedAt: new Date().toISOString(),
+  };
+}
+
+async function requestManagedExit(mode = 'default') {
+  const choice = String(mode || 'default').trim().toLowerCase();
+  rendererExitPromptPending = false;
+  if (choice === 'cancel') return { ok: true, exiting: false };
+  if (choice === 'force') {
+    quitAfterManagedShutdown = true;
+    app.exit(0);
+    return { ok: true, exiting: true, forced: true };
+  }
+  if (choice === 'keep_running') {
+    quitAfterManagedShutdown = true;
+    app.quit();
+    return { ok: true, exiting: true, keptAlive: true };
+  }
+  try {
+    let shutdownResult;
+    if (choice === 'stop_everything') {
+      shutdownResult = await stopLocalRuntime();
+    } else {
+      shutdownResult = await shutdownManagedProcessesForQuit();
+      if (shutdownResult?.stopped === false) {
+        shutdownForQuitPromise = null;
+        return { ok: false, exiting: false, detail: shutdownResult.error || 'The local runtime did not stop.' };
+      }
+    }
+    quitAfterManagedShutdown = true;
+    app.quit();
+    return { ok: true, exiting: true, shutdown: shutdownResult || null };
+  } catch (error) {
+    shutdownForQuitPromise = null;
+    return { ok: false, exiting: false, detail: String(error?.message || error || 'The local runtime did not stop.') };
+  }
 }
 
 async function loadRenderer(window) {
@@ -1310,6 +2028,14 @@ async function createWindow() {
   mainWindow.setMenuBarVisibility(false);
   installRendererSecurityHandlers(mainWindow);
   await loadRenderer(mainWindow);
+  mainWindow.on('close', (event) => {
+    if (quitAfterManagedShutdown || mainWindow?.isDestroyed()) return;
+    event.preventDefault();
+    if (!rendererExitPromptPending) {
+      rendererExitPromptPending = true;
+      mainWindow.webContents.send('emploai:shell:exit-requested', { source: 'window_close' });
+    }
+  });
 }
 
 function hideMainWindowForSleepMode() {
@@ -1420,7 +2146,6 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle('emploai:bootstrap', async (_event, payload) => {
-    bootstrapCache = null;
     return bootstrapRuntime(payload || {});
   });
 
@@ -1435,6 +2160,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('emploai:codex-auth:poll-device', async () => pollCodexAuthDeviceLogin());
   ipcMain.handle('emploai:codex-auth:logout', async () => logoutCodexAuth());
   ipcMain.handle('emploai:remote-auth:status', async () => remoteControlServices().remoteAuthStatus());
+  ipcMain.handle('emploai:remote-auth:list-desktops', async () => remoteControlServices().remoteAuthListDesktops());
   ipcMain.handle('emploai:remote-auth:login', async (_event, payload) => remoteControlServices().remoteAuthLogin(payload || {}));
   ipcMain.handle('emploai:remote-auth:google-login', async (_event, payload) => remoteControlServices().remoteAuthGoogleLogin(payload || {}));
   ipcMain.handle('emploai:remote-auth:register', async (_event, payload) => remoteControlServices().remoteAuthRegister(payload || {}));
@@ -1483,6 +2209,11 @@ app.whenReady().then(async () => {
   ipcMain.handle('emploai:updates:install', async () => installUpdate());
   ipcMain.handle('emploai:shell:open-path', async (_event, targetPath) => openManagedPath(targetPath));
   ipcMain.handle('emploai:shell:open-chrome-extensions', async () => openChromeExtensionsPage());
+  ipcMain.handle('emploai:shell:create-desktop-shortcut', async () => createDesktopShortcut());
+  ipcMain.handle('emploai:shell:edit-command', async (_event, payload) => runManagedEditCommand(payload?.command, payload || {}));
+  ipcMain.handle('emploai:shell:zoom', async (_event, payload) => runManagedZoomCommand(payload?.command));
+  ipcMain.handle('emploai:shell:diagnostics', async () => desktopDiagnostics());
+  ipcMain.handle('emploai:shell:request-exit', async (_event, payload) => requestManagedExit(payload?.mode));
   ipcMain.handle('emploai:clipboard:write-text', async (_event, textValue) => copyManagedText(textValue));
   ipcMain.handle('emploai:memory:read', async () => readManagedMemory());
   ipcMain.handle('emploai:memory:write', async (_event, payload) => writeManagedMemory(payload?.content));
@@ -1496,6 +2227,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('emploai:window:sleep-hide', async () => hideMainWindowForSleepMode());
 
   await createWindow();
+  scheduleGitAutoUpdateChecks();
 
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -1507,15 +2239,15 @@ app.whenReady().then(async () => {
 });
 
 app.on('before-quit', (event) => {
+  stopGitAutoUpdateChecks();
   if (quitAfterManagedShutdown) {
     return;
   }
-
   event.preventDefault();
-  shutdownManagedProcessesForQuit().finally(() => {
-    quitAfterManagedShutdown = true;
-    app.quit();
-  });
+  if (mainWindow && !mainWindow.isDestroyed() && !rendererExitPromptPending) {
+    rendererExitPromptPending = true;
+    mainWindow.webContents.send('emploai:shell:exit-requested', { source: 'app_quit' });
+  }
 });
 
 app.on('window-all-closed', () => {

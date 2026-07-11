@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 from urllib.parse import urlparse
 
+from shared.chat_modes import plan_tool_denial
+
 
 PermissionMode = str
 
@@ -64,6 +66,8 @@ _NETWORK_TOOLS = {"fetch_url"}
 _WRITE_TOOLS = {"write_file", "append_file", "edit_file", "delete_file", "move_file", "copy_file"}
 _OBSERVATION_TOOLS = {
     "describe_screen",
+    "start_visual_monitor",
+    "stop_visual_monitor",
     "ocr_screen",
     "observe_desktop",
     "browser_snapshot",
@@ -193,6 +197,7 @@ class SecurityContext:
     surface: Optional[str] = None
     session_id: Optional[str] = None
     identity_id: Optional[str] = None
+    run_mode: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -371,6 +376,16 @@ def evaluate_tool_call(
     ctx = context or default_security_context()
     mode = normalize_permission_mode(ctx.permission_mode)
     risk = _tool_risk(name, payload)
+
+    if str(ctx.run_mode or "").strip().lower() == "plan":
+        denial = plan_tool_denial(name, payload)
+        if denial:
+            return SecurityDecision(
+                ACTION_DENY,
+                denial,
+                "plan_mode_blocked",
+                metadata={"run_mode": "plan", "tool": name},
+            )
 
     if name in _COMMAND_TOOLS:
         reason, command_risk = _command_block_reason(str(payload.get("command") or ""))

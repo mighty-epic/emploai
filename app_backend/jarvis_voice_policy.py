@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import secrets
 from typing import Any, Dict, Optional
@@ -7,6 +8,45 @@ from typing import Any, Dict, Optional
 
 JARVIS_BARGE_IN_MIN_WORDS = 2
 JARVIS_BARGE_IN_MIN_CHARS = 6
+DEFAULT_JARVIS_WAKE_PHRASE = "jarvis"
+JARVIS_WAKE_PHRASE_ENV = "EMPLOAI_JARVIS_WAKE_PHRASE"
+JARVIS_TOOL_UPDATE_EVERY_ENV = "EMPLOAI_JARVIS_TOOL_UPDATE_EVERY"
+
+
+def jarvis_wake_phrase() -> str:
+    phrase = str(os.getenv(JARVIS_WAKE_PHRASE_ENV, "") or "").strip()
+    return phrase or DEFAULT_JARVIS_WAKE_PHRASE
+
+
+def jarvis_extract_wake_request(text: str, wake_phrase: Optional[str] = None) -> tuple[bool, str]:
+    raw = re.sub(r"\s+", " ", str(text or "").strip())
+    phrase = re.sub(r"\s+", " ", str(wake_phrase or jarvis_wake_phrase()).strip())
+    if not raw or not phrase:
+        return False, raw
+
+    phrase_pattern = r"\s+".join(re.escape(part) for part in phrase.split())
+    prefix_pattern = rf"^\s*(?:(?:hey|hi|hello|ok|okay)\s+)?{phrase_pattern}\b[\s,.:;!\-]*"
+    if not re.match(prefix_pattern, raw, flags=re.IGNORECASE):
+        return False, raw
+    request = re.sub(prefix_pattern, "", raw, count=1, flags=re.IGNORECASE).strip()
+    return True, request
+
+
+def jarvis_tool_update_every() -> int:
+    raw_value = str(os.getenv(JARVIS_TOOL_UPDATE_EVERY_ENV, "3") or "").strip()
+    try:
+        return max(0, int(raw_value))
+    except ValueError:
+        return 3
+
+
+def jarvis_tool_update_message(tool_count: int, tool_name: str) -> str:
+    count = max(1, int(tool_count or 1))
+    label = re.sub(r"[_\-]+", " ", str(tool_name or "").strip())
+    label = re.sub(r"\s+", " ", label).strip()
+    if label:
+        return f"Still working. I have completed {count} tool steps, most recently {label}."
+    return f"Still working. I have completed {count} tool steps."
 
 
 def jarvis_voice_turn_is_task_like(text: str) -> bool:

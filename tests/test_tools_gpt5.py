@@ -6,16 +6,18 @@ import logging
 from pathlib import Path
 from dotenv import load_dotenv
 
+__test__ = False  # Manual live-model evaluation script; run this module directly.
+
 # Add project root to sys.path
 root_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(root_dir))
 
 load_dotenv()
 
-from emploai.cli.agent_tools.executor import ToolExecutor
-from emploai.cli.agent_tools.definitions import CLI_AGENT_TOOLS, TOOL_WRITE_FILE
-from emploai.cli.agent_tools.loop import run_tool_loop
-from emploai.cli.tui_constants import MODEL_CONFIGS, SYSTEM_PROMPT
+from cli.agent_tools.executor import ToolExecutor
+from cli.agent_tools.definitions import CLI_AGENT_TOOLS, TOOL_WRITE_FILE
+from cli.agent_tools.loop import run_tool_loop
+from cli.tui_constants import MODEL_CONFIGS, SYSTEM_PROMPT
 from openai import OpenAI
 
 # Configure logging

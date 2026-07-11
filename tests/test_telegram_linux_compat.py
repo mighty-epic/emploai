@@ -1,7 +1,6 @@
 import base64
 import importlib
 import platform as platform_module
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,15 +9,14 @@ from telegram_bot import linux
 
 
 def _reload_telegram_unified_agent():
-    for module_name in (
-        "telegram_bot.telegram_unified_agent",
-        "telegram_bot.linux.desktop_tools",
-        "telegram_bot.linux",
-        "linux.desktop_tools",
-        "linux",
-    ):
-        sys.modules.pop(module_name, None)
-    return importlib.import_module("telegram_bot.telegram_unified_agent")
+    # Reload the existing module objects in place so other test modules do not
+    # retain functions backed by an abandoned globals dictionary.
+    linux_module = importlib.import_module("telegram_bot.linux")
+    desktop_module = importlib.import_module("telegram_bot.linux.desktop_tools")
+    unified_module = importlib.import_module("telegram_bot.telegram_unified_agent")
+    importlib.reload(linux_module)
+    importlib.reload(desktop_module)
+    return importlib.reload(unified_module)
 
 
 def test_telegram_unified_agent_imports_as_package(monkeypatch):
@@ -211,7 +209,7 @@ def test_linux_describe_screen_returns_base64_image(monkeypatch, tmp_path):
 
 
 def test_vps_agent_service_supports_both_env_file_locations():
-    service_path = Path(__file__).resolve().parents[1] / "deploy" / "vps" / "linux" / "emploai-agent.service"
+    service_path = Path(__file__).resolve().parents[1] / "deploy" / "legacy_vps" / "linux" / "emploai-agent.service"
     content = service_path.read_text(encoding="utf-8")
 
     assert "User=emploai" in content

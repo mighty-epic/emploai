@@ -5,6 +5,8 @@ Tests actual LLM decision-making with different observation modes.
 Run with: python -m tests.test_real_llm_decisions
 """
 
+__test__ = False  # Manual live-model integration harness; run this module directly.
+
 import sys
 import os
 import json

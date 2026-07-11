@@ -15,7 +15,8 @@ def test_gpt_5_4_is_available_in_primary_model_registry():
     assert MODEL_CONFIGS["gpt-5.4"]["provider"] == "openai"
     assert MODEL_CONFIGS["gpt-5.4"]["id"] == "gpt-5.4-2026-03-05"
     assert MODEL_CONFIGS["gpt-5.4"]["api"] == "responses"
-    assert MODEL_VARIANTS["gpt-5.4"]["variants"] == ["standard"]
+    assert MODEL_VARIANTS["gpt-5.4"]["variants"] == ["low", "medium", "high", "xhigh"]
+    assert MODEL_VARIANTS["gpt-5.4"]["default"] == "medium"
 
 
 def test_shared_unified_agent_maps_gpt_5_4_to_openai_snapshot():
@@ -40,6 +41,10 @@ def test_codex_subscription_models_use_separate_provider():
     assert MODEL_CONFIGS["chatgpt/gpt-5.5"]["id"] == "gpt-5.5"
     assert MODEL_CONFIGS["chatgpt/gpt-5.4"]["provider"] == "openai-codex"
     assert MODEL_CONFIGS["chatgpt/gpt-5.4-mini"]["provider"] == "openai-codex"
+    assert MODEL_VARIANTS["chatgpt/gpt-5.5"]["variants"] == ["low", "medium", "high", "xhigh"]
+    assert MODEL_VARIANTS["chatgpt/gpt-5.4"]["variants"] == ["low", "medium", "high", "xhigh"]
+    assert MODEL_VARIANTS["chatgpt/gpt-5.4-mini"]["variants"] == ["low", "medium", "high", "xhigh"]
+    assert MODEL_VARIANTS["gpt-5.2"]["variants"] == ["low", "medium", "high", "xhigh"]
 
     defaults = default_model_pair_for_enabled_providers({"openai-codex"})
     assert defaults.model == "chatgpt/gpt-5.5"

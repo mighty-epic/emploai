@@ -20,6 +20,19 @@ def enable_legacy_cloud_and_mobile_routes(monkeypatch):
     monkeypatch.setenv("EMPLOAI_CLOUD_BACKEND_ENABLED", "1")
     monkeypatch.setenv("EMPLOAI_MOBILE_CONNECTION_ENABLED", "1")
 
+    class _QueuedLocalFleetRuntime:
+        async def dispatch(self, **kwargs):
+            return kwargs["task"]
+
+        async def stop(self, **_kwargs):
+            return False
+
+        async def shutdown(self):
+            return None
+
+    queued_runtime = _QueuedLocalFleetRuntime()
+    monkeypatch.setattr(app_server, "get_local_fleet_runtime", lambda: queued_runtime)
+
 
 def _paired_remote_session(tmp_path):
     app_server._auth_store = AppAuthStore(root_path=tmp_path)
@@ -53,6 +66,26 @@ def _paired_remote_session(tmp_path):
         mobile_id=mobile_login["mobile"]["mobile_id"],
     )
     return store, user, desktop_login, mobile_login
+
+
+def _enroll_remote_worker(client, headers, *, display_name: str, device_key: str) -> dict:
+    enrollment = client.post(
+        "/api/fleet/enrollments",
+        headers=headers,
+        json={"display_name": display_name},
+    )
+    assert enrollment.status_code == 200
+    completed = client.post(
+        "/api/fleet/enrollments/complete",
+        json={
+            "enrollment_token": enrollment.json()["enrollment_token"],
+            "device_name": display_name,
+            "device_platform": "test",
+            "device_key": device_key,
+        },
+    )
+    assert completed.status_code == 200
+    return completed.json()
 
 
 def test_legacy_app_pairing_secret_bootstrap_issues_device_token(tmp_path, monkeypatch):
@@ -1072,8 +1105,22 @@ def test_fleet_api_remote_worker_task_run_and_stop_use_sqlite_broker_when_socket
     assert manager.calls == []
 
 
-def test_fleet_api_local_worker_preview_records_placeholder_without_dispatch(tmp_path, monkeypatch):
+def test_fleet_api_local_worker_preview_returns_capture_without_remote_dispatch(tmp_path, monkeypatch):
     _store, _user, desktop_login, _mobile_login = _paired_remote_session(tmp_path)
+    async def fake_local_preview(**_kwargs):
+        return {
+            "status": "captured",
+            "detail": "Local preview captured.",
+            "capture": {
+                "mime_type": "image/jpeg",
+                "image_base64": "bG9jYWwtYXBpLXByZXZpZXc=",
+                "width": 800,
+                "height": 450,
+                "backend": "test",
+                "captured_at": 1.0,
+            },
+        }
+    monkeypatch.setattr(app_server, "capture_local_worker_preview", fake_local_preview)
     client = TestClient(app_server.create_app())
     headers = {"Authorization": f"Bearer {desktop_login['session_token']}"}
     worker = client.post("/api/fleet/workers/local", headers=headers, json={}).json()
@@ -1083,7 +1130,8 @@ def test_fleet_api_local_worker_preview_records_placeholder_without_dispatch(tmp
     response = client.post(f"/api/fleet/workers/{worker['worker_id']}/preview", headers=headers)
 
     assert response.status_code == 200
-    assert response.json()["dispatch_status"] == "local_placeholder"
+    assert response.json()["dispatch_status"] == "captured"
+    assert response.json()["capture"]["image_base64"] == "bG9jYWwtYXBpLXByZXZpZXc="
     assert manager.calls == []
 
 
@@ -2714,14 +2762,23 @@ def test_fleet_worker_task_dispatch_send_failure_marks_desktop_offline(tmp_path,
     store, user, desktop_login, _mobile_login = _paired_remote_session(tmp_path)
     manager = RemoteDesktopConnectionManager()
     monkeypatch.setattr(app_server, "get_remote_desktop_manager", lambda: manager)
-    desktop_id = desktop_login["desktop"]["desktop_id"]
+    client = TestClient(app_server.create_app())
+    headers = {"Authorization": f"Bearer {desktop_login['session_token']}"}
+    enrolled = _enroll_remote_worker(
+        client,
+        headers,
+        display_name="Dispatch Worker",
+        device_key="dispatch-worker-key",
+    )
+    worker = enrolled["worker"]
+    desktop_id = worker["machine_desktop_id"]
 
     class FailingWebSocket:
         async def send_json(self, payload):
             raise OSError("socket closed")
 
     async def register_failing_desktop():
-        desktop_auth = store.resolve_session_token(desktop_login["session_token"])
+        desktop_auth = store.resolve_session_token(enrolled["session_token"])
         manager.register(
             user_id=user["user_id"],
             desktop_id=desktop_id,
@@ -2738,12 +2795,8 @@ def test_fleet_worker_task_dispatch_send_failure_marks_desktop_offline(tmp_path,
         detail="desktop websocket connected",
     )
 
-    client = TestClient(app_server.create_app())
-    headers = {"Authorization": f"Bearer {desktop_login['session_token']}"}
-    worker_response = client.post("/api/fleet/workers/local", headers=headers, json={"display_name": "Dispatch Worker"})
-    assert worker_response.status_code == 200
     task_response = client.post(
-        f"/api/fleet/workers/{worker_response.json()['worker_id']}/tasks",
+        f"/api/fleet/workers/{worker['worker_id']}/tasks",
         headers=headers,
         json={"prompt": "Run through a failing websocket", "source": "manager"},
     )
@@ -2763,17 +2816,21 @@ def test_fleet_worker_stop_send_failure_marks_desktop_offline(tmp_path, monkeypa
     store, user, desktop_login, _mobile_login = _paired_remote_session(tmp_path)
     manager = RemoteDesktopConnectionManager()
     monkeypatch.setattr(app_server, "get_remote_desktop_manager", lambda: manager)
-    desktop_id = desktop_login["desktop"]["desktop_id"]
+    client = TestClient(app_server.create_app())
+    headers = {"Authorization": f"Bearer {desktop_login['session_token']}"}
+    enrolled = _enroll_remote_worker(
+        client,
+        headers,
+        display_name="Stop Worker",
+        device_key="stop-worker-key",
+    )
+    worker = enrolled["worker"]
+    desktop_id = worker["machine_desktop_id"]
 
     class FailingWebSocket:
         async def send_json(self, payload):
             raise OSError("socket closed")
 
-    client = TestClient(app_server.create_app())
-    headers = {"Authorization": f"Bearer {desktop_login['session_token']}"}
-    worker_response = client.post("/api/fleet/workers/local", headers=headers, json={"display_name": "Stop Worker"})
-    assert worker_response.status_code == 200
-    worker = worker_response.json()
     task_response = client.post(
         f"/api/fleet/workers/{worker['worker_id']}/tasks",
         headers=headers,
@@ -2788,7 +2845,7 @@ def test_fleet_worker_stop_send_failure_marks_desktop_offline(tmp_path, monkeypa
     assert running_response.status_code == 200
 
     async def register_failing_desktop():
-        desktop_auth = store.resolve_session_token(desktop_login["session_token"])
+        desktop_auth = store.resolve_session_token(enrolled["session_token"])
         manager.register(
             user_id=user["user_id"],
             desktop_id=desktop_id,

@@ -421,6 +421,16 @@ def _runtime_paths() -> tuple[Path, Path, Path]:
     return root, home, env_file
 
 
+def _runtime_status_payload() -> dict[str, Any]:
+    _prepare_environment(apply_cloud_overlay=False)
+    _, home, _ = _runtime_paths()
+    config = _load_desktop_runtime_config()
+    status = _get_runtime_status()
+    payload = asdict(status)
+    payload["runtimeProcessDetected"] = bool(_managed_runtime_pids(home, config, status=status))
+    return payload
+
+
 def _pid_from_record_path(path: Path) -> int:
     if not path.exists():
         return 0
@@ -1237,8 +1247,7 @@ def main(argv: list[str] | None = None) -> int:
         return _json_print(_bootstrap_payload(launch_if_needed=False, resolve_current_session=False))
 
     if args.command == "status":
-        _prepare_environment(apply_cloud_overlay=False)
-        return _json_print(asdict(_get_runtime_status()))
+        return _json_print(_runtime_status_payload())
 
     if args.command == "setup-state":
         root, home, env_file, existing = _prepare_environment()

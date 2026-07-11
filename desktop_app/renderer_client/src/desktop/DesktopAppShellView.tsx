@@ -1,15 +1,27 @@
 import { useEffect, useState } from 'react';
-import { Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Image, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { InfoHint } from '@/components/InfoHint';
-import { copyDesktopText, openDesktopChromeExtensions, openDesktopPath } from '@/lib/desktopBridge';
+import {
+  copyDesktopText,
+  openDesktopChromeExtensions,
+  openDesktopPath,
+  requestDesktopFleetWorkerPreview,
+  loadDesktopDiagnostics,
+  requestDesktopExit,
+  runDesktopEditCommand,
+  runDesktopZoomCommand,
+  subscribeDesktopExitRequest,
+} from '@/lib/desktopBridge';
 import { passwordRequirementStatus } from '@/lib/remoteAuthPasswordPolicy';
 import { shortStatusText, userFacingError } from '../../lib/diagnostics';
-import { DesktopConversationView } from './DesktopConversationView';
+import { DesktopConversationView, type DesktopConversationHeaderControls } from './DesktopConversationView';
 import { DesktopSetupPanel } from './DesktopSetupPanel';
 import { DesktopConversationSkeleton, DesktopStatusBanner, StartupGlyph } from './DesktopAppShellStartup';
 import { styles } from './DesktopAppShell.styles';
+import { DesktopMenuBar } from './DesktopMenuBar';
+import { DesktopExitDialog } from './DesktopExitDialog';
 
 const webBackdropBlurStyle =
   Platform.OS === 'web'
@@ -27,6 +39,13 @@ const webWindowNoDragStyle =
 type DesktopAppShellViewProps = {
   scope: Record<string, any>;
 };
+
+const CONVERSATION_HEADER_TABS = [
+  { tab: 'chat', mode: 'chat', label: 'Chat' },
+  { tab: 'jarvis', mode: 'jarvis', label: 'Jarvis' },
+  { tab: 'fleet', mode: 'fleet', label: 'Fleet' },
+  { tab: 'remote', mode: null, label: 'Remote' },
+] as const;
 
 export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
   const {
@@ -230,7 +249,172 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
   const [remoteAuthConfirmPasswordVisible, setRemoteAuthConfirmPasswordVisible] = useState(false);
   const [remoteAuthOtpResendAvailableAt, setRemoteAuthOtpResendAvailableAt] = useState(0);
   const [remoteAuthResendCooldownSeconds, setRemoteAuthResendCooldownSeconds] = useState(0);
+  const [conversationHeaderControls, setConversationHeaderControls] = useState<DesktopConversationHeaderControls | null>(null);
+  const [pendingSurfaceMode, setPendingSurfaceMode] = useState(requestedSurfaceMode);
+  const [remoteEnrollment, setRemoteEnrollment] = useState<Record<string, any> | null>(null);
+  const [remotePreviewByWorker, setRemotePreviewByWorker] = useState<Record<string, Record<string, any>>>({});
+  const [exitDialogOpen, setExitDialogOpen] = useState(false);
+  const [exitBusy, setExitBusy] = useState(false);
+  const [exitError, setExitError] = useState<string | null>(null);
+  const [startupSkeletonExpired, setStartupSkeletonExpired] = useState(false);
   const remoteAuthPasswordRequirements = passwordRequirementStatus(String(remoteAuthPassword || ''));
+
+  const activateDesktopSurface = (tab: 'chat' | 'jarvis' | 'fleet' | 'remote', pushHistory = true) => {
+    if (tab === 'remote') {
+      setActiveTab('remote');
+    } else {
+      setActiveTab('local');
+      setPendingSurfaceMode(tab);
+      conversationHeaderControls?.setMode(tab);
+    }
+    if (pushHistory && Platform.OS === 'web' && typeof window !== 'undefined') {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.set('tab', tab);
+      window.history.pushState({ ...window.history.state, desktopTab: tab }, '', nextUrl.toString());
+    }
+  };
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return undefined;
+    const restoreSurfaceFromHistory = () => {
+      const tab = String(new URL(window.location.href).searchParams.get('tab') || 'chat').toLowerCase();
+      activateDesktopSurface(
+        tab === 'remote' || tab === 'fleet' || tab === 'jarvis' ? tab : 'chat',
+        false,
+      );
+    };
+    window.addEventListener('popstate', restoreSurfaceFromHistory);
+    return () => window.removeEventListener('popstate', restoreSurfaceFromHistory);
+  }, [conversationHeaderControls]);
+
+  useEffect(() => {
+    if (activeTab !== 'remote') setRemotePreviewByWorker({});
+  }, [activeTab]);
+
+  useEffect(() => subscribeDesktopExitRequest(() => {
+    setExitError(null);
+    setExitDialogOpen(true);
+  }), []);
+
+  useEffect(() => {
+    setStartupSkeletonExpired(false);
+    if (!chatSkeletonVisible) return undefined;
+    const timer = globalThis.setTimeout(() => setStartupSkeletonExpired(true), 3000);
+    return () => globalThis.clearTimeout(timer);
+  }, [chatSkeletonVisible, startupPhase]);
+
+  const handleExitChoice = async (choice: 'keep_running' | 'stop_everything' | 'force' | 'cancel' | 'default') => {
+    if (choice === 'cancel') {
+      setExitDialogOpen(false);
+      setExitError(null);
+      void requestDesktopExit('cancel');
+      return;
+    }
+    setExitBusy(true);
+    setExitError(null);
+    try {
+      if (choice === 'stop_everything') await conversationHeaderControls?.stopIdentity?.();
+      const result = await requestDesktopExit(choice);
+      if (!result?.ok) {
+        setExitError(String(result?.detail || 'EmploAI could not stop all active work.'));
+        setExitDialogOpen(true);
+      }
+    } catch (exitFailure) {
+      setExitError(userFacingError(exitFailure, 'EmploAI could not stop all active work.'));
+      setExitDialogOpen(true);
+    } finally {
+      setExitBusy(false);
+    }
+  };
+
+  const showDesktopDiagnostics = async () => {
+    const diagnostics = await loadDesktopDiagnostics();
+    setNotice(
+      diagnostics
+        ? `Diagnostics · EmploAI ${diagnostics.appVersion || 'dev'} · ${diagnostics.platform || 'desktop'} ${diagnostics.architecture || ''} · startup ${startupPhase} (${Number(startupCurrentTimeoutSeconds || 0)}s window) · captured ${diagnostics.capturedAt || 'now'}`
+        : `Diagnostics · startup ${startupPhase} · desktop bridge unavailable`,
+    );
+  };
+
+  const activeElement = Platform.OS === 'web' && typeof document !== 'undefined' ? document.activeElement as HTMLElement | null : null;
+  const activeTag = String(activeElement?.tagName || '').toLowerCase();
+  const focusedEditable = Boolean(activeTag === 'input' || activeTag === 'textarea' || activeElement?.isContentEditable);
+  const hasSelection = Platform.OS === 'web' && typeof window !== 'undefined' ? Boolean(window.getSelection?.()?.toString()) : false;
+  const editEnabled = (command: string) => {
+    if (command === 'paste') return focusedEditable;
+    if (command === 'cut') return focusedEditable && hasSelection;
+    if (command === 'copy') return focusedEditable || hasSelection;
+    if (command === 'select_all') return Boolean(activeElement);
+    if (Platform.OS === 'web' && typeof document !== 'undefined' && typeof document.queryCommandEnabled === 'function') {
+      return document.queryCommandEnabled(command);
+    }
+    return focusedEditable;
+  };
+
+  const desktopMenus = {
+    File: [
+      { id: 'file-new-chat', label: 'New Chat', shortcut: 'Ctrl+N', action: () => void conversationHeaderControls?.newChat?.() },
+      { id: 'file-open-project', label: 'Open Project', shortcut: 'Ctrl+O', action: () => void conversationHeaderControls?.openProject?.() },
+      { id: 'file-settings', label: 'Settings', shortcut: 'Ctrl+,', action: () => setShowSetup(true) },
+      { id: 'file-exit', label: 'Exit', shortcut: 'Alt+F4', action: () => { setExitError(null); setExitDialogOpen(true); } },
+    ],
+    Edit: [
+      { id: 'edit-undo', label: 'Undo', shortcut: 'Ctrl+Z', disabled: !editEnabled('undo'), action: () => void runDesktopEditCommand('undo') },
+      { id: 'edit-redo', label: 'Redo', shortcut: 'Ctrl+Y', disabled: !editEnabled('redo'), action: () => void runDesktopEditCommand('redo') },
+      { id: 'edit-cut', label: 'Cut', shortcut: 'Ctrl+X', disabled: !editEnabled('cut'), action: () => void runDesktopEditCommand('cut') },
+      { id: 'edit-copy', label: 'Copy', shortcut: 'Ctrl+C', disabled: !editEnabled('copy'), action: () => void runDesktopEditCommand('copy') },
+      { id: 'edit-paste', label: 'Paste', shortcut: 'Ctrl+V', disabled: !editEnabled('paste'), action: () => void runDesktopEditCommand('paste') },
+      { id: 'edit-select-all', label: 'Select All', shortcut: 'Ctrl+A', disabled: !editEnabled('select_all'), action: () => void runDesktopEditCommand('select_all') },
+      { id: 'edit-find', label: 'Find in Current Conversation', shortcut: 'Ctrl+F', action: () => {
+        const query = Platform.OS === 'web' && typeof window !== 'undefined' ? window.prompt('Find in current conversation') : '';
+        if (query) void runDesktopEditCommand('find', query);
+      } },
+    ],
+    View: [
+      { id: 'view-sidebar', label: 'Toggle Sidebar', shortcut: 'Ctrl+B', action: () => conversationHeaderControls?.toggleSidebar?.() || setConversationSidebarToggleSignal((value: any) => value + 1) },
+      { id: 'view-zoom-in', label: 'Zoom In', shortcut: 'Ctrl++', action: () => void runDesktopZoomCommand('in') },
+      { id: 'view-zoom-out', label: 'Zoom Out', shortcut: 'Ctrl+-', action: () => void runDesktopZoomCommand('out') },
+      { id: 'view-zoom-reset', label: 'Reset Zoom', shortcut: 'Ctrl+0', action: () => void runDesktopZoomCommand('reset') },
+    ],
+    Help: [
+      { id: 'help-diagnostics', label: 'Diagnostics', action: () => void showDesktopDiagnostics() },
+      { id: 'help-updates', label: 'Check for Updates', action: () => void refreshUpdateStatus(true) },
+      { id: 'help-about', label: 'About', action: () => setNotice(`EmploAI Desktop · ${accountEmail}`) },
+    ],
+  };
+
+  const requestRemotePreview = async (workerId: string) => {
+    setRemotePreviewByWorker((current) => ({
+      ...current,
+      [workerId]: { state: 'loading', detail: 'Requesting one view-only capture…' },
+    }));
+    try {
+      const result = await requestDesktopFleetWorkerPreview(workerId);
+      const capture = result?.capture;
+      if (!result?.ok || !capture?.image_base64) {
+        throw new Error(result?.detail || 'The paired desktop did not return a preview.');
+      }
+      const capturedAtValue = Number(capture.captured_at || Date.now());
+      const capturedAt = new Date(capturedAtValue > 1_000_000_000_000 ? capturedAtValue : capturedAtValue * 1000);
+      setRemotePreviewByWorker((current) => ({
+        ...current,
+        [workerId]: {
+          state: 'ready',
+          imageUri: `data:${capture.mime_type || 'image/jpeg'};base64,${capture.image_base64}`,
+          capturedAt: capturedAt.toLocaleString(),
+          detail: `${capture.width} × ${capture.height} · manual capture`,
+        },
+      }));
+    } catch (previewError) {
+      setRemotePreviewByWorker((current) => ({
+        ...current,
+        [workerId]: {
+          state: 'error',
+          detail: userFacingError(previewError, 'The paired desktop preview is unavailable.'),
+        },
+      }));
+    }
+  };
 
   useEffect(() => {
     if (!remoteAuthOtpChallenge) {
@@ -338,7 +522,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
                 onPress={() => void verifyRemoteAuthOtp()}
                 disabled={remoteAuthBusy || remoteAuthLoading}
               >
-                <Text style={styles.startupPrimaryButtonText}>{remoteAuthBusy ? 'Verifying...' : 'Verify Code'}</Text>
+                <Text style={styles.startupPrimaryButtonText}>{remoteAuthBusy ? 'Verifying…' : 'Verify Code'}</Text>
               </Pressable>
               <View style={styles.startupActionRow}>
                 <Pressable
@@ -470,7 +654,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
               >
                 <Text style={styles.startupPrimaryButtonText}>
                   {remoteAuthBusy || remoteAuthLoading
-                    ? 'Working...'
+                    ? 'Working…'
                     : remoteAuthMode === 'signup' ? 'Create Account' : 'Log In'}
                 </Text>
               </Pressable>
@@ -519,7 +703,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
               saving={savingSetup}
               voicePackBusyId={voicePackBusyId}
               voicePackProgress={voicePackProgress}
-              onSave={(values) => void saveSetup(values)}
+              onSave={(values) => saveSetup(values)}
               onInstallVoicePack={(packId) => void installVoicePack(packId)}
               onSelectTtsVoicePack={(pack) => void selectTtsVoicePack(pack)}
               onRemoveVoicePack={(packId) => void removeVoicePack(packId)}
@@ -531,7 +715,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
               memoryLoading={memoryLoading}
               memorySaving={memorySaving}
               onReloadMemory={() => void refreshMemory()}
-              onSaveMemory={(content) => void saveMemory(content)}
+              onSaveMemory={(content) => saveMemory(content)}
               localIntelligenceApi={{
                 apiBaseUrl: bootstrap.apiBaseUrl,
                 token: bootstrap.accessToken,
@@ -571,7 +755,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
               sharedSettingsSaving={sharedSettingsSaving}
               sharedSettingsStatus={sharedSettingsStatus}
               onSharedSettingsDraftChange={setSharedSettingsDraft}
-              onSaveSharedSettings={() => void saveSharedSettings()}
+              onSaveSharedSettings={() => saveSharedSettings()}
               recoveryItems={recoveryItems}
               pendingConfirmations={pendingConfirmations}
               recoveryBusyId={recoveryBusyId}
@@ -611,7 +795,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
               saving={savingSetup}
               voicePackBusyId={voicePackBusyId}
               voicePackProgress={voicePackProgress}
-              onSave={(values) => void saveSetup(values)}
+              onSave={(values) => saveSetup(values)}
               onInstallVoicePack={(packId) => void installVoicePack(packId)}
               onSelectTtsVoicePack={(pack) => void selectTtsVoicePack(pack)}
               onRemoveVoicePack={(packId) => void removeVoicePack(packId)}
@@ -623,7 +807,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
               memoryLoading={memoryLoading}
               memorySaving={memorySaving}
               onReloadMemory={() => void refreshMemory()}
-              onSaveMemory={(content) => void saveMemory(content)}
+              onSaveMemory={(content) => saveMemory(content)}
               localIntelligenceApi={{
                 apiBaseUrl: bootstrap.apiBaseUrl,
                 token: bootstrap.accessToken,
@@ -663,7 +847,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
               sharedSettingsSaving={sharedSettingsSaving}
               sharedSettingsStatus={sharedSettingsStatus}
               onSharedSettingsDraftChange={setSharedSettingsDraft}
-              onSaveSharedSettings={() => void saveSharedSettings()}
+              onSaveSharedSettings={() => saveSharedSettings()}
               recoveryItems={recoveryItems}
               pendingConfirmations={pendingConfirmations}
               recoveryBusyId={recoveryBusyId}
@@ -695,7 +879,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
                 onPress={() => void retryStartup()}
                 disabled={startingRuntime}
               >
-                <Text style={styles.startupPrimaryButtonText}>{startingRuntime ? 'Retrying...' : 'Retry Startup'}</Text>
+                <Text style={styles.startupPrimaryButtonText}>{startingRuntime ? 'Retrying…' : 'Retry Startup'}</Text>
               </Pressable>
               {bootstrap?.setupState ? (
                 <Pressable style={styles.startupSecondaryButton} onPress={() => setShowSetup(true)}>
@@ -770,37 +954,49 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
           >
             <Text style={styles.windowChromeIconText}>›</Text>
           </Pressable>
-          {['File', 'Edit', 'View'].map((item) => (
-            <Pressable
-              key={`chrome-menu-${item}`}
-              accessibilityRole="button"
-              style={({ pressed, hovered }) => [
-                styles.windowChromeMenuButton,
-                hovered ? styles.windowChromeMenuButtonHovered : null,
-                pressed ? styles.windowChromeButtonPressed : null,
-              ]}
-              onPress={() => {
-                if (item === 'View') {
-                  setConversationSidebarToggleSignal((value: any) => value + 1);
-                }
-              }}
-            >
-              <Text style={styles.windowChromeMenuText}>{item}</Text>
-            </Pressable>
-          ))}
-          <Pressable
-            accessibilityRole="button"
-            style={({ pressed, hovered }) => [
-              styles.windowChromeMenuButton,
-              hovered ? styles.windowChromeMenuButtonHovered : null,
-              pressed ? styles.windowChromeButtonPressed : null,
-            ]}
-            onPress={() => setNotice('Open Settings for setup, recovery, voice, updates, and local data controls.')}
-          >
-            <Text style={styles.windowChromeMenuText}>Help</Text>
-          </Pressable>
+          <DesktopMenuBar menus={desktopMenus} />
         </View>
         <View style={[styles.windowChromeRight, webWindowNoDragStyle]}>
+          <View accessibilityRole="tablist" style={styles.headerSurfaceTabs}>
+              {CONVERSATION_HEADER_TABS.map((item) => {
+                const selected = item.tab === 'remote'
+                  ? activeTab === 'remote'
+                  : activeTab === 'local' && (conversationHeaderControls?.mode || pendingSurfaceMode) === item.mode;
+                return (
+                  <Pressable
+                    key={`header-surface-${item.tab}`}
+                    accessibilityRole="tab"
+                    accessibilityLabel={`Open ${item.label}`}
+                    accessibilityState={{ selected }}
+                    style={({ pressed, hovered }) => [
+                      styles.headerSurfaceTab,
+                      hovered ? styles.headerSurfaceTabHovered : null,
+                      selected ? styles.headerSurfaceTabActive : null,
+                      pressed ? styles.windowChromeButtonPressed : null,
+                    ]}
+                    onPress={() => activateDesktopSurface(item.tab)}
+                  >
+                    <Text style={[styles.headerSurfaceTabText, selected ? styles.headerSurfaceTabTextActive : null]}>
+                      {item.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          {conversationHeaderControls?.identityStopActive ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Stop current identity"
+              style={({ pressed, hovered }) => [
+                styles.headerIdentityStopButton,
+                hovered ? styles.headerIdentityStopButtonHovered : null,
+                pressed ? styles.windowChromeButtonPressed : null,
+              ]}
+              onPress={() => conversationHeaderControls.stopIdentity()}
+            >
+              <Text style={styles.headerIdentityStopText}>Stop Task</Text>
+            </Pressable>
+          ) : null}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Open settings"
@@ -828,7 +1024,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
               onPress={() => void installUpdateNow()}
               disabled={installingUpdate}
             >
-              <Text style={styles.windowChromeUpdateText}>{installingUpdate ? '...' : '↑'}</Text>
+              <Text style={styles.windowChromeUpdateText}>{installingUpdate ? '…' : '↑'}</Text>
             </Pressable>
           ) : checkingUpdates ? (
             <View style={[styles.windowChromeIconButton, styles.headerIconButtonMuted]}>
@@ -881,7 +1077,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
                 apiBaseUrl={bootstrap.apiBaseUrl}
                 token={bootstrap.accessToken}
                 initialSessionId={requestedSessionId || bootstrap.currentSessionId || undefined}
-                initialSurfaceMode={requestedSurfaceMode}
+                initialSurfaceMode={pendingSurfaceMode}
                 runtimeMode={bootstrap.runtimeMode}
                 runtimeStatus={effectiveRuntimeStatus}
                 envFilePath={bootstrap.envFilePath || undefined}
@@ -899,13 +1095,19 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
                 remoteAuthBusy={remoteAuthBusy}
                 remoteAuthLoggingOut={remoteAuthLoggingOut}
                 onLogoutRemoteAccount={() => void logoutRemoteAccount()}
-                onInviteUnavailable={() => setNotice('Invite flow is not available in this beta yet.')}
                 setupOpen={showSetup}
                 sidebarToggleSignal={conversationSidebarToggleSignal}
+                onHeaderControlsChange={setConversationHeaderControls}
               />
             </View>
           ) : chatSkeletonVisible ? (
-            <DesktopConversationSkeleton />
+            startupSkeletonExpired ? (
+              <View accessibilityLiveRegion="polite" style={styles.loadingCard}>
+                <Text style={styles.loadingTitle}>Still preparing the desktop</Text>
+                <Text style={styles.loadingText}>{loadingState || `Startup phase: ${String(startupPhase || 'preparing').replace(/_/g, ' ')}`}</Text>
+                <Text style={styles.offlineMetaValue}>Phase · {String(startupPhase || 'preparing').replace(/_/g, ' ')}</Text>
+              </View>
+            ) : <DesktopConversationSkeleton />
           ) : (
             <View style={styles.loadingCard}>
               <Text style={styles.loadingTitle}>Desktop shell is running</Text>
@@ -932,8 +1134,8 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
                 >
                   <Text style={runtimeProcessDetected ? styles.secondaryRuntimeButtonText : styles.runtimeButtonText}>
                     {runtimeProcessDetected
-                      ? stoppingRuntime ? 'Stopping...' : 'Force Stop Runtime'
-                      : startingRuntime ? 'Starting...' : 'Start Local Runtime'}
+                      ? stoppingRuntime ? 'Stopping…' : 'Force Stop Runtime'
+                      : startingRuntime ? 'Starting…' : 'Start Local Runtime'}
                   </Text>
                 </Pressable>
               </View>
@@ -943,12 +1145,44 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
       ) : (
         <ScrollView style={styles.tabBody} contentContainerStyle={styles.remoteBody}>
           <View style={styles.remoteIntro}>
-            <Text style={styles.remoteIntroTitle}>Remote runtime control is planned</Text>
+            <Text style={styles.remoteIntroTitle}>Your paired desktops</Text>
             <Text style={styles.remoteIntroText}>
-              This tab accounts for hosted agents and multi-computer orchestration. Only the local tab is functional in this beta.
+              Assign and review Fleet work on machines owned by this account. Remote previews are manual, view-only snapshots—there is no screen streaming or remote input.
             </Text>
+            <View style={styles.remoteActionRow}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Enroll a paired desktop"
+                style={styles.remotePrimaryButton}
+                onPress={() => void createRemotePairingTokenFromAccount()
+                  .then((pairing: Record<string, any>) => setRemoteEnrollment(pairing))
+                  .catch((enrollError: unknown) => setNotice(userFacingError(enrollError, 'A pairing code could not be created.')))}
+              >
+                <Text style={styles.remotePrimaryButtonText}>Enroll Machine</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Open Fleet to create workers and assign tasks"
+                style={styles.remoteSecondaryButton}
+                onPress={() => activateDesktopSurface('fleet')}
+              >
+                <Text style={styles.remoteSecondaryButtonText}>Open Fleet</Text>
+              </Pressable>
+            </View>
+            {remoteEnrollment?.pairing_token ? (
+              <View accessibilityLiveRegion="polite" style={styles.remoteEnrollment}>
+                <Text style={styles.remoteEnrollmentLabel}>PAIRING CODE · EXPIRES IN {Number(remoteEnrollment.expires_in_seconds || 0)} SECONDS</Text>
+                <Text selectable style={styles.remoteEnrollmentCode}>{String(remoteEnrollment.pairing_token)}</Text>
+              </View>
+            ) : null}
           </View>
-              {remoteRuntimes.map((runtime: any) => (
+          {!remoteRuntimes.length ? (
+            <View style={styles.remoteEmpty} accessibilityLiveRegion="polite">
+              <Text style={styles.remoteTitle}>No paired desktops yet</Text>
+              <Text style={styles.remoteDetail}>Enroll a machine above. It will appear here after it signs in and sends its first heartbeat.</Text>
+            </View>
+          ) : null}
+          {remoteRuntimes.map((runtime: any) => (
             <View key={runtime.id} style={styles.remoteCard}>
               <View style={styles.remoteHeader}>
                 <View>
@@ -960,9 +1194,52 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
                 </View>
               </View>
               <View style={styles.remoteDetailRow}>
-                <Text style={styles.remoteDetail}>Details available</Text>
+                <Text style={styles.remoteDetail}>
+                  {`${Number(runtime.workerCount || 0)} workers · ${Number(runtime.activeCount || 0)} active · ${Number(runtime.queuedCount || 0)} queued`}
+                </Text>
                 <InfoHint text={runtime.detail} />
               </View>
+              {runtime.latestReport ? (
+                <View style={styles.remoteReport}>
+                  <Text style={styles.remoteSectionLabel}>LATEST REPORT</Text>
+                  <Text numberOfLines={3} style={styles.remoteDetail}>{runtime.latestReport}</Text>
+                </View>
+              ) : null}
+              {(runtime.workers || []).map((worker: any) => {
+                const preview = remotePreviewByWorker[worker.id];
+                const offline = runtime.status !== 'connected';
+                return (
+                  <View key={worker.id} style={styles.remoteWorker}>
+                    <View style={styles.remoteWorkerHeader}>
+                      <View style={styles.remoteWorkerIdentity}>
+                        <Text style={styles.remoteWorkerName}>{worker.name}</Text>
+                        <Text style={styles.remoteMeta}>{worker.activeTaskId ? 'Task active' : worker.status}</Text>
+                      </View>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Request a view-only preview from ${worker.name}`}
+                        accessibilityHint="Captures one bounded screenshot. It does not enable remote input."
+                        accessibilityState={{ disabled: offline || preview?.state === 'loading' }}
+                        disabled={offline || preview?.state === 'loading'}
+                        onPress={() => void requestRemotePreview(worker.id)}
+                        style={[styles.remotePreviewButton, offline ? styles.remoteButtonDisabled : null]}
+                      >
+                        <Text style={styles.remoteSecondaryButtonText}>
+                          {preview?.state === 'loading' ? 'Requesting…' : 'Request Preview'}
+                        </Text>
+                      </Pressable>
+                    </View>
+                    {preview ? (
+                      <View accessibilityLiveRegion="polite" style={styles.remotePreviewPanel}>
+                        {preview.imageUri ? <Image accessibilityLabel={`View-only preview from ${worker.name}`} source={{ uri: preview.imageUri }} resizeMode="contain" style={styles.remotePreviewImage} /> : null}
+                        <Text style={preview.state === 'error' ? styles.remoteErrorText : styles.remoteMeta}>
+                          {[preview.detail, preview.capturedAt ? `Captured ${preview.capturedAt}` : ''].filter(Boolean).join(' · ')}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
+                );
+              })}
             </View>
           ))}
         </ScrollView>
@@ -977,7 +1254,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
                 saving={savingSetup}
                 voicePackBusyId={voicePackBusyId}
                 voicePackProgress={voicePackProgress}
-                onSave={(values) => void saveSetup(values)}
+                onSave={(values) => saveSetup(values)}
                 onInstallVoicePack={(packId) => void installVoicePack(packId)}
                 onSelectTtsVoicePack={(pack) => void selectTtsVoicePack(pack)}
                 onRemoveVoicePack={(packId) => void removeVoicePack(packId)}
@@ -989,7 +1266,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
                 memoryLoading={memoryLoading}
                 memorySaving={memorySaving}
                 onReloadMemory={() => void refreshMemory()}
-                onSaveMemory={(content) => void saveMemory(content)}
+                onSaveMemory={(content) => saveMemory(content)}
                 localIntelligenceApi={{
                   apiBaseUrl: bootstrap.apiBaseUrl,
                   token: bootstrap.accessToken,
@@ -1029,7 +1306,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
                 sharedSettingsSaving={sharedSettingsSaving}
                 sharedSettingsStatus={sharedSettingsStatus}
                 onSharedSettingsDraftChange={setSharedSettingsDraft}
-                onSaveSharedSettings={() => void saveSharedSettings()}
+                onSaveSharedSettings={() => saveSharedSettings()}
                 recoveryItems={recoveryItems}
                 pendingConfirmations={pendingConfirmations}
                 recoveryBusyId={recoveryBusyId}
@@ -1045,6 +1322,13 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
           </View>
         </View>
       ) : null}
+      <DesktopExitDialog
+        visible={exitDialogOpen}
+        busy={exitBusy}
+        error={exitError}
+        hasActiveWork={Boolean(conversationHeaderControls?.identityStopActive)}
+        onChoice={(choice) => void handleExitChoice(choice)}
+      />
     </SafeAreaView>
   );
 }

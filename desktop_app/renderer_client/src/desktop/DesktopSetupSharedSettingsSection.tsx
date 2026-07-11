@@ -91,27 +91,25 @@ export function DesktopSetupSharedSettingsSection({ draft, saving = false, statu
           ) : null}
         </View>
 
-        {!standaloneMode ? (
-          <View style={styles.settingCard}>
-            <Text style={styles.settingCardTitle}>Active-run messages</Text>
-            <View style={styles.voiceModeRow}>
-              {INTERRUPT_OPTIONS.map((option) => {
-                const selected = draft.interruptPolicy === option.value;
-                return (
-                  <Pressable
-                    key={option.value}
-                    style={[styles.voiceModeButton, selected ? styles.voiceModeButtonActive : null]}
-                    onPress={() => update({ interruptPolicy: option.value })}
-                  >
-                    <Text style={[styles.voiceModeButtonText, selected ? styles.voiceModeButtonTextActive : null]}>
-                      {option.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
+        <View style={styles.settingCard}>
+          <Text style={styles.settingCardTitle}>Active-run messages</Text>
+          <View style={styles.voiceModeRow}>
+            {INTERRUPT_OPTIONS.map((option) => {
+              const selected = draft.interruptPolicy === option.value;
+              return (
+                <Pressable
+                  key={option.value}
+                  style={[styles.voiceModeButton, selected ? styles.voiceModeButtonActive : null]}
+                  onPress={() => update({ interruptPolicy: option.value })}
+                >
+                  <Text style={[styles.voiceModeButtonText, selected ? styles.voiceModeButtonTextActive : null]}>
+                    {option.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
           </View>
-        ) : null}
+        </View>
 
         <View style={styles.settingCard}>
           <Text style={styles.settingCardTitle}>Memory controls</Text>

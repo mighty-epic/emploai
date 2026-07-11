@@ -1,9 +1,13 @@
 import type { DesktopConversationScope } from './DesktopConversationScope';
+import { createClientMessageId } from './desktopRealtimeProtocol';
+import { createAsyncSingleFlight, createLatestAsyncQueue } from './desktopAsyncCoordination';
+import { restoreRecoveryItem, stopIdentityTree } from '@/lib/appApi';
 import { modelExistsInGroups } from './modelProviders';
+import { useRef } from 'react';
 type NativeSyntheticEvent<T = any> = any; type ActiveCommandPanel = any; type ActivityItem = any; type AgentOverview = any; type ArtifactDetail = any; type ArtifactSummary = any; type ComposerInputOrigin = any; type ConversationSurfaceMode = any; type DesktopFleetEnrollment = any; type DesktopFleetIdentity = any; type DesktopFleetSnapshot = any; type DesktopFleetTask = any; type DesktopFleetWorker = any; type DesktopGitRepoState = any; type DesktopMessage = any; type DesktopPathStatus = any; type DesktopRuntimeStatus = any; type DesktopSidebarProjectActivity = any; type DesktopSidebarState = any; type DesktopVoicePackState = any; type DesktopVoiceRuntimeStatus = any; type InterruptPolicy = any; type JarvisSttBackend = any; type JarvisTtsBackend = any; type LayoutChangeEvent = any; type MessageSourceFormat = any; type ModelProviderGroup = any; type NativeScrollEvent = any; type PendingSearchJump = any; type QueuedComposerMessage = any; type QueuedMessage = any; type RealtimeChannel = any; type RealtimeEvent = any; type ReferenceEntry = any; type RuntimeOrchestratorStatus = any; type ScheduledJob = any; type SearchResultTarget = any; type SecurityPermissionMode = any; type SessionDetail = any; type SessionMessage = any; type SessionSearchResult = any; type SessionSummary = any; type SessionTimelineEvent = any; type SidebarChatTooltipState = any; type SidebarDragState = any; type SidebarDraftChat = any; type SidebarProjectGroup = any; type StartupReadinessState = any; type TaskBoard = any; type TelegramBotConfig = any; type TextInputContentSizeChangeEventData = any; type ToolPackInfoPopupState = any; type VoiceCaptureMode = any; type VoiceGateState = any;
 
 export function useDesktopConversationSessionControls(scope: DesktopConversationScope) {
-  const { SIDEBAR_DRAFT_CHAT_ID, activateSession, activeFleetIdentity, allowedWorkspaceRoot, alwaysOnEnabledRef, apiBaseUrl, checkoutDesktopGitBranch, configureAgent, configuredModelGroups, controlAgentRun, createDesktopFolder, createSession, currentWorkspaceBySessionRef, defaultTelegramBotConfigId, defaultToolPackIds, deleteSession, describeError, draftChat, draftChatRef, enabledToolPackIdsFrom, ensureSidebarProjectEntries, ensureSidebarProjectEntry, fetchSessionDetail, fleetSessionCreateFields, fleetSnapshot, folderChoiceResolveRef, getDesktopPathStatus, interruptPolicy, isAbsoluteWindowsPath, isWorkspacePathAllowed, keepRuntimeOnAppClose, loadDesktopBootstrap, normalizeWorkspacePath, overview, pendingDraftSecurityPermissionMode, pendingMessagesRef, pendingSessionSwitch, pickDesktopFolder, preferredModelFromGroups, projectDisplayName, projectPathBasename, projectPathStatuses, sessionBelongsToFleetIdentity, sessionId, sessionIdRef, sessionSidebarSortComparator, sessions, setActiveCommandPanel, setAlwaysOnEnabled, setAssistantDraft, setChatRunActive, setCompletedTaskBoards, setDraftChat, setDraftGitRepoState, setExpandedCompletedTaskIds, setFolderChoiceBusy, setFolderChoiceOpen, setKeepRuntimeOnAppClose, setMessages, setOpenProjectMenuPath, setOpenSessionMenuId, setOverview, setPendingSearchJump, setPendingSessionSwitch, setRuntimeRunState, setSavingCloseBehavior, setSessionId, setSessionName, setShowReferenceRail, setSidebarExpanded, setStatus, setTaskBoard, setTaskBoardArmedNextTurn, setTaskBoardArmedNextTurnState, setTaskBoardCollapsed, setThinking, setTimelineEvents, setVoiceRecording, setVoiceRunning, setVoiceState, sidebarState, status, strOrNull, taskBoardArmedNextTurn, telegramBotConfigs, token, updateAgentConfig, userFacingError, voicePressActiveRef, voiceRecordingRef, voiceRunningRef, voiceStartInFlightRef, voiceWsRef } = scope;
+  const { SIDEBAR_DRAFT_CHAT_ID, activateSession, activeFleetIdentity, allowedWorkspaceRoot, alwaysOnEnabledRef, apiBaseUrl, chatRunActive, checkoutDesktopGitBranch, configureAgent, configuredModelGroups, controlAgentRun, createDesktopFolder, createSession, currentWorkspaceBySessionRef, defaultTelegramBotConfigId, defaultToolPackIds, deleteSession, describeError, draftChat, draftChatRef, enabledToolPackIdsFrom, ensureSidebarProjectEntries, ensureSidebarProjectEntry, fetchSessionDetail, fleetSessionCreateFields, fleetSnapshot, folderChoiceResolveRef, getDesktopPathStatus, interruptPolicy, isAbsoluteWindowsPath, isWorkspacePathAllowed, keepRuntimeOnAppClose, loadDesktopBootstrap, normalizeWorkspacePath, overview, pendingDraftSecurityPermissionMode, pendingMessagesRef, pendingSessionSwitch, pickDesktopFolder, preferredModelFromGroups, projectDisplayName, projectPathBasename, projectPathStatuses, refreshFleetSnapshot, runtimeRunState, sessionBelongsToFleetIdentity, sessionId, sessionIdRef, sessionSidebarSortComparator, sessions, setActiveCommandPanel, setAlwaysOnEnabled, setAssistantDraft, setChatRunActive, setCompletedTaskBoards, setDraftChat, setDraftGitRepoState, setExpandedCompletedTaskIds, setFolderChoiceBusy, setFolderChoiceOpen, setKeepRuntimeOnAppClose, setMessages, setOpenProjectMenuPath, setOpenSessionMenuId, setOverview, setPendingSearchJump, setPendingSessionSwitch, setRuntimeRunState, setSavingCloseBehavior, setSessionId, setSessionName, setShowReferenceRail, setSidebarExpanded, setStatus, setTaskBoard, setTaskBoardArmedNextTurn, setTaskBoardArmedNextTurnState, setTaskBoardCollapsed, setThinking, setTimelineEvents, setVoiceRecording, setVoiceRunning, setVoiceState, sidebarState, status, strOrNull, taskBoardArmedNextTurn, telegramBotConfigs, token, updateAgentConfig, userFacingError, voicePressActiveRef, voiceRecordingRef, voiceRunningRef, voiceStartInFlightRef, voiceWsRef } = scope;
   const applySessionDetail = (...args: any[]) => scope.applySessionDetail?.(...args);
   const discardDraftChat = (...args: any[]) => scope.discardDraftChat?.(...args);
   const pushActivity = (...args: any[]) => scope.pushActivity?.(...args);
@@ -19,6 +23,9 @@ export function useDesktopConversationSessionControls(scope: DesktopConversation
   const resetVoiceCaptureBuffers = (...args: any[]) => scope.resetVoiceCaptureBuffers?.(...args);
   const setComposerInputValue = (...args: any[]) => scope.setComposerInputValue?.(...args);
   const stopVoiceTracks = (...args: any[]) => scope.stopVoiceTracks?.(...args);
+  const sessionOpenQueue = useRef(createLatestAsyncQueue<SessionDetail>()).current;
+  const draftMaterialization = useRef(createAsyncSingleFlight<string>()).current;
+  const archiveUndoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 const isBusySessionSwitchError = (error: unknown) => (
     describeError(error).toLowerCase().includes('finish or stop the current task')
   );
@@ -37,10 +44,6 @@ const isBusySessionSwitchError = (error: unknown) => (
     try {
       return await activateSession(apiBaseUrl, token, targetSessionId);
     } catch (error) {
-      if (isBusySessionSwitchError(error)) {
-        setStatus('showing chat while the current run continues');
-        return fetchSessionDetail(apiBaseUrl, token, targetSessionId);
-      }
       if (!isRecoverableSessionActivationError(error)) {
         throw error;
       }
@@ -52,6 +55,23 @@ const isBusySessionSwitchError = (error: unknown) => (
     }
   };
 
+  const isKnownProjectPath = (projectPath: string) => {
+    const normalized = normalizeWorkspacePath(projectPath);
+    if (!normalized) {
+      return false;
+    }
+    if (normalizeWorkspacePath(draftChat?.projectPath) === normalized) {
+      return true;
+    }
+    if (sessions.some((item: any) => normalizeWorkspacePath(item.workspace) === normalized)) {
+      return true;
+    }
+    if (sidebarState.projectOrder.some((item: any) => normalizeWorkspacePath(item) === normalized)) {
+      return !Boolean(sidebarState.projects[normalized]?.hidden);
+    }
+    return Boolean(sidebarState.projects[normalized] && !sidebarState.projects[normalized]?.hidden);
+  };
+
   const selectedProjectPathCandidate = normalizeWorkspacePath(
     draftChat?.projectPath
     || sidebarState.selectedProjectPath
@@ -59,7 +79,10 @@ const isBusySessionSwitchError = (error: unknown) => (
     || sessions.find((item: any) => item.id === sessionIdRef.current)?.workspace
     || '',
   );
-  const selectedProjectPath = isWorkspacePathAllowed(selectedProjectPathCandidate, allowedWorkspaceRoot)
+  const selectedProjectPath = (
+    isWorkspacePathAllowed(selectedProjectPathCandidate, allowedWorkspaceRoot)
+    || isKnownProjectPath(selectedProjectPathCandidate)
+  )
     ? selectedProjectPathCandidate
     : '';
   const preferredProjectPath = selectedProjectPath;
@@ -137,6 +160,7 @@ const isBusySessionSwitchError = (error: unknown) => (
   };
 
   const resetConversationForDraft = (projectPath: string) => {
+    sessionOpenQueue.invalidate();
     sessionIdRef.current = undefined;
     voiceStartInFlightRef.current = false;
     voicePressActiveRef.current = false;
@@ -174,6 +198,7 @@ const isBusySessionSwitchError = (error: unknown) => (
     projectPath?: string | null,
     options?: { clearSidebarProject?: boolean },
   ) => {
+    sessionOpenQueue.invalidate();
     sessionIdRef.current = undefined;
     voiceStartInFlightRef.current = false;
     voicePressActiveRef.current = false;
@@ -225,6 +250,10 @@ const isBusySessionSwitchError = (error: unknown) => (
     const knownStatus = projectPathStatuses[normalized] || null;
     const status = knownStatus || await getDesktopPathStatus(normalized).catch(() => null);
     const resolvedStatusPath = normalizeWorkspacePath(status?.resolvedPath || '');
+    const knownProjectPath = isKnownProjectPath(normalized)
+      && (!status || (status.exists && status.isDirectory))
+      ? resolvedStatusPath || normalized
+      : '';
     const fallbackRootCandidate = (
       !isAbsoluteWindowsPath(normalized) && allowedWorkspaceRoot
         ? normalizeWorkspacePath(`${allowedWorkspaceRoot}\\${normalized.replace(/^\\+/, '')}`)
@@ -240,7 +269,7 @@ const isBusySessionSwitchError = (error: unknown) => (
       && isWorkspacePathAllowed(candidate, allowedWorkspaceRoot)
     ));
 
-    let targetPath = allowedCandidates[0] || '';
+    let targetPath = allowedCandidates[0] || knownProjectPath || '';
     if (!targetPath && fallbackRootCandidate) {
       const fallbackStatus = await getDesktopPathStatus(fallbackRootCandidate).catch(() => null);
       if (fallbackStatus?.exists && fallbackStatus.isDirectory) {
@@ -285,15 +314,15 @@ const isBusySessionSwitchError = (error: unknown) => (
       return null;
     }
     const normalized = normalizeWorkspacePath(picked);
-    if (!isWorkspacePathAllowed(normalized, allowedWorkspaceRoot)) {
-      setStatus(
-        allowedWorkspaceRoot
-          ? `Choose a folder inside ${allowedWorkspaceRoot}`
-          : 'Choose a valid workspace folder',
-      );
+    const status = await getDesktopPathStatus(normalized).catch(() => null);
+    const resolvedPath = normalizeWorkspacePath(status?.resolvedPath || normalized);
+    if (!resolvedPath || !status?.exists || !status.isDirectory) {
+      setStatus(`"${projectPathBasename(normalized)}" is not an available folder`);
       return null;
     }
-    return rememberProjectFolder(normalized);
+    const remembered = rememberProjectFolder(resolvedPath);
+    setStatus(`added folder ${projectPathBasename(remembered)}`);
+    return remembered;
   };
 
   const automaticProjectParentPath = () => (
@@ -398,6 +427,10 @@ const isBusySessionSwitchError = (error: unknown) => (
   };
 
   const openDraftChat = async (projectPath: string, telegramBotConfigId?: string | null) => {
+    if (chatRunActive || runtimeRunState === 'running') {
+      setStatus('Stop the current task before starting another chat.');
+      return;
+    }
     const resolvedProjectPath = await resolveProjectPathForNewChat(projectPath);
     if (!resolvedProjectPath) {
       return;
@@ -510,7 +543,7 @@ const isBusySessionSwitchError = (error: unknown) => (
     await openDraftChat(targetProject);
   };
 
-  const materializeDraftSession = async (projectPath: string) => {
+  const materializeDraftSessionOnce = async (projectPath: string) => {
     const { requestedPath, targetPath, status } = await resolveAllowedProjectPath(projectPath);
     if (!requestedPath || !targetPath) {
       throw new Error(
@@ -561,7 +594,14 @@ const isBusySessionSwitchError = (error: unknown) => (
       nextConfigPayload.planner_model = draftPlannerModel;
     }
     if (Object.keys(nextConfigPayload).length > 0) {
-      await configureAgent(apiBaseUrl, token, nextConfigPayload, created.session.id);
+      try {
+        await configureAgent(apiBaseUrl, token, nextConfigPayload, created.session.id);
+      } catch (error) {
+        pushActivity(
+          `Chat created, but its preferred model settings were not applied: ${describeError(error)}`,
+          'warn',
+        );
+      }
     }
     applySessionDetail(created.session);
     void Promise.all([
@@ -572,6 +612,10 @@ const isBusySessionSwitchError = (error: unknown) => (
     });
     return created.session.id;
   };
+
+  const materializeDraftSession = (projectPath: string) => (
+    draftMaterialization.run(() => materializeDraftSessionOnce(projectPath))
+  );
 
   const activateResolvedSessionForOutgoingMessage = async (targetSessionId: string) => {
     const normalizedTargetSessionId = String(targetSessionId || '').trim();
@@ -637,7 +681,7 @@ const isBusySessionSwitchError = (error: unknown) => (
 
   const openSession = async (
     nextSessionId: string,
-    options?: { jumpMessageIndex?: number | null; projectPath?: string | null },
+    options?: { jumpMessageIndex?: number | null; projectPath?: string | null; forceAfterStop?: boolean },
   ) => {
     if (!nextSessionId) {
       return;
@@ -656,7 +700,6 @@ const isBusySessionSwitchError = (error: unknown) => (
       return;
     }
 
-    discardDraftChat({ clearInput: true });
     setOpenSessionMenuId(null);
     if (options?.projectPath) {
       revealProjectInSidebar(options.projectPath);
@@ -664,22 +707,45 @@ const isBusySessionSwitchError = (error: unknown) => (
     setStatus('switching shared session');
     setAssistantDraft('');
     setThinking('');
-    try {
-      const detail = await activateSessionWithRecovery(nextSessionId);
-      applySessionDetail(detail);
-      await Promise.all([
-        refreshSidebarCollections(nextSessionId, true),
-        refreshOverviewState(nextSessionId, { quiet: true }),
-      ]);
-      if (typeof options?.jumpMessageIndex === 'number') {
-        setPendingSearchJump({
+    const result = await sessionOpenQueue.schedule(() => activateSessionWithRecovery(nextSessionId));
+    if (result.status === 'superseded') {
+      return;
+    }
+    if (!options?.forceAfterStop && (chatRunActive || runtimeRunState === 'running')) {
+      setPendingSessionSwitch({
+        mode: 'session',
+        sessionId: nextSessionId,
+        jumpMessageIndex: options?.jumpMessageIndex ?? null,
+      });
+      setStatus('Current run is still active. Stop it before switching chats.');
+      return;
+    }
+    if (result.status === 'failed') {
+      if (isBusySessionSwitchError(result.error)) {
+        setPendingSessionSwitch({
+          mode: 'session',
           sessionId: nextSessionId,
-          messageIndex: options.jumpMessageIndex,
-          attempt: 0,
+          jumpMessageIndex: options?.jumpMessageIndex ?? null,
         });
+        setStatus('Current run is still active. Stop it before switching chats.');
+        return;
       }
-    } catch (error) {
-      setStatus(userFacingError(error, 'Chat did not open.'));
+      setStatus(userFacingError(result.error, 'Chat did not open.'));
+      return;
+    }
+
+    discardDraftChat({ clearInput: true });
+    applySessionDetail(result.value);
+    await Promise.all([
+      refreshSidebarCollections(nextSessionId, true),
+      refreshOverviewState(nextSessionId, { quiet: true }),
+    ]);
+    if (typeof options?.jumpMessageIndex === 'number') {
+      setPendingSearchJump({
+        sessionId: nextSessionId,
+        messageIndex: options.jumpMessageIndex,
+        attempt: 0,
+      });
     }
   };
 
@@ -697,16 +763,21 @@ const isBusySessionSwitchError = (error: unknown) => (
       if (nextAction.mode === 'session') {
         await openSession(nextAction.sessionId, {
           jumpMessageIndex: nextAction.jumpMessageIndex ?? null,
+          forceAfterStop: true,
         });
         return;
       }
 
       const nextSessionId = await materializeDraftSession(nextAction.projectPath);
+      const clientMessageId = createClientMessageId(scope.appClientIdRef.current);
       pendingMessagesRef.current.push({
+        clientMessageId,
         text: nextAction.text,
         sourceFormat: nextAction.sourceFormat,
         interruptPolicy,
         sessionId: nextSessionId,
+        deliveryState: 'queued',
+        modeOptions: nextAction.modeOptions,
       });
       setMessages((previous: any) => [
         ...previous,
@@ -717,10 +788,11 @@ const isBusySessionSwitchError = (error: unknown) => (
           displayLabel: nextAction.sourceFormat === 'app_voice_transcript' ? 'Voice' : 'You',
           channel: 'app',
           sourceFormat: nextAction.sourceFormat,
-          messageKey: `pending:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+          messageKey: `pending:${clientMessageId}`,
           pending: true,
           localSessionId: nextSessionId,
           sourceClientId: scope.appClientIdRef.current,
+          raw: { client_message_id: clientMessageId },
         },
       ]);
       flushPendingMessages();
@@ -879,11 +951,26 @@ const isBusySessionSwitchError = (error: unknown) => (
     }
 
     setOpenSessionMenuId(null);
-    setStatus(`deleting ${session.name}`);
+    setStatus(`archiving ${session.name}`);
     const deletingCurrentSession = sessionIdRef.current === session.id && !draftChatRef.current;
 
     try {
       const result = await deleteSession(apiBaseUrl, token, session.id);
+      if (result.archive_id) {
+        if (archiveUndoTimerRef.current) clearTimeout(archiveUndoTimerRef.current);
+        scope.setArchiveUndo?.({
+          archiveId: result.archive_id,
+          sessionId: session.id,
+          sessionName: session.name,
+          expiresAt: Date.now() + 8000,
+        });
+        archiveUndoTimerRef.current = setTimeout(() => {
+          scope.setArchiveUndo?.((current: any) => (
+            current?.archiveId === result.archive_id ? null : current
+          ));
+          archiveUndoTimerRef.current = null;
+        }, 8000);
+      }
       const nextCurrentSessionId = result.current_session_id || null;
       if (deletingCurrentSession) {
         moveDeletedCurrentSessionToDraft(session);
@@ -891,15 +978,39 @@ const isBusySessionSwitchError = (error: unknown) => (
         setStatus(`new chat in ${projectPathBasename(normalizeWorkspacePath(session.workspace) || selectedProjectPath || preferredProjectPath)}`);
       } else {
         await refreshSidebarState(nextCurrentSessionId, true);
-        setStatus('chat deleted');
+        setStatus('chat archived');
       }
-      pushActivity(`Deleted chat: ${session.name}`, 'accent');
+      pushActivity(`Archived chat: ${session.name}`, 'accent');
     } catch (error) {
       const message = describeError(error);
       setStatus(message);
-      pushActivity(`Delete chat failed: ${message}`, 'error');
+      pushActivity(`Archive chat failed: ${message}`, 'error');
     }
   };
+
+  const undoArchiveChat = async () => {
+    const undo = scope.archiveUndo;
+    if (!undo?.archiveId) return;
+    if (archiveUndoTimerRef.current) {
+      clearTimeout(archiveUndoTimerRef.current);
+      archiveUndoTimerRef.current = null;
+    }
+    setStatus(`restoring ${undo.sessionName || 'chat'}`);
+    try {
+      const result = await restoreRecoveryItem(apiBaseUrl, token, undo.archiveId);
+      const restoredSessionId = String(result.restored_session_id || undo.sessionId || '').trim();
+      scope.setArchiveUndo?.(null);
+      await refreshSidebarState(restoredSessionId || null, true);
+      if (restoredSessionId) await openSession(restoredSessionId);
+      setStatus('chat restored');
+      pushActivity(`Restored chat: ${undo.sessionName || restoredSessionId}`, 'accent');
+    } catch (error) {
+      const message = describeError(error);
+      setStatus(message);
+      pushActivity(`Restore chat failed: ${message}`, 'error');
+    }
+  };
+  scope.undoArchiveChat = undoArchiveChat;
 
   const moveProjectOrder = (draggedProjectPath: string, targetProjectPath: string) => {
     const dragged = normalizeWorkspacePath(draggedProjectPath);
@@ -981,6 +1092,52 @@ const isBusySessionSwitchError = (error: unknown) => (
     }
   };
 
+  const stopCurrentIdentity = async () => {
+    const activeSessionId = sessionIdRef.current || sessionId || null;
+    const identity = activeFleetIdentity || null;
+    if (!activeSessionId && !identity?.worker_id && !identity?.identity_id) {
+      setStatus('select an active identity before stopping');
+      return;
+    }
+
+    setStatus('stopping identity');
+    try {
+      const result = await stopIdentityTree(apiBaseUrl, token, {
+        session_id: activeSessionId,
+        identity_id: identity?.identity_id || null,
+        identity_role: identity?.role || null,
+        worker_id: identity?.worker_id || null,
+        reason: 'Stopped from desktop identity stop',
+      });
+      setChatRunActive(false);
+      setRuntimeRunState('idle');
+      setAssistantDraft('');
+      setThinking('');
+      setTaskBoard(null);
+      setVoiceRunning(false);
+      setVoiceRecording(false);
+      setOverview((previous: any) => (
+        previous
+          ? {
+              ...previous,
+              run_state: 'idle',
+              active_visual_monitors: 0,
+              task_board: null,
+            }
+          : previous
+      ));
+      pushActivity(result.message || 'Identity stopped', 'warn');
+      setStatus(result.message || 'identity stopped');
+      await Promise.all([
+        activeSessionId ? refreshSidebarState(activeSessionId, true) : Promise.resolve(),
+        activeSessionId ? refreshOverviewState(activeSessionId, { quiet: true }) : Promise.resolve(),
+        refreshFleetSnapshot ? refreshFleetSnapshot({ quiet: true }) : Promise.resolve(),
+      ]);
+    } catch (error) {
+      setStatus(userFacingError(error, 'Identity stop did not finish.'));
+    }
+  };
+
   const toggleTaskBoardArmNextTurn = async () => {
     const activeSessionId = sessionIdRef.current;
     if (!activeSessionId) {
@@ -1048,5 +1205,5 @@ const isBusySessionSwitchError = (error: unknown) => (
       setSavingCloseBehavior(false);
     }
   };
-  return { isBusySessionSwitchError, isRecoverableSessionActivationError, activateSessionWithRecovery, selectedProjectPathCandidate, selectedProjectPath, preferredProjectPath, preferredFolderPickerPath, emptyConversationProjectPath, emptyConversationProjectName, buildDraftChatState, resetConversationForDraft, clearConversationSelection, resolveAllowedProjectPath, rememberProjectFolder, promptForProjectFolder, automaticProjectParentPath, createAutomaticProjectFolderPath, closeFolderChoice, askForProjectFolderChoice, chooseFolderFromChoice, createAutomaticFolderFromChoice, resolveProjectForNewChatStart, resolveProjectPathForNewChat, openDraftChat, chooseDraftProjectFolder, chooseDraftProject, chooseDraftBranch, chooseDraftTelegramBot, beginNewChat, materializeDraftSession, ensureSessionForOutgoingMessage, openSession, confirmPendingSessionSwitch, dismissPendingSessionSwitch, toggleProjectPin, toggleSessionPin, toggleProjectCollapsed, renameProject, removeProjectFromSidebar, moveDeletedCurrentSessionToDraft, deleteSidebarSession, moveProjectOrder, moveSessionOrder, runControl, toggleTaskBoardArmNextTurn, toggleKeepRuntimeOnAppClose };
+  return { isBusySessionSwitchError, isRecoverableSessionActivationError, activateSessionWithRecovery, selectedProjectPathCandidate, selectedProjectPath, preferredProjectPath, preferredFolderPickerPath, emptyConversationProjectPath, emptyConversationProjectName, buildDraftChatState, resetConversationForDraft, clearConversationSelection, resolveAllowedProjectPath, rememberProjectFolder, promptForProjectFolder, automaticProjectParentPath, createAutomaticProjectFolderPath, closeFolderChoice, askForProjectFolderChoice, chooseFolderFromChoice, createAutomaticFolderFromChoice, resolveProjectForNewChatStart, resolveProjectPathForNewChat, openDraftChat, chooseDraftProjectFolder, chooseDraftProject, chooseDraftBranch, chooseDraftTelegramBot, beginNewChat, materializeDraftSession, ensureSessionForOutgoingMessage, openSession, confirmPendingSessionSwitch, dismissPendingSessionSwitch, toggleProjectPin, toggleSessionPin, toggleProjectCollapsed, renameProject, removeProjectFromSidebar, moveDeletedCurrentSessionToDraft, deleteSidebarSession, moveProjectOrder, moveSessionOrder, runControl, stopCurrentIdentity, toggleTaskBoardArmNextTurn, toggleKeepRuntimeOnAppClose };
 }

@@ -16,6 +16,8 @@ TOOL_RUN_BACKGROUND_COMMAND = "run_background_command"
 TOOL_COMMAND_STATUS = "command_status"
 TOOL_SEND_INPUT = "send_input"
 TOOL_KILL_COMMAND = "kill_command"
+TOOL_START_VISUAL_MONITOR = "start_visual_monitor"
+TOOL_STOP_VISUAL_MONITOR = "stop_visual_monitor"
 TOOL_WEB_SEARCH = "web_search"
 TOOL_FETCH_URL = "fetch_url"
 TOOL_PULL_SKILL = "pull_skill"
@@ -147,7 +149,7 @@ CLI_AGENT_TOOLS = [
     },
     {
         "name": TOOL_RUN_BACKGROUND_COMMAND,
-        "description": "Start a command in the BACKGROUND. Background commands are hidden by default and return captured output through command_status. Use visible_terminal=true only when the user explicitly wants to see or interact with a terminal window. Use this for long-running commands (dev servers, builds, npm install, test suites, file watchers, app launches, or any command that may take more than 30 seconds). Choose shell='powershell' for PowerShell commands and shell='cmd' for cmd.exe commands. The runtime will proactively resume the task when a task-owned command exits unless persistent=true or resume_policy='manual'. After starting, use command_status to check output/progress, send_input to interact with hidden commands, or kill_command to stop it.",
+        "description": "Start a command in the BACKGROUND. Background commands are hidden by default and return captured output through command_status. Use visible_terminal=true only when the user explicitly wants to see or interact with a terminal window. Use this for long-running commands (dev servers, builds, npm install, test suites, file watchers, app launches, or any command that may take more than 30 seconds). Choose shell='powershell' for PowerShell commands and shell='cmd' for cmd.exe commands. Task-owned background commands may keep running after the current agent turn. The runtime will proactively resume the task when a task-owned command exits unless persistent=true or resume_policy='manual'; it also emits long-running no-progress checkpoints around 1 minute, 5 minutes, then every 10 minutes so a hidden planner can keep waiting or raise/wake the main agent. If the agent is already running, command events are injected as runtime context on the next model turn. After starting, use command_status to check output/progress, send_input to interact with hidden commands, or kill_command to stop it.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -171,7 +173,7 @@ CLI_AGENT_TOOLS = [
                 },
                 "persistent": {
                     "type": "boolean",
-                    "description": "Default false. Set true only for dev servers/watchers that should remain alive after the immediate task.",
+                    "description": "Default false. Set true only for dev servers/watchers that should remain alive after the immediate task and should not wake the agent on completion or no-progress checkpoints.",
                     "default": False
                 },
                 "ready_patterns": {
@@ -228,6 +230,38 @@ CLI_AGENT_TOOLS = [
                 "command_id": {"type": "string", "description": "The command_id of the command to kill."}
             },
             "required": ["command_id"]
+        }
+    },
+    {
+        "name": TOOL_START_VISUAL_MONITOR,
+        "description": "Start a local full-screen visual monitor for long uncertain waits. Use this after launching, opening, testing, or waiting on visible desktop/UI state when a meaningful screen change should wake the agent later. This tool is non-blocking, so you may continue useful non-visual work after starting it or leave it running after your turn as a cheap wait handle. Only one visual monitor can be active at a time; starting a new one replaces the old one. If it fires while you are still running, the runtime injects the event as system context on your next model turn; if you are idle, it wakes you. No-change checkpoints are handled by the hidden runtime only while you are idle. The monitor uses fixed percent-change presets, discards screenshots, and stops automatically when it wakes the main agent; after waking, inspect with describe_screen before acting.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "threshold_preset": {
+                    "type": "string",
+                    "enum": ["10%", "30%", "50%", "70%"],
+                    "description": "The visible-screen percentage change required to wake the agent. Use 10% for subtle UI changes, 30% for normal page/app changes, 50% for major transitions, and 70% for very large screen changes."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "What you are waiting for or why visual monitoring is useful."
+                }
+            },
+            "required": ["threshold_preset", "reason"]
+        }
+    },
+    {
+        "name": TOOL_STOP_VISUAL_MONITOR,
+        "description": "Stop a visual monitor started by this session. Omit monitor_id to stop this session/task's active visual monitors.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "monitor_id": {
+                    "type": "string",
+                    "description": "Optional monitor id returned by start_visual_monitor."
+                }
+            }
         }
     },
     {

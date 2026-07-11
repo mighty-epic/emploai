@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Tuple
 
 try:
     from PIL import Image
@@ -74,7 +74,7 @@ def _capture_with_mss():
         return Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
 
 
-def capture_screen_snapshot(*, max_width: int = 1280, jpeg_quality: int = 72) -> Dict[str, object]:
+def capture_screen_image(*, max_width: int = 1280) -> Tuple[object, str]:
     temp_path: Path | None = None
     backend = "mss"
 
@@ -91,7 +91,19 @@ def capture_screen_snapshot(*, max_width: int = 1280, jpeg_quality: int = 72) ->
             new_size = (max_width, max(1, int(image.height * scale)))
             resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
             image = image.resize(new_size, resampling)
+        return image, backend
+    finally:
+        if temp_path:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
+
+def capture_screen_snapshot(*, max_width: int = 1280, jpeg_quality: int = 72) -> Dict[str, object]:
+    image, backend = capture_screen_image(max_width=max_width)
+
+    try:
         output = io.BytesIO()
         image.save(output, format="JPEG", quality=jpeg_quality, optimize=True)
         image_bytes = output.getvalue()
@@ -108,8 +120,3 @@ def capture_screen_snapshot(*, max_width: int = 1280, jpeg_quality: int = 72) ->
             image.close()
         except Exception:
             pass
-        if temp_path:
-            try:
-                temp_path.unlink(missing_ok=True)
-            except Exception:
-                pass

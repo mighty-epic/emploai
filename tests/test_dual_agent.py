@@ -12,6 +12,7 @@ import sys
 import os
 import time
 from pathlib import Path
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -58,12 +59,13 @@ def test_schema_creation():
     print("✅ TEST 1 PASSED - Schemas work correctly\n")
 
 
-def test_memory_agent_initialization():
+def test_memory_agent_initialization(monkeypatch):
     """Test 2: Verify Memory Agent initializes correctly."""
     print("=" * 60)
     print("TEST 2: Memory Agent Initialization")
     print("=" * 60)
     
+    monkeypatch.setenv("OPENAI_API_KEY", "offline-test-key")
     agent = MemoryAgent(model="gpt-4o-mini")  # Use mini for testing
     agent.initialize_task("Test task: open browser and search")
     
@@ -78,12 +80,13 @@ def test_memory_agent_initialization():
     print("✅ TEST 2 PASSED - Memory Agent initializes correctly\n")
 
 
-def test_executor_agent_initialization():
+def test_executor_agent_initialization(monkeypatch):
     """Test 3: Verify Executor Agent initializes correctly."""
     print("=" * 60)
     print("TEST 3: Executor Agent Initialization")  
     print("=" * 60)
     
+    monkeypatch.setenv("OPENAI_API_KEY", "offline-test-key")
     agent = ExecutorAgent(model="gpt-4o-mini")
     
     # Should not have browser by default
@@ -95,12 +98,13 @@ def test_executor_agent_initialization():
     print("✅ TEST 3 PASSED - Executor Agent initializes correctly\n")
 
 
-def test_coordinator_initialization():
+def test_coordinator_initialization(monkeypatch):
     """Test 4: Verify Coordinator initializes correctly."""
     print("=" * 60)
     print("TEST 4: Coordinator Initialization")
     print("=" * 60)
     
+    monkeypatch.setenv("OPENAI_API_KEY", "offline-test-key")
     coordinator = DualAgentCoordinator(
         memory_model="gpt-4o-mini",
         executor_model="gpt-4o-mini"
@@ -113,6 +117,7 @@ def test_coordinator_initialization():
     print("✅ TEST 4 PASSED - Coordinator initializes correctly\n")
 
 
+@pytest.mark.live_external
 def test_simple_browser_task():
     """Test 5: Execute a simple browser task."""
     print("=" * 60)
@@ -142,6 +147,7 @@ def test_simple_browser_task():
     return result
 
 
+@pytest.mark.live_external
 def test_memory_agent_decomposition():
     """Test 6: Test Memory Agent's task decomposition."""
     print("=" * 60)

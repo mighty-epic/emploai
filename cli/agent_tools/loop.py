@@ -27,8 +27,9 @@ from shared.provider_errors import (
     PROVIDER_INPUT_REJECTED,
     PROVIDER_SAFETY_REJECTION,
     normalize_provider_error,
-    provider_blocker_message,
 )
+from shared.provider_failures import provider_failure_from_info
+from shared.openai_api import responses_store_disabled_for_client, responses_store_disabled_for_model
 from shared.security_policy import redact_json, redact_text
 
 # Try to import verbose tool logger (only available in telegram_bot context)
@@ -50,6 +51,7 @@ class LoopResult:
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    failure: Optional[Dict[str, Any]] = None
 
 
 def _extract_image_payload(result: Any) -> Optional[str]:
@@ -188,9 +190,9 @@ def _analyze_image_sidecar(
                 return text
         else:
             if api_type == "responses" and hasattr(client, "responses"):
-                response = client.responses.create(
-                    model=model_id,
-                    input=[
+                kwargs = {
+                    "model": model_id,
+                    "input": [
                         {
                             "role": "user",
                             "content": [
@@ -199,7 +201,12 @@ def _analyze_image_sidecar(
                             ],
                         }
                     ],
-                    max_output_tokens=300,
+                    "max_output_tokens": 300,
+                }
+                if responses_store_disabled_for_model(provider=provider, model_id=model_id) or responses_store_disabled_for_client(client):
+                    kwargs["store"] = False
+                response = client.responses.create(
+                    **kwargs,
                 )
                 text = _extract_openai_response_text(response)
                 if text:
@@ -662,6 +669,7 @@ def run_tool_loop(
     append_reasoning = callbacks.get("append_reasoning", lambda *args: None)
     begin_stream = callbacks.get("begin_stream", lambda *args: None)
     finish_stream = callbacks.get("finish_stream", lambda *args: None)
+    requested_provider = str(provider or "openai").strip().lower()
     provider = normalize_provider(provider)
     google_uses_openai_compat = provider == "google" and is_openai_compatible_client(client)
     tool_provider = "openai" if google_uses_openai_compat else provider
@@ -713,8 +721,12 @@ def run_tool_loop(
                 interrupt_msg = tool_executor.get_interrupt_message()
             
             if interrupt_msg:
-                # Inject the user's interrupt message into messages
-                messages.append({"role": "user", "content": f"[USER INTERRUPT] {interrupt_msg}"})
+                interrupt_text = str(interrupt_msg or "")
+                if interrupt_text.startswith("[RUNTIME SYSTEM CONTEXT]"):
+                    messages.append({"role": "system", "content": interrupt_text})
+                else:
+                    # Inject the user's interrupt message into messages
+                    messages.append({"role": "user", "content": f"[USER INTERRUPT] {interrupt_msg}"})
                 # Reset the interrupt flag so we can continue processing
                 if hasattr(tool_executor, 'clear_interrupt') and tool_executor.clear_interrupt:
                     tool_executor.clear_interrupt()
@@ -797,6 +809,7 @@ def run_tool_loop(
                 # Convert ALL messages in history to Anthropic format
                 system_parts = []
                 anthropic_messages = []
+                anthropic_thinking_blocks: List[Dict[str, Any]] = []
                 
                 for m in messages:
                     role = m.get("role")
@@ -842,13 +855,17 @@ def run_tool_loop(
                         # Standard message
                         anthropic_messages.append({"role": role, "content": content})
 
-                with client.messages.stream(
-                    model=model_id,
-                    max_tokens=4096,
-                    system=_joined_system_text(system_parts),
-                    messages=anthropic_messages,
-                    tools=tools if tools else None
-                ) as stream:
+                anthropic_kwargs = {
+                    "model": model_id,
+                    "max_tokens": 4096,
+                    "system": _joined_system_text(system_parts),
+                    "messages": anthropic_messages,
+                    "tools": tools if tools else None,
+                }
+                if variant == "thinking":
+                    anthropic_kwargs["thinking"] = {"type": "enabled", "budget_tokens": 1024}
+
+                with client.messages.stream(**anthropic_kwargs) as stream:
                     # Track current content block for tool calls
                     current_tool_block = None
                     current_tool_index = None
@@ -860,7 +877,18 @@ def run_tool_loop(
                         
                         # Track content block starts (including tool_use)
                         if event.type == "content_block_start":
-                            if hasattr(event, 'content_block') and event.content_block.type == "tool_use":
+                            if hasattr(event, 'content_block') and event.content_block.type == "thinking":
+                                anthropic_thinking_blocks.append({
+                                    "type": "thinking",
+                                    "thinking": "",
+                                })
+                            elif hasattr(event, 'content_block') and event.content_block.type == "redacted_thinking":
+                                redacted = {
+                                    "type": "redacted_thinking",
+                                    "data": getattr(event.content_block, "data", ""),
+                                }
+                                anthropic_thinking_blocks.append(redacted)
+                            elif hasattr(event, 'content_block') and event.content_block.type == "tool_use":
                                 # New tool call starting
                                 current_tool_index = event.index
                                 current_tool_block = event.content_block
@@ -873,6 +901,16 @@ def run_tool_loop(
                             if event.delta.type == "text_delta":
                                 assistant_text += event.delta.text
                                 _emit_stream(event.delta.text)
+                            elif event.delta.type == "thinking_delta":
+                                thinking_text = getattr(event.delta, "thinking", "") or getattr(event.delta, "text", "")
+                                if thinking_text:
+                                    if anthropic_thinking_blocks and anthropic_thinking_blocks[-1].get("type") == "thinking":
+                                        anthropic_thinking_blocks[-1]["thinking"] += str(thinking_text)
+                                    _emit_reasoning(str(thinking_text))
+                            elif event.delta.type == "signature_delta":
+                                signature = getattr(event.delta, "signature", "")
+                                if signature and anthropic_thinking_blocks and anthropic_thinking_blocks[-1].get("type") == "thinking":
+                                    anthropic_thinking_blocks[-1]["signature"] = signature
                             elif event.delta.type == "input_json_delta":
                                 # Tool call argument delta - use tracked index
                                 if current_tool_index is not None and current_tool_index in tool_call_chunks:
@@ -946,7 +984,7 @@ def run_tool_loop(
                                             "name": fn.name,
                                             "args": json.dumps(dict(fn.args))
                                         }
-            elif provider == "openai" and api_type == "responses":
+            elif provider in {"openai", "openai-codex"} and api_type == "responses":
                 instructions, response_input = _responses_input_from_messages(messages)
                 response_tools = _responses_tool_shape(tools)
                 kwargs = {
@@ -957,9 +995,11 @@ def run_tool_loop(
                     "tool_choice": "auto",
                     "instructions": instructions or None,
                 }
+                if responses_store_disabled_for_model(provider=requested_provider, model_id=model_id) or responses_store_disabled_for_client(client):
+                    kwargs["store"] = False
 
                 if variant in ["low", "medium", "high", "xhigh"]:
-                    kwargs["reasoning"] = {"effort": variant if variant != "xhigh" else "high"}
+                    kwargs["reasoning"] = {"effort": variant}
 
                 response_stream = client.responses.create(**kwargs)
                 completed_response = None
@@ -1035,10 +1075,10 @@ def run_tool_loop(
                 
                 if (
                     variant in ["low", "medium", "high", "xhigh"]
-                    and provider == "openai"
+                    and provider in {"openai", "openai-codex"}
                     and api_type != "responses"
                 ):
-                    kwargs["reasoning_effort"] = variant if variant != "xhigh" else "high"
+                    kwargs["reasoning_effort"] = variant
                 elif provider == "google" and variant in {"low", "medium", "high"}:
                     kwargs["reasoning_effort"] = variant
 
@@ -1089,7 +1129,12 @@ def run_tool_loop(
             _finish_visible_stream()
             info = normalize_provider_error(e, payload_kind="text")
             return LoopResult(
-                content=provider_blocker_message(info),
+                content="",
+                failure=provider_failure_from_info(
+                    info,
+                    provider_id=provider,
+                    model_id=model_id,
+                ).to_dict(),
             )
         
         # Format tool calls for history
@@ -1106,7 +1151,11 @@ def run_tool_loop(
         # --- ASSISTANT MESSAGE APPEND ---
         if provider == "anthropic":
             # For Anthropic, if there are tool calls, content must be a list
-            content_list = []
+            content_list = [
+                block
+                for block in anthropic_thinking_blocks
+                if block.get("type") == "redacted_thinking" or block.get("thinking")
+            ]
             if assistant_text:
                 content_list.append({"type": "text", "text": assistant_text})
             
@@ -1399,7 +1448,7 @@ def run_tool_loop(
             if image_payload and isinstance(result, dict):
                 vision_question = _vision_question_for_result(name, args, result)
                 vision_summary = _analyze_image_sidecar(
-                    provider=provider,
+                    provider=requested_provider if requested_provider == "openai-codex" else provider,
                     model_id=model_id,
                     client=client,
                     api_type=api_type,

@@ -8,10 +8,14 @@ import wave
 import numpy as np
 from scipy.signal import resample_poly
 
-INTERNAL_PY_DEPS = Path(__file__).resolve().parents[1] / "desktop_app" / "backend" / "_internal"
-if os.name == "nt":
-    os.add_dll_directory(str(INTERNAL_PY_DEPS))
-sys.path.insert(0, str(INTERNAL_PY_DEPS))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from shared.bundled_python_runtime import configure_bundled_python_dependencies
+
+
+configure_bundled_python_dependencies(REPO_ROOT)
 
 import torch
 from transformers import WhisperFeatureExtractor, WhisperForConditionalGeneration, WhisperTokenizerFast

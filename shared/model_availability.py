@@ -26,6 +26,32 @@ PROVIDER_ENV_VARS = {
     "openrouter": "OPENROUTER_API_KEY",
 }
 
+OPENAI_PROVIDER_MODE_ENV = "OPENAI_PROVIDER_MODE"
+OPENAI_PROVIDER_MODE_API_KEY = "api_key"
+OPENAI_PROVIDER_MODE_CHATGPT = "chatgpt"
+
+
+def normalize_openai_provider_mode(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    if normalized in {"chatgpt", "codex", "openai_codex", "subscription"}:
+        return OPENAI_PROVIDER_MODE_CHATGPT
+    if normalized in {"api", "api_key", "openai", "key"}:
+        return OPENAI_PROVIDER_MODE_API_KEY
+    return OPENAI_PROVIDER_MODE_API_KEY
+
+
+def apply_openai_provider_mode(enabled_providers: set[str], values: Mapping[str, str]) -> set[str]:
+    enabled = set(enabled_providers)
+    if "openai" not in enabled or "openai-codex" not in enabled:
+        return enabled
+
+    mode = normalize_openai_provider_mode(values.get(OPENAI_PROVIDER_MODE_ENV))
+    if mode == OPENAI_PROVIDER_MODE_CHATGPT:
+        enabled.discard("openai")
+    else:
+        enabled.discard("openai-codex")
+    return enabled
+
 
 def enabled_providers_from_env(values: Mapping[str, str], *, include_local_codex_auth: bool = False) -> set[str]:
     enabled: set[str] = set()
@@ -40,7 +66,7 @@ def enabled_providers_from_env(values: Mapping[str, str], *, include_local_codex
                 enabled.add("openai-codex")
         except Exception:
             pass
-    return enabled
+    return apply_openai_provider_mode(enabled, values)
 
 
 def enabled_providers_from_clients(

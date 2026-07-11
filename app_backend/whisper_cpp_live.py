@@ -13,10 +13,10 @@ from pathlib import Path
 from queue import Queue
 from typing import Callable, Optional
 
-INTERNAL_PY_DEPS = Path(__file__).resolve().parents[2] / "desktop_app" / "backend" / "_internal"
-if os.name == "nt":
-    os.add_dll_directory(str(INTERNAL_PY_DEPS))
-sys.path.insert(0, str(INTERNAL_PY_DEPS))
+from shared.bundled_python_runtime import configure_bundled_python_dependencies
+
+
+configure_bundled_python_dependencies()
 
 from app_backend.standalone_voice_engine import (
     DEFAULT_AWAKE_TIMEOUT_S,

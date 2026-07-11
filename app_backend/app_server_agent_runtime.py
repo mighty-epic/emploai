@@ -48,6 +48,12 @@ def _default_user_id() -> int:
 
     return _remote_account_user_id() or DEFAULT_APP_USER_ID
 
+def _normalize_agent_variant_name(value: str) -> str:
+
+    normalized = str(value or "").strip().lower()
+
+    return {"light": "low"}.get(normalized, normalized)
+
 def _get_security_manager() -> Optional[SecurityManager]:
 
     global _security_manager, _security_manager_attempted
@@ -1107,6 +1113,25 @@ def _agent_overview(runtime, bridge: "AppSessionBridge", *, history_count: int =
     get_supported_planner_models = getattr(runtime, "get_supported_planner_models", None)
 
     planner_models = list(get_supported_planner_models(AVAILABLE_MODELS)) if callable(get_supported_planner_models) else []
+    active_visual_monitors = 0
+    try:
+        from shared.visual_monitor_runtime import get_visual_monitor_manager
+
+        current_session_id = (
+            str(getattr(getattr(runtime, "session", None), "id", "") or "").strip()
+            or (runtime.session_manager.get_current_session_id() if runtime.session_manager else None)
+        )
+        current_identity_id = (
+            str(getattr(getattr(runtime, "session", None), "fleet_identity_id", "") or "").strip()
+            or str(getattr(runtime, "fleet_identity_id", "") or "").strip()
+            or None
+        )
+        active_visual_monitors = get_visual_monitor_manager().active_count(
+            session_id=current_session_id,
+            identity_id=current_identity_id,
+        )
+    except Exception:
+        active_visual_monitors = 0
 
     return {
 
@@ -1153,6 +1178,8 @@ def _agent_overview(runtime, bridge: "AppSessionBridge", *, history_count: int =
         "config_preview": _config_preview(runtime),
 
         "run_state": "running" if bool(getattr(runtime, "is_processing", False)) else "idle",
+
+        "active_visual_monitors": int(active_visual_monitors),
 
         "task_board": task_board_view(get_display_task_board(runtime)),
 
@@ -1276,23 +1303,39 @@ def _configure_runtime(runtime, request: AgentConfigureRequest) -> None:
 
     if runtime.current_variant not in available_variants:
 
-        runtime.current_variant = available_variants[0] if available_variants else "standard"
+        get_default_variant = getattr(runtime, "get_default_variant", None)
+
+        runtime.current_variant = (
+            get_default_variant(runtime.current_model)
+            if callable(get_default_variant)
+            else available_variants[0] if available_variants else "standard"
+        )
 
     if request.variant is not None:
 
+        requested_variant = _normalize_agent_variant_name(request.variant)
+
         available_variants = runtime.get_available_variants()
 
-        if request.variant not in available_variants:
+        if requested_variant not in available_variants:
 
             raise HTTPException(status_code=400, detail="Variant is not available for the current model")
 
-        runtime.current_variant = request.variant
+        runtime.current_variant = requested_variant
 
         should_save_session = True
 
-    if request.planner_model is not None:
+    request_fields = getattr(request, "model_fields_set", None)
+    if request_fields is None:
+        request_fields = getattr(request, "__fields_set__", set())
 
-        planner_value = str(request.planner_model).strip() or None
+    if "planner_model" in request_fields:
+
+        planner_value = (
+            str(request.planner_model).strip()
+            if request.planner_model is not None
+            else ""
+        ) or None
 
         get_supported_planner_models = getattr(runtime, "get_supported_planner_models", None)
 
@@ -1313,6 +1356,9 @@ def _configure_runtime(runtime, request: AgentConfigureRequest) -> None:
         runtime.planner_model = planner_value
 
         should_save_session = True
+
+    if runtime.planner_model is None:
+        runtime.ensure_planner_model_available(AVAILABLE_MODELS)
 
     if request.max_turns is not None:
 
@@ -1598,6 +1644,34 @@ def _stop_runtime_execution(runtime) -> dict[str, Any]:
 
             background_commands = {"killed": [], "already_exited": [], "errors": [{"error": "kill_all_background_commands failed"}]}
 
+    visual_monitors = {}
+
+    try:
+
+        from shared.visual_monitor_runtime import get_visual_monitor_manager
+
+        current_session_id = (
+            str(getattr(getattr(runtime, "session", None), "id", "") or "").strip()
+            or (runtime.session_manager.get_current_session_id() if runtime.session_manager else None)
+        )
+
+        visual_monitors = get_visual_monitor_manager().stop_monitor(
+            session_id=current_session_id,
+            task_id=str(getattr(runtime, "current_task_id", "") or "") or None,
+            identity_id=(
+                str(getattr(getattr(runtime, "session", None), "fleet_identity_id", "") or "").strip()
+                or str(getattr(runtime, "fleet_identity_id", "") or "").strip()
+                or None
+            ),
+            reason="Stopped by user",
+        )
+
+    except Exception:
+
+        logger.exception("[app] failed stopping visual monitors")
+
+        visual_monitors = {"stopped": [], "stopped_count": 0, "errors": [{"error": "stop_visual_monitors failed"}]}
+
     subagents_stopped = 0
 
     spawn_tool = getattr(runtime, "spawn_tool", None)
@@ -1629,6 +1703,8 @@ def _stop_runtime_execution(runtime) -> dict[str, Any]:
         "subagents_stopped": subagents_stopped,
 
         "background_commands": background_commands,
+
+        "visual_monitors": visual_monitors,
 
     }
 

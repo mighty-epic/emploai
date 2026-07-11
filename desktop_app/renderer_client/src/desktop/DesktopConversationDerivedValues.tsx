@@ -1,8 +1,13 @@
 import type { DesktopConversationScope } from './DesktopConversationScope';
 import {
+  defaultVariantForModel,
   filterModelGroupsByConfiguredProviders,
   filterModelsByConfiguredList,
+  modelVariantDisplayLabel,
+  modelVariantOptionsForModel,
   modelExistsInGroups,
+  normalizeModelVariantForModel,
+  shouldShowModelVariantControls,
 } from './modelProviders';
 import { useEffect } from 'react'; type NativeSyntheticEvent<T = any> = any; type ActiveCommandPanel = any; type ActivityItem = any; type AgentOverview = any; type ArtifactDetail = any; type ArtifactSummary = any; type ComposerInputOrigin = any; type ConversationSurfaceMode = any; type DesktopFleetEnrollment = any; type DesktopFleetIdentity = any; type DesktopFleetSnapshot = any; type DesktopFleetTask = any; type DesktopFleetWorker = any; type DesktopGitRepoState = any; type DesktopMessage = any; type DesktopPathStatus = any; type DesktopRuntimeStatus = any; type DesktopSidebarProjectActivity = any; type DesktopSidebarState = any; type DesktopVoicePackState = any; type DesktopVoiceRuntimeStatus = any; type InterruptPolicy = any; type JarvisSttBackend = any; type JarvisTtsBackend = any; type LayoutChangeEvent = any; type MessageSourceFormat = any; type ModelProviderGroup = any; type NativeScrollEvent = any; type PendingSearchJump = any; type QueuedComposerMessage = any; type QueuedMessage = any; type RealtimeChannel = any; type RealtimeEvent = any; type ReferenceEntry = any; type RuntimeOrchestratorStatus = any; type ScheduledJob = any; type SearchResultTarget = any; type SecurityPermissionMode = any; type SessionDetail = any; type SessionMessage = any; type SessionSearchResult = any; type SessionSummary = any; type SessionTimelineEvent = any; type SidebarChatTooltipState = any; type SidebarDragState = any; type SidebarDraftChat = any; type SidebarProjectGroup = any; type StartupReadinessState = any; type TaskBoard = any; type TelegramBotConfig = any; type TextInputContentSizeChangeEventData = any; type ToolPackInfoPopupState = any; type VoiceCaptureMode = any; type VoiceGateState = any;
 
@@ -175,20 +180,28 @@ const dueJobs = jobs.filter((job: any) => job.due).length;
       .map((item: any) => normalizeWorkspacePath(item.workspace))
       .filter(Boolean),
   );
-  const projectPaths = Array.from(new Set([
+  const manualProjectPaths = new Set([
     ...sidebarState.projectOrder.map((item: any) => normalizeWorkspacePath(item)),
     ...Object.keys(sidebarState.projects).map((item: any) => normalizeWorkspacePath(item)),
+  ].filter(Boolean));
+  const projectPaths = Array.from(new Set([
+    ...manualProjectPaths,
     ...visibleSessions.map((item: any) => normalizeWorkspacePath(item.workspace)),
     ...(draftChat ? [draftChat.projectPath] : []),
-  ].filter(Boolean))).filter((projectPath: any) => shouldKeepSidebarProjectPath(projectPath, {
+  ].filter(Boolean))).filter((projectPath: any) => manualProjectPaths.has(projectPath) || shouldKeepSidebarProjectPath(projectPath, {
     allowedRoot: allowedWorkspaceRoot,
     sessionProjectPaths,
     draftProjectPath: draftChat?.projectPath,
   }));
+  const pinnedSessionIds = new Set(
+    visibleSessions
+      .filter((item: any) => Boolean(sidebarState.sessionMeta[item.id]?.pinned))
+      .map((item: any) => item.id),
+  );
   const projectGroups: SidebarProjectGroup[] = projectPaths
     .map((projectPath: any) => {
       const projectSessions = visibleSessions
-        .filter((item: any) => normalizeWorkspacePath(item.workspace) === projectPath)
+        .filter((item: any) => normalizeWorkspacePath(item.workspace) === projectPath && !pinnedSessionIds.has(item.id))
         .sort((left: any, right: any) => sessionSidebarSortComparator(left, right, sidebarState.sessionMeta));
       const projectState = sidebarState.projects[projectPath] || {};
       const projectPathStatus = projectPathStatuses[projectPath];
@@ -221,11 +234,27 @@ const dueJobs = jobs.filter((job: any) => job.due).length;
       return left.label.localeCompare(right.label);
     });
   const pinnedProjects = projectGroups.filter((group: any) => group.pinned);
-  const pinnedChats = projectGroups.flatMap((group: any) => (
-    group.sessions
-      .filter((item: any) => Boolean(sidebarState.sessionMeta[item.id]?.pinned))
-      .map((item: any) => ({ session: item, project: group }))
-  ));
+  const pinnedChats = visibleSessions
+    .filter((item: any) => pinnedSessionIds.has(item.id))
+    .sort((left: any, right: any) => sessionSidebarSortComparator(left, right, sidebarState.sessionMeta))
+    .map((item: any) => {
+      const projectPath = normalizeWorkspacePath(item.workspace);
+      const projectState = sidebarState.projects[projectPath] || {};
+      const projectPathStatus = projectPathStatuses[projectPath];
+      const folderAvailable = projectPathStatus ? Boolean(projectPathStatus.exists && projectPathStatus.isDirectory) : true;
+      const project = projectGroups.find((group: any) => group.path === projectPath) || {
+        path: projectPath,
+        label: projectDisplayName(projectPath, projectState),
+        hint: folderAvailable ? projectPathHint(projectPath) : `Folder unavailable · ${projectPathHint(projectPath)}`,
+        pinned: Boolean(projectState.pinned),
+        collapsed: Boolean(projectState.collapsed),
+        folderAvailable,
+        activity: [],
+        sessions: [],
+        matchesSearch: true,
+      };
+      return { session: item, project };
+    });
   const sidebarSearchQuery = sidebarSearch.trim();
   const sidebarSearchOpen = sidebarSearchModalOpen;
   const mergedSidebarSearchResults = sidebarSearchResults.filter((item: any) => item.kind !== 'project');
@@ -257,11 +286,18 @@ const dueJobs = jobs.filter((job: any) => job.due).length;
   const currentModelLabel = currentModelCandidate && modelExistsInGroups(currentModelCandidate, draftModelGroups)
     ? currentModelCandidate
     : fallbackCatalogModel || 'Choose model';
-  const currentVariantLabel = draftChat?.variant
-    ? ` · ${draftChat.variant}`
-    : overview?.current_variant
-      ? ` · ${overview.current_variant}`
-      : '';
+  const currentVariantCandidate = String(
+    (draftChat ? draftChat.variant : overview?.current_variant || activeSession?.variant) || '',
+  ).trim();
+  const currentVariant = (
+    normalizeModelVariantForModel(currentModelLabel, currentVariantCandidate)
+    || defaultVariantForModel(currentModelLabel)
+  );
+  const currentVariantOptions = modelVariantOptionsForModel(currentModelLabel);
+  const currentVariantHasControls = shouldShowModelVariantControls(currentModelLabel);
+  const currentVariantLabel = currentVariantHasControls
+    ? ` · ${modelVariantDisplayLabel(currentVariant)}`
+    : '';
   const currentPlannerCandidate = String(
     (draftChat ? draftChat.plannerModel : overview?.planner_model) || '',
   ).trim();
@@ -356,23 +392,29 @@ const dueJobs = jobs.filter((job: any) => job.due).length;
       ? 'warn'
       : 'active';
   const hasCompletedTaskBoards = completedTaskBoards.length > 0;
-  const voiceSummary = alwaysOnEnabled
-    ? voiceRecording
-      ? `${voiceState} · always-on segment`
-      : voiceRunning
-        ? `${voiceState} · processing`
-        : 'always-on listening'
-    : voiceRecording
-      ? `${voiceState} · push-to-talk`
-      : voiceRunning
-        ? `${voiceState} · processing`
-        : voiceState;
-  const extendedVoiceStatus = liveVoiceStatus as (DesktopVoiceRuntimeStatus & {
-    english_pack_manifest?: Record<string, unknown> | null;
-    english_pack_manifest_verified?: boolean;
-    hebrew_pack_manifest?: Record<string, unknown> | null;
-    hebrew_pack_manifest_verified?: boolean;
-  }) | null;
+  const isJarvisMode = conversationMode === 'jarvis';
+  const isFleetMode = conversationMode === 'fleet';
+  const voiceSummary = isJarvisMode
+    ? alwaysOnEnabled
+      ? voiceRecording
+        ? `${voiceState} · always-on segment`
+        : voiceRunning
+          ? `${voiceState} · processing`
+          : 'always-on listening'
+      : voiceRecording
+        ? `${voiceState} · push-to-talk`
+        : voiceRunning
+          ? `${voiceState} · processing`
+          : voiceState
+    : 'idle';
+  const extendedVoiceStatus = isJarvisMode
+    ? (liveVoiceStatus as (DesktopVoiceRuntimeStatus & {
+        english_pack_manifest?: Record<string, unknown> | null;
+        english_pack_manifest_verified?: boolean;
+        hebrew_pack_manifest?: Record<string, unknown> | null;
+        hebrew_pack_manifest_verified?: boolean;
+      }) | null)
+    : null;
   const voicePacks = voicePackState?.packs ?? [];
   const englishVoicePack = voicePacks.find((pack: any) => pack.id === VOICE_ENGINE_ENGLISH) ?? null;
   const hebrewVoicePack = voicePacks.find((pack: any) => pack.id === VOICE_ENGINE_HEBREW) ?? null;
@@ -400,7 +442,7 @@ const dueJobs = jobs.filter((job: any) => job.due).length;
   const selectedVoicePackModel = extendedVoiceStatus?.stt_model || selectedVoicePack?.path || null;
   const selectedVoicePackPath = selectedVoicePack?.path || null;
   const selectedVoicePackSummary = apiVoiceInputActive
-    ? `Realtime voice input ready${selectedVoicePackModel ? ` · ${selectedVoicePackModel}` : ''}`
+    ? `API voice input ready${selectedVoicePackModel ? ` · ${selectedVoicePackModel}` : ''}`
     : selectedVoiceEngine === VOICE_ENGINE_NONE
     ? 'Voice input is off. Open setup to re-enable a local path.'
     : selectedVoiceEngineState === 'warming'
@@ -454,8 +496,6 @@ const dueJobs = jobs.filter((job: any) => job.due).length;
     ? referenceEntries[0].title
     : `${referenceEntries.length} saved reference notes`;
   const referenceRailKey = `${sessionId || 'none'}:${referenceEntries.length}`;
-  const isJarvisMode = conversationMode === 'jarvis';
-  const isFleetMode = conversationMode === 'fleet';
   const isDraftConversationEmpty = Boolean(
     transcriptTimelineEntries.length === 0
     && referenceEntries.length === 0
@@ -463,13 +503,16 @@ const dueJobs = jobs.filter((job: any) => job.due).length;
     && !activeTaskBoard
     && !hasCompletedTaskBoards
   );
-  const voiceBannerRequested = Boolean(voiceDraft)
+  const voiceBannerRequested = isJarvisMode && (
+    Boolean(voiceDraft)
     || Boolean(voiceError)
     || alwaysOnEnabled
     || voiceRecording
     || voiceRunning
+    || liveVoiceStatus?.input_ok === false
     || ['connecting', 'reconnecting', 'error', 'warming'].includes(voiceState)
-    || (!apiVoiceInputActive && selectedVoiceEngineState === 'warming');
+    || (!apiVoiceInputActive && selectedVoiceEngineState === 'warming')
+  );
   const suppressPassiveJarvisVoiceBannerOnDraft = Boolean(
     isDraftConversationEmpty
     && !isJarvisMode
@@ -483,9 +526,9 @@ const dueJobs = jobs.filter((job: any) => job.due).length;
       || (!apiVoiceInputActive && selectedVoiceEngineState === 'warming')
     )
   );
-  const showVoiceBanner = voiceBannerRequested && !suppressPassiveJarvisVoiceBannerOnDraft;
+  const showVoiceBanner = isJarvisMode && voiceBannerRequested && !suppressPassiveJarvisVoiceBannerOnDraft;
   const alwaysOnVoiceAutoSend = isJarvisMode || ALWAYS_ON_VOICE_AUTO_SEND;
-  const voicePanelActive = !voicePanelHidden && (
+  const voicePanelActive = isJarvisMode && !voicePanelHidden && (
     showVoicePanel
     || Boolean(voiceDraft)
     || Boolean(voiceError)
@@ -527,25 +570,27 @@ const dueJobs = jobs.filter((job: any) => job.due).length;
     ? shortStatusText(voiceError)
       : voiceDraft
       ? voiceDraft
+      : liveVoiceStatus?.input_ok === false
+        ? shortStatusText(liveVoiceStatus?.issues?.[0] || 'Voice input needs setup.')
       : (!apiVoiceInputActive && selectedVoiceEngineState === 'warming') || voiceState === 'warming'
         ? apiVoiceInputActive
-          ? 'Warming realtime voice input and assistant audio.'
+          ? 'Warming API voice input and assistant audio.'
           : 'Warming the Hebrew voice path so the local pass-3 model is fully ready before capture starts.'
       : alwaysOnEnabled && voiceRecording
         ? alwaysOnVoiceAutoSend
           ? apiVoiceInputActive
-            ? 'Always-on voice detected speech. Realtime transcription is streaming and will send when the gate closes.'
+            ? 'Always-on voice detected speech. API transcription is running and will send when the gate closes.'
             : 'Always-on voice detected speech. Local Whisper is drafting the transcript and will send when the gate closes.'
           : apiVoiceInputActive
-            ? 'Always-on voice detected speech. Realtime transcription is streaming and will place the final text in the message box.'
+            ? 'Always-on voice detected speech. API transcription is running and will place the final text in the message box.'
             : 'Always-on voice detected speech. Local Whisper is drafting the transcript and will place the final text in the message box.'
       : alwaysOnEnabled
         ? alwaysOnVoiceAutoSend
           ? apiVoiceInputActive
-            ? 'Always-on realtime voice is listening. Speech above the gate threshold will be transcribed and sent automatically.'
+            ? 'Always-on API voice is listening. Speech above the gate threshold will be transcribed and sent automatically.'
             : 'Always-on voice is listening locally. Speech above the gate threshold will be transcribed and sent automatically.'
           : apiVoiceInputActive
-            ? 'Always-on realtime voice is listening. Speech above the gate threshold will become editable text before you send it.'
+            ? 'Always-on API voice is listening. Speech above the gate threshold will become editable text before you send it.'
             : 'Always-on voice is listening locally. Speech above the gate threshold will become editable text before you send it.'
       : voiceRecording
         ? 'Push-to-talk is live. Keep holding to continue transcribing and release to send.'
@@ -559,7 +604,7 @@ const dueJobs = jobs.filter((job: any) => job.due).length;
                 ? 'Playing assistant audio.'
       : voiceState === 'ready'
         ? apiVoiceInputActive
-          ? 'Hold the push-to-talk button or switch to always-on realtime voice.'
+          ? 'Hold the push-to-talk button or switch to always-on API voice.'
           : 'Hold the push-to-talk button or switch to always-on local Whisper.'
         : `Voice ${voiceState}`;
   const handleVoiceEngineSelection = async (engine: typeof VOICE_ENGINE_ENGLISH | typeof VOICE_ENGINE_HEBREW) => {
@@ -617,5 +662,5 @@ const dueJobs = jobs.filter((job: any) => job.due).length;
       setVoiceEngineChanging(false);
     }
   };
-  return { dueJobs, heartbeatLabel, runtimeLabel, activeFleetIdentity, activeFleetIdentityId, visibleSessions, activeFleetIdentitySelectedChatId, activeFleetIdentityTargetChatId, activeSession, draftModelGroups, draftPlannerModels, defaultTelegramBotConfigId, draftEnabledToolPacks, fallbackCatalogModel, currentEnabledToolPacks, currentAvailableToolPacks, currentSecurityPermissionMode, currentSecurityPermissionLabel, securityPermissionOptions, activePermissionInfo, currentLockStatus, currentDisabledPackReasons, formatToolPackLockReason, unavailableEnabledToolPackReason, activeToolPackInfoId, activeToolPackInfo, activeToolPackInfoDisabledReason, activeToolPackInfoAvailable, activeToolPackInfoConfiguredEnabled, currentHeadlessBlockReason, currentSessionTelegramBotConfigId, currentSessionTelegramBot, telegramBotLabelForSession, currentSessionSleepBotConfigId, currentSleepSessionIdForBot, currentSessionIsSleepChat, chatSettingsSessionId, chatSettingsSession, permissionSettingsSessionId, permissionSettingsSession, permissionSettingsIsDraft, permissionSettingsDraftMode, chatSettingsBotConfigId, chatSettingsSleepSessionId, pendingSwitchTargetLabel, sessionProjectPaths, projectPaths, projectGroups, pinnedProjects, pinnedChats, sidebarSearchQuery, sidebarSearchOpen, mergedSidebarSearchResults, recentSearchSessions, contextUsage, contextPercent, contextPercentLabel, contextTokenLabel, contextStateLabel, currentModelLabel, currentVariantLabel, currentPlannerLabel, plannerModelGroups, currentModelProviderKey, currentPlannerProviderKey, draftFolderLabel, showFolderComposerMeta, draftBranchChoices, normalizedDraftProjectSearch, normalizedDraftBranchSearch, filteredDraftProjects, filteredDraftBranchChoices, draftBranchLabel, draftTelegramBotConfigId, draftTelegramBot, draftTelegramBotLabel, contextUsageRatio, contextBreakdownLabel, contextUsageHoverLabel, activeTaskBoard, taskBoardStatusText, taskBoardUpdatedLabel, taskBoardSummary, taskBoardTone, hasCompletedTaskBoards, voiceSummary, extendedVoiceStatus, voicePacks, englishVoicePack, hebrewVoicePack, selectedVoicePack, selectedVoiceEngineState, selectedVoiceManifest, selectedVoiceManifestVerified, selectedVoicePackProvenance, selectedVoicePackModel, selectedVoicePackPath, selectedVoicePackSummary, voicePackDiagnostics, activitySummary, referenceEntries, referenceIndexSet, transcriptEntries, transcriptTimelineEvents, verboseModeOn, timelineEntries, transcriptTimelineEntries, historySummary, referenceSummary, referenceRailKey, isJarvisMode, isFleetMode, isDraftConversationEmpty, voiceBannerRequested, suppressPassiveJarvisVoiceBannerOnDraft, showVoiceBanner, alwaysOnVoiceAutoSend, voicePanelActive, isCenteredDraftComposerStage, agentRunActive, shouldShowThinkingIndicator, thinkingShineTranslate, thinkingTextCounterTranslate, jarvisPulseScale, jarvisPulseOpacity, hasComposerText, currentSessionQueuedMessages, queuedComposerMessagesDisplay, sendButtonMode, sendButtonGlyph, voiceBannerText, handleVoiceEngineSelection };
+  return { dueJobs, heartbeatLabel, runtimeLabel, activeFleetIdentity, activeFleetIdentityId, visibleSessions, activeFleetIdentitySelectedChatId, activeFleetIdentityTargetChatId, activeSession, draftModelGroups, draftPlannerModels, defaultTelegramBotConfigId, draftEnabledToolPacks, fallbackCatalogModel, currentEnabledToolPacks, currentAvailableToolPacks, currentSecurityPermissionMode, currentSecurityPermissionLabel, securityPermissionOptions, activePermissionInfo, currentLockStatus, currentDisabledPackReasons, formatToolPackLockReason, unavailableEnabledToolPackReason, activeToolPackInfoId, activeToolPackInfo, activeToolPackInfoDisabledReason, activeToolPackInfoAvailable, activeToolPackInfoConfiguredEnabled, currentHeadlessBlockReason, currentSessionTelegramBotConfigId, currentSessionTelegramBot, telegramBotLabelForSession, currentSessionSleepBotConfigId, currentSleepSessionIdForBot, currentSessionIsSleepChat, chatSettingsSessionId, chatSettingsSession, permissionSettingsSessionId, permissionSettingsSession, permissionSettingsIsDraft, permissionSettingsDraftMode, chatSettingsBotConfigId, chatSettingsSleepSessionId, pendingSwitchTargetLabel, sessionProjectPaths, projectPaths, projectGroups, pinnedProjects, pinnedChats, sidebarSearchQuery, sidebarSearchOpen, mergedSidebarSearchResults, recentSearchSessions, contextUsage, contextPercent, contextPercentLabel, contextTokenLabel, contextStateLabel, currentModelLabel, currentVariant, currentVariantOptions, currentVariantHasControls, currentVariantLabel, currentPlannerLabel, plannerModelGroups, currentModelProviderKey, currentPlannerProviderKey, draftFolderLabel, showFolderComposerMeta, draftBranchChoices, normalizedDraftProjectSearch, normalizedDraftBranchSearch, filteredDraftProjects, filteredDraftBranchChoices, draftBranchLabel, draftTelegramBotConfigId, draftTelegramBot, draftTelegramBotLabel, contextUsageRatio, contextBreakdownLabel, contextUsageHoverLabel, activeTaskBoard, taskBoardStatusText, taskBoardUpdatedLabel, taskBoardSummary, taskBoardTone, hasCompletedTaskBoards, voiceSummary, extendedVoiceStatus, voicePacks, englishVoicePack, hebrewVoicePack, selectedVoicePack, selectedVoiceEngineState, selectedVoiceManifest, selectedVoiceManifestVerified, selectedVoicePackProvenance, selectedVoicePackModel, selectedVoicePackPath, selectedVoicePackSummary, voicePackDiagnostics, activitySummary, referenceEntries, referenceIndexSet, transcriptEntries, transcriptTimelineEvents, verboseModeOn, timelineEntries, transcriptTimelineEntries, historySummary, referenceSummary, referenceRailKey, isJarvisMode, isFleetMode, isDraftConversationEmpty, voiceBannerRequested, suppressPassiveJarvisVoiceBannerOnDraft, showVoiceBanner, alwaysOnVoiceAutoSend, voicePanelActive, isCenteredDraftComposerStage, agentRunActive, shouldShowThinkingIndicator, thinkingShineTranslate, thinkingTextCounterTranslate, jarvisPulseScale, jarvisPulseOpacity, hasComposerText, currentSessionQueuedMessages, queuedComposerMessagesDisplay, sendButtonMode, sendButtonGlyph, voiceBannerText, handleVoiceEngineSelection };
 }

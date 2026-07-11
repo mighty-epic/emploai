@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocalSearchParams } from 'expo-router';
 
 import {
@@ -44,6 +44,7 @@ import { useConfirmation } from '@/components/ConfirmationDialog';
 import { createApprovedConfirmation } from '@/lib/sharedConfirmations';
 import { createDesktopAppShellActions } from './DesktopAppShellActions';
 import { DesktopAppShellView } from './DesktopAppShellView';
+import { createLatestRequestGate } from './desktopAsyncCoordination';
 import type { DesktopMode, RemoteRuntimeSummary } from './models';
 import { profileToSharedSettingsDraft, type SharedSettingsDraft } from '@/lib/accountProfile';
 import {
@@ -59,12 +60,15 @@ import {
   isDesktopEnvironment,
   loadDesktopMemory,
   loadDesktopBootstrap,
+  normalizeDesktopBootstrapRuntimeStatus,
   loadDesktopRemoteAuthStatus,
   loadDesktopRuntimeStatus,
   loginDesktopRemoteAuth,
   loginDesktopRemoteGoogle,
   logoutDesktopRemoteAuth,
   listDesktopRemoteSecrets,
+  listDesktopRemoteAccountDesktops,
+  loadDesktopFleetSnapshot,
   openDesktopChromeExtensions,
   openDesktopPath,
   removeDesktopVoicePack,
@@ -191,6 +195,8 @@ const STARTUP_RETRY_INCREMENT_SECONDS = 10;
 const STARTUP_RETRY_MAX_TIMEOUT_SECONDS = 120;
 const STARTUP_WATCHDOG_GRACE_MS = 20_000;
 const STATUS_BANNER_AUTO_DISMISS_MS = 60_000;
+const RUNTIME_HEALTH_POLL_MS = 5_000;
+const RUNTIME_OFFLINE_CONFIRMATIONS = 2;
 
 type StartupPhase =
   | 'bootstrapping'
@@ -401,10 +407,22 @@ export function DesktopAppShell() {
   const remoteAccountHydratedKeyRef = useRef<string | null>(null);
   const remoteAccountHydrationInFlightKeyRef = useRef<string | null>(null);
   const runtimeDowngradeRecheckInFlightRef = useRef(false);
+  const runtimeOfflinePollsRef = useRef(0);
+  const runtimeHealthPollInFlightRef = useRef(false);
+  const startupRequests = useRef(createLatestRequestGate()).current;
+  const accountHydrationRequests = useRef(createLatestRequestGate()).current;
+
+  const setStartupPhaseState = (nextPhase: StartupPhase) => {
+    startupPhaseRef.current = nextPhase;
+    setStartupPhase(nextPhase);
+  };
 
   const resetAccountStartupState = () => {
+    startupRequests.invalidate();
+    accountHydrationRequests.invalidate();
     remoteAccountHydratedKeyRef.current = null;
     remoteAccountHydrationInFlightKeyRef.current = null;
+    setRemoteAccountHydrating(false);
     startupInitializedRef.current = false;
     startupFlowInFlightRef.current = false;
     startupAutoRetryAttemptedRef.current = false;
@@ -563,7 +581,7 @@ export function DesktopAppShell() {
 
     setRemoteAuthBusy(true);
     resetAccountStartupState();
-    setRemoteAuthMessage(remoteAuthMode === 'signup' ? 'Creating account...' : 'Signing in...');
+    setRemoteAuthMessage(remoteAuthMode === 'signup' ? 'Creating account…' : 'Signing in…');
     try {
       const payload = {
         email,
@@ -613,7 +631,7 @@ export function DesktopAppShell() {
     }
     setRemoteAuthBusy(true);
     resetAccountStartupState();
-    setRemoteAuthMessage('Verifying code...');
+    setRemoteAuthMessage('Verifying code…');
     try {
       const status = await verifyDesktopRemoteAuthOtp({
         challengeId: remoteAuthOtpChallenge.challenge_id,
@@ -631,7 +649,7 @@ export function DesktopAppShell() {
       setRemoteAuthConfirmPassword('');
       setRemoteAuthOtpCode('');
       clearRemoteAuthOtpChallenge();
-      setRemoteAuthMessage('Signed in. Loading saved setup...');
+      setRemoteAuthMessage('Signed in. Loading saved setup…');
       resetAccountStartupState();
     } catch (authError) {
       setRemoteAuthMessage(userFacingError(authError, 'Check the code and try again.'));
@@ -646,7 +664,7 @@ export function DesktopAppShell() {
       return;
     }
     setRemoteAuthBusy(true);
-    setRemoteAuthMessage('Sending a new code...');
+    setRemoteAuthMessage('Sending a new code…');
     try {
       const challenge = await resendDesktopRemoteAuthOtp({ challengeId: remoteAuthOtpChallenge.challenge_id });
       if (!challenge) {
@@ -664,7 +682,7 @@ export function DesktopAppShell() {
   const submitRemoteGoogleAuth = async () => {
     setRemoteAuthBusy(true);
     resetAccountStartupState();
-    setRemoteAuthMessage('Opening Google sign-in...');
+    setRemoteAuthMessage('Opening Google sign-in…');
     try {
       const status = await loginDesktopRemoteGoogle({ rememberMe: remoteAuthRememberMe });
       if (!status) {
@@ -676,7 +694,7 @@ export function DesktopAppShell() {
         return;
       }
       setRemoteAuthPassword('');
-      setRemoteAuthMessage('Signed in with Google. Loading saved setup...');
+      setRemoteAuthMessage('Signed in with Google. Loading saved setup…');
       resetAccountStartupState();
     } catch (authError) {
       setRemoteAuthMessage(userFacingError(authError, 'Google sign-in did not finish.'));
@@ -729,18 +747,16 @@ export function DesktopAppShell() {
   };
 
   function scheduleReadyRuntimeDowngradeRecheck(nextStatus: DesktopRuntimeStatus) {
-    if (runtimeDowngradeRecheckInFlightRef.current) {
+    if (nextStatus.runtimeProcessDetected || runtimeDowngradeRecheckInFlightRef.current) {
       return;
     }
     runtimeDowngradeRecheckInFlightRef.current = true;
-    setNotice((current) => current || 'Checking local runtime status...');
     void (async () => {
       try {
         await delay(500);
         const refreshed = await loadDesktopBootstrap({ force: true });
         if (refreshed?.accessToken && refreshed.runtimeStatus?.ok && !refreshed.setupState?.required) {
           applyBootstrap(refreshed, { keepSetupClosed: true, preserveLoadingState: true });
-          setNotice((current) => (current === 'Checking local runtime status...' ? null : current));
           return;
         }
         setRuntimeStatusWithRef(nextStatus);
@@ -756,6 +772,7 @@ export function DesktopAppShell() {
     payload: DesktopBootstrap,
     options: { keepSetupClosed?: boolean; preserveLoadingState?: boolean; allowReadyDowngrade?: boolean } = {}
   ) => {
+    payload = normalizeDesktopBootstrapRuntimeStatus(payload);
     const preserveIncomingRuntimeStatus = shouldPreserveReadyRuntimeStatus(payload.runtimeStatus, options);
     setBootstrap((current) => {
       const nextRuntimeStatus = preserveIncomingRuntimeStatus
@@ -801,7 +818,7 @@ export function DesktopAppShell() {
         return;
       }
       setLoadingState('Setup required');
-      setStartupPhase('setup_required');
+      setStartupPhaseState('setup_required');
       return;
     }
     if (isLaunchableRuntimePrestartDetail(payload.runtimeStatus?.detail, payload.canLaunchLocalRuntime)) {
@@ -815,16 +832,24 @@ export function DesktopAppShell() {
     if (!remoteAuthStatus?.signedIn || remoteAuthStatus?.cloudDisabled) {
       return null;
     }
+    const requestId = accountHydrationRequests.begin();
+    const requestIsCurrent = () => accountHydrationRequests.isCurrent(requestId);
     setRemoteAccountHydrating(true);
-    setRemoteSecretsMessage('Loading saved setup...');
+    setRemoteSecretsMessage('Loading saved setup…');
     try {
       const result = await applyDesktopAccountData();
       if (!result) {
         throw new Error('Desktop account hydration controls are unavailable in this shell.');
       }
+      if (!requestIsCurrent()) {
+        return null;
+      }
       let hydratedBootstrap = result.bootstrap || null;
       if (!hydratedBootstrap && result.count) {
         hydratedBootstrap = await loadDesktopBootstrap({ force: true }).catch(() => null);
+      }
+      if (!requestIsCurrent()) {
+        return null;
       }
       if (hydratedBootstrap) {
         applyBootstrap(hydratedBootstrap, { keepSetupClosed: true, preserveLoadingState: true });
@@ -834,8 +859,11 @@ export function DesktopAppShell() {
         && hydratedBootstrap
         && !hydratedBootstrap.setupState?.required
       ) {
-        setNotice('Saved setup loaded. Continuing startup...');
+        setNotice('Saved setup loaded. Continuing startup…');
         await beginStartup({ forceBootstrap: true, attachTimeoutSeconds: STARTUP_INITIAL_TIMEOUT_SECONDS });
+      }
+      if (!requestIsCurrent()) {
+        return null;
       }
       const nextMessage = result.applied
         ? `Loaded ${result.count} saved setting${result.count === 1 ? '' : 's'}.`
@@ -844,18 +872,23 @@ export function DesktopAppShell() {
       await refreshRemoteSecretItems();
       return result;
     } catch (hydrateError) {
+      if (!requestIsCurrent()) {
+        return null;
+      }
       const message = describeError(hydrateError);
       setRemoteSecretsMessage(`Account setup load failed: ${message}`);
       return null;
     } finally {
-      setRemoteAccountHydrating(false);
+      if (requestIsCurrent()) {
+        setRemoteAccountHydrating(false);
+      }
     }
   };
 
   const failStartup = (message: string) => {
     setStartupErrorDetail(message);
     setError(message);
-    setStartupPhase('startup_error');
+    setStartupPhaseState('startup_error');
   };
 
   const retryStartupSilently = async (timeoutSeconds: number) => {
@@ -892,6 +925,8 @@ export function DesktopAppShell() {
     if (startupPhaseRef.current === 'ready' && !options?.forceBootstrap) {
       return;
     }
+    const requestId = startupRequests.begin();
+    const requestIsCurrent = () => startupRequests.isCurrent(requestId);
     startupFlowInFlightRef.current = true;
     if (!isDesktopEnvironment()) {
       failStartup('Desktop preload bridge is unavailable. Launch this route inside the Electron shell.');
@@ -903,7 +938,7 @@ export function DesktopAppShell() {
     setNotice(null);
     setShowSetup(false);
     setStartupErrorDetail(null);
-    setStartupPhase('bootstrapping');
+    setStartupPhaseState('bootstrapping');
     setBootstrap(null);
     setRuntimeStatus(null);
     setLoadingState('Preparing desktop runtime');
@@ -916,6 +951,9 @@ export function DesktopAppShell() {
       if (!payload) {
         throw new Error('Desktop bootstrap is unavailable in this shell.');
       }
+      if (!requestIsCurrent()) {
+        return;
+      }
 
       applyBootstrap(payload, { keepSetupClosed: true });
 
@@ -924,13 +962,13 @@ export function DesktopAppShell() {
           setLoadingState('Loading saved setup');
           return;
         }
-        setStartupPhase('setup_required');
+        setStartupPhaseState('setup_required');
         return;
       }
 
       let readyPayload = payload;
       if (!(payload.accessToken && payload.runtimeStatus?.ok)) {
-        setStartupPhase('starting_runtime');
+        setStartupPhaseState('starting_runtime');
         setLoadingState('Starting local agent');
         const started = await startDesktopRuntime({
           attachTimeoutSeconds: options?.attachTimeoutSeconds,
@@ -939,6 +977,9 @@ export function DesktopAppShell() {
         });
         if (!started) {
           throw new Error('Desktop runtime controls are unavailable in this shell.');
+        }
+        if (!requestIsCurrent()) {
+          return;
         }
         readyPayload = started;
         applyBootstrap(readyPayload, { keepSetupClosed: true });
@@ -949,12 +990,18 @@ export function DesktopAppShell() {
           setLoadingState('Loading saved setup');
           return;
         }
-        setStartupPhase('setup_required');
+        setStartupPhaseState('setup_required');
         return;
       }
 
       if (!(readyPayload.accessToken && readyPayload.runtimeStatus?.ok)) {
+        if (!requestIsCurrent()) {
+          return;
+        }
         const recovered = await recoverReadyRuntimeFromStatus({ attempts: 10, delayMs: 750 });
+        if (!requestIsCurrent()) {
+          return;
+        }
         if (recovered) {
           return;
         }
@@ -964,7 +1011,7 @@ export function DesktopAppShell() {
         );
       }
 
-      setStartupPhase('warming_ui');
+      setStartupPhaseState('warming_ui');
       setLoadingState('Waiting for local API');
       let apiProfile;
       try {
@@ -973,12 +1020,21 @@ export function DesktopAppShell() {
           readyPayload.accessToken,
           Math.max(20_000, (options?.attachTimeoutSeconds ?? STARTUP_INITIAL_TIMEOUT_SECONDS) * 1000),
         );
+        if (!requestIsCurrent()) {
+          return;
+        }
       } catch (readyError) {
+        if (!requestIsCurrent()) {
+          return;
+        }
         if (!isAuthTokenMessage(describeError(readyError))) {
           throw readyError;
         }
         setLoadingState('Refreshing local API token');
         const refreshed = await loadDesktopBootstrap({ force: true });
+        if (!requestIsCurrent()) {
+          return;
+        }
         if (!(refreshed?.accessToken && refreshed.runtimeStatus?.ok)) {
           throw readyError;
         }
@@ -989,6 +1045,9 @@ export function DesktopAppShell() {
           readyPayload.accessToken,
           20_000,
         );
+        if (!requestIsCurrent()) {
+          return;
+        }
       }
       setBootstrap((current) => (
         current
@@ -998,9 +1057,12 @@ export function DesktopAppShell() {
             }
           : current
       ));
-      setStartupPhase('ready');
+      setStartupPhaseState('ready');
       setLoadingState('Ready');
     } catch (startupError) {
+      if (!requestIsCurrent()) {
+        return;
+      }
       const startupMessage = String(startupError);
       if (
         isStartupTimeoutMessage(startupMessage) &&
@@ -1010,11 +1072,13 @@ export function DesktopAppShell() {
       }
       handleStartupFailure(startupMessage);
     } finally {
-      startupFlowInFlightRef.current = false;
-      const deferredRetryTimeout = startupDeferredRetryTimeoutRef.current;
-      startupDeferredRetryTimeoutRef.current = null;
-      if (deferredRetryTimeout && isStartupPending(startupPhaseRef.current)) {
-        void retryStartupSilently(deferredRetryTimeout);
+      if (requestIsCurrent()) {
+        startupFlowInFlightRef.current = false;
+        const deferredRetryTimeout = startupDeferredRetryTimeoutRef.current;
+        startupDeferredRetryTimeoutRef.current = null;
+        if (deferredRetryTimeout && isStartupPending(startupPhaseRef.current)) {
+          void retryStartupSilently(deferredRetryTimeout);
+        }
       }
     }
   };
@@ -1118,7 +1182,7 @@ export function DesktopAppShell() {
 
   const reconnectDesktopAfterWindowReopen = async () => {
     setError(null);
-    setNotice('Reconnecting desktop UI...');
+    setNotice('Reconnecting desktop UI…');
     try {
       const payload = await loadDesktopBootstrap({ force: true });
       if (payload) {
@@ -1126,7 +1190,7 @@ export function DesktopAppShell() {
         runtimeStatusRef.current = payload.runtimeStatus || null;
         applyBootstrap(payload, { keepSetupClosed: true, preserveLoadingState: true });
         if (payload.accessToken && payload.runtimeStatus?.ok && !payload.setupState?.required) {
-          setStartupPhase('ready');
+          setStartupPhaseState('ready');
           setLoadingState('Ready');
         }
       }
@@ -1181,7 +1245,7 @@ export function DesktopAppShell() {
         setError((current) => (isRuntimeConnectivityMessage(current) ? null : current));
         setStartupErrorDetail((current) => (isRuntimeConnectivityMessage(current) ? null : current));
         setNotice((current) => (current && isStartupTimeoutMessage(current) ? null : current));
-        setStartupPhase('ready');
+        setStartupPhaseState('ready');
         setLoadingState('Ready');
         return true;
       }
@@ -1313,6 +1377,29 @@ export function DesktopAppShell() {
         return;
       }
 
+      if (event.type === 'update_status' && event.payload) {
+        setUpdateStatus(event.payload as DesktopUpdateStatus);
+        setInstallingUpdate(false);
+        return;
+      }
+
+      if (event.type === 'update_installing') {
+        setInstallingUpdate(true);
+        setNotice('Pulling the latest desktop update…');
+        return;
+      }
+
+      if (event.type === 'update_install_result' && event.payload) {
+        setInstallingUpdate(false);
+        const result = event.payload as { launched?: boolean; message?: string; blocked?: boolean };
+        if (result.launched) {
+          setNotice(result.message || 'Desktop update installed. Restarting EmploAI…');
+        } else if (result.blocked || result.message) {
+          setError(result.message || 'Desktop update did not start.');
+        }
+        return;
+      }
+
       if (event.type === 'runtime_status' && payload) {
         const nextStatus = payload as DesktopRuntimeStatus;
         if (shouldPreserveReadyRuntimeStatus(nextStatus)) {
@@ -1423,38 +1510,60 @@ export function DesktopAppShell() {
     };
   }, [startupCurrentTimeoutSeconds, currentStartupWatchdogMs, startupPhase]);
 
-  const remoteRuntimes = useMemo<RemoteRuntimeSummary[]>(
-    () => [
-      {
-        id: 'remote-1',
-        name: 'Primary VPS Slot',
-        hostLabel: 'Not connected',
-        status: 'planned',
-        detail: 'Reserved for future hosted agents with preview streaming and remote control.',
-        preview: {
-          state: 'planned',
-          message: 'Preview surfaces will appear here once remote runtime plumbing exists.',
-        },
-      },
-      {
-        id: 'remote-2',
-        name: 'Secondary Worker Slot',
-        hostLabel: 'Not connected',
-        status: 'planned',
-        detail: 'Additional remote runtime entry point for server-side or VPS agents.',
-        preview: {
-          state: 'planned',
-          message: 'No remote preview yet',
-        },
-      },
-    ],
-    []
-  );
+  const [remoteRuntimes, setRemoteRuntimes] = useState<RemoteRuntimeSummary[]>([]);
+  useEffect(() => {
+    if (!remoteAuthStatus?.signedIn) {
+      setRemoteRuntimes([]);
+      return;
+    }
+    let disposed = false;
+    void Promise.all([
+      listDesktopRemoteAccountDesktops(),
+      loadDesktopFleetSnapshot(),
+    ]).then(([desktops, fleet]) => {
+      if (disposed) return;
+      const workers = Array.isArray(fleet?.workers) ? fleet.workers : [];
+      const tasks = Array.isArray(fleet?.tasks) ? fleet.tasks : [];
+      const reports = Array.isArray(fleet?.reports) ? fleet.reports : [];
+      setRemoteRuntimes((Array.isArray(desktops) ? desktops : []).map((desktop) => {
+        const desktopWorkers = workers.filter((worker) => worker.machine_desktop_id === desktop.desktop_id);
+        const workerIds = new Set(desktopWorkers.map((worker) => worker.worker_id));
+        const activeCount = tasks.filter((task) => workerIds.has(task.worker_id) && task.status === 'running').length;
+        const queuedCount = tasks.filter((task) => workerIds.has(task.worker_id) && task.status === 'queued').length;
+        const latestReport = reports.find((report) => workerIds.has(report.worker_id));
+        const connected = desktop.status === 'connected';
+        return {
+          id: String(desktop.desktop_id || ''),
+          name: desktop.display_name || 'Paired desktop',
+          hostLabel: desktop.last_seen_at ? `Last seen ${desktop.last_seen_at}` : 'No heartbeat yet',
+          status: connected ? 'connected' : 'offline',
+          detail: desktop.detail || `${desktopWorkers.length} workers · ${activeCount} active · ${queuedCount} queued`,
+          workerCount: desktopWorkers.length,
+          activeCount,
+          queuedCount,
+          latestReport: latestReport?.summary || null,
+          workers: desktopWorkers.map((worker) => ({
+            id: worker.worker_id,
+            name: worker.display_name,
+            status: worker.status,
+            activeTaskId: worker.active_task_id || null,
+          })),
+          preview: {
+            state: connected ? 'connecting' : 'offline',
+            message: connected ? 'Manual view-only previews are requested from a worker.' : 'Desktop is offline.',
+            updatedAt: null,
+          },
+        } as RemoteRuntimeSummary;
+      }));
+    }).catch((remoteError) => {
+      if (!disposed) setNotice(userFacingError(remoteError, 'Paired desktops could not be loaded.'));
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [remoteAuthStatus?.signedIn, activeTab]);
 
-  const effectiveRuntimeStatus =
-    runtimeStatus?.ok === false && startupPhase === 'ready' && bootstrap?.runtimeStatus?.ok
-      ? bootstrap.runtimeStatus
-      : runtimeStatus || bootstrap?.runtimeStatus || null;
+  const effectiveRuntimeStatus = runtimeStatus || bootstrap?.runtimeStatus || null;
 
   const localRuntimeReady = Boolean(
     bootstrap?.apiBaseUrl &&
@@ -1462,11 +1571,11 @@ export function DesktopAppShell() {
     effectiveRuntimeStatus?.ok
   );
   const runtimeProcessDetected = Boolean(
-    bootstrap?.runtimeProcessDetected ||
-    effectiveRuntimeStatus?.process_id ||
-    effectiveRuntimeStatus?.processId ||
-    bootstrap?.runtimeStatus?.process_id ||
-    bootstrap?.runtimeStatus?.processId
+    effectiveRuntimeStatus?.ok && (
+      effectiveRuntimeStatus?.process_id ||
+      effectiveRuntimeStatus?.processId ||
+      bootstrap?.runtimeProcessDetected
+    )
   );
   const remoteAccountSetupCheckPending = shouldDeferSetupForAccountHydration();
   const setupBlocksRuntime = Boolean(bootstrap?.setupState?.required);
@@ -1480,7 +1589,7 @@ export function DesktopAppShell() {
       setLoadingState('Loading saved setup');
       return;
     }
-    setStartupPhase('setup_required');
+    setStartupPhaseState('setup_required');
     setLoadingState('Setup required');
     setStartupErrorDetail(null);
     setError((current) => (isRuntimeConnectivityMessage(current) ? null : current));
@@ -1528,6 +1637,77 @@ export function DesktopAppShell() {
     const timer = globalThis.setInterval(() => {
       void pollRuntimeReadiness();
     }, 2500);
+    return () => {
+      disposed = true;
+      globalThis.clearInterval(timer);
+    };
+  }, [setupBlocksRuntime, startupPhase]);
+
+  useEffect(() => {
+    if (startupPhase !== 'ready' || setupBlocksRuntime) {
+      runtimeOfflinePollsRef.current = 0;
+      return;
+    }
+
+    let disposed = false;
+    const pollRuntimeHealth = async () => {
+      if (runtimeHealthPollInFlightRef.current) {
+        return;
+      }
+      runtimeHealthPollInFlightRef.current = true;
+      try {
+        const status = await loadDesktopRuntimeStatus();
+        if (disposed || !status) {
+          return;
+        }
+        if (status.ok) {
+          runtimeOfflinePollsRef.current = 0;
+          setRuntimeStatusWithRef(status);
+          setBootstrap((current) => {
+            if (!current) {
+              return current;
+            }
+            const next = { ...current, runtimeStatus: status };
+            bootstrapRef.current = next;
+            return next;
+          });
+          return;
+        }
+
+        if (status.runtimeProcessDetected) {
+          runtimeOfflinePollsRef.current = 0;
+          return;
+        }
+
+        runtimeOfflinePollsRef.current += 1;
+        if (runtimeOfflinePollsRef.current < RUNTIME_OFFLINE_CONFIRMATIONS) {
+          return;
+        }
+        setRuntimeStatusWithRef(status);
+        setBootstrap((current) => {
+          if (!current) {
+            return current;
+          }
+          const next = {
+            ...current,
+            runtimeStatus: status,
+            runtimeProcessDetected: false,
+          };
+          bootstrapRef.current = next;
+          return next;
+        });
+      } catch (_error) {
+        // The IPC probe itself can fail transiently. A returned offline status is
+        // required before changing the visible runtime state.
+      } finally {
+        runtimeHealthPollInFlightRef.current = false;
+      }
+    };
+
+    void pollRuntimeHealth();
+    const timer = globalThis.setInterval(() => {
+      void pollRuntimeHealth();
+    }, RUNTIME_HEALTH_POLL_MS);
     return () => {
       disposed = true;
       globalThis.clearInterval(timer);
@@ -1643,7 +1823,7 @@ export function DesktopAppShell() {
     const voiceStatus = bootstrap.setupState?.voiceStatus as Record<string, any> | null | undefined;
     const selectedEngine = String(voiceStatus?.selected_engine || bootstrap.setupState?.voicePacks?.defaultEngine || '').trim();
     const sttBackend = String(voiceStatus?.stt_backend || '').trim().toLowerCase();
-    const apiSttBackendActive = sttBackend === 'openai_realtime' || sttBackend === 'openai';
+    const apiSttBackendActive = sttBackend === 'openai_realtime' || sttBackend === 'openai' || sttBackend === 'gemini';
     if ((!apiSttBackendActive && (!selectedEngine || selectedEngine === 'none')) || voiceStatus?.input_ok === false) {
       return;
     }
@@ -1698,7 +1878,7 @@ export function DesktopAppShell() {
         setLoadingState(detail);
       }
       if (startupPhaseRef.current === 'starting_runtime' || startupPhaseRef.current === 'bootstrapping') {
-        setStartupPhase('warming_ui');
+        setStartupPhaseState('warming_ui');
       }
       return;
     }
@@ -1708,7 +1888,7 @@ export function DesktopAppShell() {
       return;
     }
 
-    setStartupPhase('ready');
+    setStartupPhaseState('ready');
     setLoadingState('Ready');
   };
 
@@ -1723,7 +1903,7 @@ export function DesktopAppShell() {
     setError((current) => (isRuntimeConnectivityMessage(current) ? null : current));
     setStartupErrorDetail((current) => (isRuntimeConnectivityMessage(current) ? null : current));
     setLoadingState('Recovered local runtime');
-    setStartupPhase('ready');
+    setStartupPhaseState('ready');
   }, [bootstrap?.accessToken, localRuntimeReady, setupBlocksRuntime, startupPhase]);
 
   const refreshSetupRuntimeControls = async () => {
@@ -1830,7 +2010,7 @@ export function DesktopAppShell() {
     deleteSetupTelegramBot,
     configureRuntimeOrchestratorFromSetup,
     updateSetupGeneralAgentConfig,
-  } = createDesktopAppShellActions({ confirmAction, confirmationDialog, params, requestedSessionId, requestedTab, requestedDesktopRoute, requestedDesktopMode, requestedSurfaceMode, activeTab, setActiveTab, bootstrap, setBootstrap, runtimeStatus, setRuntimeStatus, updateStatus, setUpdateStatus, loadingState, setLoadingState, error, setError, notice, setNotice, accountMenuOpen, setAccountMenuOpen, conversationSidebarToggleSignal, setConversationSidebarToggleSignal, startupPhase, setStartupPhase, startupErrorDetail, setStartupErrorDetail, startupCurrentTimeoutSeconds, setStartupCurrentTimeoutSeconds, showSetup, setShowSetup, startingRuntime, setStartingRuntime, stoppingRuntime, setStoppingRuntime, savingSetup, setSavingSetup, voicePackBusyId, setVoicePackBusyId, voicePackProgress, setVoicePackProgress, checkingUpdates, setCheckingUpdates, installingUpdate, setInstallingUpdate, memoryState, setMemoryState, memoryLoading, setMemoryLoading, memorySaving, setMemorySaving, telegramBotConfigs, setTelegramBotConfigs, orchestratorStatus, setOrchestratorStatus, setupSessions, setSetupSessions, setupMaxTurns, setSetupMaxTurns, recoveryItems, setRecoveryItems, pendingConfirmations, setPendingConfirmations, recoveryBusyId, setRecoveryBusyId, recoveryMessage, setRecoveryMessage, sharedSettingsDraft, setSharedSettingsDraft, sharedSettingsSaving, setSharedSettingsSaving, sharedSettingsStatus, setSharedSettingsStatus, remoteAuthStatus, setRemoteAuthStatus, remoteAuthLoading, setRemoteAuthLoading, remoteAuthBusy, setRemoteAuthBusy, remoteAuthLoggingOut, setRemoteAuthLoggingOut, remoteAuthMode, setRemoteAuthMode, remoteAuthEmail, setRemoteAuthEmail, remoteAuthPassword, setRemoteAuthPassword, remoteAuthDisplayName, setRemoteAuthDisplayName, remoteAuthRememberMe, setRemoteAuthRememberMe, remoteAuthOtpChallenge, setRemoteAuthOtpChallenge, remoteAuthOtpCode, setRemoteAuthOtpCode, remoteAuthMessage, setRemoteAuthMessage, remoteSecretItems, setRemoteSecretItems, remoteSecretsBusy, setRemoteSecretsBusy, remoteSecretsMessage, setRemoteSecretsMessage, remoteAccountHydrating, setRemoteAccountHydrating, startupPhaseRef, startupWatchdogTimerRef, startupFlowInFlightRef, startupInitializedRef, startupAutoRetryAttemptedRef, startupAutoRetryInFlightRef, startupDeferredRetryTimeoutRef, startupRecoveryInFlightRef, postStartupRefreshKeyRef, postStartupSetupNoticeSentRef, previousTelegramStateRef, bootstrapRef, runtimeStatusRef, startupSleepWakeAttemptedRef, startupVoiceWarmKeyRef, remoteAccountHydratedKeyRef, remoteAccountHydrationInFlightKeyRef, runtimeDowngradeRecheckInFlightRef, resetAccountStartupState, refreshRemoteAuthStatus, submitRemoteAuth, verifyRemoteAuthOtp, resendRemoteAuthOtp, submitRemoteGoogleAuth, currentStartupWatchdogMs, nextStartupRetryWindowSeconds, setRuntimeStatusWithRef, shouldPreserveReadyRuntimeStatus, scheduleReadyRuntimeDowngradeRecheck, applyBootstrap, remoteAccountHydrationKey, hydrateSignedInAccountData, failStartup, retryStartupSilently, handleStartupFailure, beginStartup, refreshUpdateStatus, wakeDesktopFromSleepMode, reconnectDesktopAfterWindowReopen, recoverReadyRuntimeFromStatus, remoteRuntimes, effectiveRuntimeStatus, localRuntimeReady, runtimeProcessDetected, setupBlocksRuntime, chatSkeletonVisible, handleConversationStartupState, refreshSetupRuntimeControls, retryStartup, DESKTOP_RUNTIME_RESTART_WAIT_MS, delay, desktopVoicePackLabel });
+  } = createDesktopAppShellActions({ confirmAction, confirmationDialog, params, requestedSessionId, requestedTab, requestedDesktopRoute, requestedDesktopMode, requestedSurfaceMode, activeTab, setActiveTab, bootstrap, setBootstrap, runtimeStatus, setRuntimeStatus, updateStatus, setUpdateStatus, loadingState, setLoadingState, error, setError, notice, setNotice, accountMenuOpen, setAccountMenuOpen, conversationSidebarToggleSignal, setConversationSidebarToggleSignal, startupPhase, setStartupPhase: setStartupPhaseState, startupErrorDetail, setStartupErrorDetail, startupCurrentTimeoutSeconds, setStartupCurrentTimeoutSeconds, showSetup, setShowSetup, startingRuntime, setStartingRuntime, stoppingRuntime, setStoppingRuntime, savingSetup, setSavingSetup, voicePackBusyId, setVoicePackBusyId, voicePackProgress, setVoicePackProgress, checkingUpdates, setCheckingUpdates, installingUpdate, setInstallingUpdate, memoryState, setMemoryState, memoryLoading, setMemoryLoading, memorySaving, setMemorySaving, telegramBotConfigs, setTelegramBotConfigs, orchestratorStatus, setOrchestratorStatus, setupSessions, setSetupSessions, setupMaxTurns, setSetupMaxTurns, recoveryItems, setRecoveryItems, pendingConfirmations, setPendingConfirmations, recoveryBusyId, setRecoveryBusyId, recoveryMessage, setRecoveryMessage, sharedSettingsDraft, setSharedSettingsDraft, sharedSettingsSaving, setSharedSettingsSaving, sharedSettingsStatus, setSharedSettingsStatus, remoteAuthStatus, setRemoteAuthStatus, remoteAuthLoading, setRemoteAuthLoading, remoteAuthBusy, setRemoteAuthBusy, remoteAuthLoggingOut, setRemoteAuthLoggingOut, remoteAuthMode, setRemoteAuthMode, remoteAuthEmail, setRemoteAuthEmail, remoteAuthPassword, setRemoteAuthPassword, remoteAuthDisplayName, setRemoteAuthDisplayName, remoteAuthRememberMe, setRemoteAuthRememberMe, remoteAuthOtpChallenge, setRemoteAuthOtpChallenge, remoteAuthOtpCode, setRemoteAuthOtpCode, remoteAuthMessage, setRemoteAuthMessage, remoteSecretItems, setRemoteSecretItems, remoteSecretsBusy, setRemoteSecretsBusy, remoteSecretsMessage, setRemoteSecretsMessage, remoteAccountHydrating, setRemoteAccountHydrating, startupPhaseRef, startupWatchdogTimerRef, startupFlowInFlightRef, startupInitializedRef, startupAutoRetryAttemptedRef, startupAutoRetryInFlightRef, startupDeferredRetryTimeoutRef, startupRecoveryInFlightRef, postStartupRefreshKeyRef, postStartupSetupNoticeSentRef, previousTelegramStateRef, bootstrapRef, runtimeStatusRef, startupSleepWakeAttemptedRef, startupVoiceWarmKeyRef, remoteAccountHydratedKeyRef, remoteAccountHydrationInFlightKeyRef, runtimeDowngradeRecheckInFlightRef, resetAccountStartupState, refreshRemoteAuthStatus, submitRemoteAuth, verifyRemoteAuthOtp, resendRemoteAuthOtp, submitRemoteGoogleAuth, currentStartupWatchdogMs, nextStartupRetryWindowSeconds, setRuntimeStatusWithRef, shouldPreserveReadyRuntimeStatus, scheduleReadyRuntimeDowngradeRecheck, applyBootstrap, remoteAccountHydrationKey, hydrateSignedInAccountData, failStartup, retryStartupSilently, handleStartupFailure, beginStartup, refreshUpdateStatus, wakeDesktopFromSleepMode, reconnectDesktopAfterWindowReopen, recoverReadyRuntimeFromStatus, remoteRuntimes, effectiveRuntimeStatus, localRuntimeReady, runtimeProcessDetected, setupBlocksRuntime, chatSkeletonVisible, handleConversationStartupState, refreshSetupRuntimeControls, retryStartup, DESKTOP_RUNTIME_RESTART_WAIT_MS, delay, desktopVoicePackLabel });
 
   const runtimeSummary = runtimeLabel(effectiveRuntimeStatus, loadingState);
   const showStartupRuntimeSummary = Boolean(
@@ -1838,7 +2018,7 @@ export function DesktopAppShell() {
     runtimeSummary !== 'bootstrapping desktop shell' &&
     runtimeSummary.trim().toLowerCase() !== String(loadingState || '').trim().toLowerCase()
   );
-  const updateAvailable = Boolean(updateStatus?.updateAvailable && updateStatus.update);
+  const updateAvailable = Boolean(updateStatus?.updateAvailable && updateStatus.update && !updateStatus.blocked);
   const accountEmail = remoteAuthStatus?.user?.email || remoteAuthEmail || 'Not signed in';
   const telegramStatus = bootstrap?.telegramStatus || null;
   const telegramSummary = telegramStatusLabel(telegramStatus);
@@ -1928,5 +2108,5 @@ export function DesktopAppShell() {
     window.history.forward();
   };
 
-  return <DesktopAppShellView scope={{ confirmAction, confirmationDialog, params, requestedSessionId, requestedTab, requestedDesktopRoute, requestedDesktopMode, requestedSurfaceMode, activeTab, setActiveTab, bootstrap, setBootstrap, runtimeStatus, setRuntimeStatus, updateStatus, setUpdateStatus, loadingState, setLoadingState, error, setError, notice, setNotice, accountMenuOpen, setAccountMenuOpen, conversationSidebarToggleSignal, setConversationSidebarToggleSignal, startupPhase, setStartupPhase, startupErrorDetail, setStartupErrorDetail, startupCurrentTimeoutSeconds, setStartupCurrentTimeoutSeconds, showSetup, setShowSetup, startingRuntime, setStartingRuntime, stoppingRuntime, setStoppingRuntime, savingSetup, setSavingSetup, voicePackBusyId, setVoicePackBusyId, voicePackProgress, setVoicePackProgress, checkingUpdates, setCheckingUpdates, installingUpdate, setInstallingUpdate, memoryState, setMemoryState, memoryLoading, setMemoryLoading, memorySaving, setMemorySaving, telegramBotConfigs, setTelegramBotConfigs, orchestratorStatus, setOrchestratorStatus, setupSessions, setSetupSessions, setupMaxTurns, setSetupMaxTurns, recoveryItems, setRecoveryItems, pendingConfirmations, setPendingConfirmations, recoveryBusyId, setRecoveryBusyId, recoveryMessage, setRecoveryMessage, sharedSettingsDraft, setSharedSettingsDraft, sharedSettingsSaving, setSharedSettingsSaving, sharedSettingsStatus, setSharedSettingsStatus, remoteAuthStatus, setRemoteAuthStatus, remoteAuthLoading, setRemoteAuthLoading, remoteAuthBusy, setRemoteAuthBusy, remoteAuthLoggingOut, setRemoteAuthLoggingOut, remoteAuthMode, setRemoteAuthMode, remoteAuthEmail, setRemoteAuthEmail, remoteAuthPassword, setRemoteAuthPassword, remoteAuthDisplayName, setRemoteAuthDisplayName, remoteAuthRememberMe, setRemoteAuthRememberMe, remoteAuthOtpChallenge, setRemoteAuthOtpChallenge, remoteAuthOtpCode, setRemoteAuthOtpCode, remoteAuthMessage, setRemoteAuthMessage, remoteSecretItems, setRemoteSecretItems, remoteSecretsBusy, setRemoteSecretsBusy, remoteSecretsMessage, setRemoteSecretsMessage, remoteAccountHydrating, setRemoteAccountHydrating, remoteAccountSetupCheckPending, startupPhaseRef, startupWatchdogTimerRef, startupFlowInFlightRef, startupInitializedRef, startupAutoRetryAttemptedRef, startupAutoRetryInFlightRef, startupDeferredRetryTimeoutRef, startupRecoveryInFlightRef, postStartupRefreshKeyRef, postStartupSetupNoticeSentRef, previousTelegramStateRef, bootstrapRef, runtimeStatusRef, startupSleepWakeAttemptedRef, startupVoiceWarmKeyRef, remoteAccountHydratedKeyRef, remoteAccountHydrationInFlightKeyRef, runtimeDowngradeRecheckInFlightRef, resetAccountStartupState, refreshRemoteAuthStatus, submitRemoteAuth, verifyRemoteAuthOtp, resendRemoteAuthOtp, submitRemoteGoogleAuth, currentStartupWatchdogMs, nextStartupRetryWindowSeconds, setRuntimeStatusWithRef, shouldPreserveReadyRuntimeStatus, scheduleReadyRuntimeDowngradeRecheck, applyBootstrap, remoteAccountHydrationKey, hydrateSignedInAccountData, failStartup, retryStartupSilently, handleStartupFailure, beginStartup, refreshUpdateStatus, wakeDesktopFromSleepMode, reconnectDesktopAfterWindowReopen, recoverReadyRuntimeFromStatus, remoteRuntimes, effectiveRuntimeStatus, localRuntimeReady, runtimeProcessDetected, setupBlocksRuntime, chatSkeletonVisible, handleConversationStartupState, refreshSetupRuntimeControls, retryStartup, startLocalRuntime, stopLocalRuntimeNow, logoutRemoteAccount, deleteRemoteAccountData, refreshRecovery, setCloudChatBackupEnabled, saveSharedSettings, approveSharedConfirmation, denySharedConfirmation, restoreArchivedItem, permanentlyDeleteArchivedItem, restoreManagedWorkspace, deleteRemoteSecretFromCloud, createRemotePairingTokenFromAccount, refreshRemoteSecretItems, saveCurrentSetupSecretsToCloud, saveLoginCredentialSecretsToCloud, saveTelegramBotSecretToCloud, applyCloudSetupSecrets, saveSetup, refreshMemory, saveMemory, installVoicePack, selectTtsVoicePack, removeVoicePack, selectVoiceEngine, installUpdateNow, createSetupTelegramBot, updateSetupTelegramBot, deleteSetupTelegramBot, configureRuntimeOrchestratorFromSetup, updateSetupGeneralAgentConfig, runtimeSummary, showStartupRuntimeSummary, updateAvailable, accountEmail, telegramStatus, telegramSummary, telegramStatusTone, navigateWindowHistory }} />;
+  return <DesktopAppShellView scope={{ confirmAction, confirmationDialog, params, requestedSessionId, requestedTab, requestedDesktopRoute, requestedDesktopMode, requestedSurfaceMode, activeTab, setActiveTab, bootstrap, setBootstrap, runtimeStatus, setRuntimeStatus, updateStatus, setUpdateStatus, loadingState, setLoadingState, error, setError, notice, setNotice, accountMenuOpen, setAccountMenuOpen, conversationSidebarToggleSignal, setConversationSidebarToggleSignal, startupPhase, setStartupPhase: setStartupPhaseState, startupErrorDetail, setStartupErrorDetail, startupCurrentTimeoutSeconds, setStartupCurrentTimeoutSeconds, showSetup, setShowSetup, startingRuntime, setStartingRuntime, stoppingRuntime, setStoppingRuntime, savingSetup, setSavingSetup, voicePackBusyId, setVoicePackBusyId, voicePackProgress, setVoicePackProgress, checkingUpdates, setCheckingUpdates, installingUpdate, setInstallingUpdate, memoryState, setMemoryState, memoryLoading, setMemoryLoading, memorySaving, setMemorySaving, telegramBotConfigs, setTelegramBotConfigs, orchestratorStatus, setOrchestratorStatus, setupSessions, setSetupSessions, setupMaxTurns, setSetupMaxTurns, recoveryItems, setRecoveryItems, pendingConfirmations, setPendingConfirmations, recoveryBusyId, setRecoveryBusyId, recoveryMessage, setRecoveryMessage, sharedSettingsDraft, setSharedSettingsDraft, sharedSettingsSaving, setSharedSettingsSaving, sharedSettingsStatus, setSharedSettingsStatus, remoteAuthStatus, setRemoteAuthStatus, remoteAuthLoading, setRemoteAuthLoading, remoteAuthBusy, setRemoteAuthBusy, remoteAuthLoggingOut, setRemoteAuthLoggingOut, remoteAuthMode, setRemoteAuthMode, remoteAuthEmail, setRemoteAuthEmail, remoteAuthPassword, setRemoteAuthPassword, remoteAuthDisplayName, setRemoteAuthDisplayName, remoteAuthRememberMe, setRemoteAuthRememberMe, remoteAuthOtpChallenge, setRemoteAuthOtpChallenge, remoteAuthOtpCode, setRemoteAuthOtpCode, remoteAuthMessage, setRemoteAuthMessage, remoteSecretItems, setRemoteSecretItems, remoteSecretsBusy, setRemoteSecretsBusy, remoteSecretsMessage, setRemoteSecretsMessage, remoteAccountHydrating, setRemoteAccountHydrating, remoteAccountSetupCheckPending, startupPhaseRef, startupWatchdogTimerRef, startupFlowInFlightRef, startupInitializedRef, startupAutoRetryAttemptedRef, startupAutoRetryInFlightRef, startupDeferredRetryTimeoutRef, startupRecoveryInFlightRef, postStartupRefreshKeyRef, postStartupSetupNoticeSentRef, previousTelegramStateRef, bootstrapRef, runtimeStatusRef, startupSleepWakeAttemptedRef, startupVoiceWarmKeyRef, remoteAccountHydratedKeyRef, remoteAccountHydrationInFlightKeyRef, runtimeDowngradeRecheckInFlightRef, resetAccountStartupState, refreshRemoteAuthStatus, submitRemoteAuth, verifyRemoteAuthOtp, resendRemoteAuthOtp, submitRemoteGoogleAuth, currentStartupWatchdogMs, nextStartupRetryWindowSeconds, setRuntimeStatusWithRef, shouldPreserveReadyRuntimeStatus, scheduleReadyRuntimeDowngradeRecheck, applyBootstrap, remoteAccountHydrationKey, hydrateSignedInAccountData, failStartup, retryStartupSilently, handleStartupFailure, beginStartup, refreshUpdateStatus, wakeDesktopFromSleepMode, reconnectDesktopAfterWindowReopen, recoverReadyRuntimeFromStatus, remoteRuntimes, effectiveRuntimeStatus, localRuntimeReady, runtimeProcessDetected, setupBlocksRuntime, chatSkeletonVisible, handleConversationStartupState, refreshSetupRuntimeControls, retryStartup, startLocalRuntime, stopLocalRuntimeNow, logoutRemoteAccount, deleteRemoteAccountData, refreshRecovery, setCloudChatBackupEnabled, saveSharedSettings, approveSharedConfirmation, denySharedConfirmation, restoreArchivedItem, permanentlyDeleteArchivedItem, restoreManagedWorkspace, deleteRemoteSecretFromCloud, createRemotePairingTokenFromAccount, refreshRemoteSecretItems, saveCurrentSetupSecretsToCloud, saveLoginCredentialSecretsToCloud, saveTelegramBotSecretToCloud, applyCloudSetupSecrets, saveSetup, refreshMemory, saveMemory, installVoicePack, selectTtsVoicePack, removeVoicePack, selectVoiceEngine, installUpdateNow, createSetupTelegramBot, updateSetupTelegramBot, deleteSetupTelegramBot, configureRuntimeOrchestratorFromSetup, updateSetupGeneralAgentConfig, runtimeSummary, showStartupRuntimeSummary, updateAvailable, accountEmail, telegramStatus, telegramSummary, telegramStatusTone, navigateWindowHistory }} />;
 }

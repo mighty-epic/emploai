@@ -13,6 +13,17 @@ PROVIDER_TRANSIENT_ERROR = "provider_transient_error"
 PROVIDER_AUTH_OR_QUOTA_ERROR = "provider_auth_or_quota_error"
 PROVIDER_ERROR = "provider_error"
 
+PROVIDER_FAILURE_USAGE_LIMIT = "usage_limit_reached"
+PROVIDER_FAILURE_AUTHENTICATION = "authentication_failed"
+PROVIDER_FAILURE_QUOTA = "quota_exceeded"
+PROVIDER_FAILURE_BILLING = "billing_required"
+PROVIDER_FAILURE_RATE_LIMIT = "rate_limited"
+PROVIDER_FAILURE_SAFETY = "safety_rejected"
+PROVIDER_FAILURE_INVALID_INPUT = "invalid_input"
+PROVIDER_FAILURE_TRANSIENT = "provider_unavailable"
+PROVIDER_FAILURE_CONNECTIVITY = "connectivity_failed"
+PROVIDER_FAILURE_UNKNOWN = "provider_failed"
+
 
 @dataclass(frozen=True)
 class ProviderErrorInfo:
@@ -21,6 +32,7 @@ class ProviderErrorInfo:
     status_code: Optional[int] = None
     retryable: bool = False
     safe_alternate_allowed: bool = False
+    code: str = PROVIDER_FAILURE_UNKNOWN
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -29,6 +41,7 @@ class ProviderErrorInfo:
             "status_code": self.status_code,
             "retryable": self.retryable,
             "safe_alternate_allowed": self.safe_alternate_allowed,
+            "code": self.code,
         }
 
 
@@ -92,6 +105,7 @@ def normalize_provider_error(exc: BaseException, *, payload_kind: str = "text") 
             status,
             retryable=False,
             safe_alternate_allowed=payload_kind in {"image", "screenshot", "vision"},
+            code=PROVIDER_FAILURE_SAFETY,
         )
 
     input_markers = (
@@ -114,6 +128,69 @@ def normalize_provider_error(exc: BaseException, *, payload_kind: str = "text") 
             status,
             retryable=False,
             safe_alternate_allowed=payload_kind in {"image", "screenshot", "vision"},
+            code=PROVIDER_FAILURE_INVALID_INPUT,
+        )
+
+    usage_limit_markers = (
+        "usage_limit_reached",
+        "usage limit reached",
+        "monthly usage limit",
+        "spending limit reached",
+    )
+    if any(marker in text for marker in usage_limit_markers):
+        return ProviderErrorInfo(
+            PROVIDER_AUTH_OR_QUOTA_ERROR,
+            "This provider account has reached its configured usage limit.",
+            status,
+            retryable=False,
+            safe_alternate_allowed=False,
+            code=PROVIDER_FAILURE_USAGE_LIMIT,
+        )
+
+    billing_markers = (
+        "billing",
+        "payment required",
+        "credit balance",
+        "insufficient credits",
+    )
+    if status == 402 or any(marker in text for marker in billing_markers):
+        return ProviderErrorInfo(
+            PROVIDER_AUTH_OR_QUOTA_ERROR,
+            "This provider account needs billing attention before it can run requests.",
+            status,
+            retryable=False,
+            safe_alternate_allowed=False,
+            code=PROVIDER_FAILURE_BILLING,
+        )
+
+    quota_markers = (
+        "quota",
+        "insufficient_quota",
+        "quota_exceeded",
+    )
+    if any(marker in text for marker in quota_markers):
+        return ProviderErrorInfo(
+            PROVIDER_AUTH_OR_QUOTA_ERROR,
+            "This provider account has no available quota for the request.",
+            status,
+            retryable=False,
+            safe_alternate_allowed=False,
+            code=PROVIDER_FAILURE_QUOTA,
+        )
+
+    rate_limit_markers = (
+        "rate limit",
+        "rate_limit",
+        "too many requests",
+    )
+    if status == 429 or any(marker in text for marker in rate_limit_markers):
+        return ProviderErrorInfo(
+            PROVIDER_AUTH_OR_QUOTA_ERROR,
+            f"Provider authentication, quota, or permission error. {clean_message}",
+            status,
+            retryable=True,
+            safe_alternate_allowed=False,
+            code=PROVIDER_FAILURE_RATE_LIMIT,
         )
 
     auth_markers = (
@@ -122,25 +199,38 @@ def normalize_provider_error(exc: BaseException, *, payload_kind: str = "text") 
         "unauthorized",
         "forbidden",
         "permission",
-        "quota",
-        "billing",
-        "insufficient_quota",
-        "rate limit",
-        "rate_limit",
     )
-    if status in {401, 403, 429} or any(marker in text for marker in auth_markers):
+    if status in {401, 403} or any(marker in text for marker in auth_markers):
         return ProviderErrorInfo(
             PROVIDER_AUTH_OR_QUOTA_ERROR,
             f"Provider authentication, quota, or permission error. {clean_message}",
             status,
             retryable=status == 429,
             safe_alternate_allowed=False,
+            code=PROVIDER_FAILURE_AUTHENTICATION,
+        )
+
+    connectivity_markers = (
+        "connection",
+        "dns",
+        "network is unreachable",
+        "connection reset",
+        "connection refused",
+        "name resolution",
+    )
+    if any(marker in text for marker in connectivity_markers):
+        return ProviderErrorInfo(
+            PROVIDER_TRANSIENT_ERROR,
+            "The app could not connect to the provider.",
+            status,
+            retryable=True,
+            safe_alternate_allowed=False,
+            code=PROVIDER_FAILURE_CONNECTIVITY,
         )
 
     transient_markers = (
         "timeout",
         "timed out",
-        "connection",
         "temporarily unavailable",
         "server error",
         "overloaded",
@@ -153,6 +243,7 @@ def normalize_provider_error(exc: BaseException, *, payload_kind: str = "text") 
             status,
             retryable=True,
             safe_alternate_allowed=False,
+            code=PROVIDER_FAILURE_TRANSIENT,
         )
 
     return ProviderErrorInfo(
@@ -161,6 +252,7 @@ def normalize_provider_error(exc: BaseException, *, payload_kind: str = "text") 
         status,
         retryable=False,
         safe_alternate_allowed=False,
+        code=PROVIDER_FAILURE_UNKNOWN,
     )
 
 

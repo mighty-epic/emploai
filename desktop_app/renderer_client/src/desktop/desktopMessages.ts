@@ -12,13 +12,28 @@ export type DesktopMessage = {
   localOnly?: boolean;
   localSessionId?: string | null;
   sourceClientId?: string | null;
+  clientMessageId?: string | null;
+  runMode?: 'normal' | 'plan' | 'goal' | null;
+  runId?: string | null;
+  runSequence?: number | null;
+  raw?: Record<string, unknown>;
 };
 
 function sourceClientIdFromRaw(raw: Record<string, unknown> | undefined) {
   return String(raw?.source_client_id || raw?.client_id || '').trim() || null;
 }
 
+function clientMessageIdFromRaw(raw: Record<string, unknown> | undefined) {
+  return String(raw?.client_message_id || '').trim() || null;
+}
+
+function runSequenceFromRaw(raw: Record<string, unknown> | undefined) {
+  const numeric = Number(raw?.run_sequence ?? raw?.task_id ?? 0);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+}
+
 export function toDesktopMessage(message: SessionMessage): DesktopMessage {
+  const raw = (message.raw || {}) as Record<string, unknown>;
   return {
     role: message.role || 'assistant',
     content: message.content || '',
@@ -26,7 +41,12 @@ export function toDesktopMessage(message: SessionMessage): DesktopMessage {
     displayLabel: message.display_label,
     channel: message.channel,
     sourceFormat: message.source_format,
-    sourceClientId: sourceClientIdFromRaw(message.raw),
+    sourceClientId: sourceClientIdFromRaw(raw),
+    clientMessageId: clientMessageIdFromRaw(raw),
+    runMode: message.run_mode || (raw as any).run_mode || null,
+    runId: String(raw.run_id || '').trim() || null,
+    runSequence: runSequenceFromRaw(raw),
+    raw: message.raw,
   };
 }
 
@@ -48,6 +68,7 @@ export function messageIdentitySeedFromSessionMessage(message: SessionMessage) {
       || raw.id
       || raw.telegram_message_id
       || raw.app_message_id
+      || raw.client_message_id
       || '',
   ).trim();
   if (explicitId) {
@@ -89,6 +110,8 @@ export function toLiveDesktopMessage(message: SessionMessage, existingMessages: 
 }
 
 export function labelForMessage(message: DesktopMessage) {
+  if (message.role === 'user' && message.runMode === 'plan') return 'Sent as plan';
+  if (message.role === 'user' && message.runMode === 'goal') return 'Sent as goal';
   if (message.displayLabel) return message.displayLabel;
   if (message.role === 'assistant') return 'Assistant';
   if (message.role === 'system') return 'System';

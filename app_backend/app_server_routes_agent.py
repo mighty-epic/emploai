@@ -482,6 +482,18 @@ def register_agent_routes(app):
 
             return AgentActionResponse(action="provider_keys_reload", message="No provider keys were changed.")
 
+        if changed_provider_keys & {"OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"}:
+
+            try:
+
+                from app_backend.voice_runtime import reset_stt_runtime_cache
+
+                reset_stt_runtime_cache()
+
+            except Exception:
+
+                pass
+
         refreshed = 0
 
         try:
@@ -1586,6 +1598,8 @@ def register_agent_routes(app):
 
         killed_count = int((stop_summary.get("background_commands") or {}).get("killed_count") or 0)
 
+        visual_monitor_count = int((stop_summary.get("visual_monitors") or {}).get("stopped_count") or 0)
+
         stopped_bits = []
 
         if stop_summary.get("was_processing"):
@@ -1595,6 +1609,10 @@ def register_agent_routes(app):
         if killed_count:
 
             stopped_bits.append(f"{killed_count} command process{'es' if killed_count != 1 else ''}")
+
+        if visual_monitor_count:
+
+            stopped_bits.append(f"{visual_monitor_count} visual monitor{'s' if visual_monitor_count != 1 else ''}")
 
         if stop_summary.get("subagents_stopped"):
 
@@ -1611,6 +1629,404 @@ def register_agent_routes(app):
         message = f"Stopped {' and '.join(stopped_bits)}" if stopped_bits else "Stop requested; no active run was found"
 
         return AgentActionResponse(action="stop", message=message)
+
+    @app.post("/api/app/agent/control/identity-stop")
+
+    async def stop_identity_tree(
+
+        request: IdentityStopRequest,
+
+        authorization: Optional[str] = Header(default=None),
+
+    ) -> dict:
+
+        auth = _resolve_token(authorization)
+
+        if _is_remote_session_auth(auth):
+
+            await _remote_dispatch_command(
+
+                auth,
+
+                command_name="stop_run",
+
+                payload={"session_id": request.session_id},
+
+            )
+
+            return {
+
+                "ok": True,
+
+                "action": "identity_stop",
+
+                "message": "Identity stop requested for the paired desktop",
+
+                "counts": {},
+
+            }
+
+        user_id = int(auth["user_id"])
+
+        bridge = _bridge_for_user(user_id)
+
+        current = bridge.get_current_session()
+
+        target_session_id = str(request.session_id or (current.id if current else "") or "").strip()
+
+        runtime = None
+
+        current_runtime_session_id = target_session_id or None
+
+        stop_summary: Dict[str, Any] = {}
+
+        stopped_event_runs: list[Dict[str, Any]] = []
+
+        stopped_process_waits: list[Dict[str, Any]] = []
+
+        if target_session_id:
+
+            runtime = _load_runtime_session_or_409(bridge, target_session_id)
+
+            current_runtime_session_id = (
+
+                str(getattr(getattr(runtime, "session", None), "id", "") or "").strip()
+
+                or (runtime.session_manager.get_current_session_id() if runtime.session_manager else None)
+
+                or target_session_id
+
+            )
+
+            stop_summary = _stop_runtime_execution(runtime)
+
+            try:
+
+                stopped_event_runs = _get_remote_control_store().cancel_event_runs_for_session(
+
+                    user_id=user_id,
+
+                    session_id=str(current_runtime_session_id),
+
+                    reason="Identity stopped by user from app",
+
+                )
+
+                stopped_process_waits = _get_remote_control_store().stop_process_waits_for_session(
+
+                    user_id=user_id,
+
+                    session_id=str(current_runtime_session_id),
+
+                    reason="Identity stopped by user from app",
+
+                )
+
+            except Exception:
+
+                logger.exception("[app] failed stopping identity event/process runtime state")
+
+            archive_active_task_board(
+
+                runtime,
+
+                status="interrupted",
+
+                summary="The current identity tree was stopped by the user.",
+
+            )
+
+            role_hint = str(request.identity_role or getattr(getattr(runtime, "session", None), "fleet_identity_role", "") or "").strip().lower()
+
+            worker_hint = str(request.worker_id or getattr(getattr(runtime, "session", None), "fleet_worker_id", "") or "").strip()
+
+            identity_hint = str(request.identity_id or getattr(getattr(runtime, "session", None), "fleet_identity_id", "") or "").strip()
+
+            runtime.chat_history.append(
+
+                {
+
+                    "role": "system",
+
+                    "content": (
+
+                        "Identity Stop was pressed by the user. Treat the active identity run, "
+
+                        "its task-owned commands, monitors, process waits, event runs, subagents, "
+
+                        "and delegated workers in scope as canceled. Continue next time from the fact "
+
+                        "that the user intentionally stopped this identity tree."
+
+                    ),
+
+                    "timestamp": datetime.now().isoformat(),
+
+                    "channel": "app",
+
+                    "source_format": "identity_stop",
+
+                    "display_label": "Identity Stop",
+
+                    "hidden_from_app": True,
+
+                    "metadata": {
+
+                        "identity_id": identity_hint or None,
+
+                        "identity_role": role_hint or None,
+
+                        "worker_id": worker_hint or None,
+
+                    },
+
+                }
+
+            )
+
+            runtime.save_session()
+
+            try:
+
+                await bridge.orchestrator.force_release_turn(str(current_runtime_session_id), worker=runtime)
+
+            except Exception:
+
+                logger.exception("[app] failed releasing orchestrator turn during identity stop")
+
+            publish_status_update(
+
+                user_id=user_id,
+
+                session_id=current_runtime_session_id,
+
+                origin_channel="app",
+
+                message="ready",
+
+                run_state="idle",
+
+            )
+
+            get_channel_sync_hub().publish(
+
+                user_id=user_id,
+
+                event={
+
+                    "type": "task_board",
+
+                    "session_id": current_runtime_session_id,
+
+                    "origin_channel": "app",
+
+                    "payload": {
+
+                        "board": task_board_view(get_display_task_board(runtime)),
+
+                        "completed_task_boards": completed_task_board_views(runtime),
+
+                        "summary": "Identity tree stopped.",
+
+                    },
+
+                },
+
+            )
+
+        role = str(
+
+            request.identity_role
+
+            or getattr(getattr(runtime, "session", None), "fleet_identity_role", "")
+
+            or ""
+
+        ).strip().lower()
+
+        worker_id = str(
+
+            request.worker_id
+
+            or getattr(getattr(runtime, "session", None), "fleet_worker_id", "")
+
+            or ""
+
+        ).strip()
+
+        fleet_results: list[Dict[str, Any]] = []
+
+        if role == "worker" and worker_id:
+
+            try:
+
+                fleet_results.append(
+
+                    await _stop_fleet_worker_active_task(
+
+                        user_id=user_id,
+
+                        worker_id=worker_id,
+
+                        reason=request.reason or "Identity stopped by user",
+
+                        metadata={"stopped_from": "identity_stop", "session_id": current_runtime_session_id},
+
+                    )
+
+                )
+
+            except Exception:
+
+                logger.exception("[app] failed stopping worker identity task")
+
+                fleet_results.append({"worker_id": worker_id, "stopped": False, "error": "stop_failed"})
+
+        else:
+
+            try:
+
+                snapshot = _get_remote_control_store().get_fleet_snapshot(user_id=user_id)
+
+                for worker in list(snapshot.get("workers") or []):
+
+                    active_task = _fleet_active_task_for_worker(
+
+                        snapshot=snapshot,
+
+                        worker=dict(worker or {}),
+
+                        metadata=None,
+
+                    )
+
+                    active_task_id = str((active_task or {}).get("task_id") or "").strip()
+
+                    if not active_task_id:
+
+                        continue
+
+                    try:
+
+                        fleet_results.append(
+
+                            await _stop_fleet_worker_active_task(
+
+                                user_id=user_id,
+
+                                worker_id=str(worker.get("worker_id") or ""),
+
+                                reason=request.reason or "Identity tree stopped by user",
+
+                                metadata={
+
+                                    "stopped_from": "identity_stop",
+
+                                    "session_id": current_runtime_session_id,
+
+                                    "task_id": active_task_id,
+
+                                },
+
+                            )
+
+                        )
+
+                    except Exception:
+
+                        logger.exception("[app] failed stopping delegated worker during identity stop")
+
+                        fleet_results.append({"worker_id": worker.get("worker_id"), "stopped": False, "error": "stop_failed"})
+
+            except Exception:
+
+                logger.exception("[app] failed reading fleet snapshot during identity stop")
+
+        if fleet_results:
+
+            _publish_fleet_delta(
+
+                user_id=user_id,
+
+                event_type="fleet_task_status",
+
+                payload={"identity_stop": True, "results": fleet_results},
+
+                origin_channel=str(auth.get("actor_kind") or "app"),
+
+            )
+
+        background_summary = stop_summary.get("background_commands") or {}
+
+        visual_summary = stop_summary.get("visual_monitors") or {}
+
+        counts = {
+
+            "agent_runs": 1 if stop_summary.get("was_processing") else 0,
+
+            "agent_instances": int(stop_summary.get("agents_stopped") or 0),
+
+            "commands": int(background_summary.get("killed_count") or 0),
+
+            "visual_monitors": int(visual_summary.get("stopped_count") or 0),
+
+            "event_runs": len(stopped_event_runs),
+
+            "process_waits": len(stopped_process_waits),
+
+            "subagents": int(stop_summary.get("subagents_stopped") or 0),
+
+            "fleet_workers": sum(1 for item in fleet_results if item.get("stopped")),
+
+        }
+
+        stopped_bits = []
+
+        if counts["agent_runs"]:
+
+            stopped_bits.append("agent turn")
+
+        if counts["commands"]:
+
+            stopped_bits.append(f"{counts['commands']} command process{'es' if counts['commands'] != 1 else ''}")
+
+        if counts["visual_monitors"]:
+
+            stopped_bits.append(f"{counts['visual_monitors']} visual monitor{'s' if counts['visual_monitors'] != 1 else ''}")
+
+        if counts["event_runs"]:
+
+            stopped_bits.append(f"{counts['event_runs']} event run{'s' if counts['event_runs'] != 1 else ''}")
+
+        if counts["process_waits"]:
+
+            stopped_bits.append(f"{counts['process_waits']} process wait{'s' if counts['process_waits'] != 1 else ''}")
+
+        if counts["subagents"]:
+
+            stopped_bits.append(f"{counts['subagents']} sub-agent task{'s' if counts['subagents'] != 1 else ''}")
+
+        if counts["fleet_workers"]:
+
+            stopped_bits.append(f"{counts['fleet_workers']} fleet worker{'s' if counts['fleet_workers'] != 1 else ''}")
+
+        message = f"Stopped {' and '.join(stopped_bits)}" if stopped_bits else "Identity stop requested; no active scoped work was found"
+
+        return {
+
+            "ok": True,
+
+            "action": "identity_stop",
+
+            "message": message,
+
+            "counts": counts,
+
+            "fleet_results": fleet_results,
+
+            "session_id": current_runtime_session_id,
+
+        }
 
     @app.post("/api/app/agent/control/restart", response_model=AgentActionResponse)
 

@@ -181,11 +181,14 @@ from shared import (
 from shared.task_board import TASK_BOARD_INTERNAL_TOOL_NAME, build_task_board_prompt, get_active_task_board
 from shared.prompt_layers import (
     active_skills_section,
+    assistant_response_policy_section,
     join_prompt_sections,
     local_custom_instructions_section,
     memory_context_section,
+    project_onboarding_section,
     skills_index_section,
 )
+from shared.project_onboarding import project_onboarding_prompt_for_session
 from shared.tool_packs import (
     PACK_BROWSER_ISOLATED,
     PACK_INTERACTIVE_DESKTOP,
@@ -566,8 +569,42 @@ AUTO_MODE_BROWSER_TOOLS = [
 ]
 
 
+AUTO_MODE_MEMORY_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_memory",
+            "description": "Search local MEMORY.md, recent daily logs, and mirrored local memory facts for durable context.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query for durable local memory."},
+                    "max_results": {"type": "integer", "description": "Maximum number of results to return."},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_memory",
+            "description": "Append a durable reusable fact, preference, workflow lesson, or project note to local MEMORY.md. Do not store secrets or one-off transient state.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "section": {"type": "string", "description": "MEMORY.md section to update, such as User Preferences, Context, or Lessons Learned."},
+                    "content": {"type": "string", "description": "Markdown content to append. Prefer a concise bullet beginning with '-'."},
+                },
+                "required": ["section", "content"],
+            },
+        },
+    },
+]
+
+
 def get_auto_mode_extra_tools() -> List[Dict[str, Any]]:
-    return list(AUTO_MODE_BROWSER_TOOLS) + list(CRON_TOOL_DEFINITIONS)
+    return list(AUTO_MODE_BROWSER_TOOLS) + list(AUTO_MODE_MEMORY_TOOLS) + list(CRON_TOOL_DEFINITIONS)
 
 
 def get_auto_mode_tool_handlers(session) -> Dict[str, Callable[[Dict[str, Any]], Any]]:
@@ -591,6 +628,8 @@ def get_auto_mode_tool_handlers(session) -> Dict[str, Callable[[Dict[str, Any]],
         "browser_activate_tab": lambda args: _execute_browser_activate_tab(session, args),
         "browser_close_tab": lambda args: _execute_browser_close_tab(session, args),
         "browser_stop": lambda args: _execute_browser_stop(session, args),
+        "search_memory": lambda args: _execute_search_memory(session, args),
+        "update_memory": lambda args: _execute_update_memory(session, args),
         "schedule_job": lambda args: _execute_schedule_job(session, args),
         "list_scheduled_jobs": lambda args: _execute_list_scheduled_jobs(session, args),
         "get_scheduled_job": lambda args: _execute_get_scheduled_job(session, args),
@@ -967,6 +1006,7 @@ def build_unified_system_prompt(
     live_config = getattr(session, "live_config", None)
     if live_config:
         custom_prompt_append = str(live_config.get("agent.custom_system_prompt_append", "") or "").strip()
+    project_onboarding_prompt = project_onboarding_prompt_for_session(session)
     active_tool_packs = list(
         getattr(session, "_active_tool_packs_for_current_run", None)
         or getattr(session, "enabled_tool_packs", [])
@@ -998,6 +1038,8 @@ Supported schedules include: 'every 30 seconds', 'every 5 minutes', 'every 1 hou
         cron_prompt if PACK_SCHEDULER in active_tool_packs else "",
         build_tool_pack_prompt(active_tool_packs),
         PACK_SCOPED_UNIFIED_AGENT_CORE_PROMPT,
+        assistant_response_policy_section(),
+        project_onboarding_section(project_onboarding_prompt) if project_onboarding_prompt else "",
         local_custom_instructions_section(custom_prompt_append) if custom_prompt_append else "",
         workspace_context.strip() if workspace_context else "",
         memory_context_section(memory_context) if memory_context else "",

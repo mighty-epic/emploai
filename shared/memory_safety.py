@@ -6,13 +6,13 @@ part of the agent's long-term prompt context.
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List
+
+from shared.atomic_io import atomic_write_text
 
 
 SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -55,24 +55,6 @@ def assert_safe_memory_text(text: str, *, context: str = "memory") -> None:
         raise MemorySafetyError(
             f"Refusing to save {context} because it appears to contain raw secret material: {labels}."
         )
-
-
-def atomic_write_text(path: Path, content: str) -> None:
-    """Atomically replace a UTF-8 text file."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-            handle.write(content)
-        os.replace(tmp_path, path)
-    finally:
-        try:
-            if tmp_path.exists():
-                tmp_path.unlink()
-        except OSError:
-            pass
 
 
 def backup_file(path: Path, backup_dir: Path, *, label: str = "backup") -> Path | None:

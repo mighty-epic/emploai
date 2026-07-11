@@ -1,6 +1,9 @@
 import { StyleSheet } from 'react-native';
 
-export const styles = StyleSheet.create({
+import { desktopSetupPanelVisualStyles } from './DesktopSetupPanel.visualStyles';
+import { mergeDesktopVisualStyles } from './mergeDesktopVisualStyles';
+
+const baseStyles = StyleSheet.create({
   shell: {
     borderRadius: 26,
     backgroundColor: '#111111',
@@ -169,6 +172,44 @@ export const styles = StyleSheet.create({
     color: '#ffecef',
     lineHeight: 20,
   },
+  onboardingSuggestionCard: {
+    borderRadius: 18,
+    backgroundColor: '#141d22',
+    borderWidth: 1,
+    borderColor: '#284150',
+    padding: 16,
+    gap: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+  },
+  onboardingSuggestionCopy: {
+    flex: 1,
+    minWidth: 260,
+    gap: 6,
+  },
+  onboardingSuggestionEyebrow: {
+    color: '#8fb4dc',
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  onboardingSuggestionTitle: {
+    color: '#eef8ff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  onboardingSuggestionText: {
+    color: '#c7d6df',
+    lineHeight: 20,
+  },
+  onboardingSuggestionMeta: {
+    color: '#9fb6c4',
+    fontSize: 12,
+    lineHeight: 18,
+  },
   section: {
     borderRadius: 18,
     backgroundColor: '#1a1a1a',
@@ -309,6 +350,12 @@ export const styles = StyleSheet.create({
   memoryEditor: {
     minHeight: 240,
     lineHeight: 20,
+  },
+  localEmbeddedSection: {
+    borderTopWidth: 1,
+    borderTopColor: '#252525',
+    paddingTop: 16,
+    gap: 12,
   },
   localGrid: {
     flexDirection: 'row',
@@ -487,6 +534,37 @@ export const styles = StyleSheet.create({
     backgroundColor: '#efefef',
     paddingHorizontal: 14,
     paddingVertical: 10,
+  },
+  codexAuthButton: {
+    position: 'relative',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    minWidth: 168,
+  },
+  codexAuthStatusDot: {
+    position: 'absolute',
+    top: 6,
+    right: 8,
+    width: 9,
+    height: 9,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#101010',
+    backgroundColor: '#777777',
+  },
+  codexAuthStatusDotConnected: {
+    backgroundColor: '#9cf0b7',
+  },
+  codexAuthStatusDotPending: {
+    backgroundColor: '#8fb4dc',
+  },
+  codexAuthStatusDotWarning: {
+    backgroundColor: '#ffd27a',
+  },
+  codexAuthStatusDotError: {
+    backgroundColor: '#ff8e8e',
   },
   sleepModeActionButtonActive: {
     backgroundColor: '#d4ff65',
@@ -937,3 +1015,5 @@ export const styles = StyleSheet.create({
     fontWeight: '800',
   },
 });
+
+export const styles = mergeDesktopVisualStyles(baseStyles, desktopSetupPanelVisualStyles);

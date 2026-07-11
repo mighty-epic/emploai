@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -16,7 +17,7 @@ def test_desktop_remote_session_store_encrypts_and_migrates(tmp_path):
         """
 const fs = require('fs');
 const path = require('path');
-const { createRemoteAccountSessionStore, ENCRYPTED_STORAGE_KIND } = require(process.argv[2]);
+const { createRemoteAccountSessionStore, ENCRYPTED_STORAGE_KIND, UNAVAILABLE_STORAGE_KIND } = require(process.argv[2]);
 const { createRemoteControlServices } = require(process.argv[4]);
 
 const runtimeHome = process.argv[3];
@@ -78,13 +79,17 @@ const fallbackStore = createRemoteAccountSessionStore({
   resolveRuntimeHome: () => runtimeHome,
   safeStorage: { isEncryptionAvailable: () => false },
 });
-fallbackStore.write({ apiBaseUrl: 'https://api.kraitos.app', sessionToken: secretToken });
-const fallbackRecord = JSON.parse(fs.readFileSync(fallbackStore.resolvePath(), 'utf8'));
-if (fallbackRecord.storage !== 'plain_json_fallback') {
-  throw new Error('fallback store should declare plaintext fallback storage');
+let insecureWriteRejected = false;
+try {
+  fallbackStore.write({ apiBaseUrl: 'https://api.kraitos.app', sessionToken: secretToken });
+} catch (error) {
+  insecureWriteRejected = String(error?.message || error).includes('Secure credential storage is unavailable');
 }
-if (fallbackStore.read().sessionToken !== secretToken) {
-  throw new Error('fallback session did not round-trip');
+if (!insecureWriteRejected || fallbackStore.storageKind() !== UNAVAILABLE_STORAGE_KIND) {
+  throw new Error('unencrypted credential persistence must fail closed');
+}
+if (fs.existsSync(fallbackStore.resolvePath())) {
+  throw new Error('failed secure-storage write left a plaintext credential file');
 }
 
 store.write({
@@ -96,6 +101,11 @@ store.write({
 const encryptedSessionText = fs.readFileSync(store.resolvePath(), 'utf8');
 if (encryptedSessionText.includes(secretToken) || encryptedSessionText.includes('desktop-abc')) {
   throw new Error('encrypted remote session leaked plaintext metadata or token');
+}
+fs.writeFileSync(store.resolvePath(), '{"ciphertext":', 'utf8');
+const recoveredSession = store.read();
+if (recoveredSession?.sessionToken !== secretToken || recoveredSession?.desktop?.desktop_id !== 'desktop-abc') {
+  throw new Error('encrypted remote session did not recover from its durable backup');
 }
 const services = createRemoteControlServices({
   net: { fetch() { throw new Error('network should not be used'); } },
@@ -159,6 +169,7 @@ console.log(JSON.stringify({ ok: true, encryptedStorage: encryptedRecord.storage
         text=True,
         capture_output=True,
         check=False,
+        env={**os.environ, "EMPLOAI_CLOUD_BACKEND_ENABLED": "1"},
     )
 
     assert result.returncode == 0, result.stderr

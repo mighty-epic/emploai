@@ -11,7 +11,8 @@ from fastapi.testclient import TestClient
 
 from cli.models.session import Session
 from cli.session_manager import SessionManager
-from app_backend import app_server, runtime, session_bridge
+from app_backend import app_server, app_server_agent_runtime, runtime, session_bridge
+from app_backend.models import AgentConfigureRequest
 from shared.task_board import create_task_board
 from shared.tool_packs import default_enabled_tool_packs
 from telegram_bot.telegram_session_state import TelegramSession
@@ -231,7 +232,7 @@ def test_mobile_surfaces_expose_chat_fleet_and_jarvis_navigation():
     assert "normalized === 'fleet'" in desktop_shell_surface
     assert "normalized === 'jarvis' || normalized === 'agent'" in desktop_shell_surface
     assert "setActiveTab(requestedDesktopMode)" in desktop_shell_surface
-    assert "initialSurfaceMode={requestedSurfaceMode}" in desktop_shell_surface
+    assert "initialSurfaceMode={pendingSurfaceMode}" in desktop_shell_surface
     assert "hydratedBootstrap = await loadDesktopBootstrap({ force: true }).catch(() => null)" in desktop_shell_surface
     assert "!hydratedBootstrap.setupState?.required" in desktop_shell_surface
     assert "await beginStartup({ forceBootstrap: true, attachTimeoutSeconds: STARTUP_INITIAL_TIMEOUT_SECONDS })" in desktop_shell_surface
@@ -736,6 +737,16 @@ def test_app_chat_websocket_runs_local_turn_with_client_metadata(monkeypatch, tm
 
     async def fake_run_app_chat_turn_lazy(runtime_arg, **kwargs):
         run_calls.append({"runtime": runtime_arg, **kwargs})
+        accepted = kwargs.get("message_accepted_callback")
+        if accepted:
+            await accepted(
+                {
+                    "status": "accepted",
+                    "client_message_id": kwargs.get("client_message_id"),
+                    "session_id": "sess-ws",
+                    "run_id": "sess-ws:1",
+                }
+            )
         await kwargs["log_callback"]({"type": "assistant_delta", "delta": "Working"})
         await kwargs["log_callback"]({"type": "status", "message": "checking"})
         return {
@@ -770,10 +781,11 @@ def test_app_chat_websocket_runs_local_turn_with_client_metadata(monkeypatch, tm
                 "session_id": "sess-ws",
                 "source_format": "app_text",
                 "interrupt_policy": "after_tool",
+                "client_message_id": "phone-client-1:message-1",
             }
         )
         seen_events = []
-        for _ in range(6):
+        for _ in range(7):
             message = websocket.receive_json()
             seen_events.append(message)
             if message.get("type") == "assistant_final":
@@ -781,7 +793,8 @@ def test_app_chat_websocket_runs_local_turn_with_client_metadata(monkeypatch, tm
 
     assert "session_snapshot" in initial_types
     assert "session_sync" in initial_types
-    assert [event.get("type") for event in seen_events[:3]] == ["assistant_delta", "status", "assistant_final"]
+    assert [event.get("type") for event in seen_events[:4]] == ["message_ack", "assistant_delta", "status", "assistant_final"]
+    assert seen_events[0]["payload"]["client_message_id"] == "phone-client-1:message-1"
     assert seen_events[-1]["payload"]["text"] == "Done from socket"
     assert prepare_calls == ["sess-ws"]
     assert len(complete_calls) == 1
@@ -790,6 +803,8 @@ def test_app_chat_websocket_runs_local_turn_with_client_metadata(monkeypatch, tm
     assert run_calls[0]["source_format"] == "app_text"
     assert run_calls[0]["interrupt_policy"] == "after_tool"
     assert run_calls[0]["source_client_id"] == "phone-client-1"
+    assert run_calls[0]["client_message_id"] == "phone-client-1:message-1"
+    assert callable(run_calls[0]["message_accepted_callback"])
 
 
 def test_app_chat_websocket_explicit_session_ignores_external_current_session_change(monkeypatch, tmp_path):
@@ -849,6 +864,154 @@ def test_app_chat_websocket_explicit_session_ignores_external_current_session_ch
     assert next_event["payload"]["session"]["id"] == "sess-pinned"
 
 
+def test_app_chat_websocket_receives_steering_while_turn_is_running_and_deduplicates(monkeypatch, tmp_path):
+    run_calls: list[str] = []
+    prepare_calls: list[str] = []
+
+    class DummyOrchestrator:
+        async def prepare_turn(self, session_id: str, **_kwargs):
+            prepare_calls.append(session_id)
+            return SimpleNamespace(busy=False, session_id=session_id)
+
+        async def complete_turn(self, _lease):
+            return None
+
+    runtime_obj = SimpleNamespace(
+        is_processing=False,
+        verbose_mode=False,
+        chat_history=[],
+        session=SimpleNamespace(id="sess-concurrent-steer"),
+        session_manager=SimpleNamespace(get_current_session_id=lambda: "sess-concurrent-steer"),
+    )
+
+    class DummyBridge:
+        orchestrator = DummyOrchestrator()
+
+        def build_session_sync_payload(self, session_id: str):
+            return {"session": {"id": session_id, "messages": runtime_obj.chat_history}, "sessions": []}
+
+        def session_file_path(self, session_id: str):
+            return tmp_path / f"{session_id}.json"
+
+        def session_index_path(self):
+            return tmp_path / "index.json"
+
+        def get_current_session(self):
+            return runtime_obj.session
+
+    async def fake_run_app_chat_turn_lazy(_runtime, **kwargs):
+        text = kwargs["user_message"]
+        run_calls.append(text)
+        accepted = kwargs.get("message_accepted_callback")
+        if accepted:
+            await accepted(
+                {
+                    "status": "steering" if text == "steer now" else "accepted",
+                    "client_message_id": kwargs.get("client_message_id"),
+                    "session_id": "sess-concurrent-steer",
+                }
+            )
+        runtime_obj.chat_history.append(
+            {
+                "role": "user",
+                "content": text,
+                "client_message_id": kwargs.get("client_message_id"),
+            }
+        )
+        if text == "steer now":
+            return {
+                "ok": True,
+                "busy": False,
+                "steering": True,
+                "session_id": "sess-concurrent-steer",
+                "assistant_text": "",
+                "steering_status": "armed",
+            }
+
+        runtime_obj.is_processing = True
+        for _ in range(200):
+            if "steer now" in run_calls:
+                break
+            await asyncio.sleep(0.005)
+        runtime_obj.is_processing = False
+        return {
+            "ok": True,
+            "busy": False,
+            "steering": False,
+            "session_id": "sess-concurrent-steer",
+            "assistant_text": "Finished after steering",
+            "duration_seconds": 0.05,
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "total_tokens": 2,
+        }
+
+    monkeypatch.setenv("EMPLO_APP_STEERING_BETA_ENABLED", "1")
+    monkeypatch.setattr(app_server, "_resolve_ws_token", lambda _token: {"user_id": 9})
+    monkeypatch.setattr(app_server, "_bridge_for_user", lambda _user_id: DummyBridge())
+    monkeypatch.setattr(app_server, "_load_runtime_session_or_409", lambda _bridge, _session_id: runtime_obj)
+    monkeypatch.setattr(app_server, "_run_app_chat_turn_lazy", fake_run_app_chat_turn_lazy)
+    monkeypatch.setattr(app_server, "_mirror_session_snapshot", lambda **_kwargs: None)
+
+    client = TestClient(app_server.create_app())
+    with client.websocket_connect(
+        "/ws/app/chat?token=test&session_id=sess-concurrent-steer&client_id=desktop-client"
+    ) as websocket:
+        for _ in range(3):
+            if websocket.receive_json().get("type") == "session_sync":
+                break
+
+        websocket.send_json(
+            {
+                "text": "long task",
+                "session_id": "sess-concurrent-steer",
+                "interrupt_policy": "none",
+                "client_message_id": "message-1",
+            }
+        )
+        first_ack = websocket.receive_json()
+        assert first_ack["type"] == "message_ack"
+
+        websocket.send_json(
+            {
+                "text": "steer now",
+                "session_id": "sess-concurrent-steer",
+                "interrupt_policy": "steer_now",
+                "client_message_id": "message-2",
+            }
+        )
+        events = []
+        for _ in range(8):
+            event = websocket.receive_json()
+            events.append(event)
+            if event.get("type") == "assistant_final":
+                break
+
+        websocket.send_json(
+            {
+                "text": "long task",
+                "session_id": "sess-concurrent-steer",
+                "client_message_id": "message-1",
+            }
+        )
+        duplicate_ack = None
+        for _ in range(4):
+            candidate = websocket.receive_json()
+            if candidate.get("type") == "message_ack":
+                duplicate_ack = candidate
+                break
+
+    event_types = [event.get("type") for event in events]
+    assert "message_ack" in event_types
+    assert "status" in event_types
+    assert event_types.index("message_ack") < event_types.index("assistant_final")
+    assert duplicate_ack is not None
+    assert duplicate_ack["type"] == "message_ack"
+    assert duplicate_ack["payload"]["status"] == "duplicate"
+    assert run_calls == ["long task", "steer now"]
+    assert prepare_calls == ["sess-concurrent-steer"]
+
+
 def test_app_chat_websocket_runtime_error_surfaces_without_closing_socket(monkeypatch, tmp_path):
     complete_calls: list[object] = []
 
@@ -895,12 +1058,22 @@ def test_app_chat_websocket_runtime_error_surfaces_without_closing_socket(monkey
             if websocket.receive_json().get("type") == "session_sync":
                 break
 
+        websocket.send_text("{")
+        malformed_event = websocket.receive_json()
+
+        websocket.send_json({"text": "wrong target", "session_id": "sess-other"})
+        wrong_session_event = websocket.receive_json()
+
         websocket.send_json({"text": "hello", "session_id": "sess-error"})
         error_event = websocket.receive_json()
 
         websocket.send_json({"text": "", "session_id": "sess-error"})
         warning_event = websocket.receive_json()
 
+    assert malformed_event["type"] == "warning"
+    assert malformed_event["payload"]["code"] == "invalid_message"
+    assert wrong_session_event["type"] == "warning"
+    assert wrong_session_event["payload"]["code"] == "invalid_session_target"
     assert error_event["type"] == "error"
     assert error_event["payload"] == {
         "message": "Provider authentication, quota, or permission error. No API key configured for provider: openai",
@@ -1241,7 +1414,7 @@ def test_telegram_session_defaults_use_anthropic_pair_when_only_anthropic_key_is
     )
 
     assert TelegramSession._configured_default_model(runtime) == "claude-sonnet-4.5"
-    assert TelegramSession._configured_default_planner_model(runtime, "claude-sonnet-4.5") == "claude-haiku-4.5"
+    assert TelegramSession._configured_default_planner_model(runtime, "claude-sonnet-4.5") == "claude-sonnet-4.5"
 
 
 def test_telegram_session_defaults_use_nvidia_pair_when_only_nvidia_key_is_available(monkeypatch):
@@ -1273,7 +1446,7 @@ def test_telegram_session_defaults_use_nvidia_pair_when_only_nvidia_key_is_avail
     )
 
 
-def test_telegram_session_automatic_planner_follows_current_model_provider(monkeypatch):
+def test_telegram_session_automatic_planner_mirrors_current_model(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     monkeypatch.delenv("PLANNER_MODEL", raising=False)
@@ -1286,7 +1459,7 @@ def test_telegram_session_automatic_planner_follows_current_model_provider(monke
         }.get(path, default)
     )
 
-    assert TelegramSession._configured_default_planner_model(runtime, "claude-sonnet-4.5") == "claude-haiku-4.5"
+    assert TelegramSession._configured_default_planner_model(runtime, "claude-sonnet-4.5") == "claude-sonnet-4.5"
 
 
 def test_supported_planner_models_include_openai_responses_models():
@@ -1347,7 +1520,7 @@ def test_telegram_session_unavailable_model_fallback_prefers_provider_default(mo
 
     assert changed is True
     assert runtime.current_model == "claude-sonnet-4.5"
-    assert runtime.default_planner_model == "claude-haiku-4.5"
+    assert runtime.default_planner_model == "claude-sonnet-4.5"
 
 
 def test_telegram_session_known_default_planner_realigns_to_current_model_provider(monkeypatch):
@@ -1382,7 +1555,7 @@ def test_telegram_session_known_default_planner_realigns_to_current_model_provid
 
     assert changed is True
     assert runtime.planner_model is None
-    assert runtime.default_planner_model == "claude-haiku-4.5"
+    assert runtime.default_planner_model == "claude-sonnet-4.5"
 
 
 def test_telegram_session_old_registry_first_planner_pin_resets_to_automatic(monkeypatch):
@@ -1420,6 +1593,31 @@ def test_telegram_session_old_registry_first_planner_pin_resets_to_automatic(mon
     assert runtime.default_planner_model == "gpt-5.4-mini"
 
 
+def test_app_configure_explicit_null_planner_selects_automatic_mirror(monkeypatch):
+    runtime_obj = SimpleNamespace(
+        user_id=9,
+        current_model="gpt-5.4",
+        current_variant="thinking",
+        planner_model="gpt-5.4-mini",
+        default_planner_model="gpt-5.4-mini",
+        get_available_models=lambda candidates: list(candidates),
+        get_available_variants=lambda: ["standard", "thinking"],
+        get_supported_planner_models=lambda candidates: ["gpt-5.4", "gpt-5.4-mini"],
+        ensure_current_model_available=lambda candidates: False,
+        ensure_planner_model_available=lambda candidates: setattr(runtime_obj, "default_planner_model", runtime_obj.current_model) or True,
+        save_session=lambda: None,
+        live_config=None,
+    )
+
+    app_server_agent_runtime._configure_runtime(
+        runtime_obj,
+        AgentConfigureRequest(planner_model=None),
+    )
+
+    assert runtime_obj.planner_model is None
+    assert runtime_obj.default_planner_model == "gpt-5.4"
+
+
 def test_app_session_bridge_uses_shared_telegram_runtime(monkeypatch, tmp_path: Path):
     captured = {}
     runtime = object()
@@ -1447,7 +1645,7 @@ def test_app_session_bridge_uses_shared_telegram_runtime(monkeypatch, tmp_path: 
     }
 
 
-def test_app_session_bridge_create_session_during_busy_runtime_uses_disk_detail(monkeypatch, tmp_path: Path):
+def test_app_session_bridge_create_session_during_busy_runtime_preserves_owner(monkeypatch, tmp_path: Path):
     created = Session(
         id="busy1234",
         name="Busy",
@@ -1503,12 +1701,12 @@ def test_app_session_bridge_create_session_during_busy_runtime_uses_disk_detail(
 
     bridge = session_bridge.AppSessionBridge(user_id=9, workspace=tmp_path)
 
-    result = bridge.create_session("Busy")
+    with pytest.raises(RuntimeError, match="Finish or stop"):
+        bridge.create_session("Busy")
 
-    assert result is created
-    assert len(manager.create_calls) == 1
-    assert manager.set_calls == ["busy1234"]
-    assert save_calls == [True]
+    assert manager.create_calls == []
+    assert manager.set_calls == []
+    assert save_calls == []
     assert load_calls == []
 
 
@@ -1709,7 +1907,7 @@ def test_app_session_bridge_create_session_without_live_runtime_uses_provider_de
         "workspace": tmp_path,
         "model": "gpt-5.4-mini",
         "variant": "standard",
-        "planner_model": "gpt-5.4-mini",
+        "planner_model": None,
         "agent_mode": "auto",
         "enabled_tool_packs": default_enabled_tool_packs(),
         "security_permission_mode": "standard",
@@ -2017,7 +2215,7 @@ def test_app_session_bridge_create_session_uses_runtime_default_planner_when_ses
         "workspace": runtime.workspace,
         "model": "gpt-5.4",
         "variant": "thinking",
-        "planner_model": "gpt-5.4-mini",
+        "planner_model": None,
         "agent_mode": "auto",
         "enabled_tool_packs": default_enabled_tool_packs(),
         "security_permission_mode": "standard",

@@ -9,6 +9,37 @@ REMOTE_PAIRING_TTL_SECONDS = 60 * 10
 FLEET_ENROLLMENT_TTL_SECONDS = 60 * 30
 
 class RemoteControlStoreFleetWorkerMixin:
+    def set_worker_queue_policy(self, *, user_id: int, worker_id: str, queue_policy: str) -> Dict[str, Any]:
+        from app_backend.fleet_queue_policy import normalize_queue_policy
+
+        policy = normalize_queue_policy(queue_policy)
+        with self._lock:
+            worker = self._conn.execute(
+                "SELECT * FROM fleet_workers WHERE user_id = ? AND worker_id = ?",
+                (int(user_id), str(worker_id or "").strip()),
+            ).fetchone()
+            if not worker:
+                raise KeyError("Unknown worker")
+            metadata = _json_loads(worker["metadata"], {})
+            metadata["queue_policy"] = policy
+            now = time.time()
+            self._conn.execute(
+                "UPDATE fleet_workers SET metadata = ?, updated_at = ? WHERE user_id = ? AND worker_id = ?",
+                (_json_dumps(metadata), now, int(user_id), worker["worker_id"]),
+            )
+            self._audit_locked(
+                user_id=int(user_id),
+                event_type="worker_queue_policy_updated",
+                actor_kind="manager",
+                target_kind="worker",
+                target_id=worker["worker_id"],
+                metadata={"queue_policy": policy},
+            )
+            self._conn.commit()
+            return self._worker_view(
+                self._conn.execute("SELECT * FROM fleet_workers WHERE worker_id = ?", (worker["worker_id"],)).fetchone()
+            )
+
     def rename_worker(self, *, user_id: int, worker_id: str, display_name: str) -> Dict[str, Any]:
         name = str(display_name or "").strip()[:MAX_DISPLAY_NAME_CHARS]
         if not name:
@@ -540,6 +571,19 @@ class RemoteControlStoreFleetWorkerMixin:
             ).fetchone()
             return self._task_view(queued) if queued else None
 
+    def get_worker_task(self, *, user_id: int, task_id: str) -> Dict[str, Any]:
+        clean_task_id = str(task_id or "").strip()
+        if not clean_task_id:
+            raise KeyError("Unknown task")
+        with self._lock:
+            task = self._conn.execute(
+                "SELECT * FROM fleet_tasks WHERE user_id = ? AND task_id = ?",
+                (int(user_id), clean_task_id),
+            ).fetchone()
+            if not task:
+                raise KeyError("Unknown task")
+            return self._task_view(task)
+
     def mark_worker_queue_reviewed(
         self,
         *,
@@ -869,32 +913,50 @@ class RemoteControlStoreFleetWorkerMixin:
             )
             final_status = normalized_report.status
             task_metadata = _json_loads(task["metadata"], {})
-            task_metadata["queue_review_required"] = {
+            review_gate = {
                 "report_id": report_id,
                 "status": final_status,
                 "confidence": normalized_report.confidence,
                 "created_at": _utc_iso(now),
             }
+            task_metadata["queue_review_required"] = review_gate
             self._conn.execute(
                 "UPDATE fleet_tasks SET status = ?, report_id = ?, metadata = ?, updated_at = ?, completed_at = ? WHERE task_id = ?",
                 (final_status, report_id, _json_dumps(task_metadata), now, now if final_status not in {"blocked", "needs_review"} else None, task["task_id"]),
             )
+            worker_metadata = _json_loads(
+                self._conn.execute("SELECT metadata FROM fleet_workers WHERE worker_id = ?", (task["worker_id"],)).fetchone()["metadata"],
+                {},
+            )
+            from app_backend.fleet_queue_policy import (
+                QUEUE_POLICY_AUTO_CONTINUE_SUCCESS,
+                normalize_queue_policy,
+                report_allows_auto_continue,
+            )
+            report_for_policy = {
+                "status": final_status,
+                "summary": normalized_report.summary,
+                "evidence": normalized_report.evidence,
+                "artifacts": normalized_report.artifacts,
+                "blockers": normalized_report.blockers,
+                "confidence": normalized_report.confidence,
+            }
+            auto_continue = (
+                normalize_queue_policy(worker_metadata.get("queue_policy")) == QUEUE_POLICY_AUTO_CONTINUE_SUCCESS
+                and report_allows_auto_continue(report_for_policy)
+            )
+            if auto_continue:
+                worker_metadata.pop("queue_review_required", None)
+                worker_metadata["last_auto_continued_report_id"] = report_id
+            else:
+                worker_metadata["queue_review_required"] = review_gate
+
             if final_status in {"blocked", "needs_review"}:
-                worker_metadata = _json_loads(
-                    self._conn.execute("SELECT metadata FROM fleet_workers WHERE worker_id = ?", (task["worker_id"],)).fetchone()["metadata"],
-                    {},
-                )
-                worker_metadata["queue_review_required"] = task_metadata["queue_review_required"]
                 self._conn.execute(
                     "UPDATE fleet_workers SET status = ?, active_task_id = ?, metadata = ?, updated_at = ?, last_seen_at = ? WHERE worker_id = ?",
                     (final_status, task["task_id"], _json_dumps(worker_metadata), now, now, task["worker_id"]),
                 )
             else:
-                worker_metadata = _json_loads(
-                    self._conn.execute("SELECT metadata FROM fleet_workers WHERE worker_id = ?", (task["worker_id"],)).fetchone()["metadata"],
-                    {},
-                )
-                worker_metadata["queue_review_required"] = task_metadata["queue_review_required"]
                 self._conn.execute(
                     "UPDATE fleet_workers SET status = 'idle', active_task_id = NULL, metadata = ?, updated_at = ?, last_seen_at = ? WHERE worker_id = ?",
                     (_json_dumps(worker_metadata), now, now, task["worker_id"]),

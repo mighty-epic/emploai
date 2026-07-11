@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from cli.models.session import Session
 from cli.session_manager import SessionManager
+from shared.atomic_io import atomic_write_json
 from shared.runtime_paths import user_state_root
 from shared.telegram_bot_config_store import TelegramBotConfigStore
 from shared.tool_packs import (
@@ -77,7 +78,7 @@ class UserMultiChatOrchestrator:
         return payload
 
     def _save_settings(self) -> None:
-        self.settings_path.write_text(json.dumps(self._settings, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(self.settings_path, self._settings)
 
     @property
     def max_concurrent_chats(self) -> int:

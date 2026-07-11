@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Callable, Optional, Dict, Any
 from dataclasses import dataclass, field
 
+from shared.atomic_io import atomic_write_json
+
 logger = logging.getLogger(__name__)
 
 
@@ -94,10 +96,7 @@ class HeartbeatManager:
         """Save heartbeat state to disk."""
         try:
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
-            self.state_file.write_text(
-                json.dumps(self.state.to_dict(), indent=2),
-                encoding='utf-8'
-            )
+            atomic_write_json(self.state_file, self.state.to_dict())
         except Exception as e:
             logger.error(f"Error saving heartbeat state: {e}")
     

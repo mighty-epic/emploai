@@ -1,5 +1,26 @@
-import { useState, type ReactNode } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useState, type ComponentType, type ReactNode } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import Archive from 'lucide-react-native/icons/archive';
+import Bot from 'lucide-react-native/icons/bot';
+import Check from 'lucide-react-native/icons/check';
+import ChevronDown from 'lucide-react-native/icons/chevron-down';
+import ChevronUp from 'lucide-react-native/icons/chevron-up';
+import Clock3 from 'lucide-react-native/icons/clock-3';
+import Ellipsis from 'lucide-react-native/icons/ellipsis';
+import Folder from 'lucide-react-native/icons/folder';
+import FolderOpen from 'lucide-react-native/icons/folder-open';
+import GitBranch from 'lucide-react-native/icons/git-branch';
+import History from 'lucide-react-native/icons/history';
+import Info from 'lucide-react-native/icons/info';
+import Menu from 'lucide-react-native/icons/menu';
+import Mic from 'lucide-react-native/icons/mic';
+import Pin from 'lucide-react-native/icons/pin';
+import Plus from 'lucide-react-native/icons/plus';
+import Search from 'lucide-react-native/icons/search';
+import Send from 'lucide-react-native/icons/send';
+import Settings from 'lucide-react-native/icons/settings';
+import Square from 'lucide-react-native/icons/square';
+import SquarePen from 'lucide-react-native/icons/square-pen';
 
 import { styles } from './DesktopConversationView.styles';
 
@@ -20,6 +41,9 @@ type MonoIconName =
   | 'check'
   | 'pin'
   | 'more'
+  | 'archive'
+  | 'automation'
+  | 'stop'
   | 'plus';
 
 const COMPOSER_MIN_LINES = 1;
@@ -27,32 +51,6 @@ const COMPOSER_MAX_LINES = 8;
 const COMPOSER_LINE_HEIGHT = 22;
 const COMPOSER_MIN_HEIGHT = COMPOSER_MIN_LINES * COMPOSER_LINE_HEIGHT;
 const COMPOSER_MAX_HEIGHT = COMPOSER_MAX_LINES * COMPOSER_LINE_HEIGHT;
-const MONO_ICON_GLYPHS: Record<MonoIconName, string> = {
-  menu: '≡',
-  settings: '⛭',
-  compose: '✎',
-  search: '⌕',
-  info: '',
-  voice: '◌',
-  history: '◷',
-  folder_closed: '',
-  folder_open: '',
-  branch: '⎇',
-  telegram: 'T',
-  chevron_down: '',
-  chevron_up: '',
-  check: '✓',
-  pin: '⌖',
-  more: '⋯',
-  plus: '+',
-};
-
-const SIDEBAR_ICON_STYLE = Platform.OS === 'web'
-  ? ({
-      fontFamily: 'Segoe UI Symbol, Segoe UI, sans-serif',
-      fontVariant: ['tabular-nums'],
-    } as any)
-  : null;
 
 type FoldSectionProps = {
   title: string;
@@ -60,6 +58,39 @@ type FoldSectionProps = {
   defaultOpen?: boolean;
   children: ReactNode;
 };
+
+type LucideIconComponent = ComponentType<{
+  color?: string;
+  size?: number;
+  strokeWidth?: number;
+  fill?: string;
+  style?: any;
+}>;
+
+const LUCIDE_ICON_MAP: Record<MonoIconName, LucideIconComponent> = {
+  menu: Menu,
+  settings: Settings,
+  compose: SquarePen,
+  search: Search,
+  info: Info,
+  voice: Mic,
+  history: History,
+  folder_closed: Folder,
+  folder_open: FolderOpen,
+  branch: GitBranch,
+  telegram: Send,
+  chevron_down: ChevronDown,
+  chevron_up: ChevronUp,
+  check: Check,
+  pin: Pin,
+  more: Ellipsis,
+  archive: Archive,
+  automation: Clock3,
+  stop: Square,
+  plus: Plus,
+};
+
+const FILLED_ICON_NAMES = new Set<MonoIconName>(['pin', 'stop']);
 
 export function createClientId() {
   return `desktop-${Math.random().toString(36).slice(2, 10)}`;
@@ -72,186 +103,50 @@ export function MonoIcon({
   name: MonoIconName;
   style?: any;
 }) {
-  const flattened = StyleSheet.flatten(style) || {};
+  const flattened = (StyleSheet.flatten(style) || {}) as Record<string, any>;
+  const Icon = LUCIDE_ICON_MAP[name] || Bot;
   const color = typeof flattened.color === 'string' ? flattened.color : '#dfe8f5';
-  const size = typeof flattened.fontSize === 'number' ? flattened.fontSize : 14;
-  if (name === 'voice') {
-    return (
-      <View style={[flattened, { width: size + 2, height: size + 2, alignItems: 'center', justifyContent: 'center' }]}>
-        <View style={{ width: size, height: size, position: 'relative' }}>
-          <View
-            style={{
-              position: 'absolute',
-              left: size * 0.31,
-              top: size * 0.08,
-              width: size * 0.38,
-              height: size * 0.48,
-              borderWidth: 1.5,
-              borderColor: color,
-              borderRadius: size * 0.2,
-            }}
-          />
-          <View
-            style={{
-              position: 'absolute',
-              left: size * 0.49,
-              top: size * 0.56,
-              width: 1.5,
-              height: size * 0.16,
-              backgroundColor: color,
-            }}
-          />
-          <View
-            style={{
-              position: 'absolute',
-              left: size * 0.24,
-              top: size * 0.48,
-              width: size * 0.52,
-              height: size * 0.26,
-              borderWidth: 1.5,
-              borderTopWidth: 0,
-              borderColor: color,
-              borderBottomLeftRadius: size * 0.18,
-              borderBottomRightRadius: size * 0.18,
-            }}
-          />
-          <View
-            style={{
-              position: 'absolute',
-              left: size * 0.34,
-              top: size * 0.82,
-              width: size * 0.32,
-              height: 1.5,
-              backgroundColor: color,
-            }}
-          />
-        </View>
-      </View>
-    );
-  }
-  if (name === 'info') {
-    return (
-      <View style={[flattened, { width: size + 2, height: size + 2, alignItems: 'center', justifyContent: 'center' }]}>
-        <View style={{ width: size, height: size, position: 'relative' }}>
-          <View
-            style={{
-              position: 'absolute',
-              left: size * 0.12,
-              top: size * 0.12,
-              width: size * 0.76,
-              height: size * 0.76,
-              borderWidth: 1.4,
-              borderColor: color,
-              borderRadius: size * 0.38,
-            }}
-          />
-          <View
-            style={{
-              position: 'absolute',
-              left: size * 0.45,
-              top: size * 0.28,
-              width: size * 0.1,
-              height: size * 0.1,
-              borderRadius: size * 0.05,
-              backgroundColor: color,
-            }}
-          />
-          <View
-            style={{
-              position: 'absolute',
-              left: size * 0.46,
-              top: size * 0.42,
-              width: size * 0.08,
-              height: size * 0.22,
-              backgroundColor: color,
-              borderRadius: 999,
-            }}
-          />
-        </View>
-      </View>
-    );
-  }
-  if (name === 'folder_closed' || name === 'folder_open') {
-    return (
-      <View style={[flattened, { width: size + 2, height: size, alignItems: 'center', justifyContent: 'center' }]}>
-        <View style={{ width: size, height: size, position: 'relative' }}>
-          <View
-            style={{
-              position: 'absolute',
-              left: size * 0.1,
-              top: size * 0.16,
-              width: size * 0.28,
-              height: size * 0.12,
-              borderWidth: 1.5,
-              borderBottomWidth: 0,
-              borderColor: color,
-              borderTopLeftRadius: 2,
-              borderTopRightRadius: 2,
-            }}
-          />
-          <View
-            style={{
-              position: 'absolute',
-              left: size * 0.08,
-              top: name === 'folder_open' ? size * 0.34 : size * 0.28,
-              width: size * 0.82,
-              height: size * 0.44,
-              borderWidth: 1.5,
-              borderColor: color,
-              borderRadius: 2,
-            }}
-          />
-          {name === 'folder_open' ? (
-            <View
-              style={{
-                position: 'absolute',
-                left: size * 0.14,
-                top: size * 0.26,
-                width: size * 0.44,
-                height: 1.5,
-                backgroundColor: color,
-                transform: [{ rotate: '-14deg' }],
-              }}
-            />
-          ) : null}
-        </View>
-      </View>
-    );
-  }
-  if (name === 'chevron_down' || name === 'chevron_up') {
-    const isUp = name === 'chevron_up';
-    return (
-      <View style={[flattened, { width: size, height: size, alignItems: 'center', justifyContent: 'center' }]}>
-        <View style={{ width: size, height: size * 0.7, position: 'relative' }}>
-          <View
-            style={{
-              position: 'absolute',
-              left: size * 0.19,
-              top: size * 0.26,
-              width: size * 0.36,
-              height: 1.5,
-              backgroundColor: color,
-              borderRadius: 999,
-              transform: [{ rotate: isUp ? '-42deg' : '42deg' }],
-            }}
-          />
-          <View
-            style={{
-              position: 'absolute',
-              right: size * 0.19,
-              top: size * 0.26,
-              width: size * 0.36,
-              height: 1.5,
-              backgroundColor: color,
-              borderRadius: 999,
-              transform: [{ rotate: isUp ? '42deg' : '-42deg' }],
-            }}
-          />
-        </View>
-      </View>
-    );
-  }
-  return <Text style={[styles.monoIconBase, style]}>{MONO_ICON_GLYPHS[name]}</Text>;
+  const size = typeof flattened.fontSize === 'number' ? flattened.fontSize : 15;
+  const explicitWidth = typeof flattened.width === 'number' ? flattened.width : size + 3;
+  const explicitHeight = typeof flattened.height === 'number' ? flattened.height : size + 3;
+  const iconSize = Math.max(10, Math.min(size, explicitWidth, explicitHeight));
+  const strokeWidth = size <= 12 ? 2.35 : size >= 18 ? 2.05 : 2.25;
+  const iconFill = FILLED_ICON_NAMES.has(name) ? color : 'none';
+  const iconStyle = {
+    transform: name === 'pin' ? [{ rotate: '-18deg' }] : undefined,
+  };
+  const containerStyle = { ...flattened };
+  delete containerStyle.color;
+  delete containerStyle.fontFamily;
+  delete containerStyle.fontSize;
+  delete containerStyle.fontVariant;
+  delete containerStyle.fontWeight;
+  delete containerStyle.letterSpacing;
+  delete containerStyle.lineHeight;
+  delete containerStyle.textAlign;
+
+  return (
+    <View
+      style={[
+        {
+          width: explicitWidth,
+          height: explicitHeight,
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: typeof flattened.flexShrink === 'number' ? flattened.flexShrink : undefined,
+        },
+        containerStyle,
+      ]}
+    >
+      <Icon
+        color={color}
+        size={iconSize}
+        strokeWidth={strokeWidth}
+        fill={iconFill}
+        style={iconStyle}
+      />
+    </View>
+  );
 }
 
 export function FoldSection({ title, summary, defaultOpen = false, children }: FoldSectionProps) {

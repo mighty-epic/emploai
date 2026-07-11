@@ -24,6 +24,38 @@ class ToolPackDefinition:
     workspace_write: bool = False
 
 
+_CODING_DISCOVERY_CONTRACT = (
+    "CODING CONTRACT - DISCOVERY\n"
+    "- Read before editing or proposing code changes. Inspect the repository, relevant files, nearby call sites, configs, errors, docs, and tests before deciding what to do.\n"
+    "- Use fast discovery tools first: grep_search, find_files, list_dir, read_file, or rg through command tools when command tools are enabled.\n"
+    "- Follow the codebase's existing architecture, naming, helper APIs, style, and test patterns.\n"
+    "- Identify the smallest safe change that satisfies the user request. Do not broaden into unrelated cleanup.\n"
+    "- Before editing, think through what the change could break: routes, imports, callers, data flow, tests, UI state, public APIs, and persisted data.\n"
+    "- Prefer structured parsers and existing helper APIs over fragile string manipulation.\n"
+)
+
+
+_CODING_EDIT_CONTRACT = (
+    "CODING CONTRACT - EDITING\n"
+    "- Keep changes focused and non-invasive. Do not perform unrelated refactors.\n"
+    "- Avoid overcomplicating. Add an abstraction only when it removes real complexity, reduces meaningful duplication, or clearly matches an existing local pattern.\n"
+    "- Separate new code or features when that keeps files clearer; do not overcrowd already-busy files.\n"
+    "- Preserve user work. Never overwrite, revert, or discard unrelated changes, and do not assume dirty files are yours.\n"
+    "- Avoid destructive commands unless the user explicitly asks for that operation.\n"
+    "- Do not commit, push, create branches, or open PRs unless the user asks.\n"
+)
+
+
+_CODING_VERIFICATION_CONTRACT = (
+    "CODING CONTRACT - VERIFICATION\n"
+    "- Add or update focused tests when the risk or behavior change justifies it.\n"
+    "- Run the most relevant available checks: targeted repros, tests, lint, typecheck, or build. If checks cannot be run, say so clearly.\n"
+    "- Review the diff before reporting back. Look for broken imports, misrouted calls, stale routes, edge cases, and accidental unrelated changes.\n"
+    "- When asked for review, prioritize bugs, regressions, missing tests, risky behavior, and file/line evidence.\n"
+    "- Report what changed, what was verified, and any remaining risk or blocker.\n"
+)
+
+
 def _tool_name_from_definition(tool: Dict[str, Any]) -> str:
     if not isinstance(tool, dict):
         return ""
@@ -39,6 +71,8 @@ _PACKS: Dict[str, ToolPackDefinition] = {
         description="Vision, OCR, desktop input, window control, and user-Chrome/browser-extension tools.",
         tool_names={
             "describe_screen",
+            "start_visual_monitor",
+            "stop_visual_monitor",
             "ocr_screen",
             "observe_desktop",
             "open_file",
@@ -100,6 +134,10 @@ _PACKS: Dict[str, ToolPackDefinition] = {
             "- Do not terminate broad process names to clean up a task. Prefer kill_command for agent-started background commands, an exact PID known to belong to this task, an exact window title, or a visible cancel/escape path.\n"
             "- Prefer broad visual observation before OCR, and use OCR mainly when exact text or coordinates are required.\n"
             "- describe_screen is the primary desktop verification and layout-understanding tool; use OCR after that when exact text or coordinates are needed.\n"
+            "- For long uncertain visible waits, use start_visual_monitor with a fixed threshold preset instead of guessing or falsely reporting success. It is non-blocking: after starting it, you may keep working on other parts of the task or leave it running after your turn as a cheap wait handle.\n"
+            "- If a visual monitor fires while you are still running, the runtime injects that event as system context on your next model turn; inspect with describe_screen before acting on it. If you are idle, it wakes you to continue.\n"
+            "- No-change checkpoints are handled by the hidden runtime only while you are idle. Do not wait around just to service no-change checkpoints; continue useful work.\n"
+            "- Stop a visual monitor only when the expected visual wait is no longer relevant. Only one visual monitor can be active at a time; starting a new monitor replaces the prior one.\n"
             "- When you call describe_screen for visual interpretation, ask a precise question about what changed, what should now be visible, what error or dialog might be present, or what control you need to identify.\n"
             "- observe_desktop tells you which windows exist and which one is active, but it does not replace visual verification of on-screen controls.\n"
             "- When you open an app or file visually, verify that the exact requested target actually appeared. Opening a host app alone is not proof that the requested file is open inside it, and a blank window, wrong document, wrong tab, wrong chat, or generic host UI is not success.\n"
@@ -175,9 +213,12 @@ _PACKS: Dict[str, ToolPackDefinition] = {
         prompt_fragment=(
             "PACK: Workspace Write\n"
             "- You may change files and run mutating workspace commands.\n"
-            "- Keep edits scoped, verify outputs, and do not assume exclusive write access outside your lock.\n"
             "- Prefer write_file, edit_file, and append_file over shell-generated file edits when those tools are available.\n"
             "- run_command and run_background_command accept an optional shell parameter. On Windows, use shell='powershell' for PowerShell syntax such as Get-Location, Resolve-Path, Get-ChildItem, Get-Command, and Start-Process; use shell='cmd' for cmd.exe syntax such as dir, where, and start.\n"
+            "- Use run_background_command for long-running or uncertain commands instead of blocking or guessing. You may leave task-owned background commands running after your turn so the runtime can wake you later.\n"
+            "- The runtime can resume you on exit, readiness, meaningful output, or long-running no-progress checkpoints. The no-progress checkpoints happen at about 1 minute, 5 minutes, then every 10 minutes; a hidden planner decides whether to keep waiting or raise/wake the main agent.\n"
+            "- Background command events follow the same principle as visual monitors: if you are already running, the runtime injects the command event as system context on your next model turn; if you are idle, it can resume the task.\n"
+            "- Use command_status when you need current output now, and kill_command only for task-owned commands that should be stopped.\n"
             "- Match command syntax to the actual platform and selected shell; inspect the OS/current directory/available commands if uncertain.\n"
             "- To launch an app or open a file via command tools, use a direct full-path or app-specific command, then verify the visible result with desktop tools when available.\n"
             "- On Windows, prefer py before python3 and avoid Unix-specific shell patterns."
@@ -197,7 +238,6 @@ _PACKS: Dict[str, ToolPackDefinition] = {
         prompt_fragment=(
             "PACK: Workspace Read\n"
             "- You are in a read/inspect/test posture.\n"
-            "- Prefer non-mutating inspection, diff, and verification before proposing changes.\n"
             "- If the answer is already available from injected prompt context, do not spend file tools re-reading those context files."
         ),
     ),
@@ -237,7 +277,10 @@ _PACKS: Dict[str, ToolPackDefinition] = {
         id=PACK_APP_RUNTIME,
         label="App Runtime",
         description="Session/runtime coordination tools that are safe for the chat.",
-        tool_names={},
+        tool_names={
+            "search_memory",
+            "update_memory",
+        },
         prompt_fragment=(
             "PACK: App Runtime\n"
             "- You may reason about app/runtime/session state, but still prefer task-local changes and explicit verification."
@@ -319,8 +362,13 @@ def filter_tools_by_enabled_packs(
     return filtered
 
 
+def _prompt_fragment_lines(content: str) -> list[str]:
+    return [line.strip() for line in str(content or "").splitlines() if line.strip()]
+
+
 def build_tool_pack_prompt(enabled_packs: Sequence[str]) -> str:
     definitions = _enabled_definitions(enabled_packs)
+    enabled_ids = {definition.id for definition in definitions}
     lines: List[str] = [
         "# TOOL-PACK AUTHORITY",
         "- The enabled packs listed below are the only tool capabilities available in this chat.",
@@ -345,13 +393,20 @@ def build_tool_pack_prompt(enabled_packs: Sequence[str]) -> str:
         )
         return "\n".join(lines)
 
+    if PACK_WORKSPACE_WRITE in enabled_ids:
+        lines.extend(["", "## Coding Agent Contract"])
+        lines.extend(_prompt_fragment_lines(_CODING_DISCOVERY_CONTRACT))
+        lines.extend(_prompt_fragment_lines(_CODING_EDIT_CONTRACT))
+        lines.extend(_prompt_fragment_lines(_CODING_VERIFICATION_CONTRACT))
+    elif PACK_WORKSPACE_READ in enabled_ids:
+        lines.extend(["", "## Coding Agent Contract"])
+        lines.extend(_prompt_fragment_lines(_CODING_DISCOVERY_CONTRACT))
+        lines.append("- In this read-only tool-pack configuration, inspect and produce a decision-ready explanation, plan, or review instead of changing files.")
+        lines.extend(_prompt_fragment_lines(_CODING_VERIFICATION_CONTRACT))
+
     for definition in definitions:
         tool_names = sorted(definition.tool_names)
-        guidance_lines = [
-            line.strip()
-            for line in str(definition.prompt_fragment or "").splitlines()
-            if line.strip()
-        ]
+        guidance_lines = _prompt_fragment_lines(definition.prompt_fragment)
         if guidance_lines and guidance_lines[0].startswith("PACK:"):
             guidance_lines = guidance_lines[1:]
 

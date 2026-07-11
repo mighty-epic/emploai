@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import inspect
 import re
 import time
 from datetime import datetime
@@ -14,6 +15,24 @@ from runtime_support.ui_helpers import ThinkingModeVisualizer
 from cli.agent_tools.definitions import CLI_AGENT_TOOLS
 from local_agent_runtime.tool_manifest import AGENT_TOOLS
 from shared.channel_sync import get_channel_sync_hub
+from shared.chat_modes import (
+    REQUEST_USER_INPUT_TOOL,
+    UPDATE_GOAL_STATUS_TOOL,
+    add_goal_token_usage,
+    active_goal,
+    active_plan_mode,
+    apply_goal_status_update,
+    ensure_plan_mode,
+    exit_plan_mode,
+    filter_plan_tools,
+    goal_mode_system_message,
+    normalize_plan_action,
+    normalize_plan_question,
+    normalize_run_mode,
+    plan_mode_system_message,
+    record_proposed_plan,
+    start_goal,
+)
 from shared.runtime_paths import runtime_home
 from telegram_bot.telegram_unified_agent import (
     build_unified_system_prompt,
@@ -22,8 +41,9 @@ from telegram_bot.telegram_unified_agent import (
 )
 from shared.task_board import TASK_BOARD_INTERNAL_TOOL_NAME, get_active_task_board
 
-from shared import begin_chat_turn, merge_openai_tools, run_reserved_chat_turn
+from shared import begin_chat_turn, merge_openai_tools, reserve_failed_chat_turn_retry, run_reserved_chat_turn
 from shared.live_config import get_live_config
+from shared.standalone_policy import standalone_desktop_enabled
 from shared.task_intent import (
     is_screen_observation_message,
     is_task_like_message,
@@ -64,22 +84,23 @@ def _fleet_tool(
 _WORKER_ARG = {"type": "string", "description": "Worker id or display name, for example Worker-001."}
 _GROUP_ARG = {"type": "string", "description": "Group id or display name."}
 _CONFIRMED_ARG = {"type": "boolean", "description": "Set true only after the same surface has confirmed this action."}
+_CONFIRMATION_ID_ARG = {"type": "string", "description": "Confirmation id returned by the previous call for this action."}
 
 FLEET_MANAGER_TOOLS = [
     _fleet_tool("fleet_list_workers", "List workers, their task state, queue depth, latest report, groups, and pending grants."),
     _fleet_tool("fleet_create_local_worker", "Create the first or next local logical worker on this manager machine.", {"display_name": {"type": "string"}}),
     _fleet_tool("fleet_create_enrollment", "Create a short-lived enrollment token for a remote worker computer or VPS.", {"display_name": {"type": "string"}, "expires_in_seconds": {"type": "integer", "default": 1800}}),
     _fleet_tool("fleet_rename_worker", "Rename a worker.", {"worker": _WORKER_ARG, "display_name": {"type": "string"}}, ["worker", "display_name"]),
-    _fleet_tool("fleet_reset_worker", "Reset a worker identity after confirmation. Stops active work first and preserves terminal reports.", {"worker": _WORKER_ARG, "reason": {"type": "string"}, "confirmed": _CONFIRMED_ARG}, ["worker"]),
-    _fleet_tool("fleet_delete_worker", "Delete a worker from the live fleet after confirmation. Stops active work first and preserves terminal reports.", {"worker": _WORKER_ARG, "reason": {"type": "string"}, "confirmed": _CONFIRMED_ARG}, ["worker"]),
+    _fleet_tool("fleet_reset_worker", "Reset a worker identity after confirmation. Stops active work first and preserves terminal reports.", {"worker": _WORKER_ARG, "reason": {"type": "string"}, "confirmed": _CONFIRMED_ARG, "confirmation_id": _CONFIRMATION_ID_ARG}, ["worker"]),
+    _fleet_tool("fleet_delete_worker", "Delete a worker from the live fleet after confirmation. Stops active work first and preserves terminal reports.", {"worker": _WORKER_ARG, "reason": {"type": "string"}, "confirmed": _CONFIRMED_ARG, "confirmation_id": _CONFIRMATION_ID_ARG}, ["worker"]),
     _fleet_tool("fleet_list_groups", "List worker groups."),
     _fleet_tool("fleet_create_group", "Create a worker group.", {"display_name": {"type": "string"}, "worker_ids": {"type": "array", "items": {"type": "string"}}, "description": {"type": "string"}}, ["display_name"]),
     _fleet_tool("fleet_update_group", "Update group name, description, or members.", {"group": _GROUP_ARG, "display_name": {"type": "string"}, "worker_ids": {"type": "array", "items": {"type": "string"}}, "description": {"type": "string"}}, ["group"]),
-    _fleet_tool("fleet_delete_group", "Delete a group after confirmation.", {"group": _GROUP_ARG, "confirmed": _CONFIRMED_ARG}, ["group"]),
+    _fleet_tool("fleet_delete_group", "Delete a group after confirmation.", {"group": _GROUP_ARG, "confirmed": _CONFIRMED_ARG, "confirmation_id": _CONFIRMATION_ID_ARG}, ["group"]),
     _fleet_tool("fleet_assign_task", "Assign a task to one worker. If the worker is busy, the task queues by default.", {"worker": _WORKER_ARG, "prompt": {"type": "string"}}, ["worker", "prompt"]),
-    _fleet_tool("fleet_assign_group_task", "Assign a task to every worker in a group after confirmation.", {"group": _GROUP_ARG, "prompt": {"type": "string"}, "confirmed": _CONFIRMED_ARG}, ["group", "prompt"]),
+    _fleet_tool("fleet_assign_group_task", "Assign a task to every worker in a group after confirmation.", {"group": _GROUP_ARG, "prompt": {"type": "string"}, "confirmed": _CONFIRMED_ARG, "confirmation_id": _CONFIRMATION_ID_ARG}, ["group", "prompt"]),
     _fleet_tool("fleet_send_worker_message", "Send a manager message to a worker. Busy workers queue the message by default.", {"worker": _WORKER_ARG, "message": {"type": "string"}}, ["worker", "message"]),
-    _fleet_tool("fleet_send_group_message", "Send a manager message to a group after confirmation.", {"group": _GROUP_ARG, "message": {"type": "string"}, "confirmed": _CONFIRMED_ARG}, ["group", "message"]),
+    _fleet_tool("fleet_send_group_message", "Send a manager message to a group after confirmation.", {"group": _GROUP_ARG, "message": {"type": "string"}, "confirmed": _CONFIRMED_ARG, "confirmation_id": _CONFIRMATION_ID_ARG}, ["group", "message"]),
     _fleet_tool("fleet_redirect_worker_task", "Redirect the worker's active task now; do not use for normal queued follow-up messages.", {"worker": _WORKER_ARG, "task_id": {"type": "string"}, "direction": {"type": "string"}}, ["direction"]),
     _fleet_tool("fleet_delete_queued_message", "Cancel a queued worker message or task.", {"task_id": {"type": "string"}}, ["task_id"]),
     _fleet_tool("fleet_steer_queued_message", "Remove a queued message and apply it as an immediate redirect to the worker's active task.", {"task_id": {"type": "string"}}, ["task_id"]),
@@ -87,7 +108,7 @@ FLEET_MANAGER_TOOLS = [
     _fleet_tool("fleet_continue_worker_queue", "After reviewing a completed worker report, start the worker's next queued item.", {"worker": _WORKER_ARG, "reviewed_report_id": {"type": "string"}}, ["worker"]),
     _fleet_tool("fleet_update_task", "Update a fleet task state. Prefer fleet_stop_worker for active stop and fleet_delete_queued_message for queued cancel.", {"task_id": {"type": "string"}, "worker": _WORKER_ARG, "action": {"type": "string", "enum": ["pause", "resume", "stop", "cancel"]}, "reason": {"type": "string"}}, ["action"]),
     _fleet_tool("fleet_stop_worker", "Stop one worker's active task and task-owned commands.", {"worker": _WORKER_ARG, "reason": {"type": "string"}}, ["worker"]),
-    _fleet_tool("fleet_stop_all", "Stop every reachable active fleet run after confirmation.", {"reason": {"type": "string"}, "confirmed": _CONFIRMED_ARG}),
+    _fleet_tool("fleet_stop_all", "Stop every reachable active fleet run after confirmation.", {"reason": {"type": "string"}, "confirmed": _CONFIRMED_ARG, "confirmation_id": _CONFIRMATION_ID_ARG}),
     _fleet_tool("fleet_inspect_worker", "Inspect one worker's status, active task, queued tasks, and recent reports.", {"worker": _WORKER_ARG}, ["worker"]),
     _fleet_tool("fleet_search_reports", "Search recent worker reports by text, worker, or status.", {"query": {"type": "string"}, "worker": _WORKER_ARG, "status": {"type": "string"}, "limit": {"type": "integer", "default": 5}}),
     _fleet_tool("fleet_read_report", "Read one structured worker report by report id or task id.", {"report_id": {"type": "string"}, "task_id": {"type": "string"}}),
@@ -145,12 +166,34 @@ def _jarvis_voice_response_contract() -> dict[str, str]:
             "- The user normally cannot see your transcript, tool stream, markdown, tables, or long lists in this surface.\n"
             "- Your final answer will be spoken aloud through TTS, so write it as natural speech.\n"
             "- Keep the final answer short: usually one or two flowing sentences, unless the user clearly asks for more detail.\n"
+            "- Default to about 35 spoken words or fewer for routine answers.\n"
             "- Do not use markdown, bullet points, numbered lists, dash lists, tables, headings, or code fences in the final answer.\n"
             "- Do not say 'see above', 'below', or similar visual references unless you created or opened a visible artifact for the user.\n"
             "- If describing the screen, summarize the useful state naturally instead of listing every visible item.\n"
             "- Voice mode does not reduce your capabilities: use the same tools and verification discipline as chat mode.\n"
+            "- The app may speak separate start and progress updates, so do not repeat tool-by-tool status in the final answer.\n"
             "- If you used tools, mention only the meaningful outcome or next step, not raw tool-call details.\n"
             "- If the answer would be long, give a brief spoken summary and offer to continue, create a file, or open the result."
+        ),
+    }
+
+
+def _visual_monitor_wake_contract(surface_mode: Optional[str]) -> dict[str, str]:
+    jarvis_note = ""
+    if str(surface_mode or "").strip().lower() == "jarvis":
+        jarvis_note = (
+            "- This is a Jarvis continuation. Start with a brief natural continuation message before continuing.\n"
+        )
+    return {
+        "role": "system",
+        "content": (
+            "VISUAL MONITOR WAKE:\n"
+            "- A local visual monitor woke this turn because the screen changed or a no-change checkpoint needed agent attention.\n"
+            "- The monitor does not provide before/after images, and monitor screenshots were discarded.\n"
+            "- Before taking action or claiming what changed, call describe_screen with a precise question about the current visible state.\n"
+            "- If the visible change is unrelated to the task, quietly continue the original task.\n"
+            "- If more waiting is needed, start a fresh visual monitor; do not assume a prior monitor is still running.\n"
+            f"{jarvis_note}"
         ),
     }
 
@@ -231,17 +274,74 @@ def _remote_api_config() -> Dict[str, str]:
     }
 
 
-def _fleet_api_request(method: str, path: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    config = _remote_api_config()
+def _local_api_config() -> Dict[str, str]:
+    try:
+        from app_backend.local_runtime_server import bootstrap_context
+
+        bootstrap = bootstrap_context(launch_if_needed=False)
+    except Exception as exc:
+        return {
+            "base_url": "",
+            "token": "",
+            "desktop_id": "",
+            "transport": "local",
+            "error": f"Local Fleet control plane is unavailable: {type(exc).__name__}: {exc}",
+        }
+    runtime_status = bootstrap.get("runtimeStatus") if isinstance(bootstrap.get("runtimeStatus"), dict) else {}
+    if not bool(runtime_status.get("ok")):
+        return {
+            "base_url": str(bootstrap.get("apiBaseUrl") or "").strip().rstrip("/"),
+            "token": "",
+            "desktop_id": "",
+            "transport": "local",
+            "error": str(runtime_status.get("detail") or "The local desktop runtime is not ready."),
+        }
+    return {
+        "base_url": str(bootstrap.get("apiBaseUrl") or "").strip().rstrip("/"),
+        "token": str(bootstrap.get("accessToken") or "").strip(),
+        "desktop_id": "",
+        "transport": "local",
+    }
+
+
+def _fleet_api_config() -> Dict[str, str]:
+    remote = dict(_remote_api_config())
+    remote.setdefault("transport", "remote")
+    if not standalone_desktop_enabled():
+        return remote
+    local = _local_api_config()
+    if local.get("base_url") and local.get("token"):
+        return local
+    if remote.get("token"):
+        return remote
+    return local
+
+
+def _fleet_api_request(
+    method: str,
+    path: str,
+    payload: Optional[Dict[str, Any]] = None,
+    *,
+    confirmation_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    config = _fleet_api_config()
     if not config["token"]:
-        return {"error": "Fleet tools require a signed-in desktop account.", "error_type": "not_signed_in"}
+        return {
+            "error": str(config.get("error") or "Fleet control is unavailable until the local desktop runtime is ready."),
+            "error_type": "fleet_control_unavailable",
+            "transport": config.get("transport") or "unknown",
+        }
     try:
         timeout = httpx.Timeout(10.0, connect=3.0, read=10.0, write=10.0)
+        headers = {"Authorization": f"Bearer {config['token']}"}
+        clean_confirmation_id = str(confirmation_id or "").strip()
+        if clean_confirmation_id:
+            headers["X-EmploAI-Confirmation-Id"] = clean_confirmation_id
         with httpx.Client(timeout=timeout) as client:
             response = client.request(
                 method.upper(),
                 f"{config['base_url']}{path}",
-                headers={"Authorization": f"Bearer {config['token']}"},
+                headers=headers,
                 json=payload if payload is not None else None,
             )
         try:
@@ -264,16 +364,25 @@ def _fleet_snapshot_uncached() -> Dict[str, Any]:
 
 
 def _fleet_manager_tool_context(session: Any) -> Dict[str, Any]:
+    if _is_fleet_worker_session(session):
+        return {
+            "enabled": False,
+            "has_workers": False,
+            "snapshot": {},
+            "desktop_id": "",
+            "fetched_at": time.monotonic(),
+            "reason": "worker_identity",
+        }
     now = time.monotonic()
     cached = getattr(session, "_fleet_manager_tool_context", None)
     if isinstance(cached, dict) and now - float(cached.get("fetched_at") or 0.0) < FLEET_MANAGER_TOOL_CACHE_SECONDS:
         return cached
 
-    config = _remote_api_config()
+    config = _fleet_api_config()
     snapshot = _fleet_snapshot_uncached()
     workers = list(snapshot.get("workers") or []) if isinstance(snapshot, dict) else []
     manager = snapshot.get("manager") if isinstance(snapshot, dict) and isinstance(snapshot.get("manager"), dict) else None
-    is_primary_manager = bool(
+    is_primary_manager = bool(manager) if config.get("transport") == "local" else bool(
         manager
         and config.get("desktop_id")
         and str(manager.get("desktop_id") or "") == str(config.get("desktop_id") or "")
@@ -385,17 +494,92 @@ def _fleet_find_report(snapshot: Dict[str, Any], *, report_id: str = "", task_id
     return None
 
 
-def _fleet_confirmation_required(action: str, summary: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    seed = json.dumps({"action": action, "summary": summary, "payload": payload or {}}, sort_keys=True)
-    confirmation_id = f"fleet_confirm_{abs(hash(seed)) & 0xFFFFFFFF:08x}"
+def _fleet_confirmation_required(
+    session: Any,
+    action_kind: str,
+    summary: str,
+    payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    session_id = str(getattr(getattr(session, "session", None), "id", "") or "").strip() or None
+    created = _fleet_api_request(
+        "POST",
+        "/api/app/confirmations",
+        {
+            "action_kind": action_kind,
+            "title": summary[:240],
+            "message": summary[:2000],
+            "risk_tier": "danger",
+            "origin_surface": "manager_agent",
+            "origin_identity_id": str(getattr(session, "fleet_identity_id", "") or "").strip() or None,
+            "origin_chat_id": session_id,
+            "payload": dict(payload or {}),
+            "ttl_seconds": 300,
+        },
+    )
+    if created.get("error"):
+        return created
+    confirmation_id = str(created.get("confirmation_id") or "").strip()
+    if not confirmation_id:
+        return {"error": "Fleet confirmation could not be created.", "error_type": "confirmation_unavailable"}
+    pending = dict(getattr(session, "_fleet_pending_confirmations", {}) or {})
+    pending[action_kind] = confirmation_id
+    try:
+        setattr(session, "_fleet_pending_confirmations", pending)
+    except Exception:
+        pass
     return {
         "confirmation_required": True,
         "confirmation_id": confirmation_id,
-        "action": action,
+        "action": action_kind,
         "summary": summary,
         "payload": payload or {},
-        "next_valid_actions": ["Ask the user to confirm on this surface, then call the same tool with confirmed=true."],
+        "next_valid_actions": [
+            "Ask the user to confirm on this surface, then call the same tool with confirmed=true and this confirmation_id."
+        ],
     }
+
+
+def _fleet_confirmation_id_for_execution(
+    session: Any,
+    args: Dict[str, Any],
+    *,
+    action_kind: str,
+) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+    if not bool(args.get("confirmed")):
+        return None, {"error": "User confirmation is required.", "error_type": "confirmation_required"}
+    pending = dict(getattr(session, "_fleet_pending_confirmations", {}) or {})
+    confirmation_id = str(args.get("confirmation_id") or pending.get(action_kind) or "").strip()
+    if not confirmation_id:
+        return None, {"error": "The pending Fleet confirmation id is missing.", "error_type": "confirmation_required"}
+    if pending.get(action_kind) and str(pending.get(action_kind)) != confirmation_id:
+        return None, {"error": "The Fleet confirmation id does not match this action.", "error_type": "confirmation_mismatch"}
+    user_text = str(getattr(session, "last_user_message", "") or "").strip().lower()
+    affirmative = bool(re.search(r"\b(yes|confirm|confirmed|approve|approved|proceed|continue|do it|okay|ok)\b", user_text))
+    negative = bool(re.search(r"\b(no|deny|denied|cancel|stop|abort|decline)\b", user_text))
+    if not affirmative or negative:
+        return None, {
+            "error": "The latest user message did not explicitly confirm this Fleet action.",
+            "error_type": "confirmation_required",
+        }
+    approved = _fleet_api_request(
+        "POST",
+        f"/api/app/confirmations/{quote(confirmation_id, safe='')}/approve",
+        {"decided_by_surface": "manager_agent", "decided_by_actor": session_id_for_confirmation(session)},
+    )
+    if approved.get("error"):
+        return None, approved
+    if str(approved.get("status") or "").strip().lower() != "approved":
+        return None, {"error": "Fleet confirmation was not approved.", "error_type": "confirmation_required"}
+    pending.pop(action_kind, None)
+    try:
+        setattr(session, "_fleet_pending_confirmations", pending)
+    except Exception:
+        pass
+    return confirmation_id, None
+
+
+def session_id_for_confirmation(session: Any) -> Optional[str]:
+    return str(getattr(getattr(session, "session", None), "id", "") or "").strip() or None
 
 
 def _fleet_compact_task_result(task: Dict[str, Any]) -> Dict[str, Any]:
@@ -525,13 +709,21 @@ def _fleet_tool_reset_or_delete_worker(session: Any, args: Dict[str, Any], *, re
     worker = _fleet_find_worker(snapshot, str(args.get("worker") or ""))
     if not worker:
         return {"error": "Worker not found.", "error_type": "worker_not_found"}
-    action = "fleet_reset_worker" if reset else "fleet_delete_worker"
+    action = "fleet_worker_reset" if reset else "fleet_worker_delete"
     if not bool(args.get("confirmed")):
         return _fleet_confirmation_required(
+            session,
             action,
             f"{'Reset' if reset else 'Delete'} {worker.get('display_name') or worker.get('worker_id')} from the live fleet.",
             {"worker_id": worker.get("worker_id"), "active_task_id": worker.get("active_task_id")},
         )
+    confirmation_id, confirmation_error = _fleet_confirmation_id_for_execution(
+        session,
+        args,
+        action_kind=action,
+    )
+    if confirmation_error:
+        return confirmation_error
     path = (
         f"/api/fleet/workers/{quote(str(worker.get('worker_id') or ''), safe='')}/reset"
         if reset
@@ -541,6 +733,7 @@ def _fleet_tool_reset_or_delete_worker(session: Any, args: Dict[str, Any], *, re
         "POST" if reset else "DELETE",
         path,
         {"reason": str(args.get("reason") or action), "metadata": {"requested_by": "manager_agent"}} if reset else None,
+        confirmation_id=confirmation_id,
     )
     _invalidate_fleet_manager_tool_context(session)
     return result
@@ -594,11 +787,23 @@ def _fleet_tool_delete_group(session: Any, args: Dict[str, Any]) -> Dict[str, An
         return {"error": "Group not found.", "error_type": "group_not_found"}
     if not bool(args.get("confirmed")):
         return _fleet_confirmation_required(
-            "fleet_delete_group",
+            session,
+            "fleet_group_delete",
             f"Delete group {group.get('display_name') or group.get('group_id')}.",
             {"group_id": group.get("group_id"), "worker_ids": group.get("worker_ids") or []},
         )
-    result = _fleet_api_request("DELETE", f"/api/fleet/groups/{quote(str(group.get('group_id') or ''), safe='')}")
+    confirmation_id, confirmation_error = _fleet_confirmation_id_for_execution(
+        session,
+        args,
+        action_kind="fleet_group_delete",
+    )
+    if confirmation_error:
+        return confirmation_error
+    result = _fleet_api_request(
+        "DELETE",
+        f"/api/fleet/groups/{quote(str(group.get('group_id') or ''), safe='')}",
+        confirmation_id=confirmation_id,
+    )
     _invalidate_fleet_manager_tool_context(session)
     return result
 
@@ -645,10 +850,18 @@ def _fleet_tool_assign_group_task(session: Any, args: Dict[str, Any], *, message
     worker_ids = list(group.get("worker_ids") or [])
     if not bool(args.get("confirmed")):
         return _fleet_confirmation_required(
-            "fleet_send_group_message" if message else "fleet_assign_group_task",
+            session,
+            "fleet_group_dispatch",
             f"Dispatch to group {group.get('display_name') or group.get('group_id')} with {len(worker_ids)} workers.",
             {"group_id": group.get("group_id"), "worker_ids": worker_ids, "prompt": prompt[:500]},
         )
+    confirmation_id, confirmation_error = _fleet_confirmation_id_for_execution(
+        session,
+        args,
+        action_kind="fleet_group_dispatch",
+    )
+    if confirmation_error:
+        return confirmation_error
     result = _fleet_api_request(
         "POST",
         f"/api/fleet/groups/{quote(str(group.get('group_id') or ''), safe='')}/tasks",
@@ -661,6 +874,7 @@ def _fleet_tool_assign_group_task(session: Any, args: Dict[str, Any], *, message
                 "bulk_dispatch_confirmed": True,
             },
         },
+        confirmation_id=confirmation_id,
     )
     _invalidate_fleet_manager_tool_context(session)
     return {"tasks": result.get("result", result) if isinstance(result, dict) else result, "delivery": "bulk_dispatched"}
@@ -910,14 +1124,23 @@ def _fleet_tool_stop_worker(session: Any, args: Dict[str, Any]) -> Dict[str, Any
 def _fleet_tool_stop_all(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
     if not bool(args.get("confirmed")):
         return _fleet_confirmation_required(
+            session,
             "fleet_stop_all",
             "Stop every reachable active fleet run.",
             {"reason": str(args.get("reason") or "Fleet stop all")},
         )
+    confirmation_id, confirmation_error = _fleet_confirmation_id_for_execution(
+        session,
+        args,
+        action_kind="fleet_stop_all",
+    )
+    if confirmation_error:
+        return confirmation_error
     result = _fleet_api_request(
         "POST",
         "/api/fleet/stop-all",
         {"reason": str(args.get("reason") or "Fleet stop all"), "metadata": {"stopped_by": "manager_agent"}},
+        confirmation_id=confirmation_id,
     )
     _invalidate_fleet_manager_tool_context(session)
     return result
@@ -1059,6 +1282,104 @@ def _normalize_interrupt_policy(policy: str) -> str:
     return normalized if normalized in {"none", "steer_now", "after_tool"} else "none"
 
 
+def _openai_function_tool(tool: Dict[str, Any]) -> Dict[str, Any]:
+    if isinstance(tool.get("function"), dict):
+        return tool
+    return {
+        "type": "function",
+        "function": {
+            "name": tool.get("name"),
+            "description": tool.get("description", ""),
+            "parameters": tool.get("parameters") or {"type": "object", "properties": {}},
+        },
+    }
+
+
+def _request_user_input_handler(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    question = normalize_plan_question(args or {})
+    state = ensure_plan_mode(session)
+    timestamp = datetime.now().isoformat()
+    state["status"] = "awaiting_user_input"
+    state["updated_at"] = timestamp
+    state["pending_question"] = question
+    session.plan_mode = state
+    message = {
+        "role": "assistant",
+        "content": question["question"],
+        "timestamp": timestamp,
+        "channel": "app",
+        "source_format": "app_plan_question",
+        "display_label": "Plan",
+        "metadata": {"plan_question": question},
+    }
+    session.chat_history.append(message)
+    session.save_session()
+    session_id = session.session_manager.get_current_session_id() if getattr(session, "session_manager", None) else None
+    user_id = getattr(session, "sync_user_id", None) or getattr(session, "user_id", None)
+    if user_id is not None and session_id:
+        get_channel_sync_hub().publish(
+            user_id=user_id,
+            event={
+                "type": "assistant_final",
+                "session_id": session_id,
+                "origin_channel": "app",
+                "payload": {
+                    "message": message,
+                    "text": question["question"],
+                },
+            },
+        )
+    return {
+        "ok": True,
+        "status": "waiting_for_user",
+        "question_id": question["question_id"],
+        "message": "Question sent to the user. Stop and wait for the answer before finalizing the plan.",
+    }
+
+
+def _update_goal_status_handler(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    result = apply_goal_status_update(session, args or {})
+    session.save_session()
+    return result
+
+
+def _apply_incoming_mode_state(
+    session: Any,
+    *,
+    user_message: str,
+    run_mode: Optional[str],
+    plan_action: Optional[str],
+    plan_answer: Optional[Dict[str, Any]],
+) -> str:
+    effective_mode = normalize_run_mode(run_mode)
+    action = normalize_plan_action(plan_action)
+
+    if action in {"approve", "dismiss", "exit"}:
+        exit_plan_mode(session, reason=action)
+        if action in {"dismiss", "exit"}:
+            effective_mode = "normal"
+
+    if effective_mode == "plan" or active_plan_mode(session):
+        if action == "answer_question":
+            state = ensure_plan_mode(session)
+            state["pending_question"] = None
+            state["status"] = "active"
+            state["updated_at"] = datetime.now().isoformat()
+            if plan_answer:
+                state["last_answer"] = dict(plan_answer)
+            session.plan_mode = state
+        elif effective_mode == "plan":
+            ensure_plan_mode(session)
+        if active_plan_mode(session):
+            effective_mode = "plan"
+
+    if normalize_run_mode(run_mode) == "goal":
+        start_goal(session, user_message)
+        effective_mode = "goal"
+
+    return effective_mode
+
+
 def _steering_beta_enabled(session: Any) -> bool:
     env_value = os.getenv(STEERING_BETA_ENV)
     if env_value is not None and env_value.strip():
@@ -1104,6 +1425,7 @@ async def _request_app_steering(
     interrupt_policy: str,
     surface_mode: Optional[str] = None,
     source_client_id: Optional[str] = None,
+    client_message_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     policy = _normalize_interrupt_policy(interrupt_policy)
     if policy == "none" or not _steering_beta_enabled(session):
@@ -1127,6 +1449,7 @@ async def _request_app_steering(
             "interrupt_policy": policy,
             "steering_beta": True,
             "source_client_id": source_client_id,
+            "client_message_id": client_message_id,
         }
         session.chat_history.append(steering_message)
 
@@ -1157,6 +1480,22 @@ async def _request_app_steering(
     }
 
 
+async def _notify_message_delivery(
+    callback: Optional[Callable[[Dict[str, Any]], Any]],
+    payload: Dict[str, Any],
+) -> None:
+    if callback is None:
+        return
+    try:
+        result = callback(payload)
+        if inspect.isawaitable(result):
+            await result
+    except Exception:
+        # A disconnected origin must not abort a turn after its message was
+        # accepted and persisted.
+        pass
+
+
 async def run_app_chat_turn(
     session: Any,
     *,
@@ -1165,38 +1504,112 @@ async def run_app_chat_turn(
     surface_mode: Optional[str] = None,
     interrupt_policy: str = "none",
     source_client_id: Optional[str] = None,
+    client_message_id: Optional[str] = None,
+    message_accepted_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    run_mode: Optional[str] = None,
+    plan_action: Optional[str] = None,
+    plan_answer: Optional[Dict[str, Any]] = None,
     log_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    retry_run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    steering_result = await _request_app_steering(
-        session,
-        user_message=user_message,
-        source_format=source_format,
-        interrupt_policy=interrupt_policy,
-        surface_mode=surface_mode,
-        source_client_id=source_client_id,
-    )
+    previous_surface_mode = getattr(session, "current_surface_mode", None)
+    session.current_surface_mode = str(surface_mode or "chat").strip().lower() or "chat"
+    steering_result = None
+    if not retry_run_id:
+        steering_result = await _request_app_steering(
+            session,
+            user_message=user_message,
+            source_format=source_format,
+            interrupt_policy=interrupt_policy,
+            surface_mode=surface_mode,
+            source_client_id=source_client_id,
+            client_message_id=client_message_id,
+        )
     if steering_result is not None:
+        await _notify_message_delivery(
+            message_accepted_callback,
+            {
+                "status": "steering",
+                "session_id": steering_result.get("session_id"),
+                "client_message_id": client_message_id,
+            },
+        )
+        if previous_surface_mode is None:
+            try:
+                delattr(session, "current_surface_mode")
+            except Exception:
+                session.current_surface_mode = None
+        else:
+            session.current_surface_mode = previous_surface_mode
         return steering_result
 
-    display_label = "App Voice" if source_format == "app_voice_transcript" else "App"
-    reservation = await begin_chat_turn(
+    if source_format == "app_voice_transcript":
+        display_label = "App Voice"
+    elif source_format == "app_visual_monitor":
+        display_label = "Visual Monitor"
+    else:
+        display_label = "App"
+    effective_run_mode = _apply_incoming_mode_state(
         session,
         user_message=user_message,
-        user_message_payload={
-            "channel": "app",
-            "source_format": source_format,
-            "surface_mode": surface_mode,
-            "display_label": display_label,
-            "source_client_id": source_client_id,
-        },
+        run_mode=run_mode,
+        plan_action=plan_action,
+        plan_answer=plan_answer,
     )
+    session.current_turn_run_mode = effective_run_mode
+    if retry_run_id:
+        reservation = await reserve_failed_chat_turn_retry(session, run_id=retry_run_id)
+    else:
+        reservation = await begin_chat_turn(
+            session,
+            user_message=user_message,
+            user_message_payload={
+                "channel": "app",
+                "source_format": source_format,
+                "surface_mode": surface_mode,
+                "display_label": display_label,
+                "source_client_id": source_client_id,
+                "client_message_id": client_message_id,
+                "run_mode": effective_run_mode,
+                "plan_action": normalize_plan_action(plan_action),
+                **({"plan_answer": dict(plan_answer)} if isinstance(plan_answer, dict) else {}),
+            },
+        )
     if reservation.busy:
+        await _notify_message_delivery(
+            message_accepted_callback,
+            {
+                "status": "rejected",
+                "retryable": True,
+                "session_id": reservation.session_id,
+                "client_message_id": client_message_id,
+            },
+        )
+        if previous_surface_mode is None:
+            try:
+                delattr(session, "current_surface_mode")
+            except Exception:
+                session.current_surface_mode = None
+        else:
+            session.current_surface_mode = previous_surface_mode
         return {
             "ok": False,
             "busy": True,
             "session_id": reservation.session_id,
             "assistant_text": "",
         }
+
+    reservation_event_meta = dict(getattr(reservation, "event_meta", {}) or {})
+    await _notify_message_delivery(
+        message_accepted_callback,
+        {
+            "status": "accepted",
+            "session_id": reservation.session_id,
+            "client_message_id": client_message_id,
+            "run_id": reservation_event_meta.get("run_id"),
+            "run_sequence": reservation_event_meta.get("run_sequence"),
+        },
+    )
 
     screen_observation_turn = is_screen_observation_message(user_message)
     task_like_turn = screen_observation_turn or is_task_like_message(user_message)
@@ -1211,10 +1624,18 @@ async def run_app_chat_turn(
         prelude_messages.extend(_kickstart_prelude(active_tool_packs))
 
     system_messages = []
+    if active_plan_mode(session):
+        system_messages.append({"role": "system", "content": plan_mode_system_message(session)})
+    if active_goal(session):
+        goal_message = goal_mode_system_message(session)
+        if goal_message:
+            system_messages.append({"role": "system", "content": goal_message})
     if screen_observation_turn:
         system_messages.append(_screen_observation_contract(active_tool_packs))
     if source_format == "app_voice_transcript" and str(surface_mode or "").strip().lower() == "jarvis":
         system_messages.append(_jarvis_voice_response_contract())
+    if source_format == "app_visual_monitor":
+        system_messages.append(_visual_monitor_wake_contract(surface_mode))
     if _is_fleet_worker_session(session):
         system_messages.append(_fleet_worker_contract(session))
     if tool_evidence_turn:
@@ -1225,9 +1646,20 @@ async def run_app_chat_turn(
     if fleet_tool_context.get("enabled"):
         system_messages.append(_fleet_manager_contract(dict(fleet_tool_context.get("snapshot") or {})))
     session.current_turn_allowed_tool_names = tools_for_enabled_packs(active_tool_packs)
-    if fleet_tool_context.get("enabled"):
+    plan_mode_active = bool(active_plan_mode(session))
+    goal_mode_active = bool(active_goal(session))
+    if fleet_tool_context.get("enabled") and not plan_mode_active:
         session.current_turn_allowed_tool_names.update(FLEET_MANAGER_TOOL_NAMES)
     session.current_turn_allowed_tool_definitions = filter_tools_by_enabled_packs(CLI_AGENT_TOOLS, active_tool_packs)
+    if plan_mode_active:
+        session.current_turn_allowed_tool_definitions = filter_plan_tools(session.current_turn_allowed_tool_definitions)
+        session.current_turn_allowed_tool_names = {
+            str(tool.get("name") or tool.get("function", {}).get("name") or "")
+            for tool in session.current_turn_allowed_tool_definitions
+        }
+        session.current_turn_allowed_tool_names.add("request_user_input")
+    if goal_mode_active:
+        session.current_turn_allowed_tool_names.add("update_goal_status")
 
     try:
         result = await run_reserved_chat_turn(
@@ -1239,24 +1671,53 @@ async def run_app_chat_turn(
                     **get_auto_mode_tool_handlers(runtime_session),
                     **(
                         _fleet_manager_tool_handlers(runtime_session)
-                        if _fleet_manager_tool_context(runtime_session).get("enabled")
+                        if _fleet_manager_tool_context(runtime_session).get("enabled") and not active_plan_mode(runtime_session)
+                        else {}
+                    ),
+                    **(
+                        {"request_user_input": lambda args: _request_user_input_handler(runtime_session, args)}
+                        if active_plan_mode(runtime_session)
+                        else {}
+                    ),
+                    **(
+                        {"update_goal_status": lambda args: _update_goal_status_handler(runtime_session, args)}
+                        if active_goal(runtime_session)
                         else {}
                     ),
                 }
             ),
             extra_tools_builder=(
-                lambda runtime_session: merge_openai_tools(
-                    filter_openai_tools_by_enabled_packs(
-                        merge_openai_tools(get_auto_mode_extra_tools(), AGENT_TOOLS),
-                        getattr(runtime_session, "_active_tool_packs_for_current_run", None)
-                        or getattr(runtime_session, "enabled_tool_packs", [])
-                        or [],
-                    ),
-                    (
-                        FLEET_MANAGER_TOOLS
-                        if _fleet_manager_tool_context(runtime_session).get("enabled")
-                        else []
-                    ),
+                lambda runtime_session: (
+                    merge_openai_tools(
+                        filter_plan_tools(
+                            filter_openai_tools_by_enabled_packs(
+                                merge_openai_tools(get_auto_mode_extra_tools(), AGENT_TOOLS),
+                                getattr(runtime_session, "_active_tool_packs_for_current_run", None)
+                                or getattr(runtime_session, "enabled_tool_packs", [])
+                                or [],
+                            )
+                        ),
+                        [_openai_function_tool(REQUEST_USER_INPUT_TOOL)],
+                    )
+                    if active_plan_mode(runtime_session)
+                    else merge_openai_tools(
+                        filter_openai_tools_by_enabled_packs(
+                            merge_openai_tools(get_auto_mode_extra_tools(), AGENT_TOOLS),
+                            getattr(runtime_session, "_active_tool_packs_for_current_run", None)
+                            or getattr(runtime_session, "enabled_tool_packs", [])
+                            or [],
+                        ),
+                        (
+                            FLEET_MANAGER_TOOLS
+                            if _fleet_manager_tool_context(runtime_session).get("enabled")
+                            else []
+                        ),
+                        (
+                            [_openai_function_tool(UPDATE_GOAL_STATUS_TOOL)]
+                            if active_goal(runtime_session)
+                            else []
+                        ),
+                    )
                 )
             ),
             system_messages=system_messages,
@@ -1276,7 +1737,7 @@ async def run_app_chat_turn(
                     if ThinkingModeVisualizer.should_show_thinking(session.current_model, session.current_variant)
                     else response
                 )
-                if source_format == "app_voice_transcript" and str(surface_mode or "").strip().lower() == "jarvis"
+                if source_format in {"app_voice_transcript", "app_visual_monitor"} and str(surface_mode or "").strip().lower() == "jarvis"
                 else (
                     ThinkingModeVisualizer.extract_thinking_content(response)[0]
                     if ThinkingModeVisualizer.should_show_thinking(session.current_model, session.current_variant)
@@ -1287,9 +1748,31 @@ async def run_app_chat_turn(
     finally:
         session.current_turn_allowed_tool_names = None
         session.current_turn_allowed_tool_definitions = []
+        session.current_turn_run_mode = None
+        if getattr(session, "tool_executor", None):
+            try:
+                session.tool_executor.security_context_provider = None
+            except Exception:
+                pass
+        if previous_surface_mode is None:
+            try:
+                delattr(session, "current_surface_mode")
+            except Exception:
+                session.current_surface_mode = None
+        else:
+            session.current_surface_mode = previous_surface_mode
     thinking_content = None
     if ThinkingModeVisualizer.should_show_thinking(session.current_model, session.current_variant):
         _, thinking_content = ThinkingModeVisualizer.extract_thinking_content(result.raw_response)
+    if active_plan_mode(session):
+        record_proposed_plan(session, result.assistant_text or result.raw_response or "")
+    if active_goal(session):
+        add_goal_token_usage(session, result.input_tokens, result.output_tokens)
+    if active_plan_mode(session) or active_goal(session):
+        try:
+            session.save_session()
+        except Exception:
+            pass
 
     return {
         "ok": result.ok,
@@ -1305,4 +1788,5 @@ async def run_app_chat_turn(
         "total_tokens": result.total_tokens,
         "context_compressed": bool(reservation.context_compressed or result.context_compressed),
         "context_compaction": result.context_compaction or reservation.context_compaction,
+        "failure": getattr(result, "failure", None),
     }

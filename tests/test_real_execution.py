@@ -13,6 +13,10 @@ import time
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 from openai import OpenAI
+import pytest
+
+
+pytestmark = pytest.mark.live_external
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service

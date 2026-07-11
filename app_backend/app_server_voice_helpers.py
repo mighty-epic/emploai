@@ -278,23 +278,29 @@ def _normalize_stt_backend(backend_value: str) -> str:
 
         return "openai"
 
+    if backend in {"gemini", "gemini_api", "google", "google_gemini"}:
+
+        return "gemini"
+
     raise ValueError(f"Unsupported STT backend: {backend_value}")
 
 def _configure_stt_backend(backend_value: str) -> dict[str, Any]:
 
-    from app_backend.voice_runtime import APP_STT_BACKEND_ENV
+    from app_backend.voice_runtime import APP_STT_BACKEND_ENV, reset_stt_runtime_cache
 
     backend = _normalize_stt_backend(backend_value)
 
     previous_raw = os.environ.get(APP_STT_BACKEND_ENV)
 
     os.environ[APP_STT_BACKEND_ENV] = backend
+    reset_stt_runtime_cache()
 
     selected_status = _voice_runtime_status()
 
     if not bool(selected_status.get("input_ok", selected_status.get("ok"))):
 
         _restore_env_value(APP_STT_BACKEND_ENV, previous_raw)
+        reset_stt_runtime_cache()
 
         status = _voice_runtime_status()
 
@@ -313,6 +319,7 @@ def _configure_stt_backend(backend_value: str) -> dict[str, Any]:
         return status
 
     _write_runtime_env_values({APP_STT_BACKEND_ENV: backend})
+    reset_stt_runtime_cache()
 
     status = _voice_runtime_status()
 

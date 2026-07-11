@@ -11,6 +11,10 @@ import time
 import os
 from typing import Dict, List, Any
 from openai import OpenAI
+import pytest
+
+
+pytestmark = pytest.mark.live_external
 
 
 # ============================================================
@@ -201,7 +205,7 @@ def get_real_tesseract_observation() -> Dict:
     import mss.tools
     
     # Capture real screenshot
-    with mss.mss() as sct:
+    with mss.MSS() as sct:
         screenshot = sct.grab(sct.monitors[1])
         img_path = "temp_ocr_screenshot.png"
         mss.tools.to_png(screenshot.rgb, screenshot.size, output=img_path)
@@ -245,7 +249,7 @@ def get_real_tesseract_observation() -> Dict:
 # LLM REASONING TEST
 # ============================================================
 
-def test_llm_with_real_observation(observation: Dict, task: str) -> Dict:
+def run_llm_with_real_observation(observation: Dict, task: str) -> Dict:
     """Send real observation to LLM and get reasoning."""
     
     print(f"\n[LLM] Sending to GPT-4o-mini...")
@@ -308,7 +312,7 @@ def test_selenium_with_llm():
     observation = get_real_selenium_observation()
     task = "Find the search box on the page and describe how you would enter a search query"
     
-    result = test_llm_with_real_observation(observation, task)
+    result = run_llm_with_real_observation(observation, task)
     
     print(f"\n[RESULT]")
     print(f"  LLM Response Time: {result['duration_seconds']}s")
@@ -332,7 +336,7 @@ def test_pywinauto_with_llm():
     observation = get_real_pywinauto_observation()
     task = "Analyze the current window and describe what application is open and its main UI elements"
     
-    result = test_llm_with_real_observation(observation, task)
+    result = run_llm_with_real_observation(observation, task)
     
     print(f"\n[RESULT]")
     print(f"  LLM Response Time: {result['duration_seconds']}s")
@@ -356,7 +360,7 @@ def test_tesseract_with_llm():
     observation = get_real_tesseract_observation()
     task = "Read the visible text on screen and describe what you see"
     
-    result = test_llm_with_real_observation(observation, task)
+    result = run_llm_with_real_observation(observation, task)
     
     print(f"\n[RESULT]")
     print(f"  LLM Response Time: {result['duration_seconds']}s")
@@ -393,7 +397,7 @@ def test_all_combined_with_llm():
     
     task = "Using all available observation methods, provide a comprehensive analysis of what is currently on screen"
     
-    result = test_llm_with_real_observation(combined, task)
+    result = run_llm_with_real_observation(combined, task)
     
     print(f"\n[RESULT]")
     print(f"  LLM Response Time: {result['duration_seconds']}s")

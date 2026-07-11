@@ -55,7 +55,29 @@ try:
 except ImportError:
     PYPERCLIP_AVAILABLE = False
 
+def _memory_tool_unavailable_reason(session, *, read: bool = False, write: bool = False) -> str:
+    live_config = getattr(session, "live_config", None)
+    if read and live_config and live_config.get("memory.search_enabled", True) is False:
+        return "Memory search is disabled in settings."
+    if write and live_config and live_config.get("memory.write_enabled", True) is False:
+        return "Memory writing is disabled in settings."
+
+    session_context = getattr(session, "session_context", None)
+    if session_context is not None:
+        if read and not getattr(session_context, "can_access_memory", True):
+            return "This session is not allowed to access long-term memory."
+        if write and not getattr(session_context, "can_write_memory", True):
+            return "This session is not allowed to update long-term memory."
+
+    if not getattr(session, "memory_manager", None):
+        return "Memory manager is unavailable for this session."
+    return ""
+
+
 def _execute_search_memory(session, args: Dict) -> str:
+    unavailable = _memory_tool_unavailable_reason(session, read=True)
+    if unavailable:
+        return unavailable
     try:
         results = session.memory_manager.search_memory(
             args['query'],
@@ -73,6 +95,9 @@ def _execute_search_memory(session, args: Dict) -> str:
 
 
 def _execute_update_memory(session, args: Dict) -> str:
+    unavailable = _memory_tool_unavailable_reason(session, write=True)
+    if unavailable:
+        return unavailable
     try:
         updated = session.memory_manager.append_to_memory(args['section'], args['content'])
         if updated:

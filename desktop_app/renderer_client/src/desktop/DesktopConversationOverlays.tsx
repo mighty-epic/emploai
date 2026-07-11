@@ -1,6 +1,7 @@
 import { Image, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
 import { FoldSection, MonoIcon } from './DesktopConversationView.components';
+import { DesktopConversationContextMenu } from './DesktopConversationContextMenu';
 import { styles } from './DesktopConversationView.styles';
 import type { DesktopConversationScope } from './DesktopConversationScope';
 
@@ -63,7 +64,7 @@ export function DesktopConversationOverlays({ scope }: DesktopConversationOverla
                 onPress={() => void createAutomaticFolderFromChoice()}
               >
                 <Text style={[styles.folderChoiceActionText, styles.folderChoiceActionTextPrimary]}>
-                  {folderChoiceBusy === 'auto' ? 'Creating...' : 'Automatic folder'}
+                  {folderChoiceBusy === 'auto' ? 'Creating…' : 'Automatic folder'}
                 </Text>
                 <Text style={styles.folderChoiceActionHint}>
                   Create a new chat folder in the default location.
@@ -78,7 +79,7 @@ export function DesktopConversationOverlays({ scope }: DesktopConversationOverla
                 onPress={() => void chooseFolderFromChoice()}
               >
                 <Text style={styles.folderChoiceActionText}>
-                  {folderChoiceBusy === 'choose' ? 'Opening...' : 'Choose location'}
+                  {folderChoiceBusy === 'choose' ? 'Opening…' : 'Choose location'}
                 </Text>
                 <Text style={styles.folderChoiceActionHint}>
                   Pick an existing folder or create one wherever you want.
@@ -190,6 +191,8 @@ export function DesktopConversationOverlays({ scope }: DesktopConversationOverla
           </Pressable>
         </Pressable>
       ) : null}
+
+      <DesktopConversationContextMenu scope={scope} />
 
     </>
   );

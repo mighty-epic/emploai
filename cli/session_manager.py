@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import threading
 import uuid
 from dataclasses import asdict
 from datetime import datetime
@@ -9,7 +10,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from cli.models.session import Session, SessionSummary
+from shared.atomic_io import atomic_write_json
 from shared.runtime_paths import shared_state_root
+
+
+_SESSION_IO_LOCK = threading.RLock()
 
 
 def _stable_workspace_id(workspace: Optional[Path], explicit: Optional[str] = None) -> Optional[str]:
@@ -106,9 +111,10 @@ class SessionManager:
             workspace_binding_status=_workspace_binding_status(workspace or Path.cwd(), workspace_binding_status),
         )
         
-        self._save_session(session)
-        self._update_index(session)
-        self.current_session = session
+        with _SESSION_IO_LOCK:
+            self._save_session(session)
+            self._update_index(session)
+            self.current_session = session
         
         return session
     
@@ -127,14 +133,14 @@ class SessionManager:
         """
         session_file = self.sessions_dir / f"{session_id}.json"
         
-        if not session_file.exists():
+        if not session_file.exists() and not self._session_backup_file(session_id).exists():
             raise ValueError(f"Session not found: {session_id}")
         
-        data = json.loads(session_file.read_text(encoding="utf-8"))
+        data = self._read_session_payload(session_id)
         session = Session.from_dict(data)
-        self.current_session = session
-        
+
         if set_current:
+            self.current_session = session
             self.set_current_session(session_id)
         
         return session
@@ -146,15 +152,41 @@ class SessionManager:
             session: The session to save.
         """
         session.updated_at = datetime.now().isoformat()
-        self._save_session(session)
-        self._update_index(session)
+        with _SESSION_IO_LOCK:
+            self._save_session(session)
+            self._update_index(session)
+
+    def _recovery_dir(self) -> Path:
+        return self.sessions_dir / ".recovery"
+
+    def _session_backup_file(self, session_id: str) -> Path:
+        return self._recovery_dir() / f"{session_id}.json.bak"
+
+    def _index_backup_file(self) -> Path:
+        return self._recovery_dir() / "index.json.bak"
+
+    def _read_session_payload(self, session_id: str) -> Dict[str, Any]:
+        session_file = self.sessions_dir / f"{session_id}.json"
+        backup_file = self._session_backup_file(session_id)
+        for candidate in (session_file, backup_file):
+            try:
+                payload = json.loads(candidate.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            if candidate == backup_file:
+                atomic_write_json(session_file, payload)
+            return payload
+        raise ValueError(f"Session data is unreadable: {session_id}")
     
     def _save_session(self, session: Session) -> None:
         """Internal: write session to disk."""
         session_file = self.sessions_dir / f"{session.id}.json"
-        session_file.write_text(
-            json.dumps(session.to_dict(), indent=2),
-            encoding="utf-8"
+        atomic_write_json(
+            session_file,
+            session.to_dict(),
+            backup_path=self._session_backup_file(session.id),
         )
 
     def _index_file(self) -> Path:
@@ -162,18 +194,25 @@ class SessionManager:
 
     def _read_index_payload(self) -> Dict[str, Any]:
         index_file = self._index_file()
-        if not index_file.exists():
+        if not index_file.exists() and not self._index_backup_file().exists():
             return {"sessions": [], "current_session_id": None}
-        try:
-            raw = json.loads(index_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, IOError):
-            return {"sessions": [], "current_session_id": None}
-        return raw if isinstance(raw, dict) else {"sessions": [], "current_session_id": None}
+        for candidate in (index_file, self._index_backup_file()):
+            try:
+                raw = json.loads(candidate.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if not isinstance(raw, dict):
+                continue
+            if candidate == self._index_backup_file():
+                atomic_write_json(index_file, raw)
+            return raw
+        return {"sessions": [], "current_session_id": None}
 
     def _write_index_payload(self, payload: Dict[str, Any]) -> None:
-        self._index_file().write_text(
-            json.dumps(payload, indent=2),
-            encoding="utf-8",
+        atomic_write_json(
+            self._index_file(),
+            payload,
+            backup_path=self._index_backup_file(),
         )
 
     def _session_file_paths(self) -> List[Path]:
@@ -185,7 +224,7 @@ class SessionManager:
 
     def _load_session_summary_from_file(self, session_file: Path) -> SessionSummary | None:
         try:
-            payload = json.loads(session_file.read_text(encoding="utf-8"))
+            payload = self._read_session_payload(session_file.stem)
             if not isinstance(payload, dict):
                 return None
             chat_history = payload.get("chat_history", [])
@@ -242,6 +281,10 @@ class SessionManager:
         )
 
     def _synchronize_index(self) -> tuple[List[SessionSummary], Optional[str]]:
+        with _SESSION_IO_LOCK:
+            return self._synchronize_index_locked()
+
+    def _synchronize_index_locked(self) -> tuple[List[SessionSummary], Optional[str]]:
         payload = self._read_index_payload()
         indexed_summaries: Dict[str, SessionSummary] = {}
         for item in payload.get("sessions", []):
@@ -305,14 +348,18 @@ class SessionManager:
         """
         session_file = self.sessions_dir / f"{session_id}.json"
         
-        if session_file.exists():
-            session_file.unlink()
-        
-        self._remove_from_index(session_id)
-        
-        # If this was the current session, clear it
-        if self.current_session and self.current_session.id == session_id:
-            self.current_session = None
+        with _SESSION_IO_LOCK:
+            if session_file.exists():
+                session_file.unlink()
+            backup_file = self._session_backup_file(session_id)
+            if backup_file.exists():
+                backup_file.unlink()
+
+            self._remove_from_index(session_id)
+
+            # If this was the current session, clear it
+            if self.current_session and self.current_session.id == session_id:
+                self.current_session = None
     
     def rename_session(self, session_id: str, new_name: str) -> None:
         """Rename a session.
@@ -340,41 +387,44 @@ class SessionManager:
         Args:
             session_id: The session ID to set as current.
         """
-        sessions, current_session_id = self._synchronize_index()
-        valid_session_id = session_id if any(summary.id == session_id for summary in sessions) else current_session_id
-        self._write_index_payload(
-            {
-                "sessions": [summary.to_dict() for summary in sessions],
-                "current_session_id": valid_session_id,
-            }
-        )
+        with _SESSION_IO_LOCK:
+            sessions, current_session_id = self._synchronize_index_locked()
+            valid_session_id = session_id if any(summary.id == session_id for summary in sessions) else current_session_id
+            self._write_index_payload(
+                {
+                    "sessions": [summary.to_dict() for summary in sessions],
+                    "current_session_id": valid_session_id,
+                }
+            )
     
     def _update_index(self, session: Session) -> None:
         """Update the session index with session info."""
-        sessions, current_session_id = self._synchronize_index()
-        next_summaries = {summary.id: summary for summary in sessions}
-        next_summaries[session.id] = session.to_summary()
-        sorted_summaries = self._sort_summaries(list(next_summaries.values()))
-        self._write_index_payload(
-            {
-                "sessions": [summary.to_dict() for summary in sorted_summaries],
-                "current_session_id": current_session_id or session.id,
-            }
-        )
+        with _SESSION_IO_LOCK:
+            sessions, current_session_id = self._synchronize_index_locked()
+            next_summaries = {summary.id: summary for summary in sessions}
+            next_summaries[session.id] = session.to_summary()
+            sorted_summaries = self._sort_summaries(list(next_summaries.values()))
+            self._write_index_payload(
+                {
+                    "sessions": [summary.to_dict() for summary in sorted_summaries],
+                    "current_session_id": current_session_id or session.id,
+                }
+            )
     
     def _remove_from_index(self, session_id: str) -> None:
         """Remove a session from the index."""
-        sessions, current_session_id = self._synchronize_index()
-        remaining = [summary for summary in sessions if summary.id != session_id]
-        next_current = current_session_id
-        if next_current == session_id:
-            next_current = remaining[0].id if remaining else None
-        self._write_index_payload(
-            {
-                "sessions": [summary.to_dict() for summary in remaining],
-                "current_session_id": next_current,
-            }
-        )
+        with _SESSION_IO_LOCK:
+            sessions, current_session_id = self._synchronize_index_locked()
+            remaining = [summary for summary in sessions if summary.id != session_id]
+            next_current = current_session_id
+            if next_current == session_id:
+                next_current = remaining[0].id if remaining else None
+            self._write_index_payload(
+                {
+                    "sessions": [summary.to_dict() for summary in remaining],
+                    "current_session_id": next_current,
+                }
+            )
     
     def export_session(self, session_id: str, format: str = "json") -> str:
         """Export a session to a string.

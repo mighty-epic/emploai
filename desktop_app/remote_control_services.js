@@ -307,6 +307,13 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
     }
   }
 
+  async function remoteAuthListDesktops() {
+    const session = remoteAccountSessionOrThrow();
+    return remoteControlJson(session.apiBaseUrl, '/api/remote/desktops', {
+      token: session.sessionToken,
+    });
+  }
+
   async function finishLegacyRemoteAuthIfSession(apiBaseUrl, result, loginProvider = 'password') {
     if (!result?.session_token) {
       return result;
@@ -1049,13 +1056,15 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
   async function fleetRenameWorker(payload = {}) {
     const workerId = String(payload.worker_id || payload.workerId || '').trim();
     const displayName = String(payload.display_name || payload.displayName || '').trim();
-    if (!workerId || !displayName) {
-      throw new Error('worker_id and display_name are required');
+    const queuePolicy = String(payload.queue_policy || payload.queuePolicy || '').trim();
+    if (!workerId || (!displayName && !queuePolicy)) {
+      throw new Error('worker_id and a worker update are required');
     }
     return fleetApi(`/api/fleet/workers/${encodeURIComponent(workerId)}`, {
       method: 'PUT',
       body: {
-        display_name: displayName,
+        display_name: displayName || null,
+        queue_policy: queuePolicy || null,
         metadata: payload.metadata || {},
       },
     });
@@ -1365,6 +1374,7 @@ function createRemoteControlServices({ net, shell, safeStorage, resolveRuntimeHo
     sanitizeSetupValuesForLocal,
     rememberRuntimeSecretOverlay,
     remoteAuthStatus,
+    remoteAuthListDesktops,
     remoteAuthLogin,
     remoteAuthGoogleLogin,
     remoteAuthRegister,

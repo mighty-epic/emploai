@@ -2,6 +2,19 @@ from __future__ import annotations
 
 # Split from app_server.py; dependencies are injected by the app_server facade.
 
+from shared.project_onboarding import ProjectOnboardingStore, merge_tool_packs
+
+
+def _project_onboarding_tool_packs(*, user_id: int, workspace: str, current_tool_packs: list[str] | None = None) -> list[str]:
+    try:
+        profile = ProjectOnboardingStore(user_id=user_id).get_by_workspace(workspace)
+    except Exception:
+        return []
+    if not profile.get("enabled"):
+        return []
+    return merge_tool_packs(current_tool_packs or [], profile.get("desired_tool_packs") or [])
+
+
 def register_session_routes(app):
 
     @app.get("/api/app/sidebar-state", response_model=SidebarStateResponse)
@@ -201,6 +214,7 @@ def register_session_routes(app):
         bridge = _bridge_for_user(user_id)
 
         workspace = _resolve_workspace_path(request.workspace, user_id=user_id) if request.workspace else None
+        enabled_tool_packs = list(request.enabled_tool_packs or [])
 
         previous = bridge.get_current_session()
 
@@ -218,7 +232,7 @@ def register_session_routes(app):
 
                 telegram_bot_config_id=request.telegram_bot_config_id,
 
-                enabled_tool_packs=request.enabled_tool_packs,
+                enabled_tool_packs=enabled_tool_packs,
 
                 security_permission_mode=request.security_permission_mode,
 
@@ -235,6 +249,22 @@ def register_session_routes(app):
         except RuntimeError as exc:
 
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        if not request.enabled_tool_packs and getattr(session, "workspace", None):
+
+            next_tool_packs = _project_onboarding_tool_packs(
+
+                user_id=user_id,
+
+                workspace=str(getattr(session, "workspace", "")),
+
+                current_tool_packs=list(getattr(session, "enabled_tool_packs", []) or []),
+
+            )
+
+            if next_tool_packs and set(next_tool_packs) != set(getattr(session, "enabled_tool_packs", []) or []):
+
+                session = bridge.update_session_tool_packs(session.id, next_tool_packs)
 
         _sync_session_workspace_binding(user_id=user_id, auth=auth, session=session)
 
@@ -468,7 +498,85 @@ def register_session_routes(app):
 
         return SessionDetailView(**bridge.detailed_session_view(session))
 
-    @app.delete("/api/app/sessions/{session_id}", response_model=DeleteSessionResponse)
+    @app.put("/api/app/sessions/{session_id}", response_model=SessionDetailView)
+
+    async def rename_session(session_id: str, request: RenameSessionRequest, authorization: Optional[str] = Header(default=None)) -> SessionDetailView:
+
+        auth = _resolve_token(authorization)
+
+        if _is_remote_session_auth(auth):
+
+            before = _remote_shared_state(auth)
+
+            result = await _remote_request_desktop_command(
+
+                auth,
+
+                command_name="rename_session",
+
+                payload={"session_id": session_id, "name": request.name},
+
+                timeout_seconds=30.0,
+
+            )
+
+            detail_payload = result.get("session") if isinstance(result, dict) and isinstance(result.get("session"), dict) else result
+
+            if isinstance(detail_payload, dict) and detail_payload.get("id"):
+
+                return SessionDetailView.model_validate(detail_payload)
+
+            await _remote_wait_for_sync_version(
+
+                int(auth["user_id"]),
+
+                int(before.get("sync_version", 0) or 0),
+
+            )
+
+            return _remote_session_detail_view(auth, session_id)
+
+        user_id = int(auth["user_id"])
+
+        bridge = _bridge_for_user(user_id)
+
+        try:
+
+            session = bridge.rename_session(session_id, request.name)
+
+        except ValueError as exc:
+
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        except Exception as exc:
+
+            raise HTTPException(status_code=404, detail="Session not found") from exc
+
+        _mirror_session_snapshot_later(user_id=user_id, bridge=bridge, session=session, reason="session_renamed")
+
+        publish_current_session_changed(
+
+            user_id=user_id,
+
+            session_id=session.id,
+
+            previous_session_id=session.id,
+
+            origin_channel="app",
+
+            reason="session_renamed",
+
+        )
+
+        return SessionDetailView(**bridge.detailed_session_view(session))
+
+    @app.delete(
+
+        "/api/app/sessions/{session_id}",
+
+        response_model=DeleteSessionResponse,
+
+    )
 
     async def delete_session(session_id: str, authorization: Optional[str] = Header(default=None)) -> DeleteSessionResponse:
 
@@ -502,11 +610,25 @@ def register_session_routes(app):
 
             current_session_id = str((result or {}).get("current_session_id") or shared_state.get("current_session_id") or "").strip() or None
 
+            archive_id = str((result or {}).get("archive_id") or "").strip() or None
+
+            if archive_id is None:
+
+                return JSONResponse(content={
+
+                    "deleted_session_id": deleted_session_id,
+
+                    "current_session_id": current_session_id,
+
+                })
+
             return DeleteSessionResponse(
 
                 deleted_session_id=deleted_session_id,
 
                 current_session_id=current_session_id,
+
+                archive_id=archive_id,
 
             )
 
@@ -517,6 +639,8 @@ def register_session_routes(app):
         previous = bridge.get_current_session()
 
         archive_payload: Optional[Dict[str, Any]] = None
+
+        archive_id: Optional[str] = None
 
         try:
 
@@ -554,7 +678,7 @@ def register_session_routes(app):
 
                 session_payload = dict(archive_payload.get("session") or {})
 
-                _get_remote_control_store().archive_item(
+                archived_item = _get_remote_control_store().archive_item(
 
                     user_id=user_id,
 
@@ -569,6 +693,8 @@ def register_session_routes(app):
                     metadata={"archive_reason": "chat_delete", "workspace": session_payload.get("workspace")},
 
                 )
+
+                archive_id = str(archived_item.get("archive_id") or "").strip() or None
 
                 from shared.standalone_policy import cloud_backend_enabled
 
@@ -602,7 +728,7 @@ def register_session_routes(app):
 
         )
 
-        return DeleteSessionResponse(**result)
+        return DeleteSessionResponse(**result, archive_id=archive_id)
 
     @app.post("/api/app/chat/send")
 

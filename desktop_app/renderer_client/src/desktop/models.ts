@@ -15,4 +15,14 @@ export type RemoteRuntimeSummary = {
   status: 'planned' | 'offline' | 'connected';
   detail: string;
   preview: RemotePreviewState;
+  workerCount?: number;
+  activeCount?: number;
+  queuedCount?: number;
+  latestReport?: string | null;
+  workers?: Array<{
+    id: string;
+    name: string;
+    status: string;
+    activeTaskId?: string | null;
+  }>;
 };

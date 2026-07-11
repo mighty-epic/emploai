@@ -2,6 +2,8 @@ from __future__ import annotations
 
 # Split from app_server.py; dependencies are injected by the app_server facade.
 
+from shared.atomic_io import atomic_write_json
+
 REMOTE_AUTH_RATE_LIMIT_MAX_ATTEMPTS = 20
 
 def _sign(value: str) -> str:
@@ -541,11 +543,7 @@ def _write_local_sidebar_state(state: Dict[str, Any]) -> Dict[str, Any]:
 
     path = _sidebar_state_path()
 
-    temp_path = path.with_suffix(".tmp")
-
-    temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-
-    temp_path.replace(path)
+    atomic_write_json(path, payload, sort_keys=True)
 
     return payload
 

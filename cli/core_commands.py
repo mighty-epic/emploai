@@ -11,6 +11,15 @@ from cli.tui_constants import (
 )
 from shared.model_availability import filter_models_by_provider_access
 
+VARIANT_ALIASES = {
+    "light": "low",
+}
+
+
+def _normalize_variant_name(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    return VARIANT_ALIASES.get(normalized, normalized)
+
 
 def help(context, args, result_cls):
     lines = [
@@ -136,7 +145,7 @@ def variant(context, args, result_cls):
         ]
         return result_cls(True, "\n".join(lines))
 
-    new_variant = args[0].lower()
+    new_variant = _normalize_variant_name(args[0])
     if new_variant not in available:
         return result_cls(
             False,

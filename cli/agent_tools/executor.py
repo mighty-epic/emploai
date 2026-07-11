@@ -55,6 +55,11 @@ DEFAULT_FAILURE_OUTPUT_PATTERNS = [
     r"\baddress already in use\b",
 ]
 
+LONG_RUNNING_COMMAND_SECONDS = 5.0
+LIVE_OUTPUT_EVENT_INTERVAL_SECONDS = 1.0
+BACKGROUND_NO_PROGRESS_SECONDS = [60.0, 300.0]
+BACKGROUND_NO_PROGRESS_REPEAT_SECONDS = 600.0
+
 
 class ToolExecutor:
     def __init__(
@@ -101,6 +106,32 @@ class ToolExecutor:
         # when the process exits.
         self.background_command_context_provider = None
         self.background_command_event_callback = None
+        self.visual_monitor_context_provider = None
+        self.visual_monitor_event_callback = None
+
+    def _background_command_context(self) -> Dict[str, Any]:
+        context: Dict[str, Any] = {}
+        context_provider = getattr(self, "background_command_context_provider", None)
+        if callable(context_provider):
+            try:
+                provided = context_provider()
+                if isinstance(provided, dict):
+                    context = dict(provided)
+            except Exception:
+                context = {}
+        return context
+
+    def _visual_monitor_context(self) -> Dict[str, Any]:
+        context: Dict[str, Any] = {}
+        context_provider = getattr(self, "visual_monitor_context_provider", None)
+        if callable(context_provider):
+            try:
+                provided = context_provider()
+                if isinstance(provided, dict):
+                    context = dict(provided)
+            except Exception:
+                context = {}
+        return context
 
     @staticmethod
     def _normalize_pattern_list(value: Any) -> List[str]:
@@ -143,6 +174,7 @@ class ToolExecutor:
                         surface=provided.get("surface"),
                         session_id=provided.get("session_id"),
                         identity_id=provided.get("identity_id"),
+                        run_mode=provided.get("run_mode"),
                     )
                 if provided:
                     return SecurityContext(
@@ -822,28 +854,105 @@ class ToolExecutor:
             
             start_time = time.time()
             timeout = 30 # Synchronous commands must finish in 30s. Use background tools for longer tasks.
+            command_id = f"sync_{uuid.uuid4().hex[:8]}"
+            entry = {
+                "process": process,
+                "command": command,
+                "shell": resolved_shell,
+                "cwd": str(work_dir),
+                "output_lines": deque(maxlen=200),
+                "stdout_lines": deque(maxlen=200),
+                "stderr_lines": deque(maxlen=200),
+                "thread": None,
+                "stderr_thread": None,
+                "completion_thread": None,
+                "visible_terminal": bool(visible_terminal and os.name == "nt"),
+                "started_at": start_time,
+                "resume_policy": "manual",
+                "persistent": False,
+                "ready_patterns": [],
+                "meaningful_output_patterns": [],
+                "failure_patterns": [],
+                "context": self._background_command_context(),
+                "ui_only": True,
+                "synchronous": True,
+            }
+            self._background_commands[command_id] = entry
+            if not (visible_terminal and os.name == "nt"):
+                stdout_reader = threading.Thread(
+                    target=self._read_command_stream,
+                    args=(command_id, process.stdout),
+                    kwargs={"stream_name": "stdout"},
+                    daemon=True,
+                )
+                stderr_reader = threading.Thread(
+                    target=self._read_command_stream,
+                    args=(command_id, process.stderr),
+                    kwargs={"stream_name": "stderr"},
+                    daemon=True,
+                )
+                entry["thread"] = stdout_reader
+                entry["stderr_thread"] = stderr_reader
+                stdout_reader.start()
+                stderr_reader.start()
+            long_running = threading.Thread(
+                target=self._bg_long_running_thread,
+                args=(command_id,),
+                daemon=True,
+            )
+            entry["long_running_thread"] = long_running
+            long_running.start()
             
             while process.poll() is None:
                 # Check for interruption flag
                 if self.check_interruption and self.check_interruption():
+                    entry["killed_by_user"] = True
                     self._terminate_process_tree(process)
+                    if entry.get("long_running_announced"):
+                        self._emit_background_command_event(
+                            self._background_event_payload(command_id, entry, status="process_failed", exit_code=process.returncode)
+                        )
+                    else:
+                        self._background_commands.pop(command_id, None)
                     return {
                         "error": "Command terminated by user interruption.",
                         "interrupted": True,
-                        "stdout": "Command was terminated before completion."
+                        "stdout": "Command was terminated before completion.",
+                        "command_id": command_id,
                     }
                 
                 # Check for timeout
                 if time.time() - start_time > timeout:
+                    entry["killed_by_user"] = True
                     self._terminate_process_tree(process)
-                    return {"error": f"Command timed out after {timeout} seconds."}
+                    if entry.get("long_running_announced"):
+                        self._emit_background_command_event(
+                            self._background_event_payload(command_id, entry, status="process_failed", exit_code=process.returncode)
+                        )
+                    else:
+                        self._background_commands.pop(command_id, None)
+                    return {"error": f"Command timed out after {timeout} seconds.", "command_id": command_id}
                 
                 time.sleep(0.1) # Poll every 100ms
             
             if visible_terminal and os.name == "nt":
                 stdout, stderr = "", ""
             else:
-                stdout, stderr = process.communicate()
+                for reader in (entry.get("thread"), entry.get("stderr_thread")):
+                    if reader:
+                        try:
+                            reader.join(timeout=0.5)
+                        except Exception:
+                            pass
+                stdout = "\n".join(list(entry.get("stdout_lines") or []))
+                stderr = "\n".join(list(entry.get("stderr_lines") or []))
+            if entry.get("long_running_announced"):
+                status = "process_failed" if process.returncode not in (None, 0) else "process_completed"
+                self._emit_background_command_event(
+                    self._background_event_payload(command_id, entry, status=status, exit_code=process.returncode)
+                )
+            else:
+                self._background_commands.pop(command_id, None)
             return {
                 "stdout": stdout,
                 "stderr": stderr,
@@ -851,6 +960,7 @@ class ToolExecutor:
                 "shell": resolved_shell,
                 "visible_terminal": bool(visible_terminal and os.name == "nt"),
                 "output_capture": "visible_terminal" if visible_terminal and os.name == "nt" else "captured",
+                "command_id": command_id,
             }
         except Exception as e:
             return {"error": f"Execution failed: {str(e)}"}
@@ -859,22 +969,34 @@ class ToolExecutor:
     # Background Command System
     # -----------------------------------------------------------------------
 
+    def _append_command_output_line(self, entry: Dict[str, Any], line: str, *, stream_name: str = "stdout") -> None:
+        clean_line = str(line or "")
+        stream_key = "stderr_lines" if stream_name == "stderr" else "stdout_lines"
+        if stream_key not in entry:
+            entry[stream_key] = deque(maxlen=200)
+        entry[stream_key].append(clean_line)
+        display_line = f"[stderr] {clean_line}" if stream_name == "stderr" else clean_line
+        entry["output_lines"].append(display_line)
+
+    def _read_command_stream(self, command_id: str, stream: Any, *, stream_name: str = "stdout") -> None:
+        entry = self._background_commands.get(command_id)
+        if not entry or stream is None:
+            return
+        try:
+            for raw_line in iter(stream.readline, ""):
+                line = raw_line.rstrip("\n")
+                self._append_command_output_line(entry, line, stream_name=stream_name)
+                self._maybe_emit_background_output_event(command_id, line)
+        except (ValueError, OSError):
+            pass  # pipe closed
+
     def _bg_reader_thread(self, command_id: str):
         """Daemon thread that continuously reads stdout from a background process."""
         entry = self._background_commands.get(command_id)
         if not entry:
             return
         proc = entry["process"]
-        out_lines = entry["output_lines"]
-        if proc.stdout is None:
-            return
-        try:
-            for raw_line in iter(proc.stdout.readline, ""):
-                line = raw_line.rstrip("\n")
-                out_lines.append(line)
-                self._maybe_emit_background_output_event(command_id, line)
-        except (ValueError, OSError):
-            pass  # pipe closed
+        self._read_command_stream(command_id, proc.stdout, stream_name="stdout")
 
     def _background_event_payload(self, command_id: str, entry: Dict[str, Any], *, status: str, output: str = "", exit_code: Any = None) -> Dict[str, Any]:
         proc = entry.get("process")
@@ -894,8 +1016,10 @@ class ToolExecutor:
             "output_capture": "visible_terminal" if entry.get("visible_terminal") else "captured",
             "resume_policy": entry.get("resume_policy") or "on_exit",
             "persistent": bool(entry.get("persistent")),
-            "auto_resume": not bool(entry.get("killed_by_user")),
+            "auto_resume": not bool(entry.get("killed_by_user")) and not bool(entry.get("ui_only")),
             "status": status,
+            "ui_only": bool(entry.get("ui_only")),
+            "synchronous": bool(entry.get("synchronous")),
             "ready_patterns": list(entry.get("ready_patterns") or []),
             "meaningful_output_patterns": list(entry.get("meaningful_output_patterns") or []),
             "failure_patterns": list(entry.get("failure_patterns") or []),
@@ -916,6 +1040,7 @@ class ToolExecutor:
             return
         resume_policy = str(entry.get("resume_policy") or "on_exit").strip().lower()
         if resume_policy in {"manual", "none", "off"}:
+            self._maybe_emit_live_output_event(command_id, entry)
             return
         line_text = str(line or "")
         now = time.time()
@@ -957,6 +1082,96 @@ class ToolExecutor:
             self._emit_background_command_event(
                 self._background_event_payload(command_id, entry, status="process_meaningful_output", output=line_text)
             )
+            return
+
+        self._maybe_emit_live_output_event(command_id, entry)
+
+    def _mark_long_running_if_needed(self, command_id: str, entry: Dict[str, Any], *, force: bool = False) -> bool:
+        proc = entry.get("process")
+        if not proc or proc.poll() is not None:
+            return False
+        now = time.time()
+        if entry.get("long_running_announced"):
+            return False
+        if not force and now - float(entry.get("started_at") or now) < LONG_RUNNING_COMMAND_SECONDS:
+            return False
+        entry["long_running_announced"] = True
+        entry["last_live_output_event_at"] = now
+        self._emit_background_command_event(
+            self._background_event_payload(command_id, entry, status="process_running")
+        )
+        return True
+
+    def _maybe_emit_live_output_event(self, command_id: str, entry: Dict[str, Any]) -> None:
+        if entry.get("visible_terminal"):
+            return
+        if not entry.get("long_running_announced"):
+            self._mark_long_running_if_needed(command_id, entry)
+            if not entry.get("long_running_announced"):
+                return
+        now = time.time()
+        previous = float(entry.get("last_live_output_event_at") or 0)
+        if now - previous < LIVE_OUTPUT_EVENT_INTERVAL_SECONDS:
+            return
+        entry["last_live_output_event_at"] = now
+        self._emit_background_command_event(
+            self._background_event_payload(command_id, entry, status="process_output")
+        )
+
+    def _bg_long_running_thread(self, command_id: str) -> None:
+        time.sleep(LONG_RUNNING_COMMAND_SECONDS)
+        entry = self._background_commands.get(command_id)
+        if not entry:
+            return
+        self._mark_long_running_if_needed(command_id, entry, force=True)
+
+    def _bg_no_progress_thread(self, command_id: str) -> None:
+        deadline_index = 0
+        next_deadline = BACKGROUND_NO_PROGRESS_SECONDS[0]
+        while True:
+            entry = self._background_commands.get(command_id)
+            if not entry:
+                return
+            if bool(entry.get("persistent")) or bool(entry.get("ui_only")):
+                return
+            resume_policy = str(entry.get("resume_policy") or "on_exit").strip().lower()
+            if resume_policy in {"manual", "none", "off"}:
+                return
+            proc = entry.get("process")
+            if not proc or proc.poll() is not None or bool(entry.get("killed_by_user")):
+                return
+
+            started_at = float(entry.get("started_at") or time.time())
+            target_at = started_at + float(next_deadline)
+            while True:
+                entry = self._background_commands.get(command_id)
+                if not entry:
+                    return
+                proc = entry.get("process")
+                if not proc or proc.poll() is not None or bool(entry.get("killed_by_user")):
+                    return
+                remaining = target_at - time.time()
+                if remaining <= 0:
+                    break
+                time.sleep(min(2.0, max(0.2, remaining)))
+
+            entry = self._background_commands.get(command_id)
+            if not entry:
+                return
+            proc = entry.get("process")
+            if not proc or proc.poll() is not None or bool(entry.get("killed_by_user")):
+                return
+            event = self._background_event_payload(command_id, entry, status="process_no_progress")
+            event["no_progress_seconds"] = max(0.0, time.time() - started_at)
+            event["deadline_seconds"] = next_deadline
+            event["auto_resume"] = not bool(entry.get("killed_by_user")) and not bool(entry.get("persistent"))
+            self._emit_background_command_event(event)
+
+            deadline_index += 1
+            if deadline_index < len(BACKGROUND_NO_PROGRESS_SECONDS):
+                next_deadline = BACKGROUND_NO_PROGRESS_SECONDS[deadline_index]
+            else:
+                next_deadline += BACKGROUND_NO_PROGRESS_REPEAT_SECONDS
 
     def _bg_completion_thread(self, command_id: str):
         """Daemon thread that emits a proactive event when a background process exits."""
@@ -1068,6 +1283,20 @@ class ToolExecutor:
         self._emit_background_command_event(
             self._background_event_payload(command_id, entry, status="waiting_on_process", output="")
         )
+        long_running = threading.Thread(
+            target=self._bg_long_running_thread,
+            args=(command_id,),
+            daemon=True,
+        )
+        entry["long_running_thread"] = long_running
+        long_running.start()
+        no_progress = threading.Thread(
+            target=self._bg_no_progress_thread,
+            args=(command_id,),
+            daemon=True,
+        )
+        entry["no_progress_thread"] = no_progress
+        no_progress.start()
 
         if not (visible_terminal and os.name == "nt"):
             # Start reader thread (daemon so it won't block shutdown)
@@ -1188,6 +1417,32 @@ class ToolExecutor:
             "exit_code": proc.returncode,
             "message": f"Command '{command_id}' has been terminated.",
         }
+
+    def tool_start_visual_monitor(self, threshold_preset: str, reason: str) -> Dict[str, Any]:
+        """Start a full-screen visual monitor for long uncertain UI waits."""
+        from shared.visual_monitor_runtime import get_visual_monitor_manager
+
+        callback = getattr(self, "visual_monitor_event_callback", None)
+        return get_visual_monitor_manager().start_monitor(
+            threshold_preset=threshold_preset,
+            reason=reason,
+            context=self._visual_monitor_context(),
+            event_callback=callback if callable(callback) else None,
+        )
+
+    def tool_stop_visual_monitor(self, monitor_id: str = "") -> Dict[str, Any]:
+        """Stop one monitor or this session/task's active visual monitors."""
+        from shared.visual_monitor_runtime import get_visual_monitor_manager
+
+        context = self._visual_monitor_context()
+        clean_monitor_id = str(monitor_id or "").strip() or None
+        return get_visual_monitor_manager().stop_monitor(
+            monitor_id=clean_monitor_id,
+            session_id=None if clean_monitor_id else str(context.get("session_id") or "") or None,
+            task_id=None if clean_monitor_id else str(context.get("task_id") or "") or None,
+            identity_id=None if clean_monitor_id else str(context.get("fleet_identity_id") or "") or None,
+            reason="Stopped by agent",
+        )
 
     def kill_all_background_commands(self) -> Dict[str, Any]:
         """Terminate every background command started by this executor."""

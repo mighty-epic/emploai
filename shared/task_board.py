@@ -666,12 +666,11 @@ def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
 def _planner_model_supported(session: Any, model_name: str) -> bool:
     config = MODEL_CONFIGS.get(model_name, {})
     provider = str(config.get("provider", "unknown"))
-    api = str(config.get("api", "chat"))
     if provider == "google":
         return getattr(session, "gemini_openai_client", None) is not None
     if provider == "openai-codex":
         return getattr(session, "openai_codex_client", None) is not None
-    return provider in {"openai", "anthropic", "xai", "deepseek", "openrouter", "nvidia"} and api != "responses"
+    return provider in {"openai", "anthropic", "xai", "deepseek", "openrouter", "nvidia"}
 
 
 def _select_planner_model(session: Any) -> Optional[str]:
@@ -680,13 +679,13 @@ def _select_planner_model(session: Any) -> Optional[str]:
     if configured and configured in available and _planner_model_supported(session, configured):
         return configured
 
-    for candidate in _PLANNER_PREFERRED_MODELS:
-        if candidate in available and _planner_model_supported(session, candidate):
-            return candidate
-
     current = str(getattr(session, "current_model", "") or "").strip()
     if current and current in available and _planner_model_supported(session, current):
         return current
+
+    for candidate in _PLANNER_PREFERRED_MODELS:
+        if candidate in available and _planner_model_supported(session, candidate):
+            return candidate
     return None
 
 

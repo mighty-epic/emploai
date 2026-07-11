@@ -1,9 +1,14 @@
 import type { DesktopConversationScope } from './DesktopConversationScope';
+import { createLatestRequestGate } from './desktopAsyncCoordination';
+import { useRef } from 'react';
 import { useEffect } from 'react'; type NativeSyntheticEvent<T = any> = any; type ActiveCommandPanel = any; type ActivityItem = any; type AgentOverview = any; type ArtifactDetail = any; type ArtifactSummary = any; type ComposerInputOrigin = any; type ConversationSurfaceMode = any; type DesktopFleetEnrollment = any; type DesktopFleetIdentity = any; type DesktopFleetSnapshot = any; type DesktopFleetTask = any; type DesktopFleetWorker = any; type DesktopGitRepoState = any; type DesktopMessage = any; type DesktopPathStatus = any; type DesktopRuntimeStatus = any; type DesktopSidebarProjectActivity = any; type DesktopSidebarState = any; type DesktopVoicePackState = any; type DesktopVoiceRuntimeStatus = any; type InterruptPolicy = any; type JarvisSttBackend = any; type JarvisTtsBackend = any; type LayoutChangeEvent = any; type MessageSourceFormat = any; type ModelProviderGroup = any; type NativeScrollEvent = any; type PendingSearchJump = any; type QueuedComposerMessage = any; type QueuedMessage = any; type RealtimeChannel = any; type RealtimeEvent = any; type ReferenceEntry = any; type RuntimeOrchestratorStatus = any; type ScheduledJob = any; type SearchResultTarget = any; type SecurityPermissionMode = any; type SessionDetail = any; type SessionMessage = any; type SessionSearchResult = any; type SessionSummary = any; type SessionTimelineEvent = any; type SidebarChatTooltipState = any; type SidebarDragState = any; type SidebarDraftChat = any; type SidebarProjectGroup = any; type StartupReadinessState = any; type TaskBoard = any; type TelegramBotConfig = any; type TextInputContentSizeChangeEventData = any; type ToolPackInfoPopupState = any; type VoiceCaptureMode = any; type VoiceGateState = any;
 
 export function useDesktopConversationSyncControls(scope: DesktopConversationScope) {
   const { DESKTOP_SIDEBAR_ACTIVITY_LIMIT, MAX_ACTIVITY_ITEMS, SIDEBAR_REFRESH_MS, TRANSCRIPT_AUTO_SCROLL_IDLE_MS, TRANSCRIPT_SCROLL_MOVE_THRESHOLD, TRANSCRIPT_SCROLL_UP_THRESHOLD, VOICE_ENGINE_HEBREW, activateSessionWithRecovery, allowedWorkspaceRoot, alwaysOnEnabled, alwaysOnEnabledRef, apiBaseUrl, assistantDeltaBufferRef, assistantDeltaFlushTimerRef, assistantDraft, buildDraftChatState, chatRunActive, chatRunActiveRef, clearConversationSelection, coerceSidebarState, completedTaskBoards, configureVoiceSttBackend, configureVoiceTtsBackend, configuredModelGroups, configuredPlannerModels, conversationMode, conversationModeRef, createEmptySidebarState, currentJarvisSttBackend, currentJarvisTtsBackend, currentWorkspaceBySessionRef, describeError, draftChat, draftChatRef, ensureSidebarProjectEntries, ensureSidebarProjectEntry, existingSessionIdFrom, fetchAgentConfig, fetchAgentOverview, fetchJobs, fetchProfile, fetchRuntimeOrchestratorStatus, fetchSessionDetail, fetchSessions, fetchTelegramBotConfigs, fetchVoiceRuntimeStatus, getDesktopGitRepoInfo, getDesktopPathStatus, historyMessageLayoutRef, historyScrollRef, initialSessionId, initialSurfaceMode, isReferenceSidebarMessage, jarvisSttBackendLabel, jarvisTtsBackendLabel, lastVoiceWarmRequestEngineRef, liveVoiceStatus, loadDesktopSidebarState, mergeTimelineEventState, messageTimestampValue, messages, normalizeCompletedTaskBoards, normalizeJarvisSttBackend, normalizeJarvisTtsBackend, normalizeTimelineEvents, normalizeWorkspacePath, onStartupStateChange, overview, overviewRefreshInFlightRef, pendingSearchJump, preferredProjectPath, projectPathBasename, projectPaths, resetConversationForDraft, resolveTaskBoardState, saveDesktopSidebarState, scrollRef, searchHighlightTimerRef, searchJumpTimerRef, searchSessions, selectedProjectPath, selectedVoiceEngine, sessionId, sessionIdRef, sessionName, sessionProjectPaths, sessions, setActivity, setArtifactError, setArtifacts, setAssistantDraft, setCachedModelGroups, setCachedPlannerModels, setChatRunActive, setCompletedTaskBoards, setConversationMode, setDraftChat, setDraftGitRepoLoading, setDraftGitRepoState, setExpandedCompletedTaskIds, setHighlightedMessageIndex, setJobs, setKeepRuntimeOnAppClose, setLastAssistantOutputAt, setLiveVoiceStatus, setMessages, setOrchestratorStatus, setOverview, setPendingSearchJump, setProjectPathStatuses, setRuntimeRunState, setSelectedArtifactDetail, setSelectedArtifactId, setSessionId, setSessionName, setSessions, setShowReferenceRail, setShowVoicePanel, setSidebarExpanded, setSidebarSearch, setSidebarSearchError, setSidebarSearchLoading, setSidebarSearchModalOpen, setSidebarSearchResults, setSidebarState, setSidebarStateReady, setStatus, setSttBackendChanging, setTaskBoard, setTaskBoardArmedNextTurnState, setTaskBoardCollapsed, setTelegramBotConfigs, setThinking, setTimelineEvents, setTtsBackendChanging, setVoiceError, setVoicePanelHidden, setVoiceState, shouldKeepSidebarProjectPath, showReferenceRail, sidebarCollectionsRefreshInFlightRef, sidebarSearch, sidebarSearchInputRef, sidebarSearchModalOpen, sidebarSearchRequestIdRef, sidebarState, sidebarStateReady, startupChatSocketReadyRef, startupSessionStateReadyRef, startupSidebarReadyRef, startupTerminalStateRef, status, sttBackendChanging, taskBoard, taskBoardStateRef, timelineEventMergeKey, toDesktopMessages, token, transcriptAutoScrollResumeTimerRef, transcriptAutoScrollSuspendedRef, transcriptContentHeightRef, transcriptLastScrollOffsetYRef, transcriptLastSignatureRef, transcriptMessageLayoutRef, transcriptPendingAutoScrollRef, transcriptProgrammaticScrollUntilRef, transcriptViewportHeightRef, ttsBackendChanging, useEffect, userFacingError, voiceCaptureModeRef, voiceDraft, voiceEngineChanging, voiceError, voiceMode, voicePanelHidden, voiceRecording, voiceRecordingRef, voiceRunning, voiceRunningRef, voiceStatus, warmVoiceRuntime } = scope;
   const setComposerInputValue = (...args: any[]) => scope.setComposerInputValue?.(...args);
+  const sidebarCollectionsRequests = useRef(createLatestRequestGate()).current;
+  const overviewRequests = useRef(createLatestRequestGate()).current;
+  const sidebarStateRequests = useRef(createLatestRequestGate()).current;
 const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
   const lastMessageSignature = lastMessage
     ? [
@@ -109,11 +114,53 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
       if (disposed) {
         return;
       }
-      setSidebarState(coerceSidebarState(stored));
+      const storedState = coerceSidebarState(stored);
+      setSidebarState((current: any) => {
+        const currentState = coerceSidebarState(current);
+        const hasLocalChanges = Boolean(
+          currentState.projectOrder.length
+          || Object.keys(currentState.projects).length
+          || Object.keys(currentState.sessionMeta).length
+          || currentState.selectedProjectPath
+          || currentState.lastSelectedProjectPath
+        );
+        if (!hasLocalChanges) {
+          return storedState;
+        }
+        const projectOrder = Array.from(new Set([
+          ...storedState.projectOrder,
+          ...currentState.projectOrder,
+        ].map((item: any) => normalizeWorkspacePath(item)).filter(Boolean)));
+        return coerceSidebarState({
+          ...storedState,
+          projectOrder,
+          projects: {
+            ...storedState.projects,
+            ...currentState.projects,
+          },
+          sessionMeta: {
+            ...storedState.sessionMeta,
+            ...currentState.sessionMeta,
+          },
+          selectedProjectPath: currentState.selectedProjectPath || storedState.selectedProjectPath,
+          lastSelectedProjectPath: currentState.lastSelectedProjectPath || storedState.lastSelectedProjectPath,
+        });
+      });
       setSidebarStateReady(true);
     }).catch(() => {
       if (!disposed) {
-        setSidebarState(createEmptySidebarState());
+        setSidebarState((current: any) => {
+          const currentState = coerceSidebarState(current);
+          return (
+            currentState.projectOrder.length
+            || Object.keys(currentState.projects).length
+            || Object.keys(currentState.sessionMeta).length
+            || currentState.selectedProjectPath
+            || currentState.lastSelectedProjectPath
+          )
+            ? currentState
+            : createEmptySidebarState();
+        });
         setSidebarStateReady(true);
       }
     });
@@ -137,12 +184,15 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
         .map((item: any) => normalizeWorkspacePath(item.workspace))
         .filter(Boolean),
     );
-    const projectPaths = Array.from(new Set([
+    const manualProjectPaths = new Set([
       ...sidebarState.projectOrder.map((item: any) => normalizeWorkspacePath(item)),
       ...Object.keys(sidebarState.projects).map((item: any) => normalizeWorkspacePath(item)),
+    ].filter(Boolean));
+    const projectPaths = Array.from(new Set([
+      ...manualProjectPaths,
       ...sessions.map((item: any) => normalizeWorkspacePath(item.workspace)),
       ...(draftChat ? [draftChat.projectPath] : []),
-    ].filter(Boolean))).filter((projectPath: any) => shouldKeepSidebarProjectPath(projectPath, {
+    ].filter(Boolean))).filter((projectPath: any) => manualProjectPaths.has(projectPath) || shouldKeepSidebarProjectPath(projectPath, {
       allowedRoot: allowedWorkspaceRoot,
       sessionProjectPaths,
       draftProjectPath: draftChat?.projectPath,
@@ -428,16 +478,25 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
     scrollRef.current?.scrollToEnd({ animated });
   };
 
-  const scheduleTranscriptAutoScrollResume = () => {
+  const resumeTranscriptAutoScrollAtBottom = () => {
     clearTranscriptAutoScrollResumeTimer();
-    transcriptAutoScrollResumeTimerRef.current = setTimeout(() => {
-      transcriptAutoScrollSuspendedRef.current = false;
-      transcriptAutoScrollResumeTimerRef.current = null;
-      if (transcriptPendingAutoScrollRef.current) {
-        transcriptPendingAutoScrollRef.current = false;
-        scrollTranscriptToEnd(true);
-      }
-    }, TRANSCRIPT_AUTO_SCROLL_IDLE_MS);
+    transcriptAutoScrollSuspendedRef.current = false;
+    if (transcriptPendingAutoScrollRef.current) {
+      transcriptPendingAutoScrollRef.current = false;
+      scrollTranscriptToEnd(true);
+    }
+  };
+
+  const scheduleTranscriptAutoScrollResume = () => {
+    const distanceFromBottom = Math.max(
+      0,
+      transcriptContentHeightRef.current - (
+        transcriptLastScrollOffsetYRef.current + transcriptViewportHeightRef.current
+      ),
+    );
+    if (distanceFromBottom <= 24) {
+      resumeTranscriptAutoScrollAtBottom();
+    }
   };
 
   const resetTranscriptAutoScrollState = () => {
@@ -677,6 +736,11 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
       if (!local.pending || synced.role !== local.role || synced.role !== 'user') {
         return false;
       }
+      const localMessageId = String(local.clientMessageId || local.raw?.client_message_id || '').trim();
+      const syncedMessageId = String(synced.clientMessageId || synced.raw?.client_message_id || '').trim();
+      if (localMessageId && syncedMessageId) {
+        return localMessageId === syncedMessageId;
+      }
       const localClientId = String(local.sourceClientId || '').trim();
       const syncedClientId = String(synced.sourceClientId || '').trim();
       if (!localClientId || !syncedClientId || localClientId !== syncedClientId) {
@@ -739,6 +803,8 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
     sessionIdRef.current = detail.id;
     setSessionId(detail.id);
     setSessionName(detail.name);
+    scope.setPlanMode?.((detail.plan_mode && typeof detail.plan_mode === 'object') ? detail.plan_mode : null);
+    scope.setActiveGoal?.((detail.active_goal && typeof detail.active_goal === 'object') ? detail.active_goal : null);
     setRuntimeRunState(nextRunState);
     setChatRunActive(nextRunState === 'running');
     if (nextRunState === 'idle') {
@@ -764,6 +830,7 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
       created_at: detail.created_at,
       updated_at: detail.updated_at,
       model: detail.model,
+      variant: detail.variant,
       message_count: detailMessages.length,
       workspace: detail.workspace,
       latest_preview: latestDetailMessage ? String(latestDetailMessage.content || '').slice(0, 140) : null,
@@ -783,6 +850,8 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
       fleet_identity_id: detail.fleet_identity_id ?? null,
       fleet_identity_role: detail.fleet_identity_role ?? null,
       fleet_worker_id: detail.fleet_worker_id ?? null,
+      plan_mode: detail.plan_mode ?? null,
+      active_goal: detail.active_goal ?? null,
     };
     setSessions((previous: any) => {
       let updated = false;
@@ -807,6 +876,9 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
       }
       return {
         ...previous,
+        current_model: detail.model || previous.current_model,
+        current_variant: detail.variant || previous.current_variant,
+        planner_model: detail.planner_model ?? previous.planner_model,
         run_state: detail.run_state || previous.run_state,
         enabled_tool_packs: nextEnabledToolPacks,
         available_tool_packs: nextAvailableToolPacks,
@@ -844,26 +916,31 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
       return;
     }
 
+    const distanceFromBottom = Math.max(
+      0,
+      transcriptContentHeightRef.current - (nextOffsetY + transcriptViewportHeightRef.current),
+    );
+    const isAtBottom = distanceFromBottom <= 24;
+
+    if (transcriptAutoScrollSuspendedRef.current && isAtBottom) {
+      resumeTranscriptAutoScrollAtBottom();
+      return;
+    }
+
     const deltaY = nextOffsetY - previousOffsetY;
     if (Math.abs(deltaY) < TRANSCRIPT_SCROLL_MOVE_THRESHOLD) {
       return;
     }
 
-    const distanceFromBottom = Math.max(
-      0,
-      transcriptContentHeightRef.current - (nextOffsetY + transcriptViewportHeightRef.current),
-    );
-
     if (deltaY < -TRANSCRIPT_SCROLL_UP_THRESHOLD) {
       transcriptAutoScrollSuspendedRef.current = true;
       transcriptPendingAutoScrollRef.current = distanceFromBottom > 24;
-      scheduleTranscriptAutoScrollResume();
+      clearTranscriptAutoScrollResumeTimer();
       return;
     }
 
     if (transcriptAutoScrollSuspendedRef.current) {
       transcriptPendingAutoScrollRef.current = transcriptPendingAutoScrollRef.current || distanceFromBottom > 24;
-      scheduleTranscriptAutoScrollResume();
     }
   };
 
@@ -890,7 +967,6 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
       const modelChanged = Boolean(
         overview && (
           overview.current_model !== detail.model
-          || overview.current_variant !== detail.variant
           || overview.context_usage?.model !== detail.model
         )
       );
@@ -902,8 +978,6 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
         return {
           ...previous,
           session_id: detail.id,
-          current_model: detail.model,
-          current_variant: detail.variant,
           planner_model: detail.planner_model ?? previous.planner_model ?? null,
           task_board_armed_next_turn: Boolean(detail.task_board_armed_next_turn),
           task_board: detail.task_board ?? null,
@@ -921,9 +995,7 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
   };
 
   const refreshSidebarCollections = async (preferredSessionId?: string | null, quiet = true) => {
-    if (sidebarCollectionsRefreshInFlightRef.current) {
-      return;
-    }
+    const requestId = sidebarCollectionsRequests.begin();
     sidebarCollectionsRefreshInFlightRef.current = true;
     try {
       const [profile, sessionList, jobList, botConfigList, runtimeSummary] = await Promise.all([
@@ -933,6 +1005,10 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
         fetchTelegramBotConfigs(apiBaseUrl, token).catch(() => []),
         fetchRuntimeOrchestratorStatus(apiBaseUrl, token).catch(() => null),
       ]);
+
+      if (!sidebarCollectionsRequests.isCurrent(requestId)) {
+        return;
+      }
 
       const currentSelectedSessionId = sessionIdRef.current || sessionId || null;
       const resolvedSessionId = draftChatRef.current
@@ -962,6 +1038,9 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
         maybeResolveStartupReady();
       }
     } catch (error) {
+      if (!sidebarCollectionsRequests.isCurrent(requestId)) {
+        return;
+      }
       if (!quiet) {
         const message = describeError(error);
         setStatus(message);
@@ -970,7 +1049,9 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
         }
       }
     } finally {
-      sidebarCollectionsRefreshInFlightRef.current = false;
+      if (sidebarCollectionsRequests.isCurrent(requestId)) {
+        sidebarCollectionsRefreshInFlightRef.current = false;
+      }
     }
   };
 
@@ -978,15 +1059,14 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
     preferredSessionId?: string | null,
     options?: { includeCloseBehavior?: boolean; quiet?: boolean },
   ) => {
-    if (overviewRefreshInFlightRef.current) {
-      return;
-    }
+    const requestId = overviewRequests.begin();
     const includeCloseBehavior = Boolean(options?.includeCloseBehavior);
     const quiet = Boolean(options?.quiet);
     const resolvedSessionId = draftChatRef.current
       ? null
       : preferredSessionId || sessionIdRef.current || null;
     if (!resolvedSessionId) {
+      overviewRefreshInFlightRef.current = false;
       if (!quiet) {
         setOverview(null);
       }
@@ -1008,7 +1088,21 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
             ).catch(() => ({ items: [] }))
           : Promise.resolve<{ items: Array<{ value?: unknown }> }>({ items: [] }),
       ]);
-      setOverview(nextOverview);
+      if (
+        !overviewRequests.isCurrent(requestId)
+        || String(sessionIdRef.current || '').trim() !== String(resolvedSessionId || '').trim()
+      ) {
+        return;
+      }
+      setOverview((previous: any) => {
+        if (nextOverview) {
+          return nextOverview;
+        }
+        if (resolvedSessionId && previous?.session_id === resolvedSessionId) {
+          return previous;
+        }
+        return null;
+      });
       setRuntimeRunState(nextOverview?.run_state ?? 'idle');
       setTaskBoardArmedNextTurnState(Boolean(nextOverview?.task_board_armed_next_turn ?? false));
       setTaskBoard(resolveTaskBoardState(nextOverview?.task_board ?? null, resolvedSessionId, sessionIdRef.current));
@@ -1017,6 +1111,9 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
         setKeepRuntimeOnAppClose(Boolean(closeBehaviorConfig.items?.[0]?.value));
       }
     } catch (error) {
+      if (!overviewRequests.isCurrent(requestId)) {
+        return;
+      }
       if (!quiet) {
         const message = describeError(error);
         setStatus(message);
@@ -1025,11 +1122,14 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
         }
       }
     } finally {
-      overviewRefreshInFlightRef.current = false;
+      if (overviewRequests.isCurrent(requestId)) {
+        overviewRefreshInFlightRef.current = false;
+      }
     }
   };
 
   const refreshSidebarState = async (preferredSessionId?: string | null, quiet = false) => {
+    const requestId = sidebarStateRequests.begin();
     if (!quiet) {
       setStatus('loading shared session');
       emitStartupState('warming', 'Loading shared session');
@@ -1048,18 +1148,26 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
           fetchProfile(apiBaseUrl, token),
           fetchSessions(apiBaseUrl, token),
         ]);
+        if (!sidebarStateRequests.isCurrent(requestId)) {
+          return;
+        }
         void Promise.all([
           fetchJobs(apiBaseUrl, token),
           fetchTelegramBotConfigs(apiBaseUrl, token).catch(() => []),
           fetchRuntimeOrchestratorStatus(apiBaseUrl, token).catch(() => null),
         ])
           .then(([deferredJobs, deferredBotConfigs, deferredRuntimeSummary]) => {
+            if (!sidebarStateRequests.isCurrent(requestId)) {
+              return;
+            }
             setJobs(deferredJobs);
             setTelegramBotConfigs(Array.isArray(deferredBotConfigs) ? deferredBotConfigs : []);
             setOrchestratorStatus(deferredRuntimeSummary);
           })
           .catch((error: any) => {
-            setStatus(userFacingError(error, 'Chat data did not finish loading.'));
+            if (sidebarStateRequests.isCurrent(requestId)) {
+              setStatus(userFacingError(error, 'Chat data did not finish loading.'));
+            }
           });
       } else {
         [profile, sessionList, jobList, botConfigList, runtimeSummary] = await Promise.all([
@@ -1069,6 +1177,10 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
           fetchTelegramBotConfigs(apiBaseUrl, token).catch(() => []),
           fetchRuntimeOrchestratorStatus(apiBaseUrl, token).catch(() => null),
         ]);
+      }
+
+      if (!sidebarStateRequests.isCurrent(requestId)) {
+        return;
       }
 
       const currentSelectedSessionId = sessionIdRef.current || sessionId || null;
@@ -1090,6 +1202,10 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
           : await fetchSessionDetail(apiBaseUrl, token, resolvedSessionId);
       }
 
+      if (!sidebarStateRequests.isCurrent(requestId)) {
+        return;
+      }
+
       let nextOverview: AgentOverview | null = null;
       let closeBehaviorConfig: { items: Array<{ value?: unknown }> } = { items: [] };
       if (resolvedSessionId && !fastInitialLoad) {
@@ -1104,6 +1220,10 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
             resolvedSessionId || undefined
           ).catch(() => ({ items: [] })),
         ]);
+      }
+
+      if (!sidebarStateRequests.isCurrent(requestId)) {
+        return;
       }
 
       reconcileSidebarProjects(sessionList, {
@@ -1149,6 +1269,9 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
         });
       }
     } catch (error) {
+      if (!sidebarStateRequests.isCurrent(requestId)) {
+        return;
+      }
       const message = describeError(error);
       setStatus(message);
       if (!startupTerminalStateRef.current) {
@@ -1158,6 +1281,10 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
   };
 
   const refreshVoiceRuntimeState = async () => {
+    if (conversationModeRef.current !== 'jarvis') {
+      setLiveVoiceStatus(null);
+      return null;
+    }
     if (!apiBaseUrl || !token) {
       return null;
     }
@@ -1168,6 +1295,9 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
 
   const warmSelectedVoicePath = async (engineOverride?: string) => {
     const engine = engineOverride || selectedVoiceEngine;
+    if (conversationModeRef.current !== 'jarvis') {
+      return refreshVoiceRuntimeState();
+    }
     if (!apiBaseUrl || !token) {
       return refreshVoiceRuntimeState();
     }
@@ -1180,7 +1310,12 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
     }
     const warmed = await warmVoiceRuntime(apiBaseUrl, token);
     setLiveVoiceStatus(warmed as DesktopVoiceRuntimeStatus);
-    if ((warmed?.selected_engine_state || '') === 'ready' || engine !== VOICE_ENGINE_HEBREW) {
+    if (warmed?.input_ok === false) {
+      const message = warmed.issues?.[0] || 'Jarvis voice input is not ready.';
+      setVoiceError(String(message));
+      setVoiceState('error');
+      setStatus(String(message));
+    } else if ((warmed?.selected_engine_state || '') === 'ready' || engine !== VOICE_ENGINE_HEBREW) {
       setVoiceState(alwaysOnEnabledRef.current ? 'always_on' : 'ready');
       setStatus('voice ready');
     } else if (warmed?.issues?.[0]) {
@@ -1192,7 +1327,7 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
   };
 
   const handleJarvisSttBackendSelection = async (backend: JarvisSttBackend) => {
-    if (!apiBaseUrl || !token || sttBackendChanging) {
+    if (conversationModeRef.current !== 'jarvis' || !apiBaseUrl || !token || sttBackendChanging) {
       return;
     }
     const normalizedBackend = normalizeJarvisSttBackend(backend);
@@ -1229,7 +1364,7 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
   };
 
   const handleJarvisTtsBackendSelection = async (backend: JarvisTtsBackend) => {
-    if (!apiBaseUrl || !token || ttsBackendChanging) {
+    if (conversationModeRef.current !== 'jarvis' || !apiBaseUrl || !token || ttsBackendChanging) {
       return;
     }
     const normalizedBackend = normalizeJarvisTtsBackend(backend) as JarvisTtsBackend;
@@ -1271,10 +1406,14 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
   }, [apiBaseUrl, initialSessionId, token]);
 
   useEffect(() => {
-    setLiveVoiceStatus(voiceStatus || null);
-  }, [voiceStatus]);
+    setLiveVoiceStatus(conversationMode === 'jarvis' ? voiceStatus || null : null);
+  }, [conversationMode, voiceStatus]);
 
   useEffect(() => {
+    if (conversationMode !== 'jarvis') {
+      lastVoiceWarmRequestEngineRef.current = null;
+      return;
+    }
     if (!apiBaseUrl || !token) {
       return;
     }
@@ -1290,7 +1429,7 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
       return;
     }
     void warmSelectedVoicePath(selectedVoiceEngine);
-  }, [apiBaseUrl, token, selectedVoiceEngine, liveVoiceStatus?.selected_engine_state, voiceEngineChanging]);
+  }, [apiBaseUrl, conversationMode, token, selectedVoiceEngine, liveVoiceStatus?.selected_engine_state, voiceEngineChanging]);
 
   useEffect(() => {
     if (!apiBaseUrl || !token || !sessionId) return;

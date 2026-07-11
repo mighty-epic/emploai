@@ -183,6 +183,7 @@ export type SessionSummary = {
   created_at: string;
   updated_at: string;
   model: string;
+  variant?: string | null;
   message_count: number;
   workspace?: string;
   latest_preview?: string | null;
@@ -202,6 +203,8 @@ export type SessionSummary = {
   fleet_worker_id?: string | null;
   account_user_id?: number | null;
   account_email?: string | null;
+  plan_mode?: Record<string, unknown> | null;
+  active_goal?: Record<string, unknown> | null;
   artifact_count: number;
   latest_artifact_at?: string | null;
 };
@@ -213,6 +216,7 @@ export type SessionMessage = {
   channel?: 'telegram' | 'app' | 'system' | null;
   source_format?: string | null;
   display_label?: string | null;
+  run_mode?: 'normal' | 'plan' | 'goal' | null;
   raw?: Record<string, unknown>;
 };
 
@@ -258,6 +262,8 @@ export type SessionDetail = {
   fleet_worker_id?: string | null;
   account_user_id?: number | null;
   account_email?: string | null;
+  plan_mode?: Record<string, unknown> | null;
+  active_goal?: Record<string, unknown> | null;
   artifact_count: number;
   latest_artifact_at?: string | null;
 };
@@ -408,6 +414,7 @@ export type ArtifactDetail = ArtifactSummary & {
 export type DeleteSessionResult = {
   deleted_session_id: string;
   current_session_id?: string | null;
+  archive_id?: string | null;
 };
 
 export type SessionSearchResult = {
@@ -779,6 +786,7 @@ export type AgentOverview = {
   security: SecuritySummary;
   config_preview: ConfigEntry[];
   run_state: 'idle' | 'running';
+  active_visual_monitors: number;
   task_board?: TaskBoard | null;
   completed_task_boards: TaskBoard[];
   task_board_armed_next_turn: boolean;
@@ -921,6 +929,69 @@ export type AgentConfigurePayload = {
 
 export type ToolPackUpdatePayload = {
   enabled_tool_packs: string[];
+};
+
+export type ProjectOnboardingGuideMessage = {
+  role: 'assistant' | 'user' | 'system';
+  content: string;
+  created_at?: string | null;
+};
+
+export type ProjectOnboardingToolRequirement = {
+  tool_pack_id: string;
+  label: string;
+  status: 'enabled' | 'available' | 'missing';
+  reason?: string | null;
+};
+
+export type ProjectOnboardingProfile = {
+  workspace: string;
+  workspace_key: string;
+  workspace_id?: string | null;
+  enabled: boolean;
+  role_identity: string;
+  job_mission: string;
+  required_tools: string[];
+  workflows: string[];
+  constraints: string;
+  communication_style: string;
+  raw_notes: string;
+  desired_tool_packs: string[];
+  missing_requirements: string[];
+  guided_transcript: ProjectOnboardingGuideMessage[];
+  created_at?: string | null;
+  updated_at?: string | null;
+  prompt_preview: string;
+};
+
+export type ProjectOnboardingSavePayload = {
+  workspace: string;
+  workspace_id?: string | null;
+  enabled?: boolean;
+  role_identity?: string;
+  job_mission?: string;
+  required_tools?: string[];
+  workflows?: string[];
+  constraints?: string;
+  communication_style?: string;
+  raw_notes?: string;
+  desired_tool_packs?: string[];
+  missing_requirements?: string[];
+  guided_transcript?: ProjectOnboardingGuideMessage[];
+  apply_tool_packs?: boolean;
+};
+
+export type ProjectOnboardingSummarizePayload = {
+  workspace: string;
+  answers: Record<string, unknown>;
+  guided_transcript?: ProjectOnboardingGuideMessage[];
+};
+
+export type ProjectOnboardingResponse = {
+  profile: ProjectOnboardingProfile;
+  tool_requirements: ProjectOnboardingToolRequirement[];
+  updated_session_ids: string[];
+  message?: string | null;
 };
 
 export type SessionBotAssignmentPayload = {

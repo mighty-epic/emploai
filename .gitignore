@@ -12,6 +12,9 @@ bot_core/data/analytics.json
 runtime_support/data/analytics.json
 data/analytics.json
 data/
+desktop-sidebar-state.json
+EmploAI Chats/
+**/EmploAI Chats/
 SYSTEM_HEALTH_REPORT.md
 config.local.json
 config.*.local.json
@@ -83,6 +86,7 @@ chat-preview-workspace.png
 # local model/data artifacts
 voice_packs/
 marketing_assets/generated/
+marketing_assets/instagram_reels/
 marketing_assets/*_log.json
 marketing_assets/rendered_assets.md
 marketing_assets/video_drop/*

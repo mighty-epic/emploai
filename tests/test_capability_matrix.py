@@ -11,6 +11,8 @@ Example:
   Step Diff 3, Adapt 3 = Complex actions across 3 page transitions
 """
 
+__test__ = False  # Manual live-model matrix; run this module directly.
+
 from dotenv import load_dotenv
 load_dotenv()
 

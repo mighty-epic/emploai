@@ -9,9 +9,25 @@ type DesktopConversationSidebarDockProps = {
 };
 
 export function DesktopConversationSidebarDock({ scope }: DesktopConversationSidebarDockProps) {
-    const { VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW, activeSessionArtifactCount, activity, alwaysOnEnabled, alwaysOnVoiceAutoSend, artifactDetailLoading, artifactError, artifacts, artifactsLoading, beginHorizontalResize, beginNewChat, cancelAlwaysOnSegment, clearSidebarChatTooltipTimer, closeArtifactRail, closeReferenceRail, deleteSidebarSession, downloadArtifact, draftChat, englishVoicePack, formatAbsoluteTime, formatRelativeTime, handleVoiceEngineSelection, hebrewVoicePack, hideSidebarChatTooltip, hideVoicePanel, highlightedMessageIndex, historyAvailable, historyMessageLayoutRef, historyScrollRef, historySummary, hoveredProjectPath, hoveredSessionId, id, onOpenSetup, openArtifactExternally, openArtifactPreview, openArtifactRail, openDraftChat, openProjectMenuPath, openReferenceRail, openSession, openSessionMenuId, openSidebarSearchModal, openVoicePanel, pinnedChats, pinnedProjects, projectDragProps, projectGroups, projectPath, projectPathBasename, promptForProjectFolder, referenceEntries, referenceSummary, removeProjectFromSidebar, renameProject, rightSidebarWidth, router, scheduleSidebarChatTooltip, selectProjectPath, selectedArtifactDetail, selectedArtifactId, selectedArtifactSummary, selectedProjectPath, selectedVoiceEngine, selectedVoicePackSummary, sessionDragProps, sessionId, sessionMeta, sessions, setActiveCommandPanel, setHoveredProjectPath, setHoveredSessionId, setOpenProjectMenuPath, setOpenSessionMenuId, setProjectMenuRef, setProjectMenuTriggerRef, setRightSidebarWidth, setSelectedArtifactId, setSessionMenuRef, setSessionMenuTriggerRef, setSessionRowRef, setSidebarExpanded, setVoiceMode, shortStatusText, showArtifactRail, showReferenceRail, sidebarExpanded, sidebarSearchLauncherRef, sidebarState, startAlwaysOnVoice, startVoiceCapture, stopAlwaysOnVoice, stopVoiceCapture, telegramBotLabelForSession, timelineEntries, title, toggleProjectCollapsed, toggleProjectPin, toggleSessionPin, voiceDraft, voiceEngineChanging, voiceError, voiceMode, voicePackDiagnostics, voicePanelActive, voicePressActiveRef, voiceRecording, voiceRunning, voiceSummary } = scope;
+    const { VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW, activeSessionArtifactCount, activity, alwaysOnEnabled, alwaysOnVoiceAutoSend, artifactDetailLoading, artifactError, artifacts, artifactsLoading, beginHorizontalResize, beginNewChat, cancelAlwaysOnSegment, chooseDraftProject, clearSidebarChatTooltipTimer, closeArtifactRail, closeReferenceRail, deleteSidebarSession, downloadArtifact, draftChat, englishVoicePack, formatAbsoluteTime, formatRelativeTime, handleVoiceEngineSelection, hebrewVoicePack, hideSidebarChatTooltip, hideVoicePanel, highlightedMessageIndex, historyAvailable, historyMessageLayoutRef, historyScrollRef, historySummary, hoveredProjectPath, hoveredSessionId, id, onOpenSetup, openArtifactExternally, openArtifactPreview, openChatContextMenu, openDraftChat, openProjectContextMenu, openProjectMenuPath, openReferenceRail, openSession, openSidebarSearchModal, pinnedChats, pinnedProjects, projectDragProps, projectGroups, projectPath, promptForProjectFolder, referenceEntries, referenceSummary, removeProjectFromSidebar, renameProject, rightSidebarWidth, router, scheduleSidebarChatTooltip, selectProjectPath, selectedArtifactDetail, selectedArtifactId, selectedArtifactSummary, selectedVoiceEngine, selectedVoicePackSummary, sessionDragProps, sessionId, sessionMeta, sessions, setHoveredProjectPath, setHoveredSessionId, setOpenProjectMenuPath, setOpenSessionMenuId, setProjectMenuRef, setProjectMenuTriggerRef, setRightSidebarWidth, setSelectedArtifactId, setSessionRowRef, setSidebarExpanded, setVoiceMode, shortStatusText, showArtifactRail, showReferenceRail, sidebarExpanded, sidebarSearchLauncherRef, sidebarState, startAlwaysOnVoice, startVoiceCapture, stopAlwaysOnVoice, stopVoiceCapture, timelineEntries, title, toggleProjectCollapsed, toggleProjectPin, toggleSessionPin, voiceDraft, voiceEngineChanging, voiceError, voiceMode, voicePackDiagnostics, voicePanelActive, voicePressActiveRef, voiceRecording, voiceRunning, voiceSummary } = scope;
     const sessionListLoading = Boolean(scope.sessionListLoading);
-    const sidebarUpdateAvailable = Boolean(scope.updateAvailable);
+    const selectProjectForSidebar = (projectPathValue: string) => {
+      setOpenProjectMenuPath(null);
+      setOpenSessionMenuId(null);
+      if (draftChat) {
+        chooseDraftProject?.(projectPathValue);
+      } else {
+        selectProjectPath(projectPathValue);
+      }
+    };
+    const historyAndArtifactsOpen = showReferenceRail || showArtifactRail;
+    const openHistoryAndArtifacts = () => {
+      openReferenceRail();
+    };
+    const closeHistoryAndArtifacts = () => {
+      closeReferenceRail();
+      closeArtifactRail();
+    };
 
   return (
       <View
@@ -55,76 +71,57 @@ export function DesktopConversationSidebarDock({ scope }: DesktopConversationSid
             scrollEventThrottle={16}
           >
             <View style={styles.sidebarNavStack}>
-              <Pressable style={styles.sidebarListRow} onPress={() => void beginNewChat()}>
-                <MonoIcon name="compose" style={styles.sidebarListRowIcon} />
+              <Pressable
+                style={({ hovered }: any) => [
+                  styles.sidebarListRow,
+                  hovered ? styles.sidebarListRowHovered : null,
+                ]}
+                onPress={() => void beginNewChat()}
+              >
+                <MonoIcon name="plus" style={styles.sidebarListRowIcon} />
                 <Text style={styles.sidebarListRowTitle}>New chat</Text>
-                <Text style={styles.sidebarListRowMeta} numberOfLines={1}>
-                  {selectedProjectPath ? projectPathBasename(selectedProjectPath) : 'Choose folder'}
-                </Text>
               </Pressable>
 
-              <Pressable ref={sidebarSearchLauncherRef} style={styles.sidebarMenuRowMinimal} onPress={openSidebarSearchModal}>
+              <Pressable
+                ref={sidebarSearchLauncherRef}
+                style={({ hovered }: any) => [
+                  styles.sidebarMenuRowMinimal,
+                  hovered ? styles.sidebarMenuRowMinimalHovered : null,
+                ]}
+                onPress={openSidebarSearchModal}
+              >
                 <MonoIcon name="search" style={styles.sidebarSearchGlyph} />
                 <Text style={styles.sidebarSearchButtonText}>Search</Text>
               </Pressable>
 
               <View style={styles.sidebarMenuList}>
                 <Pressable
-                  style={[styles.sidebarMenuRowMinimal, voicePanelActive ? styles.sidebarMenuRowMinimalActive : null]}
-                  onPress={() => {
-                    if (voicePanelActive) {
-                      hideVoicePanel();
-                    } else {
-                      openVoicePanel();
-                    }
-                  }}
-                >
-                  <MonoIcon name="voice" style={styles.sidebarMenuRowGlyph} />
-                  <Text style={styles.sidebarMenuRowLabelMinimal}>Jarvis</Text>
-                </Pressable>
-
-                <Pressable
-                  style={[
+                  style={({ hovered }: any) => [
                     styles.sidebarMenuRowMinimal,
-                    showReferenceRail ? styles.sidebarMenuRowMinimalActive : null,
-                    !historyAvailable ? styles.sidebarMenuRowMinimalDisabled : null,
+                    hovered ? styles.sidebarMenuRowMinimalHovered : null,
+                    historyAndArtifactsOpen ? styles.sidebarMenuRowMinimalActive : null,
                   ]}
-                  disabled={!historyAvailable}
                   onPress={() => {
-                    if (showReferenceRail) {
-                      closeReferenceRail();
+                    if (historyAndArtifactsOpen) {
+                      closeHistoryAndArtifacts();
                     } else {
-                      openReferenceRail();
+                      openHistoryAndArtifacts();
                     }
                   }}
                 >
-                  <MonoIcon name="history" style={styles.sidebarMenuRowGlyph} />
-                  <Text style={styles.sidebarMenuRowLabelMinimal}>History</Text>
+                  <MonoIcon name="archive" style={styles.sidebarMenuRowGlyph} />
+                  <Text style={styles.sidebarMenuRowLabelMinimal}>History & Artifacts</Text>
                 </Pressable>
 
                 <Pressable
-                  style={styles.sidebarMenuRowMinimal}
+                  style={({ hovered }: any) => [
+                    styles.sidebarMenuRowMinimal,
+                    hovered ? styles.sidebarMenuRowMinimalHovered : null,
+                  ]}
                   onPress={() => router.push('/cron')}
                 >
-                  <MonoIcon name="history" style={styles.sidebarMenuRowGlyph} />
+                  <MonoIcon name="automation" style={styles.sidebarMenuRowGlyph} />
                   <Text style={styles.sidebarMenuRowLabelMinimal}>Automations</Text>
-                </Pressable>
-
-                <Pressable
-                  style={[
-                    styles.sidebarMenuRowMinimal,
-                    showArtifactRail ? styles.sidebarMenuRowMinimalActive : null,
-                  ]}
-                  onPress={() => {
-                    if (showArtifactRail) {
-                      closeArtifactRail();
-                    } else {
-                      openArtifactRail();
-                    }
-                  }}
-                >
-                  <MonoIcon name="history" style={styles.sidebarMenuRowGlyph} />
-                  <Text style={styles.sidebarMenuRowLabelMinimal}>Artifacts</Text>
                 </Pressable>
 
               </View>
@@ -136,32 +133,108 @@ export function DesktopConversationSidebarDock({ scope }: DesktopConversationSid
                   <Text style={styles.sidebarListSectionTitle}>Pinned</Text>
                 </View>
                 <View style={styles.sidebarSimpleList}>
-                  {pinnedChats.map(({ session }: any) => (
-                    <Pressable
-                      key={`pinned-chat-${session.id}`}
-                      style={[
-                        styles.sidebarSimpleRow,
-                        session.id === sessionId ? styles.sidebarSimpleRowActive : null,
-                      ]}
-                      onPress={() => void openSession(session.id)}
-                    >
-                      <View style={styles.sidebarSimpleRowCopy}>
-                        <View style={styles.sidebarRunningRow}>
-                          {session.is_running ? <View style={styles.sidebarRunningDot} /> : null}
-                          <Text style={styles.sidebarSimpleRowTitle} numberOfLines={1}>{session.name}</Text>
-                        </View>
+                  {pinnedChats.map(({ session }: any) => {
+                    const pinnedChatActionsVisible = hoveredSessionId === session.id;
+                    return (
+                      <View
+                        key={`pinned-chat-${session.id}`}
+                        {...(Platform.OS === 'web'
+                          ? {
+                              onMouseEnter: () => {
+                                setHoveredSessionId(session.id);
+                                scheduleSidebarChatTooltip(session, session.workspace || null);
+                              },
+                              onMouseLeave: () => {
+                                setHoveredSessionId((current: any) => (
+                                  current === session.id ? null : current
+                                ));
+                                clearSidebarChatTooltipTimer();
+                                hideSidebarChatTooltip(session.id);
+                              },
+                            } as any
+                          : {})}
+                      >
+                        <Pressable
+                          ref={setSessionRowRef(session.id)}
+                          style={({ pressed }: any) => [
+                            styles.sidebarSimpleRow,
+                            pinnedChatActionsVisible ? styles.sidebarSimpleRowHovered : null,
+                            session.id === sessionId ? styles.sidebarSimpleRowActive : null,
+                            pressed ? styles.sidebarSimpleRowPressed : null,
+                          ]}
+                          onPress={() => {
+                            clearSidebarChatTooltipTimer();
+                            hideSidebarChatTooltip(session.id);
+                            void openSession(session.id);
+                          }}
+                          {...(Platform.OS === 'web'
+                            ? ({ onContextMenu: (event: any) => openChatContextMenu(event, session, session.workspace || null) } as any)
+                            : {})}
+                        >
+                          <View style={styles.sidebarSimpleRowCopy}>
+                            <View style={styles.sidebarRunningRow}>
+                              {session.is_running ? <View style={styles.sidebarRunningDot} /> : null}
+                              <Text style={styles.sidebarSimpleRowTitle} numberOfLines={1}>{session.name}</Text>
+                            </View>
+                          </View>
+                          {pinnedChatActionsVisible ? (
+                            <View style={styles.projectChatActions}>
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel="Unpin chat"
+                                style={styles.projectChatActionButton}
+                                onPress={(event: any) => {
+                                  event?.stopPropagation?.();
+                                  event?.preventDefault?.();
+                                  event?.nativeEvent?.stopPropagation?.();
+                                  event?.nativeEvent?.preventDefault?.();
+                                  clearSidebarChatTooltipTimer();
+                                  hideSidebarChatTooltip(session.id);
+                                  toggleSessionPin(session);
+                                }}
+                              >
+                                <MonoIcon name="pin" style={[styles.projectChatActionText, styles.projectChatActionTextActive]} />
+                              </Pressable>
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel="Archive chat"
+                                style={styles.projectChatActionButton}
+                                onPress={(event: any) => {
+                                  event?.stopPropagation?.();
+                                  event?.preventDefault?.();
+                                  event?.nativeEvent?.stopPropagation?.();
+                                  event?.nativeEvent?.preventDefault?.();
+                                  clearSidebarChatTooltipTimer();
+                                  hideSidebarChatTooltip(session.id);
+                                  void deleteSidebarSession(session);
+                                }}
+                              >
+                                <MonoIcon name="archive" style={styles.projectChatActionText} />
+                              </Pressable>
+                            </View>
+                          ) : (
+                            <Text style={styles.sidebarSimpleRowMeta}>
+                              {session.is_running ? 'Running' : formatRelativeTime(session.updated_at)}
+                            </Text>
+                          )}
+                        </Pressable>
                       </View>
-                      <Text style={styles.sidebarSimpleRowMeta}>{session.is_running ? 'Running' : formatRelativeTime(session.updated_at)}</Text>
-                    </Pressable>
-                  ))}
+                    );
+                  })}
                   {pinnedProjects.map((project: any) => (
                     <Pressable
                       key={`pinned-project-${project.path}`}
-                      style={styles.sidebarSimpleRow}
+                      style={({ hovered }: any) => [
+                        styles.sidebarSimpleRow,
+                        hovered ? styles.sidebarSimpleRowHovered : null,
+                      ]}
                       onPress={() => {
-                        selectProjectPath(project.path);
+                        selectProjectForSidebar(project.path);
                         setSidebarExpanded(true);
                       }}
+                      {...(Platform.OS === 'web'
+                        ? ({ onContextMenu: (event: any) => openProjectContextMenu(event, project) } as any)
+                        : {})}
                     >
                       <View style={styles.sidebarSimpleRowCopy}>
                         <Text style={styles.sidebarSimpleRowTitle} numberOfLines={1}>{project.label}</Text>
@@ -195,7 +268,7 @@ export function DesktopConversationSidebarDock({ scope }: DesktopConversationSid
                   <View style={styles.sidebarProjectList}>
                     {projectGroups.map((project: any) => {
                     const projectHasDraft = draftChat?.projectPath === project.path;
-                    const projectActionsVisible = hoveredProjectPath === project.path || openProjectMenuPath === project.path;
+                    const projectActionsVisible = hoveredProjectPath === project.path || openProjectMenuPath === project.path || projectHasDraft;
                     return (
                       <View
                         key={`project-${project.path}`}
@@ -206,17 +279,20 @@ export function DesktopConversationSidebarDock({ scope }: DesktopConversationSid
                               onMouseLeave: () => setHoveredProjectPath((current: any) => (
                                 current === project.path ? null : current
                               )),
+                              onContextMenu: (event: any) => openProjectContextMenu(event, project),
                             } as any
                           : {})}
                         {...projectDragProps(project.path)}
                       >
-                        <View style={styles.projectHeaderRow}>
+                        <View style={[
+                          styles.projectHeaderRow,
+                          projectActionsVisible ? styles.projectHeaderRowHovered : null,
+                          projectHasDraft ? styles.projectHeaderRowActive : null,
+                        ]}>
                           <Pressable
                             style={styles.projectHeaderMain}
                             onPress={() => {
-                              setOpenProjectMenuPath(null);
-                              setOpenSessionMenuId(null);
-                              selectProjectPath(project.path);
+                              selectProjectForSidebar(project.path);
                             }}
                           >
                             <Pressable
@@ -229,18 +305,15 @@ export function DesktopConversationSidebarDock({ scope }: DesktopConversationSid
                               />
                             </Pressable>
                             <Text style={styles.projectTitle} numberOfLines={1}>{project.label}</Text>
+                            {projectActionsVisible ? (
+                              <MonoIcon
+                                name={project.collapsed ? 'chevron_down' : 'chevron_up'}
+                                style={styles.projectFolderChevron}
+                              />
+                            ) : null}
                           </Pressable>
                           {projectActionsVisible ? (
                             <View style={styles.projectHeaderActions}>
-                              <Pressable
-                                style={styles.projectHeaderActionButton}
-                                onPress={() => {
-                                  setOpenProjectMenuPath(null);
-                                  void openDraftChat(project.path);
-                                }}
-                              >
-                                <MonoIcon name="plus" style={styles.projectHeaderActionText} />
-                              </Pressable>
                               <Pressable
                                 ref={setProjectMenuTriggerRef(project.path)}
                                 style={styles.projectHeaderActionButton}
@@ -249,6 +322,15 @@ export function DesktopConversationSidebarDock({ scope }: DesktopConversationSid
                                 ))}
                               >
                                 <MonoIcon name="more" style={styles.projectHeaderActionText} />
+                              </Pressable>
+                              <Pressable
+                                style={styles.projectHeaderActionButton}
+                                onPress={() => {
+                                  setOpenProjectMenuPath(null);
+                                  void openDraftChat(project.path);
+                                }}
+                              >
+                                <MonoIcon name="compose" style={styles.projectHeaderActionText} />
                               </Pressable>
                             </View>
                           ) : null}
@@ -284,7 +366,7 @@ export function DesktopConversationSidebarDock({ scope }: DesktopConversationSid
                           <View style={styles.projectContent}>
                             {project.sessions.map((item: any) => {
                               const selected = item.id === sessionId;
-                              const sessionActionsVisible = hoveredSessionId === item.id || openSessionMenuId === item.id;
+                              const sessionActionsVisible = hoveredSessionId === item.id;
                               return (
                                 <View
                                   key={item.id}
@@ -306,8 +388,15 @@ export function DesktopConversationSidebarDock({ scope }: DesktopConversationSid
                                 >
                                   <View
                                     ref={setSessionRowRef(item.id)}
-                                    style={[styles.projectChatRow, selected ? styles.projectChatRowActive : null]}
+                                    style={[
+                                      styles.projectChatRow,
+                                      sessionActionsVisible ? styles.projectChatRowHovered : null,
+                                      selected ? styles.projectChatRowActive : null,
+                                    ]}
                                     {...sessionDragProps(project.path, item.id)}
+                                    {...(Platform.OS === 'web'
+                                      ? ({ onContextMenu: (event: any) => openChatContextMenu(event, item, project.path) } as any)
+                                      : {})}
                                   >
                                     <Pressable
                                       style={styles.projectChatPrimary}
@@ -323,60 +412,50 @@ export function DesktopConversationSidebarDock({ scope }: DesktopConversationSid
                                           {item.is_running ? <View style={styles.sidebarRunningDot} /> : null}
                                           <Text style={styles.projectChatTitle} numberOfLines={1}>{item.name}</Text>
                                         </View>
-                                        <Text style={styles.projectChatAge}>{item.is_running ? 'Running' : formatRelativeTime(item.updated_at)}</Text>
+                                        {!sessionActionsVisible ? (
+                                          <Text style={styles.projectChatAge}>{item.is_running ? 'Running' : formatRelativeTime(item.updated_at)}</Text>
+                                        ) : null}
                                       </View>
                                     </Pressable>
                                     {sessionActionsVisible ? (
                                       <View style={styles.projectChatActions}>
                                         <Pressable
-                                          ref={setSessionMenuTriggerRef(item.id)}
                                           style={styles.projectChatActionButton}
-                                          onPress={() => {
+                                          onPress={(event: any) => {
+                                            event?.stopPropagation?.();
+                                            event?.preventDefault?.();
+                                            event?.nativeEvent?.stopPropagation?.();
+                                            event?.nativeEvent?.preventDefault?.();
                                             clearSidebarChatTooltipTimer();
                                             hideSidebarChatTooltip(item.id);
-                                            setOpenSessionMenuId((current: any) => (
-                                              current === item.id ? null : item.id
-                                            ));
+                                            toggleSessionPin(item);
                                           }}
                                         >
-                                          <MonoIcon name="more" style={styles.projectChatActionText} />
+                                          <MonoIcon
+                                            name="pin"
+                                            style={[
+                                              styles.projectChatActionText,
+                                              sidebarState.sessionMeta[item.id]?.pinned ? styles.projectChatActionTextActive : null,
+                                            ]}
+                                          />
+                                        </Pressable>
+                                        <Pressable
+                                          style={styles.projectChatActionButton}
+                                          onPress={(event: any) => {
+                                            event?.stopPropagation?.();
+                                            event?.preventDefault?.();
+                                            event?.nativeEvent?.stopPropagation?.();
+                                            event?.nativeEvent?.preventDefault?.();
+                                            clearSidebarChatTooltipTimer();
+                                            hideSidebarChatTooltip(item.id);
+                                            void deleteSidebarSession(item);
+                                          }}
+                                        >
+                                          <MonoIcon name="archive" style={styles.projectChatActionText} />
                                         </Pressable>
                                       </View>
                                     ) : null}
                                   </View>
-	                                  {openSessionMenuId === item.id ? (
-	                                    <View ref={setSessionMenuRef(item.id)} style={styles.projectChatMenu}>
-                                          <View style={styles.projectMenuLabelRow}>
-                                            <Text style={styles.projectMenuLabelText}>Bot: {telegramBotLabelForSession(item)}</Text>
-                                          </View>
-	                                      <Pressable
-	                                        style={styles.projectMenuItem}
-	                                        onPress={() => {
-	                                          toggleSessionPin(item);
-	                                          setOpenSessionMenuId(null);
-	                                        }}
-	                                      >
-	                                        <Text style={styles.projectMenuItemText}>
-	                                          {sidebarState.sessionMeta[item.id]?.pinned ? 'Unpin chat' : 'Pin chat'}
-	                                        </Text>
-	                                      </Pressable>
-                                        <Pressable
-                                          style={styles.projectMenuItem}
-                                          onPress={() => {
-                                            setOpenSessionMenuId(null);
-                                            setActiveCommandPanel({ kind: 'session', sessionId: item.id });
-                                          }}
-                                        >
-                                          <Text style={styles.projectMenuItemText}>Chat settings</Text>
-                                        </Pressable>
-	                                      <Pressable
-	                                        style={styles.projectMenuItem}
-	                                        onPress={() => void deleteSidebarSession(item)}
-	                                      >
-                                        <Text style={[styles.projectMenuItemText, styles.projectMenuItemTextWarn]}>Delete chat</Text>
-                                      </Pressable>
-                                    </View>
-                                  ) : null}
                                 </View>
                               );
                             })}
@@ -595,70 +674,71 @@ export function DesktopConversationSidebarDock({ scope }: DesktopConversationSid
               </>
             ) : null}
 
-            {showReferenceRail && (timelineEntries.length > 0 || referenceEntries.length > 0) ? (
+            {historyAndArtifactsOpen ? (
               <View style={styles.referencePanel}>
                 <View style={styles.referencePanelHeader}>
                   <View style={styles.referencePanelHeaderCopy}>
-                    <Text style={styles.referencePanelTitle}>History</Text>
+                    <Text style={styles.referencePanelTitle}>History & Artifacts</Text>
                     <Text style={styles.referencePanelSummary}>
-                      {referenceEntries.length ? `${historySummary} · ${referenceSummary}` : historySummary}
+                      {historyAvailable
+                        ? `${referenceEntries.length ? `${historySummary} · ${referenceSummary}` : historySummary} · ${activeSessionArtifactCount ? `${activeSessionArtifactCount} artifacts` : 'no artifacts'}`
+                        : activeSessionArtifactCount
+                          ? `${activeSessionArtifactCount} saved artifacts`
+                          : 'No history or artifacts yet'}
                     </Text>
                   </View>
-                  <Pressable style={styles.referencePanelCloseButton} onPress={closeReferenceRail}>
+                  <Pressable style={styles.referencePanelCloseButton} onPress={closeHistoryAndArtifacts}>
                     <Text style={styles.referencePanelCloseText}>Close</Text>
                   </Pressable>
                 </View>
-                <ScrollView ref={historyScrollRef} contentContainerStyle={styles.referenceStack}>
-                  {timelineEntries.map((entry: any) => (
-                    <View
-                      key={`timeline-${entry.id}`}
-                      onLayout={(event: any) => {
-                        if (entry.kind === 'message') {
-                          historyMessageLayoutRef.current[entry.sourceMessageIndex] = event.nativeEvent.layout.y;
-                        }
-                      }}
-                      style={[
-                        styles.referenceCard,
-                        entry.kind === 'message' && highlightedMessageIndex === entry.sourceMessageIndex
-                          ? styles.searchJumpHighlight
-                          : null,
-                        entry.tone === 'accent'
-                          ? styles.activityItemAccent
-                          : entry.tone === 'warn'
-                            ? styles.activityItemWarn
-                            : entry.tone === 'error'
-                              ? styles.activityItemError
+                <View style={styles.referencePanelSection}>
+                  <Text style={styles.referencePanelSectionTitle}>History</Text>
+                  {historyAvailable ? (
+                    <ScrollView ref={historyScrollRef} contentContainerStyle={styles.referenceStack}>
+                      {timelineEntries.map((entry: any) => (
+                        <View
+                          key={`timeline-${entry.id}`}
+                          onLayout={(event: any) => {
+                            if (entry.kind === 'message') {
+                              historyMessageLayoutRef.current[entry.sourceMessageIndex] = event.nativeEvent.layout.y;
+                            }
+                          }}
+                          style={[
+                            styles.referenceCard,
+                            entry.kind === 'message' && highlightedMessageIndex === entry.sourceMessageIndex
+                              ? styles.searchJumpHighlight
                               : null,
-                      ]}
-                    >
-                      <View style={styles.referenceCardHeader}>
-                        <Text style={styles.referenceCardEyebrow}>{entry.eyebrow}</Text>
-                        <Text style={styles.referenceCardTitle}>{entry.label}</Text>
-                      </View>
-                      <Text style={styles.referenceCardMeta}>
-                        {entry.timestamp ? formatAbsoluteTime(entry.timestamp) : 'timeline event'}
-                      </Text>
-                      <Text style={styles.referenceCardBody}>{entry.body}</Text>
+                            entry.tone === 'accent'
+                              ? styles.activityItemAccent
+                              : entry.tone === 'warn'
+                                ? styles.activityItemWarn
+                                : entry.tone === 'error'
+                                  ? styles.activityItemError
+                                  : null,
+                          ]}
+                        >
+                          <View style={styles.referenceCardHeader}>
+                            <Text style={styles.referenceCardEyebrow}>{entry.eyebrow}</Text>
+                            <Text style={styles.referenceCardTitle}>{entry.label}</Text>
+                          </View>
+                          <Text style={styles.referenceCardMeta}>
+                            {entry.timestamp ? formatAbsoluteTime(entry.timestamp) : 'timeline event'}
+                          </Text>
+                          <Text style={styles.referenceCardBody}>{entry.body}</Text>
+                        </View>
+                      ))}
+                    </ScrollView>
+                  ) : (
+                    <View style={styles.emptyCard}>
+                      <Text style={styles.emptyTitle}>No history yet</Text>
+                      <Text style={styles.emptyText}>Chat timeline events and referenced messages for this session will appear here.</Text>
                     </View>
-                  ))}
-                </ScrollView>
-              </View>
-            ) : null}
-
-            {showArtifactRail ? (
-              <View style={styles.referencePanel}>
-                <View style={styles.referencePanelHeader}>
-                  <View style={styles.referencePanelHeaderCopy}>
-                    <Text style={styles.referencePanelTitle}>Artifacts</Text>
-                    <Text style={styles.referencePanelSummary}>
-                      {activeSessionArtifactCount ? `${activeSessionArtifactCount} saved artifacts` : 'No saved artifacts yet'}
-                    </Text>
-                  </View>
-                  <Pressable style={styles.referencePanelCloseButton} onPress={closeArtifactRail}>
-                    <Text style={styles.referencePanelCloseText}>Close</Text>
-                  </Pressable>
+                  )}
                 </View>
-                {artifactsLoading ? (
+                {showArtifactRail ? (
+                  <View style={styles.referencePanelSection}>
+                    <Text style={styles.referencePanelSectionTitle}>Artifacts</Text>
+                    {artifactsLoading ? (
                   <View style={styles.emptyCard}>
                     <Text style={styles.emptyTitle}>Loading artifacts…</Text>
                     <Text style={styles.emptyText}>Pulling saved files, screenshots, and command outputs for this chat.</Text>
@@ -742,35 +822,13 @@ export function DesktopConversationSidebarDock({ scope }: DesktopConversationSid
                       )}
                     </View>
                   </View>
-                )}
+                    )}
+                  </View>
+                ) : null}
               </View>
             ) : null}
 
           </ScrollView>
-          <View style={styles.sidebarAccountFooter}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Open settings"
-              style={({ pressed, hovered }: any) => [
-                styles.sidebarAccountButton,
-                hovered ? styles.sidebarAccountButtonHovered : null,
-                pressed ? styles.sidebarAccountButtonPressed : null,
-              ]}
-              onPress={() => onOpenSetup?.()}
-            >
-              <View style={styles.sidebarAccountAvatar}>
-                <MonoIcon name="settings" style={styles.sidebarAccountAvatarText} />
-              </View>
-              <View style={styles.sidebarAccountCopy}>
-                <Text style={styles.sidebarAccountEmail} numberOfLines={1}>Settings</Text>
-              </View>
-              {sidebarUpdateAvailable ? (
-                <View style={styles.sidebarAccountUpdateBadge}>
-                  <Text style={styles.sidebarAccountUpdateText}>Update</Text>
-                </View>
-              ) : null}
-            </Pressable>
-          </View>
           </View>
         ) : null}
       </View>

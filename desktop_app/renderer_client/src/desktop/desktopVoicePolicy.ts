@@ -1,17 +1,22 @@
 export const JARVIS_BARGE_IN_MIN_VOICED_MS = 1500;
 export const JARVIS_BARGE_IN_MIN_WORDS = 2;
 export const JARVIS_BARGE_IN_MIN_CHARS = 6;
+export const JARVIS_WAKE_PHRASE = 'Jarvis';
 export const VOICE_ENGINE_NONE = 'none';
 export const VOICE_ENGINE_ENGLISH = 'english_local';
 export const VOICE_ENGINE_HEBREW = 'hebrew_local';
 export const JARVIS_ENGLISH_VOICE_PATH_ERROR = 'Jarvis mode currently uses the English local voice path.';
 export const STT_BACKEND_LOCAL_WHISPER = 'local_whisper';
 export const STT_BACKEND_OPENAI_REALTIME = 'openai_realtime';
+export const STT_BACKEND_GEMINI = 'gemini';
 export const TTS_BACKEND_KOKORO = 'kokoro_onnx';
 export const TTS_BACKEND_KYUTAI = 'pocket';
 export const ALWAYS_ON_VOICE_AUTO_SEND = false;
 
-export type JarvisSttBackend = typeof STT_BACKEND_LOCAL_WHISPER | typeof STT_BACKEND_OPENAI_REALTIME;
+export type JarvisSttBackend =
+  | typeof STT_BACKEND_LOCAL_WHISPER
+  | typeof STT_BACKEND_OPENAI_REALTIME
+  | typeof STT_BACKEND_GEMINI;
 export type JarvisTtsBackend = typeof TTS_BACKEND_KOKORO | typeof TTS_BACKEND_KYUTAI;
 
 export function composeVoiceDraftInput(baseInput: string, draftText: string) {
@@ -62,6 +67,9 @@ export function normalizeJarvisSttBackend(value: string | null | undefined): Jar
   if (backend === 'openai' || backend === STT_BACKEND_OPENAI_REALTIME || backend === 'realtime' || backend === 'realtime_api') {
     return STT_BACKEND_OPENAI_REALTIME;
   }
+  if (backend === STT_BACKEND_GEMINI || backend === 'gemini_api' || backend === 'google' || backend === 'google_gemini') {
+    return STT_BACKEND_GEMINI;
+  }
   return STT_BACKEND_LOCAL_WHISPER;
 }
 
@@ -69,6 +77,9 @@ export function jarvisSttBackendLabel(value: string | null | undefined) {
   const backend = normalizeJarvisSttBackend(value);
   if (backend === STT_BACKEND_OPENAI_REALTIME) {
     return 'Realtime API';
+  }
+  if (backend === STT_BACKEND_GEMINI) {
+    return 'Gemini API';
   }
   return 'Local Whisper';
 }

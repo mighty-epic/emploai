@@ -51,6 +51,33 @@ def local_custom_instructions_section(text: str) -> PromptSection:
     )
 
 
+def assistant_response_policy_section() -> PromptSection:
+    return PromptSection(
+        "ASSISTANT RESPONSE SIZE POLICY",
+        (
+            "Default to concise, high-signal replies. For ordinary progress reports, fixes, setup summaries, "
+            "and verification results, keep the final user-facing answer under about 500 words unless the user "
+            "explicitly asks for exhaustive detail.\n"
+            "- Do not paste entire generated files, logs, reports, command outputs, or long plans into chat by default.\n"
+            "- When work creates large content, summarize what exists and reference the file paths, artifacts, or commands used.\n"
+            "- Use bullets only when they improve scanning; prefer the shortest complete answer.\n"
+            "- Include enough verification detail for trust, but not raw walls of output.\n"
+            "- If the user asks for full contents, exact logs, or a complete report, then provide it."
+        ),
+        managed=True,
+        volatile=False,
+    )
+
+
+def project_onboarding_section(text: str) -> PromptSection:
+    return PromptSection(
+        "PROJECT ONBOARDING PROFILE",
+        text,
+        managed=True,
+        volatile=False,
+    )
+
+
 def memory_context_section(text: str) -> PromptSection:
     return PromptSection(
         "LOCAL MEMORY CONTEXT",

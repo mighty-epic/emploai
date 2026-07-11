@@ -16,6 +16,7 @@ from cli.tui_constants import MODEL_CONFIGS
 from local_agent_runtime.agent import AGENT_TOOLS
 from shared import current_session_id
 from shared.proactive_runtime import install_background_process_hooks
+from shared.visual_monitor_runtime import install_visual_monitor_hooks
 from shared.tool_packs import (
     filter_openai_tools_by_enabled_packs,
     filter_tools_by_enabled_packs,
@@ -148,6 +149,7 @@ async def run_cron_job_via_unified_flow(
     loop = asyncio.get_running_loop()
     if session.tool_executor:
         install_background_process_hooks(session, event_loop=loop)
+        install_visual_monitor_hooks(session, event_loop=loop)
     session.current_turn_allowed_tool_names = tools_for_enabled_packs(active_tool_packs)
     session.current_turn_allowed_tool_definitions = filter_tools_by_enabled_packs(CLI_AGENT_TOOLS, active_tool_packs)
     try:

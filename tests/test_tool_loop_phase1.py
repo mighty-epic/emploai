@@ -117,6 +117,10 @@ class DummyClient:
         self.responses = DummyResponses()
 
 
+class OpenAICodexClient(DummyClient):
+    pass
+
+
 class DummyAnthropicStream:
     def __init__(self, events):
         self.events = events
@@ -151,6 +155,28 @@ def _anthropic_text_event(text):
     )
 
 
+def _anthropic_thinking_start_event():
+    return SimpleNamespace(
+        type="content_block_start",
+        index=0,
+        content_block=SimpleNamespace(type="thinking"),
+    )
+
+
+def _anthropic_thinking_delta_event(text):
+    return SimpleNamespace(
+        type="content_block_delta",
+        delta=SimpleNamespace(type="thinking_delta", thinking=text),
+    )
+
+
+def _anthropic_signature_delta_event(signature):
+    return SimpleNamespace(
+        type="content_block_delta",
+        delta=SimpleNamespace(type="signature_delta", signature=signature),
+    )
+
+
 def _anthropic_tool_start_event(name, tool_id="toolu_1"):
     return SimpleNamespace(
         type="content_block_start",
@@ -175,7 +201,46 @@ def test_responses_api_models_do_not_send_reasoning_effort_through_chat_completi
 
     assert result.content == "ready"
     assert client.chat.completions.last_kwargs is None
+    assert client.responses.last_kwargs["reasoning"] == {"effort": "high"}
     assert "reasoning_effort" not in client.responses.last_kwargs
+
+
+def test_openai_codex_responses_models_receive_reasoning_payload():
+    client = DummyClient()
+
+    result = run_tool_loop(
+        provider="openai-codex",
+        model_id="gpt-5.2-codex",
+        client=client,
+        messages=[{"role": "user", "content": "hello"}],
+        tool_executor=DummyExecutor(),
+        callbacks={},
+        variant="xhigh",
+        api_type="responses",
+    )
+
+    assert result.content == "ready"
+    assert client.chat.completions.last_kwargs is None
+    assert client.responses.last_kwargs["reasoning"] == {"effort": "xhigh"}
+    assert client.responses.last_kwargs["store"] is False
+
+
+def test_responses_loop_disables_store_for_codex_client_even_with_plain_provider():
+    client = OpenAICodexClient()
+
+    result = run_tool_loop(
+        provider="openai",
+        model_id="gpt-5.4-mini",
+        client=client,
+        messages=[{"role": "user", "content": "hello"}],
+        tool_executor=DummyExecutor(),
+        callbacks={},
+        variant="high",
+        api_type="responses",
+    )
+
+    assert result.content == "ready"
+    assert client.responses.last_kwargs["store"] is False
 
 
 def test_anthropic_receives_joined_system_prompt():
@@ -197,6 +262,45 @@ def test_anthropic_receives_joined_system_prompt():
 
     assert result.content == "ready"
     assert client.messages.calls[0]["system"] == "Base unified prompt\n\nRuntime task contract"
+
+
+def test_anthropic_thinking_variant_sends_payload_and_preserves_thinking_blocks():
+    client = DummyAnthropicClient(
+        [
+            [
+                _anthropic_thinking_start_event(),
+                _anthropic_thinking_delta_event("Inspecting tool plan."),
+                _anthropic_signature_delta_event("sig_123"),
+                _anthropic_tool_start_event("screenshot"),
+            ],
+            [_anthropic_text_event("Recovered.")],
+        ]
+    )
+
+    result = run_tool_loop(
+        provider="anthropic",
+        model_id="claude-sonnet-4-5",
+        client=client,
+        messages=[{"role": "user", "content": "Inspect the screen."}],
+        tool_executor=DummyExecutor(),
+        callbacks={},
+        variant="thinking",
+    )
+
+    assert result.content == "Recovered."
+    assert client.messages.calls[0]["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    second_messages = client.messages.calls[1]["messages"]
+    assistant_messages = [
+        message
+        for message in second_messages
+        if message.get("role") == "assistant" and isinstance(message.get("content"), list)
+    ]
+    assert assistant_messages
+    assert assistant_messages[-1]["content"][0] == {
+        "type": "thinking",
+        "thinking": "Inspecting tool plan.",
+        "signature": "sig_123",
+    }
 
 
 def test_undeclared_provider_tool_call_is_blocked_before_executor():

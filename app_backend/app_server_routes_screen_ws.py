@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 # Split from app_server.py; dependencies are injected by the app_server facade.
+from shared.provider_failures import get_failed_turn
 from shared.standalone_policy import mobile_connection_enabled
 
 def register_screen_ws_routes(app):
@@ -343,13 +344,35 @@ def register_screen_ws_routes(app):
 
         watch_task: Optional[asyncio.Task[None]] = None
 
+        receive_task: Optional[asyncio.Task[None]] = None
+
         sync_subscription_id: Optional[str] = None
 
         effective_session_id: Optional[str] = None
 
+        connection_open = True
+
         async def send_model(event: RealtimeServerEvent) -> None:
 
-            await _send_realtime_event(websocket, send_lock, event)
+            nonlocal connection_open
+
+            if not connection_open:
+
+                return
+
+            try:
+
+                await _send_realtime_event(websocket, send_lock, event)
+
+            except Exception as exc:
+
+                if _is_expected_websocket_close_error(exc):
+
+                    connection_open = False
+
+                    return
+
+                raise
 
         try:
 
@@ -585,21 +608,415 @@ def register_screen_ws_routes(app):
 
             watch_task = asyncio.create_task(watch_session_updates())
 
+            incoming_messages: asyncio.Queue[Optional[str]] = asyncio.Queue(maxsize=64)
+
+            async def receive_chat_messages() -> None:
+
+                nonlocal connection_open
+
+                try:
+
+                    while True:
+
+                        raw_message = await websocket.receive_text()
+
+                        try:
+
+                            preview = json.loads(raw_message)
+
+                        except json.JSONDecodeError:
+
+                            preview = None
+
+                        if isinstance(preview, dict):
+
+                            preview_text = str(preview.get("text") or "").strip()
+
+                            preview_policy = str(preview.get("interrupt_policy") or "none")
+
+                            preview_session_id = preview.get("session_id") or effective_session_id
+
+                            session_target_valid = (
+
+                                not requested_session_id
+
+                                or str(preview_session_id or "").strip() == requested_session_id
+
+                            )
+
+                            if preview_text and len(preview_text) <= 200_000 and session_target_valid:
+
+                                try:
+
+                                    steering_runtime = _load_runtime_session_or_409(bridge, preview_session_id)
+
+                                except (HTTPException, RuntimeError):
+
+                                    steering_runtime = None
+
+                                steering_enabled = False
+
+                                if steering_runtime is not None:
+
+                                    try:
+
+                                        from app_backend.runtime import _steering_beta_enabled
+
+                                        steering_enabled = _steering_beta_enabled(steering_runtime)
+
+                                    except Exception:
+
+                                        steering_enabled = False
+
+                                if (
+
+                                    steering_runtime is not None
+
+                                    and steering_enabled
+
+                                    and _is_active_steering_request(steering_runtime, preview_policy)
+
+                                ):
+
+                                    steering_client_message_id = str(
+
+                                        preview.get("client_message_id") or ""
+
+                                    ).strip()[:128]
+
+                                    if steering_client_message_id and any(
+
+                                        str(item.get("client_message_id") or "").strip()
+
+                                        == steering_client_message_id
+
+                                        for item in list(getattr(steering_runtime, "chat_history", []) or [])
+
+                                        if isinstance(item, dict)
+
+                                    ):
+
+                                        await send_model(
+
+                                            RealtimeServerEvent(
+
+                                                type="message_ack",
+
+                                                session_id=preview_session_id,
+
+                                                payload={
+
+                                                    "client_message_id": steering_client_message_id,
+
+                                                    "status": "duplicate",
+
+                                                    "retryable": False,
+
+                                                },
+
+                                            )
+
+                                        )
+
+                                        continue
+
+
+
+                                    async def acknowledge_steering(payload: Dict[str, Any]) -> None:
+
+                                        if not steering_client_message_id:
+
+                                            return
+
+                                        await send_model(
+
+                                            RealtimeServerEvent(
+
+                                                type="message_ack",
+
+                                                session_id=preview_session_id,
+
+                                                payload={
+
+                                                    "client_message_id": steering_client_message_id,
+
+                                                    "status": str(payload.get("status") or "steering"),
+
+                                                    "retryable": bool(payload.get("retryable", False)),
+
+                                                },
+
+                                            )
+
+                                        )
+
+
+
+                                    try:
+
+                                        steering_result = await _run_app_chat_turn_lazy(
+
+                                            steering_runtime,
+
+                                            user_message=preview_text,
+
+                                            source_format=str(preview.get("source_format") or "app_text"),
+
+                                            interrupt_policy=preview_policy,
+
+                                            source_client_id=str(preview.get("source_client_id") or client_id),
+
+                                            client_message_id=steering_client_message_id or None,
+
+                                            message_accepted_callback=acknowledge_steering,
+
+                                            run_mode=preview.get("run_mode"),
+
+                                            plan_action=preview.get("plan_action"),
+
+                                            plan_answer=(
+
+                                                preview.get("plan_answer")
+
+                                                if isinstance(preview.get("plan_answer"), dict)
+
+                                                else None
+
+                                            ),
+
+                                        )
+
+                                    except Exception as exc:
+
+                                        failure_payload = _record_chat_turn_failure(exc)
+
+                                        await acknowledge_steering(
+
+                                            {
+
+                                                "status": "rejected",
+
+                                                "retryable": bool(failure_payload.get("retryable", False)),
+
+                                            }
+
+                                        )
+
+                                        await send_model(
+
+                                            RealtimeServerEvent(
+
+                                                type="error",
+
+                                                session_id=preview_session_id,
+
+                                                payload=failure_payload,
+
+                                            )
+
+                                        )
+
+                                        continue
+
+                                    if steering_result.get("steering"):
+
+                                        try:
+
+                                            steering_runtime.session.account_user_id = int(auth["user_id"])
+
+                                            _mirror_session_snapshot(
+
+                                                user_id=int(auth["user_id"]),
+
+                                                bridge=bridge,
+
+                                                session=steering_runtime.session,
+
+                                                reason="chat_ws_steering",
+
+                                            )
+
+                                        except Exception:
+
+                                            logger.exception("[recovery] failed mirroring chat websocket steering")
+
+                                        await send_model(
+
+                                            RealtimeServerEvent(
+
+                                                type="status",
+
+                                                session_id=preview_session_id,
+
+                                                payload={
+
+                                                    "message": (
+
+                                                        "Beta steering accepted"
+
+                                                        if steering_result.get("steering_status") == "armed"
+
+                                                        else "Beta steering queued for next safe boundary"
+
+                                                    )
+
+                                                },
+
+                                            )
+
+                                        )
+
+                                        continue
+
+                        await incoming_messages.put(raw_message)
+
+                except WebSocketDisconnect:
+
+                    connection_open = False
+
+                except Exception as exc:
+
+                    connection_open = False
+
+                    if not _is_expected_websocket_close_error(exc):
+
+                        logger.exception("[app] chat websocket receive loop failed")
+
+                finally:
+
+                    await incoming_messages.put(None)
+
+            receive_task = asyncio.create_task(receive_chat_messages())
+
             while True:
 
-                raw = await websocket.receive_text()
+                raw = await incoming_messages.get()
 
-                data = json.loads(raw)
+                if raw is None:
 
+                    break
+
+                try:
+
+                    data = json.loads(raw)
+
+                except json.JSONDecodeError:
+
+                    await send_model(
+
+                        RealtimeServerEvent(
+
+                            type="warning",
+
+                            session_id=effective_session_id,
+
+                            payload={"message": "Malformed chat message ignored", "code": "invalid_message"},
+
+                        )
+
+                    )
+
+                    continue
+
+                if not isinstance(data, dict):
+
+                    await send_model(
+
+                        RealtimeServerEvent(
+
+                            type="warning",
+
+                            session_id=effective_session_id,
+
+                            payload={"message": "Chat message must be a JSON object", "code": "invalid_message"},
+
+                        )
+
+                    )
+
+                    continue
+
+                message_type = str(data.get("type") or "chat_message").strip().lower()
+                retry_run_id = str(data.get("run_id") or "").strip() if message_type == "retry_failed_turn" else ""
                 text = str(data.get("text", "")).strip()
+                if retry_run_id:
+                    text = "[retry failed turn]"
 
                 req_session_id = data.get("session_id") or effective_session_id
+
+                if requested_session_id and str(req_session_id or "").strip() != requested_session_id:
+
+                    await send_model(
+
+                        RealtimeServerEvent(
+
+                            type="warning",
+
+                            session_id=requested_session_id,
+
+                            payload={
+
+                                "message": "Chat socket cannot target a different session",
+
+                                "code": "invalid_session_target",
+
+                            },
+
+                        )
+
+                    )
+
+                    continue
 
                 source_format = str(data.get("source_format") or "app_text")
 
                 message_client_id = str(data.get("source_client_id") or client_id)
+                client_message_id = str(data.get("client_message_id") or "").strip()[:128]
+                run_mode = data.get("run_mode")
+                plan_action = data.get("plan_action")
+                plan_answer = data.get("plan_answer") if isinstance(data.get("plan_answer"), dict) else None
+
+                async def send_message_ack(
+                    status: str,
+                    *,
+                    retryable: bool = False,
+                    extra: Optional[Dict[str, Any]] = None,
+                ) -> None:
+                    if not client_message_id:
+                        return
+                    await send_model(
+                        RealtimeServerEvent(
+                            type="message_ack",
+                            session_id=req_session_id,
+                            payload={
+                                "client_message_id": client_message_id,
+                                "status": status,
+                                "retryable": bool(retryable),
+                                **dict(extra or {}),
+                            },
+                        )
+                    )
+
+                delivery_kwargs = (
+                    {
+                        "client_message_id": client_message_id,
+                        "message_accepted_callback": lambda payload: send_message_ack(
+                            str(payload.get("status") or "accepted"),
+                            retryable=bool(payload.get("retryable", False)),
+                            extra={
+                                key: value
+                                for key, value in dict(payload or {}).items()
+                                if key not in {"status", "retryable", "client_message_id"}
+                            },
+                        ),
+                    }
+                    if client_message_id
+                    else {}
+                )
 
                 if not text:
+
+                    await send_message_ack("rejected", retryable=False)
 
                     await send_model(
 
@@ -631,9 +1048,37 @@ def register_screen_ws_routes(app):
 
                         pass
 
+                    if retry_run_id:
+                        failed_turn = get_failed_turn(runtime, retry_run_id)
+                        if not failed_turn:
+                            raise RuntimeError("The failed turn is no longer available to retry.")
+                        if bool(failed_turn.get("retry_consumed")):
+                            raise RuntimeError("This failed turn has already been retried.")
+                        selected_model = str(data.get("model_id") or "").strip()
+                        selected_provider = str(data.get("provider_id") or "").strip().lower()
+                        model_key = next(
+                            (
+                                key
+                                for key, config in MODEL_CONFIGS.items()
+                                if key == selected_model or str(config.get("id") or "") == selected_model
+                            ),
+                            None,
+                        )
+                        if not model_key:
+                            raise RuntimeError("Choose a configured model before retrying this turn.")
+                        model_provider = str(MODEL_CONFIGS.get(model_key, {}).get("provider") or "").strip().lower()
+                        if selected_provider and selected_provider != model_provider:
+                            raise RuntimeError("The selected provider does not match the selected model.")
+                        runtime.current_model = model_key
+                        text = str(failed_turn.get("user_message") or "").strip()
+                        if not text:
+                            raise RuntimeError("The failed turn no longer contains a request to retry.")
+
                 except (HTTPException, RuntimeError) as exc:
 
                     detail = getattr(exc, "detail", str(exc))
+
+                    await send_message_ack("rejected", retryable=False)
 
                     await send_model(
 
@@ -651,9 +1096,43 @@ def register_screen_ws_routes(app):
 
                     continue
 
+                if len(text) > 200_000:
+
+                    await send_message_ack("rejected", retryable=False, extra={"message": "Message is too large"})
+
+                    await send_model(
+
+                        RealtimeServerEvent(
+
+                            type="warning",
+
+                            session_id=req_session_id,
+
+                            payload={"message": "Message is too large", "code": "message_too_large"},
+
+                        )
+
+                    )
+
+                    continue
+
+                if client_message_id and any(
+                    str(item.get("client_message_id") or "").strip() == client_message_id
+                    for item in list(getattr(runtime, "chat_history", []) or [])
+                    if isinstance(item, dict)
+                ):
+
+                    await send_message_ack("duplicate", retryable=False)
+
+                    await send_session_sync(req_session_id, "duplicate_message")
+
+                    continue
+
                 missing_key_payload = _missing_provider_api_key_payload(runtime)
 
                 if missing_key_payload:
+
+                    await send_message_ack("rejected", retryable=False)
 
                     await send_model(
 
@@ -795,6 +1274,30 @@ def register_screen_ws_routes(app):
 
                         )
 
+                    elif kind == "run_failed":
+
+                        await send_model(
+
+                            RealtimeServerEvent(
+
+                                type="run_failed",
+
+                                session_id=req_session_id,
+
+                                payload={
+
+                                    key: value
+
+                                    for key, value in event.items()
+
+                                    if key != "type"
+
+                                },
+
+                            )
+
+                        )
+
                 interrupt_policy = str(data.get("interrupt_policy", "none"))
 
                 if _is_active_steering_request(runtime, interrupt_policy):
@@ -812,14 +1315,21 @@ def register_screen_ws_routes(app):
                             interrupt_policy=interrupt_policy,
 
                             source_client_id=message_client_id,
+                            **delivery_kwargs,
+                            run_mode=run_mode,
+                            plan_action=plan_action,
+                            plan_answer=plan_answer,
 
                             log_callback=emit,
+                            retry_run_id=retry_run_id or None,
 
                         )
 
                     except Exception as exc:
 
                         payload = _record_chat_turn_failure(exc)
+
+                        await send_message_ack("rejected", retryable=bool(payload.get("retryable", False)))
 
                         await send_model(
 
@@ -879,6 +1389,8 @@ def register_screen_ws_routes(app):
 
                     if result.get("busy"):
 
+                        await send_message_ack("rejected", retryable=True)
+
                         await send_model(
 
                             RealtimeServerEvent(
@@ -904,6 +1416,8 @@ def register_screen_ws_routes(app):
                 )
 
                 if lease.busy:
+
+                    await send_message_ack("rejected", retryable=True)
 
                     await send_model(
 
@@ -936,14 +1450,21 @@ def register_screen_ws_routes(app):
                             interrupt_policy=interrupt_policy,
 
                             source_client_id=message_client_id,
+                            **delivery_kwargs,
+                            run_mode=run_mode,
+                            plan_action=plan_action,
+                            plan_answer=plan_answer,
 
                             log_callback=emit,
+                            retry_run_id=retry_run_id or None,
 
                         )
 
                     except Exception as exc:
 
                         payload = _record_chat_turn_failure(exc)
+
+                        await send_message_ack("rejected", retryable=bool(payload.get("retryable", False)))
 
                         await send_model(
 
@@ -966,6 +1487,8 @@ def register_screen_ws_routes(app):
                     await bridge.orchestrator.complete_turn(lease)
 
                 if result.get("busy"):
+
+                    await send_message_ack("rejected", retryable=True)
 
                     await send_model(
 
@@ -1020,6 +1543,10 @@ def register_screen_ws_routes(app):
                         )
 
                     )
+
+                    continue
+
+                if result.get("failure"):
 
                     continue
 
@@ -1151,9 +1678,9 @@ def register_screen_ws_routes(app):
 
                         payload={
 
-                            "message": f"Chat websocket failed: {str(exc)}",
+                            "message": "Chat websocket failed. Reconnect and try again.",
 
-                            "detail": traceback.format_exc(),
+                            "code": "chat_websocket_error",
 
                         },
 
@@ -1168,6 +1695,10 @@ def register_screen_ws_routes(app):
             return
 
         finally:
+
+            if receive_task:
+
+                receive_task.cancel()
 
             if watch_task:
 

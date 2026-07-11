@@ -349,6 +349,13 @@ export const desktopConversationStylesPart4 = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
+  composerStatusText: {
+    flex: 1,
+    minWidth: 0,
+    color: '#7e8fae',
+    fontSize: 11,
+    lineHeight: 15,
+  },
   composerFooterActions: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -700,6 +707,16 @@ export const desktopConversationStylesPart4 = StyleSheet.create({
   },
   referenceStack: {
     gap: 12,
+  },
+  referencePanelSection: {
+    gap: 10,
+  },
+  referencePanelSectionTitle: {
+    color: '#dce8fb',
+    fontSize: 12,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
   },
   referenceCard: {
     borderRadius: 0,

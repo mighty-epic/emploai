@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from shared.atomic_io import atomic_write_json
+
 
 DEFAULT_WAKE_PHRASE = "EmploAI"
 DEFAULT_AWAKE_TIMEOUT_S = 12.0
@@ -292,8 +294,8 @@ class StandaloneVoiceEngine:
 
     def _persist_locked(self) -> None:
         self.profile["updated_at"] = _utc_now_iso()
-        self.profile_path.write_text(json.dumps(self.profile, indent=2, sort_keys=True), encoding="utf-8")
-        self.session_path.write_text(json.dumps(self.session, indent=2, sort_keys=True), encoding="utf-8")
+        atomic_write_json(self.profile_path, self.profile, sort_keys=True)
+        atomic_write_json(self.session_path, self.session, sort_keys=True)
 
     def _append_session_event_locked(self, event_type: str, *, text: Optional[str] = None, confidence: Optional[float] = None) -> None:
         event = {

@@ -27,6 +27,8 @@ EmploAI can:
 
 ## Quick Start
 
+For first-time setup, manual runtime control, Jarvis voice packs, Yggdrasil Fleet pairing, verification, and recovery commands, see the [complete desktop and local-system runbook](docs/running_desktop_and_system.md).
+
 From the repo root:
 
 ```powershell

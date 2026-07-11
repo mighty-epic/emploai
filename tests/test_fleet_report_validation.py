@@ -56,5 +56,7 @@ def test_normalize_worker_task_report_defaults_invalid_fields_without_overwritin
     assert report.summary == "No summary provided."
     assert report.confidence == "medium"
     assert report.artifacts == [{"kind": "screenshot", "path": "proof.png"}]
-    assert report.raw["runtime_repaired_fields"] == {"preserve": True}
+    assert report.raw["runtime_repaired_fields"]["preserve"] is True
+    assert report.raw["runtime_repaired_fields"]["status"] == "completed"
+    assert report.raw["runtime_repaired_fields"]["artifact_count"] == 1
     assert report.raw["source"] == "worker"

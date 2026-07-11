@@ -50,7 +50,8 @@ from app_backend.fleet_orchestration import (
     workspace_binding_blocker_for_task as _workspace_binding_blocker_for_task_values,
     workspace_id_for_task as _workspace_id_for_task_values,
 )
-from app_backend.fleet_preview import request_fleet_worker_preview
+from app_backend.fleet_preview import capture_local_worker_preview, request_fleet_worker_preview
+from app_backend.fleet_local_runtime import get_local_fleet_runtime
 from app_backend.fleet_task_dispatch import try_dispatch_fleet_worker_task, try_stop_fleet_worker_task
 from app_backend.jarvis_voice_policy import (
     jarvis_barge_in_is_self_echo as _jarvis_barge_in_is_self_echo,
@@ -58,7 +59,11 @@ from app_backend.jarvis_voice_policy import (
     jarvis_barge_in_words as _jarvis_barge_in_words,
     jarvis_confirmation_intent as _jarvis_confirmation_intent,
     jarvis_confirmation_prompt as _jarvis_confirmation_prompt,
+    jarvis_extract_wake_request as _jarvis_extract_wake_request,
     jarvis_start_task_message as _jarvis_start_task_message,
+    jarvis_tool_update_every as _jarvis_tool_update_every,
+    jarvis_tool_update_message as _jarvis_tool_update_message,
+    jarvis_wake_phrase as _jarvis_wake_phrase,
     jarvis_voice_turn_is_task_like as _jarvis_voice_turn_is_task_like,
 )
 from app_backend.models import (
@@ -105,6 +110,7 @@ from app_backend.models import (
     JobCreateRequest,
     JobDetailView,
     HeadlessConfigureRequest,
+    IdentityStopRequest,
     MemorySearchRequest,
     MemorySearchResponse,
     MemoryNoteRequest,
@@ -123,6 +129,7 @@ from app_backend.models import (
     RemoteMobileView,
     RemoteMobileSocketMessage,
     RemoteUserView,
+    RenameSessionRequest,
     ScheduledJobView,
     ScreenCaptureView,
     PlannerContractView,
@@ -156,6 +163,7 @@ from app_backend.models import (
 from app_backend.routers.app_confirmations import AppConfirmationsRouterDeps, create_app_confirmations_router
 from app_backend.routers.app_devices import AppDevicesRouterDeps, create_app_devices_router
 from app_backend.routers.app_files import AppFilesRouterDeps, create_app_files_router
+from app_backend.routers.app_onboarding import AppOnboardingRouterDeps, create_app_onboarding_router
 from app_backend.routers.app_pairing import AppPairingRouterDeps, create_app_pairing_router
 from app_backend.routers.app_recovery import AppRecoveryRouterDeps, create_app_recovery_router
 from app_backend.routers.app_sessions import AppSessionsRouterDeps, create_app_sessions_router
@@ -317,6 +325,7 @@ _REMOTE_AGENT_EXPLICIT_SESSION_PATHS = {
     "/api/app/agent/task-board/reassess",
     "/api/app/agent/control/pause",
     "/api/app/agent/control/stop",
+    "/api/app/agent/control/identity-stop",
     "/api/app/agent/control/restart",
 }
 _REMOTE_AUTH_RATE_LIMIT_LOCK = threading.Lock()
@@ -427,6 +436,7 @@ async def _app_lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await get_local_fleet_runtime().shutdown()
         await _stop_proactive_runtime_services(app)
 
 
@@ -541,6 +551,17 @@ def create_app() -> FastAPI:
                 is_remote_session_auth=_is_remote_session_auth,
                 bridge_for_user=_bridge_for_user,
                 consume_approved_confirmation=_consume_approved_confirmation,
+                check_rate_limit=_check_remote_auth_rate_limit,
+                rate_limit_max_attempts=REMOTE_AUTH_RATE_LIMIT_MAX_ATTEMPTS,
+            )
+        )
+    )
+    app.include_router(
+        create_app_onboarding_router(
+            AppOnboardingRouterDeps(
+                resolve_token=_resolve_token,
+                is_remote_session_auth=_is_remote_session_auth,
+                bridge_for_user=_bridge_for_user,
                 check_rate_limit=_check_remote_auth_rate_limit,
                 rate_limit_max_attempts=REMOTE_AUTH_RATE_LIMIT_MAX_ATTEMPTS,
             )

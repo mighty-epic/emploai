@@ -377,8 +377,6 @@ class AppSessionBridge:
         )
         if runtime:
             planner_model = getattr(runtime, "planner_model", None)
-            if planner_model is None:
-                planner_model = getattr(runtime, "default_planner_model", None)
             return {
                 "workspace": self._preferred_workspace(getattr(runtime, "workspace", self.workspace)),
                 "model": getattr(runtime, "current_model", "claude-haiku-4.5"),
@@ -414,7 +412,7 @@ class AppSessionBridge:
             "model": provider_defaults.model,
             "variant": "standard",
             "agent_mode": "auto",
-            "planner_model": provider_defaults.planner_model,
+            "planner_model": None,
             "enabled_tool_packs": default_enabled_tool_packs(),
             "security_permission_mode": "standard",
             "telegram_bot_config_id": self.orchestrator._default_bot_config_id(),
@@ -459,9 +457,12 @@ class AppSessionBridge:
         fleet_identity_id: Optional[str] = None,
         fleet_identity_role: Optional[str] = None,
         fleet_worker_id: Optional[str] = None,
+        activate: bool = True,
     ) -> Session:
         runtime = self._runtime()
-        self._persist_runtime_before_switch(runtime)
+        if activate:
+            self._assert_runtime_can_switch(runtime)
+            self._persist_runtime_before_switch(runtime)
 
         defaults = self._session_defaults(runtime)
         target_workspace = Path(workspace).expanduser().resolve() if workspace else defaults["workspace"]
@@ -497,15 +498,17 @@ class AppSessionBridge:
         if session.account_user_id is not None or session.fleet_identity_id or session.fleet_identity_role or session.fleet_worker_id:
             self.session_manager.save_session(session)
 
-        self.session_manager.set_current_session(session.id)
-        if runtime and not getattr(runtime, "is_processing", False):
-            runtime.load_session_by_id(session.id)
-            return runtime.session
+        if activate:
+            self.session_manager.set_current_session(session.id)
+            if runtime and not getattr(runtime, "is_processing", False):
+                runtime.load_session_by_id(session.id)
+                return runtime.session
         return self._load_session(session.id, set_current=False)
 
     def activate_session(self, session_id: str) -> Session:
         session = self._load_session(session_id, set_current=False)
         runtime = self._runtime()
+        self._assert_runtime_can_switch(runtime, target_session_id=session_id)
         self._persist_runtime_before_switch(runtime)
         self.session_manager.set_current_session(session_id)
         if runtime and not getattr(runtime, "is_processing", False):
@@ -562,6 +565,18 @@ class AppSessionBridge:
             "deleted_session_id": session.id,
             "current_session_id": next_current_id,
         }
+
+    def rename_session(self, session_id: str, name: str) -> Session:
+        clean_name = str(name or "").strip()
+        if not clean_name:
+            raise ValueError("Chat name is required")
+        if len(clean_name) > 160:
+            clean_name = clean_name[:160].rstrip()
+        session = self._load_session(session_id, set_current=False)
+        session.name = clean_name
+        self.session_manager.save_session(session)
+        self._reload_current_runtime_session_if_idle(session_id)
+        return session
 
     def get_or_create_runtime_session(self) -> "TelegramSession":
         return get_session(
@@ -625,6 +640,7 @@ class AppSessionBridge:
             "channel": channel,
             "source_format": source_format,
             "display_label": display_label,
+            "run_mode": message.get("run_mode"),
             "raw": message,
         }
 
@@ -645,17 +661,21 @@ class AppSessionBridge:
         latest_preview = None
         origin_channels = []
         for item in session.chat_history:
+            if bool(item.get("hidden_from_app")):
+                continue
             ch = item.get("channel")
             if ch and ch not in origin_channels:
                 origin_channels.append(ch)
-        if session.chat_history:
-            latest_preview = str(session.chat_history[-1].get("content", ""))[:140]
+        visible_history = [item for item in session.chat_history if not bool(item.get("hidden_from_app"))]
+        if visible_history:
+            latest_preview = str(visible_history[-1].get("content", ""))[:140]
         return {
             "id": session.id,
             "name": session.name,
             "created_at": session.created_at,
             "updated_at": session.updated_at,
             "model": session.model,
+            "variant": session.variant,
             "message_count": len(session.chat_history),
             "workspace": session.workspace,
             "latest_preview": latest_preview,
@@ -668,6 +688,8 @@ class AppSessionBridge:
             "fleet_worker_id": getattr(session, "fleet_worker_id", None),
             "account_user_id": getattr(session, "account_user_id", None),
             "account_email": getattr(session, "account_email", None),
+            "plan_mode": getattr(session, "plan_mode", None),
+            "active_goal": getattr(session, "active_goal", None),
             **self._artifact_meta(session.id),
             **self.orchestrator._session_summary_live_fields(session),
         }
@@ -679,6 +701,7 @@ class AppSessionBridge:
             "created_at": session.created_at,
             "updated_at": session.updated_at,
             "model": session.model,
+            "variant": getattr(session, "variant", "standard"),
             "message_count": int(getattr(session, "message_count", 0) or 0),
             "workspace": session.workspace,
             "latest_preview": getattr(session, "latest_preview", None),
@@ -691,6 +714,8 @@ class AppSessionBridge:
             "fleet_worker_id": getattr(session, "fleet_worker_id", None),
             "account_user_id": getattr(session, "account_user_id", None),
             "account_email": getattr(session, "account_email", None),
+            "plan_mode": getattr(session, "plan_mode", None),
+            "active_goal": getattr(session, "active_goal", None),
             **self._artifact_meta(session.id),
             **self.orchestrator._session_summary_live_fields(session),
         }
@@ -713,7 +738,11 @@ class AppSessionBridge:
             "workspace": session.workspace,
             "workspace_id": getattr(session, "workspace_id", None),
             "workspace_binding_status": getattr(session, "workspace_binding_status", None),
-            "messages": [self.build_message_view(m) for m in session.chat_history],
+            "messages": [
+                self.build_message_view(m)
+                for m in session.chat_history
+                if not bool(m.get("hidden_from_app"))
+            ],
             "timeline_events": [
                 self.build_timeline_event_view(item)
                 for item in session.event_timeline
@@ -727,9 +756,49 @@ class AppSessionBridge:
             "fleet_worker_id": getattr(session, "fleet_worker_id", None),
             "account_user_id": getattr(session, "account_user_id", None),
             "account_email": getattr(session, "account_email", None),
+            "plan_mode": getattr(session, "plan_mode", None),
+            "active_goal": getattr(session, "active_goal", None),
             **self._artifact_meta(session.id),
             **self.orchestrator._session_summary_live_fields(session),
         }
+
+    def update_session_mode_state(self, session_id: str, action: str, reason: Optional[str] = None) -> Session:
+        runtime = self._runtime()
+        current_id = None
+        if runtime and getattr(runtime, "session_manager", None):
+            current_id = runtime.session_manager.get_current_session_id()
+        session = runtime.session if runtime and str(current_id or "") == str(session_id) else self._load_session(session_id, set_current=False)
+
+        normalized = str(action or "").strip().lower()
+        timestamp = datetime.utcnow().isoformat() + "Z"
+        if normalized in {"exit_plan", "dismiss_plan"}:
+            state = getattr(session, "plan_mode", None)
+            if isinstance(state, dict):
+                state = dict(state)
+                state["status"] = "dismissed" if normalized == "dismiss_plan" else "exited"
+                state["updated_at"] = timestamp
+                if reason:
+                    state["exit_reason"] = str(reason)
+            session.plan_mode = None
+        elif normalized == "clear_goal":
+            goal = getattr(session, "active_goal", None)
+            if isinstance(goal, dict):
+                goal = dict(goal)
+                goal["status"] = "cleared"
+                goal["updated_at"] = timestamp
+                goal["cleared_at"] = timestamp
+                if reason:
+                    goal["summary"] = str(reason)
+            session.active_goal = None
+        else:
+            raise ValueError(f"Unsupported mode action: {action}")
+
+        if runtime and session is runtime.session:
+            runtime.save_session()
+        else:
+            self.session_manager.save_session(session)
+        self._reload_current_runtime_session_if_idle(session_id)
+        return session
 
     def append_timeline_event(
         self,

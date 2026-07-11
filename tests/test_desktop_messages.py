@@ -62,6 +62,13 @@ def test_desktop_message_helpers_execute_with_typescript_transpile():
         assert.strictEqual(mapped[0].messageKey, 'message:server-1#1');
         assert.strictEqual(mapped[1].messageKey, 'message:server-1#2');
         assert.strictEqual(messages.toLiveDesktopMessage(sessionMessages[0], mapped).messageKey, 'message:server-1#3');
+        const clientMessage = messages.toDesktopMessages([{
+          role: 'user',
+          content: 'Reliable delivery',
+          raw: { client_message_id: 'desktop:message-1' },
+        }])[0];
+        assert.strictEqual(clientMessage.messageKey, 'message:desktop:message-1#1');
+        assert.strictEqual(clientMessage.clientMessageId, 'desktop:message-1');
         assert.strictEqual(messages.labelForMessage(mapped[0]), 'Helper');
         assert.strictEqual(messages.labelForMessage({ role: 'user', content: '' }), 'You');
         assert.strictEqual(messages.labelForMessage({ role: 'system', content: '' }), 'System');

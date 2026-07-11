@@ -136,6 +136,39 @@ def test_ensure_runtime_bootstrap_respects_auto_start(monkeypatch, tmp_path: Pat
         desktop_backend._ensure_runtime(config, tmp_path, require_auto_start=True)
 
 
+def test_runtime_status_payload_distinguishes_busy_runtime_process_from_dead_runtime(monkeypatch, tmp_path: Path):
+    config = DesktopRuntimeConfig(
+        enabled=True,
+        host="127.0.0.1",
+        port=8787,
+        auto_start=False,
+        attach_timeout_seconds=3,
+        restart_attach_timeout_seconds=3,
+        workspace=str(tmp_path),
+    )
+    status = DesktopRuntimeStatus(
+        ok=False,
+        state="offline",
+        mode="detached",
+        api_base_url="http://127.0.0.1:8787",
+        detail="Health probe timed out while the runtime was busy",
+    )
+    monkeypatch.setattr(desktop_backend, "_prepare_environment", lambda **_kwargs: None)
+    monkeypatch.setattr(desktop_backend, "_runtime_paths", lambda: (tmp_path, tmp_path, tmp_path / ".env"))
+    monkeypatch.setattr(desktop_backend, "_load_desktop_runtime_config", lambda: config)
+    monkeypatch.setattr(desktop_backend, "_get_runtime_status", lambda: status)
+    monkeypatch.setattr(
+        desktop_backend,
+        "_managed_runtime_pids",
+        lambda _home, _config, status=None: [4321],
+    )
+
+    payload = desktop_backend._runtime_status_payload()
+
+    assert payload["ok"] is False
+    assert payload["runtimeProcessDetected"] is True
+
+
 def test_ensure_runtime_restarts_incompatible_attached_runtime(monkeypatch, tmp_path: Path):
     config = DesktopRuntimeConfig(
         enabled=True,
@@ -766,7 +799,7 @@ def test_forward_voice_bridge_prepares_runtime_environment(monkeypatch, tmp_path
 
     def _fake_configure(home: Path, env_file: Path) -> None:
         recorded["configure"] = (home, env_file)
-        os.environ["EMPLOAI_HOME"] = str(home)
+        monkeypatch.setenv("EMPLOAI_HOME", str(home))
 
     monkeypatch.setattr(desktop_backend, "configure_process_environment", _fake_configure)
 

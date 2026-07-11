@@ -66,11 +66,17 @@ try:
 except ImportError:  # pragma: no cover
     OpenAI = None
 
+try:
+    from google import genai as google_genai
+except ImportError:  # pragma: no cover
+    google_genai = None
+
 APP_STT_BACKEND_ENV = "EMPLO_APP_STT_BACKEND"
 APP_STT_MODEL_ENV = "EMPLO_APP_STT_MODEL"
 APP_STT_DRAFT_MODEL_ENV = "EMPLO_APP_STT_DRAFT_MODEL"
 APP_STT_LANGUAGE_ENV = "EMPLO_APP_STT_LANGUAGE"
 APP_STT_PROMPT_ENV = "EMPLO_APP_STT_PROMPT"
+APP_STT_GEMINI_MODEL_ENV = "EMPLO_APP_STT_GEMINI_MODEL"
 APP_STT_REALTIME_MODEL_ENV = "EMPLO_APP_STT_REALTIME_MODEL"
 APP_STT_REALTIME_TRANSCRIPTION_MODEL_ENV = "EMPLO_APP_STT_REALTIME_TRANSCRIPTION_MODEL"
 APP_STT_REALTIME_URL_ENV = "EMPLO_APP_STT_REALTIME_URL"
@@ -115,7 +121,9 @@ APP_JARVIS_BARGE_IN_GATE_DBFS_ENV = "EMPLO_APP_JARVIS_BARGE_IN_GATE_DBFS"
 DEFAULT_STT_BACKEND = "local_whisper"
 OPENAI_STT_MODEL = "gpt-4o-mini-transcribe"
 OPENAI_REALTIME_STT_BACKEND = "openai_realtime"
+GEMINI_STT_BACKEND = "gemini"
 DEFAULT_REALTIME_STT_MODEL = "gpt-realtime-whisper"
+DEFAULT_GEMINI_STT_MODEL = "gemini-3.5-flash"
 REALTIME_STT_SAMPLE_RATE = 24_000
 DEFAULT_REALTIME_STT_TIMEOUT_SECONDS = 8.0
 DEFAULT_REALTIME_STT_APPEND_TIMEOUT_SECONDS = 6.0
@@ -153,6 +161,7 @@ MAX_TTS_CHARS = 4000
 SUPPORTED_TTS_BACKENDS = ("openai", "kokoro_onnx", "pocket")
 
 _stt_client: Optional[OpenAI] = None
+_gemini_stt_client: Optional[Any] = None
 _whisper_cli_cache: Optional[Path] = None
 _model_cache: dict[str, Path] = {}
 _pocket_tts_runtime: Optional["_PocketTtsRuntime"] = None
@@ -161,6 +170,8 @@ _pocket_tts_lock = threading.Lock()
 _kokoro_tts_runtime: Optional["_KokoroOnnxRuntime"] = None
 _kokoro_tts_runtime_key: Optional[tuple[str, str, str]] = None
 _kokoro_tts_lock = threading.Lock()
+_openai_realtime_config_error: Optional[str] = None
+_openai_realtime_config_error_key: Optional[str] = None
 
 
 def _runtime_env_value(name: str) -> str:
@@ -195,6 +206,46 @@ def _openai_api_key() -> str:
     if api_key:
         os.environ["OPENAI_API_KEY"] = api_key
     return api_key
+
+
+def _openai_realtime_setup_error_message() -> str:
+    return "OPENAI_API_KEY was rejected by OpenAI Realtime voice transcription. Replace it in Settings or switch Jarvis input to Local Whisper or Gemini."
+
+
+def _looks_like_openai_realtime_setup_error(message: object) -> bool:
+    normalized = str(message or "").lower()
+    return (
+        "invalid api key" in normalized
+        or "error.invalid api key" in normalized
+        or "openai_api_key is not configured" in normalized
+        or "openai_api_key is required" in normalized
+    )
+
+
+def _remember_openai_realtime_setup_error(message: object) -> Optional[str]:
+    global _openai_realtime_config_error, _openai_realtime_config_error_key
+    if not _looks_like_openai_realtime_setup_error(message):
+        return None
+    friendly = _openai_realtime_setup_error_message()
+    _openai_realtime_config_error = friendly
+    _openai_realtime_config_error_key = _openai_api_key()
+    return friendly
+
+
+def _gemini_api_key() -> str:
+    for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        api_key = os.getenv(name, "").strip()
+        if api_key:
+            os.environ["GEMINI_API_KEY"] = api_key
+            os.environ["GOOGLE_API_KEY"] = api_key
+            return api_key
+    for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        api_key = _runtime_env_value(name)
+        if api_key:
+            os.environ["GEMINI_API_KEY"] = api_key
+            os.environ["GOOGLE_API_KEY"] = api_key
+            return api_key
+    return ""
 
 
 def _hebrew_transformers_runtime():
@@ -233,6 +284,22 @@ def _get_stt_client() -> Optional[OpenAI]:
 
     _stt_client = OpenAI(api_key=api_key)
     return _stt_client
+
+
+def _get_gemini_stt_client() -> Optional[Any]:
+    global _gemini_stt_client
+    if _gemini_stt_client is not None:
+        return _gemini_stt_client
+
+    if google_genai is None:
+        return None
+
+    api_key = _gemini_api_key()
+    if not api_key:
+        return None
+
+    _gemini_stt_client = google_genai.Client(api_key=api_key)
+    return _gemini_stt_client
 
 
 def _voice_engine_selection() -> Dict[str, object]:
@@ -294,9 +361,14 @@ def _voice_input_selection_issue() -> Optional[str]:
     if stt_backend == OPENAI_REALTIME_STT_BACKEND:
         issues = _openai_realtime_stt_issues()
         return issues[0] if issues else None
+    if stt_backend == GEMINI_STT_BACKEND:
+        issues = _gemini_stt_issues()
+        return issues[0] if issues else None
 
     default_engine = _selected_voice_engine()
     if default_engine == VOICE_ENGINE_NONE:
+        if not bool(get_english_pack_status().get("available")) and not bool(get_hebrew_pack_status().get("available")):
+            return "No local voice packs are installed. Open setup or choose an API voice input engine."
         return "Voice input is disabled in setup and settings."
     if default_engine == VOICE_ENGINE_HEBREW:
         issues = _hebrew_support_issues(require_model=True)
@@ -375,6 +447,13 @@ def reset_tts_runtime_cache() -> None:
     with _kokoro_tts_lock:
         _kokoro_tts_runtime = None
         _kokoro_tts_runtime_key = None
+
+
+def reset_stt_runtime_cache() -> None:
+    global _stt_client, _gemini_stt_client
+
+    _stt_client = None
+    _gemini_stt_client = None
 
 
 def _pocket_tts_language() -> str:
@@ -806,11 +885,16 @@ def get_voice_runtime_status() -> Dict[str, object]:
     hebrew_pack_ready = bool(hebrew_pack_status.get("available"))
 
     if default_engine == VOICE_ENGINE_NONE and not api_stt_backend:
-        input_issues.append("Voice input is disabled in setup and settings.")
+        if not english_pack_ready and not hebrew_pack_ready:
+            input_issues.append("No local voice packs are installed. Open setup or choose an API voice input engine.")
+        else:
+            input_issues.append("Voice input is disabled in setup and settings.")
     elif stt_backend == "openai":
         input_issues.extend(_openai_request_stt_issues())
     elif stt_backend == OPENAI_REALTIME_STT_BACKEND:
         input_issues.extend(_openai_realtime_stt_issues())
+    elif stt_backend == GEMINI_STT_BACKEND:
+        input_issues.extend(_gemini_stt_issues())
     elif default_engine == VOICE_ENGINE_HEBREW:
         input_issues.extend(hebrew_pack_issues)
     else:
@@ -837,6 +921,10 @@ def get_voice_runtime_status() -> Dict[str, object]:
         binary_flavor = None
     elif stt_backend == "openai":
         stt_model = os.getenv(APP_STT_MODEL_ENV, OPENAI_STT_MODEL)
+        draft_model = None
+        binary_flavor = None
+    elif stt_backend == GEMINI_STT_BACKEND:
+        stt_model = _gemini_stt_model()
         draft_model = None
         binary_flavor = None
     elif default_engine == VOICE_ENGINE_HEBREW:
@@ -926,11 +1014,22 @@ def _normalize_tts_text(text: str) -> str:
 
 
 def _stt_backend() -> str:
-    return (os.getenv(APP_STT_BACKEND_ENV, DEFAULT_STT_BACKEND).strip().lower() or DEFAULT_STT_BACKEND)
+    backend = (os.getenv(APP_STT_BACKEND_ENV, DEFAULT_STT_BACKEND).strip().lower().replace("-", "_") or DEFAULT_STT_BACKEND)
+    if backend in {"local", "whisper", "whisper_cpp"}:
+        return DEFAULT_STT_BACKEND
+    if backend in {"realtime", "realtime_api"}:
+        return OPENAI_REALTIME_STT_BACKEND
+    if backend in {"google", "google_gemini", "gemini_api"}:
+        return GEMINI_STT_BACKEND
+    return backend
 
 
 def _is_api_stt_backend(stt_backend: Optional[str] = None) -> bool:
-    return (stt_backend or _stt_backend()) in {"openai", OPENAI_REALTIME_STT_BACKEND}
+    return (stt_backend or _stt_backend()) in {"openai", OPENAI_REALTIME_STT_BACKEND, GEMINI_STT_BACKEND}
+
+
+def _gemini_stt_model() -> str:
+    return os.getenv(APP_STT_GEMINI_MODEL_ENV, "").strip() or DEFAULT_GEMINI_STT_MODEL
 
 
 def _realtime_stt_model() -> str:
@@ -979,13 +1078,24 @@ def _openai_request_stt_issues() -> list[str]:
 
 def _openai_realtime_stt_issues() -> list[str]:
     issues: list[str] = []
-    if not _openai_api_key():
+    api_key = _openai_api_key()
+    if not api_key:
         issues.append("OPENAI_API_KEY is not configured, so OpenAI Realtime voice transcription is unavailable.")
+    elif _openai_realtime_config_error and _openai_realtime_config_error_key == api_key:
+        issues.append(_openai_realtime_config_error)
     try:
         import websockets  # noqa: F401
     except ImportError:
         issues.append("The `websockets` Python package is not installed, so OpenAI Realtime voice transcription is unavailable.")
     return issues
+
+
+def _gemini_stt_issues() -> list[str]:
+    if google_genai is None:
+        return ["The `google-genai` Python package is not installed, so Gemini voice transcription is unavailable."]
+    if not _gemini_api_key():
+        return ["GOOGLE_API_KEY or GEMINI_API_KEY is not configured, so Gemini voice transcription is unavailable."]
+    return []
 
 
 def _local_model_name() -> str:
@@ -1196,6 +1306,12 @@ def _mime_for_audio_format(audio_format: str) -> str:
 
 
 def _transcribe_audio_bytes(data: bytes, mime_type: Optional[str]) -> str:
+    if _stt_backend() == GEMINI_STT_BACKEND:
+        return _transcribe_audio_bytes_gemini(data, mime_type)
+    return _transcribe_audio_bytes_openai(data, mime_type)
+
+
+def _transcribe_audio_bytes_openai(data: bytes, mime_type: Optional[str]) -> str:
     client = _get_stt_client()
     if not client:
         if OpenAI is None:
@@ -1229,6 +1345,61 @@ def _transcribe_audio_bytes(data: bytes, mime_type: Optional[str]) -> str:
     if isinstance(result, str):
         return _normalize_transcript(result)
     return _normalize_transcript(getattr(result, "text", ""))
+
+
+def _gemini_mime_type(mime_type: Optional[str]) -> str:
+    mime = (mime_type or "").strip().lower()
+    if "mpeg" in mime or "mp3" in mime:
+        return "audio/mp3"
+    if "wav" in mime or "x-wav" in mime:
+        return "audio/wav"
+    if "flac" in mime:
+        return "audio/flac"
+    if "ogg" in mime:
+        return "audio/ogg"
+    if "webm" in mime:
+        return "audio/webm"
+    return mime or "audio/wav"
+
+
+def _transcribe_audio_bytes_gemini(data: bytes, mime_type: Optional[str]) -> str:
+    client = _get_gemini_stt_client()
+    if not client:
+        if google_genai is None:
+            raise RuntimeError("The `google-genai` Python package is not installed, so Gemini voice transcription is unavailable")
+        raise RuntimeError("GOOGLE_API_KEY or GEMINI_API_KEY is required for Gemini voice transcription")
+    if not data:
+        return ""
+
+    prompt_parts = [
+        "Generate only a clean transcript of the speech in this audio.",
+        "Do not summarize, explain, add timestamps, or identify speakers unless they are spoken aloud.",
+    ]
+    known_terms = _known_terms_prompt()
+    if known_terms:
+        prompt_parts.append(known_terms)
+    language = os.getenv(APP_STT_LANGUAGE_ENV, "").strip()
+    if language:
+        prompt_parts.append(f"The expected language hint is {language}.")
+    prompt = "\n".join(prompt_parts)
+
+    try:
+        interaction = client.interactions.create(
+            model=_gemini_stt_model(),
+            input=[
+                {"type": "text", "text": prompt},
+                {
+                    "type": "audio",
+                    "data": base64.b64encode(data).decode("utf-8"),
+                    "mime_type": _gemini_mime_type(mime_type),
+                },
+            ],
+        )
+    except Exception as exc:
+        info = normalize_provider_error(exc, payload_kind="audio")
+        raise RuntimeError(f"{info.error_type}: {info.message}") from exc
+
+    return _normalize_transcript(str(getattr(interaction, "output_text", "") or ""))
 
 
 def synthesize_assistant_audio(text: str) -> Optional[Dict[str, object]]:
@@ -1757,17 +1928,23 @@ class OpenAIRealtimeVoiceDraftState:
         if noise_reduction_type:
             input_config["noise_reduction"] = {"type": noise_reduction_type}
 
-        await websocket.send(
-            json.dumps(
-                {
-                    "type": "session.update",
-                    "session": {
-                        "type": "transcription",
-                        "audio": {"input": input_config},
-                    },
-                }
+        try:
+            await websocket.send(
+                json.dumps(
+                    {
+                        "type": "session.update",
+                        "session": {
+                            "type": "transcription",
+                            "audio": {"input": input_config},
+                        },
+                    }
+                )
             )
-        )
+        except Exception as exc:
+            friendly = _remember_openai_realtime_setup_error(exc)
+            if friendly:
+                raise RuntimeError(friendly) from exc
+            raise
         return websocket
 
     async def _append_pending_pcm_locked(self, websocket: Any) -> None:
@@ -1837,16 +2014,21 @@ class OpenAIRealtimeVoiceDraftState:
                 elif event_type == "error":
                     error = data.get("error") or {}
                     if isinstance(error, dict):
-                        self.error_text = redact_text(str(error.get("message") or error.get("type") or error))
+                        error_message = str(error.get("message") or error.get("type") or error)
+                        self.error_text = _remember_openai_realtime_setup_error(error_message) or redact_text(error_message)
                     else:
-                        self.error_text = redact_text(str(error))
+                        self.error_text = _remember_openai_realtime_setup_error(error) or redact_text(str(error))
                     self.state = "error"
                     self.final_event.set()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            info = normalize_provider_error(exc, payload_kind="audio")
-            self.error_text = f"{info.error_type}: {info.message}"
+            friendly = _remember_openai_realtime_setup_error(exc)
+            if friendly:
+                self.error_text = friendly
+            else:
+                info = normalize_provider_error(exc, payload_kind="audio")
+                self.error_text = f"{info.error_type}: {info.message}"
             self.state = "error"
             self.final_event.set()
 
@@ -1880,10 +2062,16 @@ class OpenAIRealtimeVoiceDraftState:
         self.pcm_chunks[seq] = pcm24k
         self.last_sequence = max(self.last_sequence, seq)
 
-        async with self.transcription_slots:
-            websocket = await self._ensure_session()
-            await self._append_pending_pcm_locked(websocket)
-            self.state = "listening"
+        try:
+            async with self.transcription_slots:
+                websocket = await self._ensure_session()
+                await self._append_pending_pcm_locked(websocket)
+                self.state = "listening"
+        except Exception as exc:
+            friendly = _remember_openai_realtime_setup_error(exc)
+            if friendly:
+                raise RuntimeError(friendly) from exc
+            raise
 
         return self.transcript()
 
@@ -1895,13 +2083,19 @@ class OpenAIRealtimeVoiceDraftState:
         if self.last_sequence <= 0:
             return ""
 
-        async with self.transcription_slots:
-            websocket = await self._ensure_session()
-            await self._append_pending_pcm_locked(websocket)
-            if not self.commit_sent:
-                self.final_event.clear()
-                await websocket.send(json.dumps({"type": "input_audio_buffer.commit"}))
-                self.commit_sent = True
+        try:
+            async with self.transcription_slots:
+                websocket = await self._ensure_session()
+                await self._append_pending_pcm_locked(websocket)
+                if not self.commit_sent:
+                    self.final_event.clear()
+                    await websocket.send(json.dumps({"type": "input_audio_buffer.commit"}))
+                    self.commit_sent = True
+        except Exception as exc:
+            friendly = _remember_openai_realtime_setup_error(exc)
+            if friendly:
+                raise RuntimeError(friendly) from exc
+            raise
 
         try:
             await asyncio.wait_for(self.final_event.wait(), timeout=_realtime_final_timeout_seconds())

@@ -234,7 +234,7 @@ def _planner_model_for_final_verifier(session: Any) -> str:
     configured = str(getattr(session, "planner_model", "") or "").strip()
     default = str(getattr(session, "default_planner_model", "") or "").strip()
     current = str(getattr(session, "current_model", "") or "").strip()
-    return configured or default or current
+    return configured or current or default
 
 
 def _planner_final_completion(session: Any, *, prompt_payload: Dict[str, Any]) -> Optional[str]:

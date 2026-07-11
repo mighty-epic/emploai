@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 from app_backend import session_bridge
@@ -56,6 +57,7 @@ def test_generated_artifacts_are_cloud_mirrored_with_quota_metadata(monkeypatch,
     runtime_home = tmp_path / "runtime"
     runtime_home.mkdir()
     monkeypatch.setenv("EMPLOAI_HOME", str(runtime_home))
+    monkeypatch.setenv("EMPLOAI_CLOUD_BACKEND_ENABLED", "1")
 
     store = ChatArtifactStore(user_id=77, session_id="sess-cloud")
     record = store.create_text_artifact(
@@ -76,6 +78,28 @@ def test_generated_artifacts_are_cloud_mirrored_with_quota_metadata(monkeypatch,
         source_kind="upload",
     )
     assert "cloud_sync_status" not in upload.metadata
+
+
+def test_concurrent_artifact_creates_do_not_lose_index_entries(monkeypatch, tmp_path: Path) -> None:
+    runtime_home = tmp_path / "runtime"
+    runtime_home.mkdir()
+    monkeypatch.setenv("EMPLOAI_HOME", str(runtime_home))
+
+    store = ChatArtifactStore(user_id=77, session_id="sess-concurrent")
+
+    def create(index: int) -> str:
+        return store.create_text_artifact(
+            artifact_kind="note",
+            title=f"Note {index}",
+            text=f"payload {index}",
+            source_kind="agent",
+        ).artifact_id
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        artifact_ids = set(executor.map(create, range(24)))
+
+    assert len(artifact_ids) == 24
+    assert {record.artifact_id for record in store.list_records()} == artifact_ids
 
 
 def test_screen_artifact_uses_sidecar_vision_summary(monkeypatch, tmp_path: Path) -> None:
@@ -105,6 +129,31 @@ def test_screen_artifact_uses_sidecar_vision_summary(monkeypatch, tmp_path: Path
     assert "Vision summary: Notepad is visible" in record.summary_text
     assert "Question: Did the requested file open?" in record.summary_text
     assert record.metadata["tool_result"]["image_base64"].startswith("[omitted image data")
+
+
+def test_touched_file_snapshot_preserves_workspace_id(monkeypatch, tmp_path: Path) -> None:
+    runtime_home = tmp_path / "runtime"
+    runtime_home.mkdir()
+    monkeypatch.setenv("EMPLOAI_HOME", str(runtime_home))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    touched = workspace / "notes.txt"
+    touched.write_text("snapshot proof", encoding="utf-8")
+
+    store = ChatArtifactStore(user_id=77, session_id="sess-snapshot")
+    artifact_ids = channel_runtime._snapshot_touched_file_artifact_ids(
+        SimpleNamespace(workspace=str(workspace), workspace_id="workspace-123"),
+        store=store,
+        touched_file_paths={touched},
+        task_id=9,
+    )
+
+    assert len(artifact_ids) == 1
+    record = store.get_record(artifact_ids[0])
+    assert record is not None
+    assert record.metadata["workspace_id"] == "workspace-123"
+    assert record.metadata["path"] == "notes.txt"
 
 
 def test_session_bridge_upload_creates_chat_artifact(monkeypatch, tmp_path: Path) -> None:

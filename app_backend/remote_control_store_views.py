@@ -201,6 +201,8 @@ class RemoteControlStoreViewMixin:
         }
 
     def _worker_view(self, row: sqlite3.Row | Dict[str, Any]) -> Dict[str, Any]:
+        from app_backend.fleet_queue_policy import normalize_queue_policy
+
         status = str(row["status"] or "idle")
         last_seen_at = row["last_seen_at"]
         if status not in {"working", "blocked", "needs_review"} and last_seen_at:
@@ -209,6 +211,7 @@ class RemoteControlStoreViewMixin:
                 status = "offline"
             elif age_seconds >= FLEET_STALE_SECONDS:
                 status = "stale"
+        metadata = _json_loads(row["metadata"], {})
         return {
             "worker_id": row["worker_id"],
             "user_id": int(row["user_id"]),
@@ -220,7 +223,8 @@ class RemoteControlStoreViewMixin:
             "detail": row["detail"],
             "group_id": row["group_id"],
             "active_task_id": row["active_task_id"],
-            "metadata": _json_loads(row["metadata"], {}),
+            "metadata": metadata,
+            "queue_policy": normalize_queue_policy(metadata.get("queue_policy")),
             "created_at": _utc_iso(row["created_at"]),
             "updated_at": _utc_iso(row["updated_at"]),
             "last_seen_at": _utc_iso(row["last_seen_at"]),

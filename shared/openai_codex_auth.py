@@ -12,7 +12,16 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, Iterator, Mapping, Optional, Tuple
 
+from shared.atomic_io import atomic_write_json
 from shared.runtime_paths import shared_state_root
+from shared.secure_store import (
+    KEYRING_STORAGE,
+    WINDOWS_DPAPI_STORAGE,
+    SecureStorageUnavailable,
+    delete_secure_payload,
+    protect_json_payload,
+    unprotect_json_payload,
+)
 
 
 CODEX_PROVIDER = "openai-codex"
@@ -44,23 +53,64 @@ def codex_auth_path() -> Path:
 
 def _read_store() -> Dict[str, Any]:
     path = codex_auth_path()
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    backup_path = path.with_suffix(f"{path.suffix}.bak")
+    purpose = f"EmploAI OpenAI Codex auth: {path}"
+    for candidate in (path, backup_path):
+        try:
+            record = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        storage = str(record.get("storage") or "").strip()
+        try:
+            if storage in {WINDOWS_DPAPI_STORAGE, KEYRING_STORAGE}:
+                payload = unprotect_json_payload(record, purpose=purpose)
+            else:
+                # Legacy plaintext stores are accepted only long enough to
+                # migrate them into the current user's OS credential vault.
+                payload = record
+                _write_store(payload)
+        except SecureStorageUnavailable:
+            continue
+        if candidate == backup_path:
+            _write_store(payload)
+        return payload
+    return {}
 
 
 def _write_store(payload: Mapping[str, Any]) -> None:
     path = codex_auth_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(dict(payload), indent=2, sort_keys=True), encoding="utf-8")
+    purpose = f"EmploAI OpenAI Codex auth: {path}"
+    try:
+        envelope = protect_json_payload(payload, purpose=purpose)
+    except SecureStorageUnavailable as exc:
+        raise CodexAuthError(str(exc)) from exc
+    atomic_write_json(
+        path,
+        envelope,
+        backup_path=path.with_suffix(f"{path.suffix}.bak"),
+        sort_keys=True,
+    )
 
 
 def delete_codex_auth() -> Dict[str, Any]:
     path = codex_auth_path()
+    purpose = f"EmploAI OpenAI Codex auth: {path}"
+    for candidate in (path, path.with_suffix(f"{path.suffix}.bak")):
+        try:
+            record = json.loads(candidate.read_text(encoding="utf-8"))
+            if isinstance(record, dict):
+                delete_secure_payload(record, purpose=purpose)
+        except (OSError, json.JSONDecodeError, SecureStorageUnavailable):
+            pass
     try:
         path.unlink()
+    except FileNotFoundError:
+        pass
+    try:
+        path.with_suffix(f"{path.suffix}.bak").unlink()
     except FileNotFoundError:
         pass
     return codex_auth_status()
@@ -460,6 +510,7 @@ class _CodexResponsesEndpoint:
         base_url = _base_url(store)
         url = f"{base_url}/responses"
         payload = {key: value for key, value in dict(kwargs).items() if value is not None}
+        payload["store"] = False
         stream = bool(payload.get("stream"))
         accept = "text/event-stream" if stream else "application/json"
         headers = _codex_headers(store)

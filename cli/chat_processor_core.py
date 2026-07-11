@@ -37,6 +37,10 @@ OPENAI_COMPATIBLE_PROVIDER_BASE_URLS = {
     "openrouter": "https://openrouter.ai/api/v1",
 }
 
+VARIANT_ALIASES = {
+    "light": "low",
+}
+
 
 class _PromptConfig(dict):
     def get(self, key, default=None):
@@ -238,8 +242,15 @@ def get_available_variants(processor, model: str) -> List[str]:
     return variant_info.get("variants", ["standard"])
 
 
+def normalize_variant_name(variant: str) -> str:
+    """Normalize user-facing variant aliases to canonical runtime values."""
+    normalized = str(variant or "").strip().lower()
+    return VARIANT_ALIASES.get(normalized, normalized)
+
+
 def set_variant(processor, variant: str) -> bool:
     """Set the current variant if valid for the current model."""
+    variant = normalize_variant_name(variant)
     available = get_available_variants(processor, processor.current_model)
     if variant in available:
         processor.current_variant = variant

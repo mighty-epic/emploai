@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import {
   Animated,
   Easing,
@@ -21,6 +21,15 @@ import { buildWsBaseUrl } from '../../lib/appConfig';
 import { describeError, logDiagnostic, shortStatusText, userFacingError } from '../../lib/diagnostics';
 import { useConfirmation } from '@/components/ConfirmationDialog';
 import { createApprovedConfirmation } from '@/lib/sharedConfirmations';
+import {
+  openDesktopConversationContextMenu,
+  type DesktopConversationContextMenuState,
+  type DesktopConversationContextMenuTarget,
+} from './DesktopConversationContextMenu';
+import {
+  desktopVoiceMachineReducer,
+  initialDesktopVoiceMachineState,
+} from './desktopJarvisState';
 import {
   activateSession,
   appendSessionTimelineEvent,
@@ -45,6 +54,7 @@ import {
   setTaskBoardArmedNextTurn,
   searchSessions,
   configureHeadlessRuntime,
+  stopProcessWait,
   updateSessionHeadlessEligibility,
   updateSessionSecurityPermissionMode,
   updateSessionTelegramBotAssignment,
@@ -155,6 +165,8 @@ import {
   ALWAYS_ON_VOICE_AUTO_SEND,
   JARVIS_BARGE_IN_MIN_VOICED_MS,
   JARVIS_ENGLISH_VOICE_PATH_ERROR,
+  JARVIS_WAKE_PHRASE,
+  STT_BACKEND_GEMINI,
   STT_BACKEND_LOCAL_WHISPER,
   STT_BACKEND_OPENAI_REALTIME,
   TTS_BACKEND_KOKORO,
@@ -185,6 +197,15 @@ import {
   type VoiceGateState,
 } from '@/desktop/desktopVoiceAudio';
 import {
+  clearJarvisWakeProfile,
+  createJarvisWakeMatchState,
+  isJarvisWakeProfileReady,
+  loadJarvisWakeProfile,
+  saveJarvisWakeProfile,
+  type JarvisWakeMatchState,
+  type JarvisWakeProfile,
+} from '@/desktop/desktopJarvisWakeProfile';
+import {
   normalizeCompletedTaskBoards,
   resolveTaskBoardState,
   summarizeRuntimeStatus,
@@ -205,7 +226,6 @@ import { formatAbsoluteTime, formatRelativeTime } from '@/lib/time';
 import { fleetTaskBatchStatusMessage, fleetTaskStatusMessage, isBlockedFleetTask } from '@/lib/fleetStatus';
 
 const VOICE_SEGMENT_MS = 850;
-const VOICE_PROCESSOR_BUFFER_SIZE = 4096;
 const VOICE_GATE_DBFS = -35.5;
 const VOICE_GATE_ATTACK_MS = 25;
 const VOICE_GATE_MIN_MS = 50;
@@ -231,9 +251,26 @@ const DESKTOP_NO_ACTIVE_SESSION_STATUS = 'Open or select a chat before using age
 
 type InterruptPolicy = 'none' | 'steer_now' | 'after_tool';
 type MessageSourceFormat = 'app_text' | 'app_voice_transcript';
-type RealtimeChannel = 'chat' | 'voice';
+type ComposerRunMode = 'normal' | 'plan' | 'goal';
+type PlanAction = 'approve' | 'dismiss' | 'answer_question' | 'exit';
+type PlanAnswer = { question_id: string; option_id?: string | null; freeform_text?: string | null };
+type ComposerModeOptions = {
+  runMode?: ComposerRunMode | null;
+  planAction?: PlanAction | null;
+  planAnswer?: PlanAnswer | null;
+};
 type VoiceCaptureMode = 'push_to_talk' | 'always_on';
-type ConversationSurfaceMode = 'chat' | 'jarvis' | 'fleet';
+export type ConversationSurfaceMode = 'chat' | 'jarvis' | 'fleet';
+
+export type DesktopConversationHeaderControls = {
+  mode: ConversationSurfaceMode;
+  identityStopActive: boolean;
+  setMode: (mode: ConversationSurfaceMode) => void;
+  stopIdentity: () => Promise<void>;
+  newChat: () => Promise<void>;
+  openProject: () => Promise<void>;
+  toggleSidebar: () => void;
+};
 type StartupReadinessState = 'warming' | 'chat_ready' | 'fatal_error';
 type ComposerInputOrigin = 'manual' | 'voice' | 'system';
 type SecurityPermissionMode = 'low' | 'standard' | 'full_permissions';
@@ -262,18 +299,14 @@ type PendingSearchJump = {
   attempt: number;
 };
 
-type RealtimeEvent = {
-  type: string;
-  session_id?: string;
-  message?: string;
-  payload?: Record<string, any>;
-};
-
 type QueuedMessage = {
+  clientMessageId: string;
   text: string;
   sourceFormat: MessageSourceFormat;
   interruptPolicy: InterruptPolicy;
   sessionId?: string;
+  deliveryState?: 'queued' | 'sent';
+  modeOptions?: ComposerModeOptions;
 };
 
 type QueuedComposerMessage = {
@@ -282,6 +315,7 @@ type QueuedComposerMessage = {
   sourceFormat: MessageSourceFormat;
   sessionId: string;
   queuedAt: number;
+  modeOptions?: ComposerModeOptions;
 };
 
 type Props = {
@@ -309,6 +343,7 @@ type Props = {
   onInviteUnavailable?: () => void;
   setupOpen?: boolean;
   sidebarToggleSignal?: number;
+  onHeaderControlsChange?: (controls: DesktopConversationHeaderControls | null) => void;
 };
 
 type FoldSectionProps = {
@@ -392,6 +427,7 @@ import { handleDesktopConversationRealtimeEvent } from './DesktopConversationRea
 import { DesktopConversationRender } from './DesktopConversationRender';
 import { useDesktopConversationController } from './DesktopConversationController';
 import { styles } from './DesktopConversationView.styles';
+import type { DesktopAudioCaptureHandle } from './desktopAudioCapture';
 
 export function DesktopConversationView({
   apiBaseUrl,
@@ -417,10 +453,12 @@ export function DesktopConversationView({
   onLogoutRemoteAccount,
   onInviteUnavailable,
   sidebarToggleSignal,
+  onHeaderControlsChange,
 }: Props) {
   const router = useRouter();
   const chatWsRef = useRef<WebSocket | null>(null);
   const voiceWsRef = useRef<WebSocket | null>(null);
+  const controllerScopeRef = useRef<any>(null);
   const appClientIdRef = useRef(createClientId());
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voiceReconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -433,7 +471,7 @@ export function DesktopConversationView({
   const voiceStreamRef = useRef<MediaStream | null>(null);
   const voiceAudioContextRef = useRef<AudioContext | null>(null);
   const voiceAudioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const voiceProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const voiceCaptureNodeRef = useRef<DesktopAudioCaptureHandle | null>(null);
   const voiceChunkSequenceRef = useRef(0);
   const voiceChunkChainRef = useRef(Promise.resolve());
   const voiceChunkSamplesRef = useRef<Float32Array[]>([]);
@@ -446,6 +484,7 @@ export function DesktopConversationView({
   const alwaysOnEnabledRef = useRef(false);
   const voiceStartInFlightRef = useRef(false);
   const voiceGateStateRef = useRef<VoiceGateState>(createVoiceGateState());
+  const jarvisWakeMatchStateRef = useRef<JarvisWakeMatchState>(createJarvisWakeMatchState());
   const voiceRunningRef = useRef(false);
   const voiceRecordingRef = useRef(false);
   const voiceComposerBaseInputRef = useRef('');
@@ -559,7 +598,13 @@ export function DesktopConversationView({
   const [chatRunActive, setChatRunActive] = useState(false);
   const [runtimeRunState, setRuntimeRunState] = useState<'idle' | 'running'>('idle');
   const [queuedComposerMessages, setQueuedComposerMessages] = useState<QueuedComposerMessage[]>([]);
-  const [voiceState, setVoiceState] = useState('connecting');
+  const [voiceMachineState, dispatchVoiceMachine] = useReducer(
+    desktopVoiceMachineReducer,
+    initialDesktopVoiceMachineState,
+  );
+  const voiceState = voiceMachineState.voiceState;
+  const jarvisState = voiceMachineState.jarvisPhase;
+  const setVoiceState = (value: string) => dispatchVoiceMachine({ type: 'voice_state', value });
   const [voiceDraft, setVoiceDraft] = useState('');
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [voiceRunning, setVoiceRunning] = useState(false);
@@ -568,8 +613,11 @@ export function DesktopConversationView({
   const [voiceEngineChanging, setVoiceEngineChanging] = useState(false);
   const [sttBackendChanging, setSttBackendChanging] = useState<JarvisSttBackend | null>(null);
   const [ttsBackendChanging, setTtsBackendChanging] = useState<JarvisTtsBackend | null>(null);
-  const [liveVoiceStatus, setLiveVoiceStatus] = useState<DesktopVoiceRuntimeStatus | null>(voiceStatus || null);
+  const [liveVoiceStatus, setLiveVoiceStatus] = useState<DesktopVoiceRuntimeStatus | null>(null);
   const [alwaysOnEnabled, setAlwaysOnEnabled] = useState(false);
+  const [jarvisWakeProfile, setJarvisWakeProfile] = useState<JarvisWakeProfile | null>(() => loadJarvisWakeProfile());
+  const jarvisWakeProfileRef = useRef<JarvisWakeProfile | null>(jarvisWakeProfile);
+  const [jarvisWakeEnrollmentOpen, setJarvisWakeEnrollmentOpen] = useState(false);
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const [rightSidebarWidth, setRightSidebarWidth] = useState(328);
   const [fleetPanelOpen, setFleetPanelOpen] = useState(false);
@@ -607,9 +655,10 @@ export function DesktopConversationView({
   const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null);
   const [openSessionMenuId, setOpenSessionMenuId] = useState<string | null>(null);
   const [sidebarChatTooltip, setSidebarChatTooltip] = useState<SidebarChatTooltipState | null>(null);
+  const [contextMenu, setContextMenu] = useState<DesktopConversationContextMenuState>(null);
   const [pendingSessionSwitch, setPendingSessionSwitch] = useState<
     | { mode: 'session'; sessionId: string; jumpMessageIndex?: number | null }
-    | { mode: 'draft_send'; projectPath: string; text: string; sourceFormat: MessageSourceFormat }
+    | { mode: 'draft_send'; projectPath: string; text: string; sourceFormat: MessageSourceFormat; modeOptions?: ComposerModeOptions }
     | null
   >(null);
   const [pendingSearchJump, setPendingSearchJump] = useState<PendingSearchJump | null>(null);
@@ -640,6 +689,9 @@ export function DesktopConversationView({
   const jarvisPulseProgress = useRef(new Animated.Value(0)).current;
   const [voicePanelHidden, setVoicePanelHidden] = useState(false);
   const [jarvisMuted, setJarvisMuted] = useState(false);
+  useEffect(() => {
+    dispatchVoiceMachine({ type: 'muted', value: conversationMode === 'jarvis' && jarvisMuted });
+  }, [conversationMode, jarvisMuted]);
   const [jarvisStatusDrawerOpen, setJarvisStatusDrawerOpen] = useState(false);
   const [jarvisVoiceSettingsOpen, setJarvisVoiceSettingsOpen] = useState(false);
   const [jarvisHoldToTalkMode, setJarvisHoldToTalkMode] = useState(false);
@@ -649,30 +701,161 @@ export function DesktopConversationView({
   const [keepRuntimeOnAppClose, setKeepRuntimeOnAppClose] = useState(false);
   const [savingCloseBehavior, setSavingCloseBehavior] = useState(false);
   const [contextUsageHovered, setContextUsageHovered] = useState(false);
-  const selectedVoiceEngine = voicePackState?.defaultEngine || liveVoiceStatus?.selected_engine || voiceStatus?.selected_engine || VOICE_ENGINE_NONE;
-  const currentJarvisSttBackend = normalizeJarvisSttBackend(liveVoiceStatus?.stt_backend || voiceStatus?.stt_backend || null);
+  const visibleVoiceStatus = conversationMode === 'jarvis' ? (liveVoiceStatus || voiceStatus || null) : null;
+  const selectedVoiceEngine = voicePackState?.defaultEngine || visibleVoiceStatus?.selected_engine || VOICE_ENGINE_NONE;
+  const currentJarvisSttBackend = normalizeJarvisSttBackend(visibleVoiceStatus?.stt_backend || null);
   const currentJarvisSttLabel = jarvisSttBackendLabel(currentJarvisSttBackend);
-  const apiVoiceInputActive = currentJarvisSttBackend === STT_BACKEND_OPENAI_REALTIME;
+  const apiVoiceInputActive = currentJarvisSttBackend === STT_BACKEND_OPENAI_REALTIME || currentJarvisSttBackend === STT_BACKEND_GEMINI;
   const allowedWorkspaceRoot = normalizeWorkspacePath(defaultWorkspace);
   const usingHebrewVoiceEngine = selectedVoiceEngine === VOICE_ENGINE_HEBREW;
   const activeVoiceSegmentMs = usingHebrewVoiceEngine ? HEBREW_VOICE_SEGMENT_MS : VOICE_SEGMENT_MS;
-  const configuredVoiceGateDbfs = finiteStatusNumber(liveVoiceStatus?.voice_gate_dbfs ?? voiceStatus?.voice_gate_dbfs);
+  const configuredVoiceGateDbfs = finiteStatusNumber(visibleVoiceStatus?.voice_gate_dbfs);
   const configuredHebrewVoiceGateDbfs = finiteStatusNumber(
-    liveVoiceStatus?.hebrew_voice_gate_dbfs ?? voiceStatus?.hebrew_voice_gate_dbfs,
+    visibleVoiceStatus?.hebrew_voice_gate_dbfs,
   );
   const activeVoiceGateDbfs = usingHebrewVoiceEngine
     ? configuredHebrewVoiceGateDbfs ?? HEBREW_VOICE_GATE_DBFS
     : configuredVoiceGateDbfs ?? VOICE_GATE_DBFS;
   const configuredJarvisBargeInGateDbfs = finiteStatusNumber(
-    liveVoiceStatus?.jarvis_barge_in_gate_dbfs ?? voiceStatus?.jarvis_barge_in_gate_dbfs,
+    visibleVoiceStatus?.jarvis_barge_in_gate_dbfs,
   );
   const activeJarvisBargeInGateDbfs = configuredJarvisBargeInGateDbfs ?? activeVoiceGateDbfs;
   const activeVoiceGateReleaseMs = usingHebrewVoiceEngine ? HEBREW_VOICE_GATE_RELEASE_MS : VOICE_GATE_RELEASE_MS;
-  const currentJarvisTtsBackend = normalizeJarvisTtsBackend(liveVoiceStatus?.tts_backend || voiceStatus?.tts_backend || null);
+  const currentJarvisTtsBackend = normalizeJarvisTtsBackend(visibleVoiceStatus?.tts_backend || null);
   const currentJarvisTtsLabel = jarvisTtsBackendLabel(currentJarvisTtsBackend);
+  const jarvisWakeProfileReady = isJarvisWakeProfileReady(jarvisWakeProfile);
+  const currentJarvisWakePhrase = jarvisWakeProfile?.phrase || JARVIS_WAKE_PHRASE;
+  const saveLocalJarvisWakeProfile = (profile: JarvisWakeProfile) => {
+    saveJarvisWakeProfile(profile);
+    jarvisWakeProfileRef.current = profile;
+    setJarvisWakeProfile(profile);
+    setJarvisWakeEnrollmentOpen(false);
+    setStatus(`Wake phrase "${profile.phrase}" saved locally`);
+  };
+  const clearLocalJarvisWakeProfile = () => {
+    clearJarvisWakeProfile();
+    jarvisWakeProfileRef.current = null;
+    setJarvisWakeProfile(null);
+    setJarvisWakeEnrollmentOpen(true);
+    setStatus('Jarvis wake phrase training cleared');
+  };
+  const closeContextMenu = () => setContextMenu(null);
+  const openConversationContextMenu = (event: any, target: DesktopConversationContextMenuTarget) => {
+    if (Platform.OS !== 'web') {
+      return;
+    }
+    if (sidebarChatTooltipTimerRef.current) {
+      clearTimeout(sidebarChatTooltipTimerRef.current);
+      sidebarChatTooltipTimerRef.current = null;
+    }
+    setSidebarChatTooltip(null);
+    setOpenProjectMenuPath(null);
+    setOpenSessionMenuId(null);
+    openDesktopConversationContextMenu(setContextMenu, event, target);
+  };
+  const openChatContextMenu = (event: any, session: SessionSummary, projectPath?: string | null) => {
+    openConversationContextMenu(event, { kind: 'chat', session, projectPath });
+  };
+  const openProjectContextMenu = (event: any, project: any) => {
+    openConversationContextMenu(event, { kind: 'project', project });
+  };
+  const openMessageContextMenu = (event: any, message: DesktopMessage) => {
+    if (message.role === 'user') {
+      openConversationContextMenu(event, { kind: 'userMessage', content: message.content });
+    } else if (message.role === 'assistant') {
+      openConversationContextMenu(event, { kind: 'assistantFinal', content: message.content });
+    }
+  };
+  const openToolContextMenu = (event: any, content: string) => {
+    openConversationContextMenu(event, { kind: 'toolCall', content });
+  };
 
-      const controllerScope = useDesktopConversationController({ ALWAYS_ON_VOICE_AUTO_SEND, Animated, COMPOSER_MAX_HEIGHT, COMPOSER_MIN_HEIGHT, DESKTOP_COMMAND_PLACEHOLDER, DESKTOP_COMMAND_SUGGESTIONS, DESKTOP_NO_ACTIVE_SESSION_STATUS, DESKTOP_SIDEBAR_ACTIVITY_LIMIT, DesktopConversationRender, Easing, FoldSection, HEBREW_VOICE_GATE_DBFS, HEBREW_VOICE_GATE_MAX_MS, HEBREW_VOICE_GATE_PREROLL_MS, HEBREW_VOICE_GATE_RELEASE_MS, HEBREW_VOICE_SEGMENT_MS, Image, JARVIS_BARGE_IN_MIN_VOICED_MS, JARVIS_ENGLISH_VOICE_PATH_ERROR, MAX_ACTIVITY_ITEMS, MAX_COMMAND_SUGGESTIONS, MonoIcon, Platform, Pressable, SIDEBAR_DRAFT_CHAT_ID, SIDEBAR_REFRESH_MS, SOCKET_RECONNECT_MS, STT_BACKEND_LOCAL_WHISPER, STT_BACKEND_OPENAI_REALTIME, ScrollView, TOOL_PACK_DEFINITIONS, TRANSCRIPT_AUTO_SCROLL_IDLE_MS, TRANSCRIPT_SCROLL_MOVE_THRESHOLD, TRANSCRIPT_SCROLL_UP_THRESHOLD, TTS_BACKEND_KOKORO, TTS_BACKEND_KYUTAI, Text, TextInput, VOICE_DEFERRED_FRAME_MAX_MS, VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW, VOICE_ENGINE_NONE, VOICE_GATE_ATTACK_MS, VOICE_GATE_DBFS, VOICE_GATE_FRAME_MS, VOICE_GATE_MAX_MS, VOICE_GATE_MIN_MS, VOICE_GATE_PREROLL_MS, VOICE_GATE_RELEASE_MS, VOICE_PROCESSOR_BUFFER_SIZE, VOICE_SEGMENT_MS, View, accountEmail, activateSession, activeCommandPanel, activeJarvisBargeInGateDbfs, activePermissionInfoId, activeVoiceBargeInCandidateRef, activeVoiceBargeInReferenceTextRef, activeVoiceGateDbfs, activeVoiceGateReleaseMs, activeVoiceSegmentMs, activeVoiceUtteranceIdRef, activity, allowedWorkspaceRoot, alwaysOnEnabled, alwaysOnEnabledRef, apiBaseUrl, apiVoiceInputActive, appClientIdRef, appendSessionTimelineEvent, appendVoiceTranscriptSegment, artifactDetailLoading, artifactError, artifacts, artifactsLoading, assignDesktopFleetGroupTask, assignDesktopFleetTask, assistantAudioRef, assistantAudioTextRef, assistantDeltaBufferRef, assistantDeltaFlushTimerRef, assistantDraft, attachmentUploadInFlight, availableToolPackIdsFrom, buildWsBaseUrl, bytesToBase64, cachedModelGroups, cachedPlannerModels, chatRunActive, chatRunActiveRef, chatWsRef, checkoutDesktopGitBranch, clampUsagePercent, coerceSidebarState, commandSuggestionMenuRef, completedTaskBoards, composeVoiceDraftInput, composerInputHeight, composerTextRegionRef, concatFloat32, configureAgent, configureHeadlessRuntime, configureVoiceSttBackend, configureVoiceTtsBackend, configuredHebrewVoiceGateDbfs, configuredJarvisBargeInGateDbfs, configuredModelGroups, configuredPlannerModels, configuredVoiceGateDbfs, confirmAction, confirmationDialog, contextUsageHovered, continueDesktopFleetWorkerQueue, controlAgentRun, conversationMode, conversationModeRef, copyDesktopText, createApprovedConfirmation, createAudioContext, createClientId, createDesktopFleetEnrollment, createDesktopFleetGroup, createDesktopFleetLocalWorker, createDesktopFolder, createEmptySidebarState, createLocalToolTimelineEvent, createSession, createVoiceGateState, currentJarvisSttBackend, currentJarvisSttLabel, currentJarvisTtsBackend, currentJarvisTtsLabel, currentWorkspaceBySessionRef, defaultInterruptPolicy, defaultToolPackIds, defaultWorkspace, deferredAlwaysOnFramesRef, deferredAlwaysOnSampleCountRef, deleteDesktopFleetGroup, deleteDesktopFleetWorker, deleteSession, describeError, dismissedCommandSuggestionInput, draftBranchSearch, draftBranchTriggerRef, draftChat, draftChatRef, draftGitRepoLoading, draftGitRepoState, draftProjectSearch, draftProjectTriggerRef, draftTelegramTriggerRef, dragState, drainingDeferredAlwaysOnFramesRef, enabledToolPackIdsFrom, encodePcm16Wav, ensureSidebarProjectEntries, ensureSidebarProjectEntry, envFilePath, existingSessionIdFrom, expandedCompletedTaskIds, expandedModelProviders, expandedPlannerProviders, externalSidebarToggleSignalRef, extractReferenceTitle, fetchAgentConfig, fetchAgentOverview, fetchJobs, fetchProfile, fetchRuntimeOrchestratorStatus, fetchSessionArtifactBlob, fetchSessionArtifactDetail, fetchSessionArtifacts, fetchSessionDetail, fetchSessions, fetchTelegramBotConfigs, fetchVoiceRuntimeStatus, finiteStatusNumber, fleetChatPanelCollapsed, fleetChatPanelWidth, fleetDashboardCollapsed, fleetEnrollment, fleetError, fleetGroupNameDraft, fleetGroupTaskDrafts, fleetLoading, fleetPanelOpen, fleetRenameDrafts, fleetSessionCreateFields, fleetSnapshot, fleetStatus, fleetTaskBatchStatusMessage, fleetTaskDrafts, fleetTaskStatusMessage, fleetWorkerNameDraft, floatingPanelRef, folderChoiceBusy, folderChoiceOpen, folderChoiceResolveRef, formatAbsoluteTime, formatRelativeTime, formatStatusNumber, formatToolPackLockReasonText, getCommandSuggestionQuery, getDesktopGitRepoInfo, getDesktopPathStatus, groupPlannerModelsByProvider, handleDesktopConversationRealtimeEvent, highlightedMessageIndex, historyMessageLayoutRef, historyScrollRef, hoveredProjectPath, hoveredSessionId, hoveredToolPackInfoId, initialSessionId, initialSurfaceMode, input, interruptPolicy, isAbsoluteWindowsPath, isBlockedFleetTask, isDesktopSlashCommand, isMeaningfulJarvisBargeInText, isReferenceSidebarMessage, isWorkspacePathAllowed, jarvisBargeInCandidateUtteranceIdsRef, jarvisHoldToTalkMode, jarvisLatestSpokenText, jarvisLatestTranscript, jarvisMuted, jarvisPulseProgress, jarvisPushToTalkActiveRef, jarvisSpaceHotkeyActiveRef, jarvisStatusDrawerOpen, jarvisSttBackendLabel, jarvisTtsBackendLabel, jarvisVoiceSettingsOpen, jarvisWarmRequestedRef, jobs, keepRuntimeOnAppClose, labelForMessage, lastAssistantOutputAt, lastComposerInputOriginRef, lastVoiceWarmRequestEngineRef, liveVoiceStatus, loadDesktopBootstrap, loadDesktopFleetSnapshot, loadDesktopSidebarState, logDiagnostic, mergeTimelineEntries, mergeTimelineEventState, messageTimestampValue, messages, modelProviderKey, modelTriggerRef, normalizeCompletedTaskBoards, normalizeInterruptPolicyValue, normalizeJarvisSttBackend, normalizeJarvisTtsBackend, normalizeTimelineEvents, normalizeWorkspacePath, onInviteUnavailable, onLogoutRemoteAccount, onOpenSetup, onSelectVoiceEngine, onStartupStateChange, openFleetWorkerMenuId, openProjectMenuPath, openSessionMenuId, orchestratorStatus, overview, overviewRefreshInFlightRef, parseComposerSlashCommand, pendingDraftSecurityPermissionMode, pendingMessagesRef, pendingSearchJump, pendingSessionSwitch, permissionsTriggerRef, pickDesktopFolder, pinnedToolPackInfoId, preferredModelFromGroups, projectDisplayName, projectMenuRefs, projectMenuTriggerRefs, projectPathBasename, projectPathHint, projectPathStatuses, queuedComposerMessages, reconnectRef, referenceAutoOpenKeyRef, referenceDismissedKeyRef, remoteAuthBusy, remoteAuthLoggingOut, renameDesktopFleetWorker, requestDesktopFleetWorkerPreview, resetDesktopFleetWorker, resolveTaskBoardState, rightSidebarWidth, router, runDesktopSlashCommand, runtimeMode, runtimeRunState, runtimeStatus, samplesDbfs, saveDesktopSidebarState, savingCloseBehavior, scrollRef, searchHighlightTimerRef, searchJumpTimerRef, searchSessions, selectedArtifactDetail, selectedArtifactId, selectedVoiceEngine, sessionBelongsToFleetIdentity, sessionId, sessionIdRef, sessionMenuRefs, sessionMenuTriggerRefs, sessionName, sessionRowRefs, sessionSettingsMutationInFlight, sessionSidebarSortComparator, sessions, setActiveCommandPanel, setActivePermissionInfoId, setActivity, setAlwaysOnEnabled, setArtifactDetailLoading, setArtifactError, setArtifacts, setArtifactsLoading, setAssistantDraft, setAttachmentUploadInFlight, setCachedModelGroups, setCachedPlannerModels, setChatRunActive, setCompletedTaskBoards, setComposerInputHeight, setContextUsageHovered, setConversationMode, setDesktopFleetActiveIdentity, setDismissedCommandSuggestionInput, setDraftBranchSearch, setDraftChat, setDraftGitRepoLoading, setDraftGitRepoState, setDraftProjectSearch, setDragState, setExpandedCompletedTaskIds, setExpandedModelProviders, setExpandedPlannerProviders, setFleetChatPanelCollapsed, setFleetChatPanelWidth, setFleetDashboardCollapsed, setFleetEnrollment, setFleetError, setFleetGroupNameDraft, setFleetGroupTaskDrafts, setFleetLoading, setFleetPanelOpen, setFleetRenameDrafts, setFleetSnapshot, setFleetStatus, setFleetTaskDrafts, setFleetWorkerNameDraft, setFolderChoiceBusy, setFolderChoiceOpen, setHighlightedMessageIndex, setHoveredProjectPath, setHoveredSessionId, setHoveredToolPackInfoId, setInput, setInterruptPolicy, setJarvisHoldToTalkMode, setJarvisLatestSpokenText, setJarvisLatestTranscript, setJarvisMuted, setJarvisStatusDrawerOpen, setJarvisVoiceSettingsOpen, setJobs, setKeepRuntimeOnAppClose, setLastAssistantOutputAt, setLiveVoiceStatus, setMessages, setOpenFleetWorkerMenuId, setOpenProjectMenuPath, setOpenSessionMenuId, setOrchestratorStatus, setOverview, setPendingDraftSecurityPermissionMode, setPendingSearchJump, setPendingSessionSwitch, setPinnedToolPackInfoId, setProjectPathStatuses, setQueuedComposerMessages, setRightSidebarWidth, setRuntimeRunState, setSavingCloseBehavior, setSelectedArtifactDetail, setSelectedArtifactId, setSessionId, setSessionName, setSessionSettingsMutationInFlight, setSessions, setShowArtifactRail, setShowReferenceRail, setShowVoicePanel, setSidebarChatTooltip, setSidebarExpanded, setSidebarSearch, setSidebarSearchError, setSidebarSearchLoading, setSidebarSearchModalOpen, setSidebarSearchResults, setSidebarState, setSidebarStateReady, setSocketState, setStatus, setSttBackendChanging, setTaskBoard, setTaskBoardArmedNextTurn, setTaskBoardArmedNextTurnState, setTaskBoardCollapsed, setTelegramBotConfigs, setThinking, setTimelineEvents, setToolPackInfoPopup, setToolPackMutationInFlight, setTtsBackendChanging, setVoiceDraft, setVoiceEngineChanging, setVoiceError, setVoiceMode, setVoicePanelHidden, setVoiceRecording, setVoiceRunning, setVoiceState, shellRef, shortStatusText, shouldKeepSidebarProjectPath, showArtifactRail, showReferenceRail, showVoicePanel, sidebarChatTooltip, sidebarChatTooltipTimerRef, sidebarCollectionsRefreshInFlightRef, sidebarExpanded, sidebarSearch, sidebarSearchError, sidebarSearchInputRef, sidebarSearchLauncherRef, sidebarSearchLoading, sidebarSearchModalOpen, sidebarSearchModalRef, sidebarSearchRequestIdRef, sidebarSearchResults, sidebarState, sidebarStateReady, sidebarToggleSignal, socketState, startupChatSocketReadyRef, startupSessionStateReadyRef, startupSidebarReadyRef, startupTerminalStateRef, status, stopAllDesktopFleetWorkers, stopDesktopFleetWorker, strOrNull, sttBackendChanging, styles, summarizeReferenceContent, summarizeRuntimeStatus, summarizeToolPayload, takeGateFrame, taskBoard, taskBoardArmedNextTurn, taskBoardCollapsed, taskBoardStateRef, taskBoardStatusLabel, taskBoardStepPrefix, telegramBotConfigs, thinking, thinkingShineProgress, timelineEventMergeKey, timelineEvents, toDesktopMessages, toLiveDesktopMessage, toggleToolPackId, token, toolPackInfoButtonRefs, toolPackInfoHideTimerRef, toolPackInfoPopup, toolPackLabel, toolPackMutationInFlight, toolsTriggerRef, transcriptAutoScrollResumeTimerRef, transcriptAutoScrollSuspendedRef, transcriptContentHeightRef, transcriptLastScrollOffsetYRef, transcriptLastSignatureRef, transcriptMessageLayoutRef, transcriptPendingAutoScrollRef, transcriptProgrammaticScrollUntilRef, transcriptViewportHeightRef, ttsBackendChanging, updateAgentConfig, updateAvailable, updateSessionHeadlessEligibility, updateSessionSecurityPermissionMode, updateSessionTelegramBotAssignment, updateSessionToolPacks, uploadAppAttachment, useConfirmation, useDesktopConversationController, useEffect, useRef, useRouter, useState, userFacingError, usingHebrewVoiceEngine, voiceAudioContextRef, voiceAudioSourceRef, voiceCaptureModeRef, voiceChunkChainRef, voiceChunkSampleCountRef, voiceChunkSamplesRef, voiceChunkSequenceRef, voiceComposerBaseInputRef, voiceComposerDraftRef, voiceDraft, voiceEngineChanging, voiceError, voiceGateStateRef, voiceMode, voicePackState, voicePanelHidden, voicePressActiveRef, voiceProcessorRef, voiceReconnectRef, voiceRecording, voiceRecordingRef, voiceRunning, voiceRunningRef, voiceSampleRateRef, voiceStartInFlightRef, voiceState, voiceStatus, voiceStreamRef, voiceWsRef, warmVoiceRuntime, workspaceSortOrder });
+  const killLiveCommand = async (metadata: Record<string, any>) => {
+    const processWaitId = String(metadata?.process_wait_id || '').trim();
+    const commandId = String(metadata?.command_id || '').trim();
+    const command = String(metadata?.command || commandId || 'command').trim();
+    if (!processWaitId) {
+      setStatus('No running process handle is available for that command.');
+      return;
+    }
+    try {
+      const confirmationId = await createApprovedConfirmation(apiBaseUrl, token, confirmAction, {
+        action_kind: 'process_wait_stop',
+        title: 'Stop this command?',
+        message: 'EmploAI will stop only the exact process attached to this live command.',
+        risk_tier: 'danger',
+        origin_surface: 'desktop_chat',
+        payload: { process_wait_id: processWaitId, command_id: commandId, command },
+      }, {
+        confirmLabel: 'Stop command',
+        tone: 'danger',
+      });
+      if (!confirmationId) {
+        return;
+      }
+      setStatus(`Stopping ${command.slice(0, 80)}`);
+      await stopProcessWait(apiBaseUrl, token, processWaitId, 'Stopped from the live command card.', confirmationId);
+      setStatus(`Stop requested for ${commandId || 'command'}`);
+    } catch (error) {
+      setStatus(userFacingError(error, 'Command was not stopped.'));
+    }
+  };
 
+      const controllerScope = useDesktopConversationController({ ALWAYS_ON_VOICE_AUTO_SEND, Animated, COMPOSER_MAX_HEIGHT, COMPOSER_MIN_HEIGHT, DESKTOP_COMMAND_PLACEHOLDER, DESKTOP_COMMAND_SUGGESTIONS, DESKTOP_NO_ACTIVE_SESSION_STATUS, DESKTOP_SIDEBAR_ACTIVITY_LIMIT, DesktopConversationRender, Easing, FoldSection, HEBREW_VOICE_GATE_DBFS, HEBREW_VOICE_GATE_MAX_MS, HEBREW_VOICE_GATE_PREROLL_MS, HEBREW_VOICE_GATE_RELEASE_MS, HEBREW_VOICE_SEGMENT_MS, Image, JARVIS_BARGE_IN_MIN_VOICED_MS, JARVIS_ENGLISH_VOICE_PATH_ERROR, MAX_ACTIVITY_ITEMS, MAX_COMMAND_SUGGESTIONS, MonoIcon, Platform, Pressable, SIDEBAR_DRAFT_CHAT_ID, SIDEBAR_REFRESH_MS, SOCKET_RECONNECT_MS, STT_BACKEND_GEMINI, STT_BACKEND_LOCAL_WHISPER, STT_BACKEND_OPENAI_REALTIME, ScrollView, TOOL_PACK_DEFINITIONS, TRANSCRIPT_AUTO_SCROLL_IDLE_MS, TRANSCRIPT_SCROLL_MOVE_THRESHOLD, TRANSCRIPT_SCROLL_UP_THRESHOLD, TTS_BACKEND_KOKORO, TTS_BACKEND_KYUTAI, Text, TextInput, VOICE_DEFERRED_FRAME_MAX_MS, VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW, VOICE_ENGINE_NONE, VOICE_GATE_ATTACK_MS, VOICE_GATE_DBFS, VOICE_GATE_FRAME_MS, VOICE_GATE_MAX_MS, VOICE_GATE_MIN_MS, VOICE_GATE_PREROLL_MS, VOICE_GATE_RELEASE_MS, VOICE_SEGMENT_MS, View, accountEmail, activateSession, activeCommandPanel, activeJarvisBargeInGateDbfs, activePermissionInfoId, activeVoiceBargeInCandidateRef, activeVoiceBargeInReferenceTextRef, activeVoiceGateDbfs, activeVoiceGateReleaseMs, activeVoiceSegmentMs, activeVoiceUtteranceIdRef, activity, allowedWorkspaceRoot, alwaysOnEnabled, alwaysOnEnabledRef, apiBaseUrl, apiVoiceInputActive, appClientIdRef, appendSessionTimelineEvent, appendVoiceTranscriptSegment, artifactDetailLoading, artifactError, artifacts, artifactsLoading, assignDesktopFleetGroupTask, assignDesktopFleetTask, assistantAudioRef, assistantAudioTextRef, assistantDeltaBufferRef, assistantDeltaFlushTimerRef, assistantDraft, attachmentUploadInFlight, availableToolPackIdsFrom, buildWsBaseUrl, bytesToBase64, cachedModelGroups, cachedPlannerModels, chatRunActive, chatRunActiveRef, chatWsRef, checkoutDesktopGitBranch, clampUsagePercent, clearLocalJarvisWakeProfile, coerceSidebarState, commandSuggestionMenuRef, completedTaskBoards, composeVoiceDraftInput, composerInputHeight, composerTextRegionRef, concatFloat32, configureAgent, configureHeadlessRuntime, configureVoiceSttBackend, configureVoiceTtsBackend, configuredHebrewVoiceGateDbfs, configuredJarvisBargeInGateDbfs, configuredModelGroups, configuredPlannerModels, configuredVoiceGateDbfs, confirmAction, confirmationDialog, contextUsageHovered, continueDesktopFleetWorkerQueue, controlAgentRun, conversationMode, conversationModeRef, copyDesktopText, createApprovedConfirmation, createAudioContext, createClientId, createDesktopFleetEnrollment, createDesktopFleetGroup, createDesktopFleetLocalWorker, createDesktopFolder, createEmptySidebarState, createJarvisWakeMatchState, createLocalToolTimelineEvent, createSession, createVoiceGateState, currentJarvisSttBackend, currentJarvisSttLabel, currentJarvisTtsBackend, currentJarvisTtsLabel, currentJarvisWakePhrase, currentWorkspaceBySessionRef, defaultInterruptPolicy, defaultToolPackIds, defaultWorkspace, deferredAlwaysOnFramesRef, deferredAlwaysOnSampleCountRef, deleteDesktopFleetGroup, deleteDesktopFleetWorker, deleteSession, describeError, dismissedCommandSuggestionInput, draftBranchSearch, draftBranchTriggerRef, draftChat, draftChatRef, draftGitRepoLoading, draftGitRepoState, draftProjectSearch, draftProjectTriggerRef, draftTelegramTriggerRef, dragState, drainingDeferredAlwaysOnFramesRef, enabledToolPackIdsFrom, encodePcm16Wav, ensureSidebarProjectEntries, ensureSidebarProjectEntry, envFilePath, existingSessionIdFrom, expandedCompletedTaskIds, expandedModelProviders, expandedPlannerProviders, externalSidebarToggleSignalRef, extractReferenceTitle, fetchAgentConfig, fetchAgentOverview, fetchJobs, fetchProfile, fetchRuntimeOrchestratorStatus, fetchSessionArtifactBlob, fetchSessionArtifactDetail, fetchSessionArtifacts, fetchSessionDetail, fetchSessions, fetchTelegramBotConfigs, fetchVoiceRuntimeStatus, finiteStatusNumber, fleetChatPanelCollapsed, fleetChatPanelWidth, fleetDashboardCollapsed, fleetEnrollment, fleetError, fleetGroupNameDraft, fleetGroupTaskDrafts, fleetLoading, fleetPanelOpen, fleetRenameDrafts, fleetSessionCreateFields, fleetSnapshot, fleetStatus, fleetTaskBatchStatusMessage, fleetTaskDrafts, fleetTaskStatusMessage, fleetWorkerNameDraft, floatingPanelRef, folderChoiceBusy, folderChoiceOpen, folderChoiceResolveRef, formatAbsoluteTime, formatRelativeTime, formatStatusNumber, formatToolPackLockReasonText, getCommandSuggestionQuery, getDesktopGitRepoInfo, getDesktopPathStatus, groupPlannerModelsByProvider, handleDesktopConversationRealtimeEvent, highlightedMessageIndex, historyMessageLayoutRef, historyScrollRef, hoveredProjectPath, hoveredSessionId, hoveredToolPackInfoId, initialSessionId, initialSurfaceMode, input, interruptPolicy, isAbsoluteWindowsPath, isBlockedFleetTask, isDesktopSlashCommand, isMeaningfulJarvisBargeInText, isReferenceSidebarMessage, isWorkspacePathAllowed, jarvisBargeInCandidateUtteranceIdsRef, jarvisHoldToTalkMode, jarvisLatestSpokenText, jarvisLatestTranscript, jarvisMuted, jarvisPulseProgress, jarvisPushToTalkActiveRef, jarvisSpaceHotkeyActiveRef, jarvisStatusDrawerOpen, jarvisSttBackendLabel, jarvisTtsBackendLabel, jarvisVoiceSettingsOpen, jarvisWakeEnrollmentOpen, jarvisWakeMatchStateRef, jarvisWakeProfile, jarvisWakeProfileReady, jarvisWakeProfileRef, jarvisWarmRequestedRef, jobs, keepRuntimeOnAppClose, labelForMessage, lastAssistantOutputAt, lastComposerInputOriginRef, lastVoiceWarmRequestEngineRef, liveVoiceStatus, loadDesktopBootstrap, loadDesktopFleetSnapshot, loadDesktopSidebarState, logDiagnostic, mergeTimelineEntries, mergeTimelineEventState, messageTimestampValue, messages, modelProviderKey, modelTriggerRef, normalizeCompletedTaskBoards, normalizeInterruptPolicyValue, normalizeJarvisSttBackend, normalizeJarvisTtsBackend, normalizeTimelineEvents, normalizeWorkspacePath, onInviteUnavailable, onLogoutRemoteAccount, onOpenSetup, onSelectVoiceEngine, onStartupStateChange, openFleetWorkerMenuId, openProjectMenuPath, openSessionMenuId, orchestratorStatus, overview, overviewRefreshInFlightRef, parseComposerSlashCommand, pendingDraftSecurityPermissionMode, pendingMessagesRef, pendingSearchJump, pendingSessionSwitch, permissionsTriggerRef, pickDesktopFolder, pinnedToolPackInfoId, preferredModelFromGroups, projectDisplayName, projectMenuRefs, projectMenuTriggerRefs, projectPathBasename, projectPathHint, projectPathStatuses, queuedComposerMessages, reconnectRef, referenceAutoOpenKeyRef, referenceDismissedKeyRef, remoteAuthBusy, remoteAuthLoggingOut, renameDesktopFleetWorker, requestDesktopFleetWorkerPreview, resetDesktopFleetWorker, resolveTaskBoardState, rightSidebarWidth, router, runDesktopSlashCommand, runtimeMode, runtimeRunState, runtimeStatus, samplesDbfs, saveDesktopSidebarState, saveLocalJarvisWakeProfile, savingCloseBehavior, scrollRef, searchHighlightTimerRef, searchJumpTimerRef, searchSessions, selectedArtifactDetail, selectedArtifactId, selectedVoiceEngine, sessionBelongsToFleetIdentity, sessionId, sessionIdRef, sessionMenuRefs, sessionMenuTriggerRefs, sessionName, sessionRowRefs, sessionSettingsMutationInFlight, sessionSidebarSortComparator, sessions, setActiveCommandPanel, setActivePermissionInfoId, setActivity, setAlwaysOnEnabled, setArtifactDetailLoading, setArtifactError, setArtifacts, setArtifactsLoading, setAssistantDraft, setAttachmentUploadInFlight, setCachedModelGroups, setCachedPlannerModels, setChatRunActive, setCompletedTaskBoards, setComposerInputHeight, setContextUsageHovered, setConversationMode, setDesktopFleetActiveIdentity, setDismissedCommandSuggestionInput, setDraftBranchSearch, setDraftChat, setDraftGitRepoLoading, setDraftGitRepoState, setDraftProjectSearch, setDragState, setExpandedCompletedTaskIds, setExpandedModelProviders, setExpandedPlannerProviders, setFleetChatPanelCollapsed, setFleetChatPanelWidth, setFleetDashboardCollapsed, setFleetEnrollment, setFleetError, setFleetGroupNameDraft, setFleetGroupTaskDrafts, setFleetLoading, setFleetPanelOpen, setFleetRenameDrafts, setFleetSnapshot, setFleetStatus, setFleetTaskDrafts, setFleetWorkerNameDraft, setFolderChoiceBusy, setFolderChoiceOpen, setHighlightedMessageIndex, setHoveredProjectPath, setHoveredSessionId, setHoveredToolPackInfoId, setInput, setInterruptPolicy, setJarvisHoldToTalkMode, setJarvisLatestSpokenText, setJarvisLatestTranscript, setJarvisMuted, setJarvisStatusDrawerOpen, setJarvisVoiceSettingsOpen, setJarvisWakeEnrollmentOpen, setJobs, setKeepRuntimeOnAppClose, setLastAssistantOutputAt, setLiveVoiceStatus, setMessages, setOpenFleetWorkerMenuId, setOpenProjectMenuPath, setOpenSessionMenuId, setOrchestratorStatus, setOverview, setPendingDraftSecurityPermissionMode, setPendingSearchJump, setPendingSessionSwitch, setPinnedToolPackInfoId, setProjectPathStatuses, setQueuedComposerMessages, setRightSidebarWidth, setRuntimeRunState, setSavingCloseBehavior, setSelectedArtifactDetail, setSelectedArtifactId, setSessionId, setSessionName, setSessionSettingsMutationInFlight, setSessions, setShowArtifactRail, setShowReferenceRail, setShowVoicePanel, setSidebarChatTooltip, setSidebarExpanded, setSidebarSearch, setSidebarSearchError, setSidebarSearchLoading, setSidebarSearchModalOpen, setSidebarSearchResults, setSidebarState, setSidebarStateReady, setSocketState, setStatus, setSttBackendChanging, setTaskBoard, setTaskBoardArmedNextTurn, setTaskBoardArmedNextTurnState, setTaskBoardCollapsed, setTelegramBotConfigs, setThinking, setTimelineEvents, setToolPackInfoPopup, setToolPackMutationInFlight, setTtsBackendChanging, setVoiceDraft, setVoiceEngineChanging, setVoiceError, setVoiceMode, setVoicePanelHidden, setVoiceRecording, setVoiceRunning, setVoiceState, shellRef, shortStatusText, shouldKeepSidebarProjectPath, showArtifactRail, showReferenceRail, showVoicePanel, sidebarChatTooltip, sidebarChatTooltipTimerRef, sidebarCollectionsRefreshInFlightRef, sidebarExpanded, sidebarSearch, sidebarSearchError, sidebarSearchInputRef, sidebarSearchLauncherRef, sidebarSearchLoading, sidebarSearchModalOpen, sidebarSearchModalRef, sidebarSearchRequestIdRef, sidebarSearchResults, sidebarState, sidebarStateReady, sidebarToggleSignal, socketState, startupChatSocketReadyRef, startupSessionStateReadyRef, startupSidebarReadyRef, startupTerminalStateRef, status, stopAllDesktopFleetWorkers, stopDesktopFleetWorker, strOrNull, sttBackendChanging, styles, summarizeReferenceContent, summarizeRuntimeStatus, summarizeToolPayload, takeGateFrame, taskBoard, taskBoardArmedNextTurn, taskBoardCollapsed, taskBoardStateRef, taskBoardStatusLabel, taskBoardStepPrefix, telegramBotConfigs, thinking, thinkingShineProgress, timelineEventMergeKey, timelineEvents, toDesktopMessages, toLiveDesktopMessage, toggleToolPackId, token, toolPackInfoButtonRefs, toolPackInfoHideTimerRef, toolPackInfoPopup, toolPackLabel, toolPackMutationInFlight, toolsTriggerRef, transcriptAutoScrollResumeTimerRef, transcriptAutoScrollSuspendedRef, transcriptContentHeightRef, transcriptLastScrollOffsetYRef, transcriptLastSignatureRef, transcriptMessageLayoutRef, transcriptPendingAutoScrollRef, transcriptProgrammaticScrollUntilRef, transcriptViewportHeightRef, ttsBackendChanging, updateAgentConfig, updateAvailable, updateSessionHeadlessEligibility, updateSessionSecurityPermissionMode, updateSessionTelegramBotAssignment, updateSessionToolPacks, uploadAppAttachment, useConfirmation, useDesktopConversationController, useEffect, useRef, useRouter, useState, userFacingError, usingHebrewVoiceEngine, voiceAudioContextRef, voiceAudioSourceRef, voiceCaptureModeRef, voiceChunkChainRef, voiceChunkSampleCountRef, voiceChunkSamplesRef, voiceChunkSequenceRef, voiceComposerBaseInputRef, voiceComposerDraftRef, voiceDraft, voiceEngineChanging, voiceError, voiceGateStateRef, voiceMode, voicePackState, voicePanelHidden, voicePressActiveRef, voiceCaptureNodeRef, voiceReconnectRef, voiceRecording, voiceRecordingRef, voiceRunning, voiceRunningRef, voiceSampleRateRef, voiceStartInFlightRef, voiceState, voiceStatus, voiceStreamRef, voiceWsRef, warmVoiceRuntime, workspaceSortOrder });
+
+  controllerScope.jarvisState = jarvisState;
+  controllerScope.killLiveCommand = killLiveCommand;
+  controllerScope.contextMenu = contextMenu;
+  controllerScope.closeContextMenu = closeContextMenu;
+  controllerScope.openChatContextMenu = openChatContextMenu;
+  controllerScope.openProjectContextMenu = openProjectContextMenu;
+  controllerScope.openMessageContextMenu = openMessageContextMenu;
+  controllerScope.openToolContextMenu = openToolContextMenu;
   controllerScope.sessionListLoading = sessionListLoading;
+  controllerScopeRef.current = controllerScope;
+
+  const headerIdentityStopActive = Boolean(
+    controllerScope.agentRunActive
+    || controllerScope.chatRunActive
+    || controllerScope.voiceRunning
+    || controllerScope.runtimeRunState === 'running'
+    || Number(controllerScope.overview?.active_visual_monitors || 0) > 0
+    || controllerScope.hasActiveFleetTask
+  );
+  const headerControls = useMemo<DesktopConversationHeaderControls>(() => ({
+    mode: controllerScope.conversationMode || 'chat',
+    identityStopActive: headerIdentityStopActive,
+    setMode: (mode: ConversationSurfaceMode) => {
+      const activeScope = controllerScopeRef.current;
+      activeScope?.setConversationMode?.(mode);
+      if (mode === 'fleet') {
+        void activeScope?.refreshFleetSnapshot?.({ quiet: true });
+      }
+    },
+    stopIdentity: async () => {
+      await controllerScopeRef.current?.stopCurrentIdentity?.();
+    },
+    newChat: async () => {
+      await controllerScopeRef.current?.beginNewChat?.();
+    },
+    openProject: async () => {
+      const activeScope = controllerScopeRef.current;
+      const projectPath = await activeScope?.promptForProjectFolder?.();
+      if (projectPath) await activeScope?.openDraftChat?.(projectPath);
+    },
+    toggleSidebar: () => {
+      const activeScope = controllerScopeRef.current;
+      activeScope?.setSidebarExpanded?.((current: boolean) => !current);
+    },
+  }), [controllerScope.conversationMode, headerIdentityStopActive]);
+
+  useEffect(() => {
+    onHeaderControlsChange?.(headerControls);
+  }, [headerControls, onHeaderControlsChange]);
+
+  useEffect(() => () => {
+    onHeaderControlsChange?.(null);
+  }, [onHeaderControlsChange]);
+
   return <DesktopConversationRender scope={controllerScope} />;
 }

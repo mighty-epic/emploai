@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from shared.atomic_io import atomic_write_json
 from shared.runtime_paths import user_state_root
 
 
@@ -29,7 +30,7 @@ class CronFeedStore:
         return payload
 
     def _write(self, payload: Dict[str, Any]) -> None:
-        self.path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(self.path, payload)
 
     def append(
         self,

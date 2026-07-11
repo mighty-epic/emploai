@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 from app_backend.remote_command_broker import dispatch_remote_desktop_command_via_broker
 from app_backend.remote_control_runtime import remote_control_sqlite_broker_enabled
@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 SessionActiveChecker = Callable[..., bool]
 DesktopUnavailableChecker = Callable[[str], bool]
 DesktopOfflineMarker = Callable[..., None]
+LocalTaskDispatcher = Callable[..., Awaitable[Dict[str, Any]]]
+LocalTaskStopper = Callable[..., Awaitable[bool]]
 
 
 def fleet_run_task_payload(*, worker: Dict[str, Any], task: Dict[str, Any]) -> Dict[str, Any]:
@@ -37,6 +39,7 @@ async def try_dispatch_fleet_worker_task(
     is_remote_session_active: SessionActiveChecker,
     is_desktop_unavailable_error: Optional[DesktopUnavailableChecker] = None,
     mark_desktop_offline: Optional[DesktopOfflineMarker] = None,
+    dispatch_local_task: Optional[LocalTaskDispatcher] = None,
 ) -> Dict[str, Any]:
     if str(task.get("status") or "") != "queued":
         return task
@@ -52,6 +55,16 @@ async def try_dispatch_fleet_worker_task(
         return task
     if not next_task or str(next_task.get("task_id") or "") != str(task.get("task_id") or ""):
         return task
+
+    if str(worker.get("kind") or "").strip().lower() == "local":
+        if dispatch_local_task is None:
+            return task
+        return await dispatch_local_task(
+            store=store,
+            user_id=int(user_id),
+            worker=worker,
+            task=task,
+        )
 
     desktop_id = str(worker.get("machine_desktop_id") or "").strip()
     desktop_connected_here = bool(desktop_id and remote_desktop_manager.is_connected_for_user(desktop_id, int(user_id)))
@@ -109,6 +122,7 @@ async def try_stop_fleet_worker_task(
     is_remote_session_active: SessionActiveChecker,
     is_desktop_unavailable_error: Optional[DesktopUnavailableChecker] = None,
     mark_desktop_offline: Optional[DesktopOfflineMarker] = None,
+    stop_local_task: Optional[LocalTaskStopper] = None,
 ) -> bool:
     task_id = str(task.get("task_id") or "").strip()
     worker_id = str(task.get("worker_id") or "").strip()
@@ -119,6 +133,11 @@ async def try_stop_fleet_worker_task(
     except Exception:
         logger.exception("[fleet] failed resolving worker for stop request")
         return False
+
+    if str(worker.get("kind") or "").strip().lower() == "local":
+        if stop_local_task is None:
+            return False
+        return await stop_local_task(user_id=int(user_id), task=task)
 
     desktop_id = str(worker.get("machine_desktop_id") or "").strip()
     desktop_connected_here = bool(desktop_id and remote_desktop_manager.is_connected_for_user(desktop_id, int(user_id)))

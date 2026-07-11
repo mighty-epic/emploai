@@ -35,6 +35,8 @@ import {
   type SessionSummary,
 } from '@/lib/appApi';
 import { formatAbsoluteTime, formatRelativeTime } from '@/lib/time';
+import { desktopAutomationsVisualStyles } from './DesktopAutomationsScreen.visualStyles';
+import { mergeDesktopVisualStyles } from './mergeDesktopVisualStyles';
 
 type ScheduleMode = 'interval' | 'daily' | 'delay' | 'advanced';
 type DetailTab = 'overview' | 'output' | 'runs' | 'processes' | 'planner';
@@ -948,7 +950,7 @@ function EmptyState({ title, text }: { title: string; text: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const baseStyles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#070b13',
@@ -1580,3 +1582,5 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
 });
+
+const styles = mergeDesktopVisualStyles(baseStyles, desktopAutomationsVisualStyles);

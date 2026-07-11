@@ -22,15 +22,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-INTERNAL_PY_DEPS = REPO_ROOT / "desktop_app" / "backend" / "_internal"
-if INTERNAL_PY_DEPS.exists():
-    if os.name == "nt":
-        try:
-            os.add_dll_directory(str(INTERNAL_PY_DEPS))
-        except Exception:
-            pass
-    if str(INTERNAL_PY_DEPS) not in sys.path:
-        sys.path.insert(0, str(INTERNAL_PY_DEPS))
+from shared.bundled_python_runtime import configure_bundled_python_dependencies
+
+
+configure_bundled_python_dependencies(REPO_ROOT)
 
 try:
     import sounddevice as sd

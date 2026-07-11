@@ -6,6 +6,42 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from cli.tui_constants import MODEL_CONFIGS
 
 
+def responses_store_disabled_for_model(
+    *,
+    provider: Optional[str] = None,
+    model_name: Optional[str] = None,
+    model_id: Optional[str] = None,
+) -> bool:
+    normalized_provider = str(provider or "").strip()
+    if normalized_provider:
+        return normalized_provider == "openai-codex"
+
+    if model_name:
+        config = MODEL_CONFIGS.get(str(model_name).strip(), {})
+        return str(config.get("provider", "") or "").strip() == "openai-codex"
+
+    if model_id:
+        normalized_model_id = str(model_id).strip()
+        matching_providers = {
+            str(config.get("provider", "") or "").strip()
+            for config in MODEL_CONFIGS.values()
+            if str(config.get("id", "")).strip() == normalized_model_id
+        }
+        if matching_providers:
+            return "openai-codex" in matching_providers
+
+    return False
+
+
+def responses_store_disabled_for_client(client: Any) -> bool:
+    client_type = type(client)
+    type_name = str(getattr(client_type, "__name__", "") or "")
+    module_name = str(getattr(client_type, "__module__", "") or "")
+    if type_name == "OpenAICodexClient":
+        return True
+    return module_name == "shared.openai_codex_auth"
+
+
 def resolve_openai_api_type(
     model_name: Optional[str] = None,
     *,
@@ -144,6 +180,8 @@ def create_openai_completion(
             "model": model_id,
             "input": response_input,
         }
+        if responses_store_disabled_for_model(model_name=model_name, model_id=model_id) or responses_store_disabled_for_client(client):
+            kwargs["store"] = False
 
         response_tools = _responses_tool_shape(tools)
         if response_tools:

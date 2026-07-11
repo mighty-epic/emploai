@@ -1,4 +1,5 @@
 import type { DesktopConversationScope } from './DesktopConversationScope'; type NativeSyntheticEvent<T = any> = any; type ActiveCommandPanel = any; type ActivityItem = any; type AgentOverview = any; type ArtifactDetail = any; type ArtifactSummary = any; type ComposerInputOrigin = any; type ConversationSurfaceMode = any; type DesktopFleetEnrollment = any; type DesktopFleetIdentity = any; type DesktopFleetSnapshot = any; type DesktopFleetTask = any; type DesktopFleetWorker = any; type DesktopGitRepoState = any; type DesktopMessage = any; type DesktopPathStatus = any; type DesktopRuntimeStatus = any; type DesktopSidebarProjectActivity = any; type DesktopSidebarState = any; type DesktopVoicePackState = any; type DesktopVoiceRuntimeStatus = any; type InterruptPolicy = any; type JarvisSttBackend = any; type JarvisTtsBackend = any; type LayoutChangeEvent = any; type MessageSourceFormat = any; type ModelProviderGroup = any; type NativeScrollEvent = any; type PendingSearchJump = any; type QueuedComposerMessage = any; type QueuedMessage = any; type RealtimeChannel = any; type RealtimeEvent = any; type ReferenceEntry = any; type RuntimeOrchestratorStatus = any; type ScheduledJob = any; type SearchResultTarget = any; type SecurityPermissionMode = any; type SessionDetail = any; type SessionMessage = any; type SessionSearchResult = any; type SessionSummary = any; type SessionTimelineEvent = any; type SidebarChatTooltipState = any; type SidebarDragState = any; type SidebarDraftChat = any; type SidebarProjectGroup = any; type StartupReadinessState = any; type TaskBoard = any; type TelegramBotConfig = any; type TextInputContentSizeChangeEventData = any; type ToolPackInfoPopupState = any; type VoiceCaptureMode = any; type VoiceGateState = any;
+import { updateDesktopFleetWorkerQueuePolicy } from '@/lib/desktopBridge';
 
 export function useDesktopConversationFleetActions(scope: DesktopConversationScope) {
   const { HEBREW_VOICE_GATE_MAX_MS, HEBREW_VOICE_GATE_PREROLL_MS, Platform, VOICE_GATE_MAX_MS, VOICE_GATE_PREROLL_MS, apiBaseUrl, assignDesktopFleetGroupTask, assignDesktopFleetTask, confirmAction, continueDesktopFleetWorkerQueue, copyDesktopText, createApprovedConfirmation, createDesktopFleetEnrollment, createDesktopFleetGroup, createDesktopFleetLocalWorker, deleteDesktopFleetGroup, deleteDesktopFleetWorker, describeError, fleetEnrollment, fleetGroupNameDraft, fleetGroupTaskDrafts, fleetRenameDrafts, fleetSnapshot, fleetTaskBatchStatusMessage, fleetTaskDrafts, fleetTaskStatusMessage, fleetWorkerNameDraft, fleetWorkers, floatingPanelRef, isBlockedFleetTask, loadDesktopFleetSnapshot, pinnedToolPackInfoId, projectMenuRefs, projectMenuTriggerRefs, remoteAuthStatus, renameDesktopFleetWorker, requestDesktopFleetWorkerPreview, resetDesktopFleetWorker, sessionBelongsToFleetIdentity, sessionId, sessionMenuRefs, sessionMenuTriggerRefs, sessionRowRefs, sessions, setDesktopFleetActiveIdentity, setFleetEnrollment, setFleetError, setFleetGroupNameDraft, setFleetGroupTaskDrafts, setFleetLoading, setFleetRenameDrafts, setFleetSnapshot, setFleetStatus, setFleetTaskDrafts, setFleetWorkerNameDraft, setHoveredToolPackInfoId, setPinnedToolPackInfoId, setSidebarChatTooltip, setToolPackInfoPopup, shellRef, sidebarChatTooltipTimerRef, status, stopAllDesktopFleetWorkers, stopDesktopFleetWorker, token, toolPackInfoButtonRefs, toolPackInfoHideTimerRef, userFacingError, usingHebrewVoiceEngine } = scope;
@@ -6,6 +7,7 @@ export function useDesktopConversationFleetActions(scope: DesktopConversationSco
   const clearConversationSelection = (...args: any[]) => scope.clearConversationSelection?.(...args);
   const fleetSelectedChatIdForWorker = (...args: any[]) => scope.fleetSelectedChatIdForWorker?.(...args);
   const telegramBotLabelForSession = (...args: any[]) => scope.telegramBotLabelForSession?.(...args);
+  const setFleetPreview = scope.setFleetPreview as ((value: any) => void) | undefined;
 const setProjectMenuRef = (projectPath: string) => (node: any) => {
     if (node) {
       projectMenuRefs.current[projectPath] = node;
@@ -503,9 +505,13 @@ const setProjectMenuRef = (projectPath: string) => (node: any) => {
     setFleetLoading(true);
     setFleetStatus(`Requesting preview for ${worker.display_name}`);
     try {
-      await requestDesktopFleetWorkerPreview(worker.worker_id);
+      const preview = await requestDesktopFleetWorkerPreview(worker.worker_id);
+      if (!preview?.capture?.image_base64) {
+        throw new Error(preview?.detail || 'The worker did not return a preview image.');
+      }
+      setFleetPreview?.(preview);
       setFleetError(null);
-      setFleetStatus('Preview requested');
+      setFleetStatus('Preview captured');
       await refreshFleetSnapshot({ quiet: true });
     } catch (error) {
       const detail = describeError(error);
@@ -529,6 +535,21 @@ const setProjectMenuRef = (projectPath: string) => (node: any) => {
       const detail = describeError(error);
       setFleetError(detail);
       setFleetStatus(detail);
+    } finally {
+      setFleetLoading(false);
+    }
+  };
+
+  const updateFleetQueuePolicy = async (worker: DesktopFleetWorker, queuePolicy: 'review_required' | 'auto_continue_success') => {
+    setFleetLoading(true);
+    setFleetStatus(`Updating ${worker.display_name} queue policy`);
+    try {
+      await updateDesktopFleetWorkerQueuePolicy(worker.worker_id, queuePolicy);
+      setFleetError(null);
+      setFleetStatus(queuePolicy === 'auto_continue_success' ? 'Safe successful reports will continue automatically' : 'Report review required');
+      await refreshFleetSnapshot({ quiet: true });
+    } catch (error) {
+      setFleetError(userFacingError(error, 'Queue policy was not updated.'));
     } finally {
       setFleetLoading(false);
     }
@@ -685,5 +706,5 @@ const setProjectMenuRef = (projectPath: string) => (node: any) => {
       setFleetStatus(userFacingError(error, 'Enrollment token was not copied.'));
     }
   };
-  return { setProjectMenuRef, setProjectMenuTriggerRef, setSessionRowRef, setSessionMenuRef, setSessionMenuTriggerRef, setToolPackInfoButtonRef, activeVoiceGatePrerollMs, activeVoiceGateMaxMs, clearSidebarChatTooltipTimer, hideSidebarChatTooltip, clearToolPackInfoHideTimer, hideToolPackInfoPopup, showToolPackInfoPopup, scheduleHideToolPackInfoPopup, showSidebarChatTooltip, scheduleSidebarChatTooltip, refreshFleetSnapshot, createFleetLocalWorker, createFleetEnrollment, assignFleetTask, resetFleetWorker, resetFleetWorkerIdentity, renameFleetWorker, stopFleetWorker, stopAllFleetWorkers, requestFleetPreview, continueFleetQueue, createFleetGroupFromFirstWorker, deleteFleetGroup, assignFleetGroupTask, selectFleetIdentity, copyFleetEnrollmentToken };
+  return { setProjectMenuRef, setProjectMenuTriggerRef, setSessionRowRef, setSessionMenuRef, setSessionMenuTriggerRef, setToolPackInfoButtonRef, activeVoiceGatePrerollMs, activeVoiceGateMaxMs, clearSidebarChatTooltipTimer, hideSidebarChatTooltip, clearToolPackInfoHideTimer, hideToolPackInfoPopup, showToolPackInfoPopup, scheduleHideToolPackInfoPopup, showSidebarChatTooltip, scheduleSidebarChatTooltip, refreshFleetSnapshot, createFleetLocalWorker, createFleetEnrollment, assignFleetTask, resetFleetWorker, resetFleetWorkerIdentity, renameFleetWorker, updateFleetQueuePolicy, stopFleetWorker, stopAllFleetWorkers, requestFleetPreview, continueFleetQueue, createFleetGroupFromFirstWorker, deleteFleetGroup, assignFleetGroupTask, selectFleetIdentity, copyFleetEnrollmentToken };
 }

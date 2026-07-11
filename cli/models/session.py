@@ -83,6 +83,8 @@ class SessionSummary:
     fleet_worker_id: Optional[str] = None
     account_user_id: Optional[int] = None
     account_email: Optional[str] = None
+    plan_mode: Optional[Dict[str, Any]] = None
+    active_goal: Optional[Dict[str, Any]] = None
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -108,6 +110,8 @@ class SessionSummary:
             "fleet_worker_id": self.fleet_worker_id,
             "account_user_id": self.account_user_id,
             "account_email": self.account_email,
+            "plan_mode": self.plan_mode,
+            "active_goal": self.active_goal,
         }
     
     @classmethod
@@ -135,6 +139,8 @@ class SessionSummary:
             fleet_worker_id=data.get("fleet_worker_id"),
             account_user_id=data.get("account_user_id"),
             account_email=data.get("account_email"),
+            plan_mode=data.get("plan_mode") if isinstance(data.get("plan_mode"), dict) else None,
+            active_goal=data.get("active_goal") if isinstance(data.get("active_goal"), dict) else None,
         )
 
 
@@ -161,6 +167,8 @@ class Session:
     fleet_worker_id: Optional[str] = None
     account_user_id: Optional[int] = None
     account_email: Optional[str] = None
+    plan_mode: Optional[Dict[str, Any]] = None
+    active_goal: Optional[Dict[str, Any]] = None
     chat_history: List[Dict[str, Any]] = field(default_factory=list)
     event_timeline: List[Dict[str, Any]] = field(default_factory=list)
     task_history: List[Dict[str, Any]] = field(default_factory=list)
@@ -168,6 +176,7 @@ class Session:
     task_board_armed_next_turn: bool = False
     active_skills: List[str] = field(default_factory=list)
     last_context_compaction: Optional[Dict[str, Any]] = None
+    failed_turns: List[Dict[str, Any]] = field(default_factory=list)
     
     def __post_init__(self):
         if not self.updated_at:
@@ -202,6 +211,8 @@ class Session:
             "fleet_worker_id": self.fleet_worker_id,
             "account_user_id": self.account_user_id,
             "account_email": self.account_email,
+            "plan_mode": self.plan_mode,
+            "active_goal": self.active_goal,
             "chat_history": self.chat_history,
             "event_timeline": self.event_timeline,
             "task_history": self.task_history,
@@ -209,6 +220,7 @@ class Session:
             "task_board_armed_next_turn": self.task_board_armed_next_turn,
             "active_skills": self.active_skills,
             "last_context_compaction": _sanitize_context_compaction(self.last_context_compaction),
+            "failed_turns": list(self.failed_turns),
         }
     
     @classmethod
@@ -235,6 +247,8 @@ class Session:
             fleet_worker_id=data.get("fleet_worker_id"),
             account_user_id=data.get("account_user_id"),
             account_email=data.get("account_email"),
+            plan_mode=data.get("plan_mode") if isinstance(data.get("plan_mode"), dict) else None,
+            active_goal=data.get("active_goal") if isinstance(data.get("active_goal"), dict) else None,
             chat_history=data.get("chat_history", []),
             event_timeline=data.get("event_timeline", []),
             task_history=data.get("task_history", []),
@@ -242,6 +256,7 @@ class Session:
             task_board_armed_next_turn=bool(data.get("task_board_armed_next_turn", False)),
             active_skills=data.get("active_skills", []),
             last_context_compaction=_sanitize_context_compaction(data.get("last_context_compaction")),
+            failed_turns=list(data.get("failed_turns", []) or []),
         )
     
     def to_summary(self) -> SessionSummary:
@@ -276,4 +291,6 @@ class Session:
             fleet_worker_id=self.fleet_worker_id,
             account_user_id=self.account_user_id,
             account_email=self.account_email,
+            plan_mode=self.plan_mode,
+            active_goal=self.active_goal,
         )

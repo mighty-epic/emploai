@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from shared.atomic_io import atomic_write_json
 from shared.runtime_paths import user_state_root
 
 FIRST_BOT_LABEL = "Telegram bot 1"
@@ -110,7 +111,7 @@ class TelegramBotConfigStore:
         except Exception:
             previous_umask = None
         try:
-            self.path.write_text(json.dumps(disk_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            atomic_write_json(self.path, disk_payload)
         finally:
             if previous_umask is not None:
                 try:

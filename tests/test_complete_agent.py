@@ -6,6 +6,8 @@ Run individual: python tests/test_complete_agent.py browser
 Run all: python tests/test_complete_agent.py
 """
 
+__test__ = False  # Manual legacy execution harness; run this module directly.
+
 from dotenv import load_dotenv
 load_dotenv()
 

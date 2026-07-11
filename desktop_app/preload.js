@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('emploaiDesktop', {
   },
   remoteAuth: {
     status: () => ipcRenderer.invoke('emploai:remote-auth:status'),
+    listDesktops: () => ipcRenderer.invoke('emploai:remote-auth:list-desktops'),
     login: (payload) => ipcRenderer.invoke('emploai:remote-auth:login', payload),
     googleLogin: (payload) => ipcRenderer.invoke('emploai:remote-auth:google-login', payload),
     register: (payload) => ipcRenderer.invoke('emploai:remote-auth:register', payload),
@@ -85,6 +86,12 @@ contextBridge.exposeInMainWorld('emploaiDesktop', {
   shell: {
     openPath: (targetPath) => ipcRenderer.invoke('emploai:shell:open-path', targetPath),
     openChromeExtensions: () => ipcRenderer.invoke('emploai:shell:open-chrome-extensions'),
+    createDesktopShortcut: () => ipcRenderer.invoke('emploai:shell:create-desktop-shortcut'),
+    editCommand: (payload) => ipcRenderer.invoke('emploai:shell:edit-command', payload),
+    zoom: (payload) => ipcRenderer.invoke('emploai:shell:zoom', payload),
+    diagnostics: () => ipcRenderer.invoke('emploai:shell:diagnostics'),
+    requestExit: (payload) => ipcRenderer.invoke('emploai:shell:request-exit', payload),
+    onExitRequested: (callback) => subscribe('emploai:shell:exit-requested', callback),
   },
   clipboard: {
     writeText: (textValue) => ipcRenderer.invoke('emploai:clipboard:write-text', textValue),

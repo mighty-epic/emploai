@@ -1,11 +1,43 @@
 import type { DesktopConversationScope } from './DesktopConversationScope';
-import { useEffect } from 'react'; type NativeSyntheticEvent<T = any> = any; type ActiveCommandPanel = any; type ActivityItem = any; type AgentOverview = any; type ArtifactDetail = any; type ArtifactSummary = any; type ComposerInputOrigin = any; type ConversationSurfaceMode = any; type DesktopFleetEnrollment = any; type DesktopFleetIdentity = any; type DesktopFleetSnapshot = any; type DesktopFleetTask = any; type DesktopFleetWorker = any; type DesktopGitRepoState = any; type DesktopMessage = any; type DesktopPathStatus = any; type DesktopRuntimeStatus = any; type DesktopSidebarProjectActivity = any; type DesktopSidebarState = any; type DesktopVoicePackState = any; type DesktopVoiceRuntimeStatus = any; type InterruptPolicy = any; type JarvisSttBackend = any; type JarvisTtsBackend = any; type LayoutChangeEvent = any; type MessageSourceFormat = any; type ModelProviderGroup = any; type NativeScrollEvent = any; type PendingSearchJump = any; type QueuedComposerMessage = any; type QueuedMessage = any; type RealtimeChannel = any; type RealtimeEvent = any; type ReferenceEntry = any; type RuntimeOrchestratorStatus = any; type ScheduledJob = any; type SearchResultTarget = any; type SecurityPermissionMode = any; type SessionDetail = any; type SessionMessage = any; type SessionSearchResult = any; type SessionSummary = any; type SessionTimelineEvent = any; type SidebarChatTooltipState = any; type SidebarDragState = any; type SidebarDraftChat = any; type SidebarProjectGroup = any; type StartupReadinessState = any; type TaskBoard = any; type TelegramBotConfig = any; type TextInputContentSizeChangeEventData = any; type ToolPackInfoPopupState = any; type VoiceCaptureMode = any; type VoiceGateState = any;
+import { JARVIS_WAKE_PHRASE } from './desktopVoicePolicy';
+import {
+  JARVIS_WAKE_MATCH_MAX_MS,
+  JARVIS_WAKE_MATCH_MIN_MS,
+  JARVIS_WAKE_MATCH_RELEASE_MS,
+  JARVIS_WAKE_MATCH_SCORE_EVERY_MS,
+  createJarvisWakeMatchState,
+  scoreJarvisWakeCandidate,
+} from './desktopJarvisWakeProfile';
+import { updateSessionModeState } from '@/lib/appApi';
+import { modelVariantDisplayLabel } from './modelProviders';
+import {
+  chatReconnectDelayMs,
+  createClientMessageId,
+  parseDesktopRealtimeEvent,
+  realtimeEventMatchesSession,
+  shouldReconnectChatSocket,
+} from './desktopRealtimeProtocol';
+import type { DesktopRealtimeEvent, PendingChatMessage } from './desktopRealtimeProtocol';
+import { createDesktopAudioCapture } from './desktopAudioCapture';
+import { playJarvisWakeTone } from './desktopJarvisTone';
+import { useEffect, useRef } from 'react'; type NativeSyntheticEvent<T = any> = any; type ActiveCommandPanel = any; type ActivityItem = any; type AgentOverview = any; type ArtifactDetail = any; type ArtifactSummary = any; type ComposerInputOrigin = any; type ComposerModeOptions = any; type ConversationSurfaceMode = any; type DesktopFleetEnrollment = any; type DesktopFleetIdentity = any; type DesktopFleetSnapshot = any; type DesktopFleetTask = any; type DesktopFleetWorker = any; type DesktopGitRepoState = any; type DesktopMessage = any; type DesktopPathStatus = any; type DesktopRuntimeStatus = any; type DesktopSidebarProjectActivity = any; type DesktopSidebarState = any; type DesktopVoicePackState = any; type DesktopVoiceRuntimeStatus = any; type InterruptPolicy = any; type JarvisSttBackend = any; type JarvisTtsBackend = any; type LayoutChangeEvent = any; type MessageSourceFormat = any; type ModelProviderGroup = any; type NativeScrollEvent = any; type PendingSearchJump = any; type QueuedComposerMessage = any; type ReferenceEntry = any; type RuntimeOrchestratorStatus = any; type ScheduledJob = any; type SearchResultTarget = any; type SecurityPermissionMode = any; type SessionDetail = any; type SessionMessage = any; type SessionSearchResult = any; type SessionSummary = any; type SessionTimelineEvent = any; type SidebarChatTooltipState = any; type SidebarDragState = any; type SidebarDraftChat = any; type SidebarProjectGroup = any; type StartupReadinessState = any; type TaskBoard = any; type TelegramBotConfig = any; type TextInputContentSizeChangeEventData = any; type ToolPackInfoPopupState = any; type VoiceCaptureMode = any; type VoiceGateState = any;
 
 const desktopSecurityPermissionMutationsInFlight = new Set<string>();
 
 export function useDesktopConversationVoiceControls(scope: DesktopConversationScope) {
-  const { ALWAYS_ON_VOICE_AUTO_SEND, COMPOSER_MAX_HEIGHT, COMPOSER_MIN_HEIGHT, DESKTOP_COMMAND_SUGGESTIONS, DESKTOP_NO_ACTIVE_SESSION_STATUS, JARVIS_BARGE_IN_MIN_VOICED_MS, Platform, SOCKET_RECONNECT_MS, VOICE_DEFERRED_FRAME_MAX_MS, VOICE_ENGINE_NONE, VOICE_GATE_ATTACK_MS, VOICE_GATE_FRAME_MS, VOICE_GATE_MIN_MS, VOICE_PROCESSOR_BUFFER_SIZE, activeCommandPanel, activeJarvisBargeInGateDbfs, activePermissionInfoId, activeVoiceBargeInCandidateRef, activeVoiceBargeInReferenceTextRef, activeVoiceGateDbfs, activeVoiceGateMaxMs, activeVoiceGatePrerollMs, activeVoiceGateReleaseMs, activeVoiceSegmentMs, activeVoiceUtteranceIdRef, activity, agentRunActive, allowedWorkspaceRoot, alwaysOnEnabled, alwaysOnEnabledRef, apiBaseUrl, apiVoiceInputActive, appClientIdRef, appendSessionTimelineEvent, appendTimelineEvent, appendVoiceTranscriptSegment, applySessionDetail, applySessionSync, artifactDetailLoading, artifactError, artifacts, artifactsLoading, assignFleetGroupTask, assignFleetTask, assistantAudioRef, assistantAudioTextRef, assistantDeltaBufferRef, assistantDeltaFlushTimerRef, assistantDraft, attachmentUploadInFlight, buildWsBaseUrl, bytesToBase64, chatRunActive, chatRunActiveRef, chatWsRef, clearAssistantDeltaFlushTimer, clearSidebarChatTooltipTimer, clearSidebarSearch, clearToolPackInfoHideTimer, clearTranscriptAutoScrollResumeTimer, closeSidebarSearchModal, commandSuggestionMenuRef, completedTaskBoards, composerInputHeight, composerTextRegionRef, concatFloat32, configureAgent, configureHeadlessRuntime, configuredHebrewVoiceGateDbfs, configuredJarvisBargeInGateDbfs, configuredModelGroups, configuredVoiceGateDbfs, confirmAction, confirmationDialog, contextUsageHovered, continueFleetQueue, conversationMode, conversationModeRef, copyFleetEnrollmentToken, createApprovedConfirmation, createAudioContext, createClientId, createFleetEnrollment, createFleetGroupFromFirstWorker, createFleetLocalWorker, createLocalToolTimelineEvent, createVoiceGateState, currentAvailableToolPacks, currentDisabledPackReasons, currentEnabledToolPacks, currentJarvisSttBackend, currentJarvisSttLabel, currentJarvisTtsBackend, currentJarvisTtsLabel, currentWorkspaceBySessionRef, defaultTelegramBotConfigId, deferredAlwaysOnFramesRef, deferredAlwaysOnSampleCountRef, deleteFleetGroup, describeError, discardDraftChat, dismissedCommandSuggestionInput, draftBranchSearch, draftBranchTriggerRef, draftChat, draftChatRef, draftGitRepoLoading, draftGitRepoState, draftProjectSearch, draftProjectTriggerRef, draftTelegramTriggerRef, dragState, drainingDeferredAlwaysOnFramesRef, emitStartupState, encodePcm16Wav, ensureSessionForOutgoingMessage, envFilePath, expandedCompletedTaskIds, expandedModelProviders, expandedPlannerProviders, externalSidebarToggleSignalRef, fleetChatPanelCollapsed, fleetChatPanelWidth, fleetDashboardCollapsed, fleetEnrollment, fleetError, fleetGroupNameDraft, fleetGroupTaskDrafts, fleetLoading, fleetPanelOpen, fleetRenameDrafts, fleetSnapshot, fleetStatus, fleetTaskBatchStatusMessage, fleetTaskDrafts, fleetTaskStatusMessage, fleetWorkerNameDraft, floatingPanelRef, flushAssistantDeltaBuffer, folderChoiceBusy, folderChoiceOpen, folderChoiceResolveRef, formatToolPackLockReason, handleDesktopConversationRealtimeEvent, handleJarvisSttBackendSelection, handleJarvisTtsBackendSelection, handleTranscriptScroll, hideSidebarChatTooltip, hideToolPackInfoPopup, hideVoicePanel, highlightedMessageIndex, historyMessageLayoutRef, historyScrollRef, hoveredProjectPath, hoveredSessionId, hoveredToolPackInfoId, input, interruptPolicy, isBlockedFleetTask, isDesktopSlashCommand, isJarvisMode, isMeaningfulJarvisBargeInText, jarvisBargeInCandidateUtteranceIdsRef, jarvisHoldToTalkMode, jarvisLatestSpokenText, jarvisLatestTranscript, jarvisMuted, jarvisPulseProgress, jarvisPushToTalkActiveRef, jarvisSpaceHotkeyActiveRef, jarvisStatusDrawerOpen, jarvisVoiceSettingsOpen, jarvisWarmRequestedRef, jobs, keepRuntimeOnAppClose, lastAssistantOutputAt, lastComposerInputOriginRef, lastMessage, lastMessageSignature, lastVoiceWarmRequestEngineRef, liveVoiceStatus, logDiagnostic, maybeResolveStartupReady, mergeLocalMessages, mergeTimelineEventState, messages, modelTriggerRef, normalizeCompletedTaskBoards, openFleetWorkerMenuId, openProjectMenuPath, openSessionMenuId, openSidebarSearchModal, openVoicePanel, orchestratorStatus, overview, overviewRefreshInFlightRef, parseComposerSlashCommand, pendingDraftSecurityPermissionMode, pendingMessagesRef, pendingSearchJump, pendingSessionSwitch, permissionsTriggerRef, pinnedToolPackInfoId, projectMenuRefs, projectMenuTriggerRefs, projectPathStatuses, pushActivity, pushProjectActivity, queuedComposerMessages, reconcileSidebarProjects, reconnectRef, referenceAutoOpenKeyRef, referenceDismissedKeyRef, refreshFleetSnapshot, refreshOverviewState, refreshSidebarCollections, refreshSidebarState, refreshVoiceRuntimeState, renameFleetWorker, requestFleetPreview, resetFleetWorker, resetFleetWorkerIdentity, resetTranscriptAutoScrollState, resolveTaskBoardState, revealProjectInSidebar, rightSidebarWidth, router, runDesktopSlashCommand, runtimeRunState, samplesDbfs, savingCloseBehavior, scheduleHideToolPackInfoPopup, scheduleSidebarChatTooltip, scheduleTranscriptAutoScrollResume, scrollRef, scrollTranscriptToEnd, searchHighlightTimerRef, searchJumpTimerRef, selectFleetIdentity, selectProjectPath, selectedArtifactDetail, selectedArtifactId, selectedVoiceEngine, selectedVoiceEngineState, sessionId, sessionIdRef, sessionMenuRefs, sessionMenuTriggerRefs, sessionName, sessionRowRefs, sessionSettingsMutationInFlight, sessions, setActiveCommandPanel, setActivePermissionInfoId, setActivity, setAlwaysOnEnabled, setArtifactDetailLoading, setArtifactError, setArtifacts, setArtifactsLoading, setAssistantDraft, setAttachmentUploadInFlight, setCachedModelGroups, setCachedPlannerModels, setChatRunActive, setCompletedTaskBoards, setComposerInputHeight, setContextUsageHovered, setConversationMode, setDismissedCommandSuggestionInput, setDraftBranchSearch, setDraftChat, setDraftGitRepoLoading, setDraftGitRepoState, setDraftProjectSearch, setDragState, setExpandedCompletedTaskIds, setExpandedModelProviders, setExpandedPlannerProviders, setFleetChatPanelCollapsed, setFleetChatPanelWidth, setFleetDashboardCollapsed, setFleetEnrollment, setFleetError, setFleetGroupNameDraft, setFleetGroupTaskDrafts, setFleetLoading, setFleetPanelOpen, setFleetRenameDrafts, setFleetSnapshot, setFleetStatus, setFleetTaskDrafts, setFleetWorkerNameDraft, setFolderChoiceBusy, setFolderChoiceOpen, setHighlightedMessageIndex, setHoveredProjectPath, setHoveredSessionId, setHoveredToolPackInfoId, setInput, setInterruptPolicy, setJarvisHoldToTalkMode, setJarvisLatestSpokenText, setJarvisLatestTranscript, setJarvisMuted, setJarvisStatusDrawerOpen, setJarvisVoiceSettingsOpen, setJobs, setKeepRuntimeOnAppClose, setLastAssistantOutputAt, setLiveVoiceStatus, setMessages, setOpenFleetWorkerMenuId, setOpenProjectMenuPath, setOpenSessionMenuId, setOrchestratorStatus, setOverview, setPendingDraftSecurityPermissionMode, setPendingSearchJump, setPendingSessionSwitch, setPinnedToolPackInfoId, setProjectMenuRef, setProjectMenuTriggerRef, setProjectPathStatuses, setQueuedComposerMessages, setRightSidebarWidth, setRuntimeRunState, setSavingCloseBehavior, setSelectedArtifactDetail, setSelectedArtifactId, setSessionId, setSessionMenuRef, setSessionMenuTriggerRef, setSessionName, setSessionRowRef, setSessionSettingsMutationInFlight, setSessions, setShowArtifactRail, setShowReferenceRail, setShowVoicePanel, setSidebarChatTooltip, setSidebarExpanded, setSidebarSearch, setSidebarSearchError, setSidebarSearchLoading, setSidebarSearchModalOpen, setSidebarSearchResults, setSidebarState, setSidebarStateReady, setSocketState, setStatus, setSttBackendChanging, setTaskBoard, setTaskBoardArmedNextTurnState, setTaskBoardCollapsed, setTelegramBotConfigs, setThinking, setTimelineEvents, setToolPackInfoButtonRef, setToolPackInfoPopup, setToolPackMutationInFlight, setTtsBackendChanging, setVoiceDraft, setVoiceEngineChanging, setVoiceError, setVoiceMode, setVoicePanelHidden, setVoiceRecording, setVoiceRunning, setVoiceState, shellRef, shortStatusText, showArtifactRail, showReferenceRail, showSidebarChatTooltip, showToolPackInfoPopup, showVoicePanel, sidebarChatTooltip, sidebarChatTooltipTimerRef, sidebarCollectionsRefreshInFlightRef, sidebarExpanded, sidebarSearch, sidebarSearchError, sidebarSearchInputRef, sidebarSearchLauncherRef, sidebarSearchLoading, sidebarSearchModalOpen, sidebarSearchModalRef, sidebarSearchRequestIdRef, sidebarSearchResults, sidebarState, sidebarStateReady, socketState, startupChatSocketReadyRef, startupSessionStateReadyRef, startupSidebarReadyRef, startupTerminalStateRef, status, stopAllFleetWorkers, stopFleetWorker, sttBackendChanging, summarizeToolPayload, takeGateFrame, taskBoard, taskBoardArmedNextTurn, taskBoardCollapsed, taskBoardStateRef, telegramBotConfigs, thinking, thinkingShineProgress, timelineEvents, toLiveDesktopMessage, toggleToolPackId, token, toolPackInfoButtonRefs, toolPackInfoHideTimerRef, toolPackInfoPopup, toolPackLabel, toolPackMutationInFlight, toolsTriggerRef, transcriptAutoScrollResumeTimerRef, transcriptAutoScrollSuspendedRef, transcriptContentHeightRef, transcriptLastScrollOffsetYRef, transcriptLastSignatureRef, transcriptMessageLayoutRef, transcriptPendingAutoScrollRef, transcriptProgrammaticScrollUntilRef, transcriptSignature, transcriptViewportHeightRef, ttsBackendChanging, unavailableEnabledToolPackReason, updateSessionHeadlessEligibility, updateSessionSecurityPermissionMode, updateSessionTelegramBotAssignment, updateSessionToolPacks, updateSidebarState, uploadAppAttachment, useEffect, userFacingError, usingHebrewVoiceEngine, voiceAudioContextRef, voiceAudioSourceRef, voiceCaptureModeRef, voiceChunkChainRef, voiceChunkSampleCountRef, voiceChunkSamplesRef, voiceChunkSequenceRef, voiceComposerBaseInputRef, voiceComposerDraftRef, voiceDraft, voiceEngineChanging, voiceError, voiceGateStateRef, voiceMode, voicePanelHidden, voicePressActiveRef, voiceProcessorRef, voiceReconnectRef, voiceRecording, voiceRecordingRef, voiceRunning, voiceRunningRef, voiceSampleRateRef, voiceStartInFlightRef, voiceState, voiceStreamRef, voiceWsRef, warmSelectedVoicePath } = scope;
+  const { ALWAYS_ON_VOICE_AUTO_SEND, COMPOSER_MAX_HEIGHT, COMPOSER_MIN_HEIGHT, DESKTOP_COMMAND_SUGGESTIONS, DESKTOP_NO_ACTIVE_SESSION_STATUS, JARVIS_BARGE_IN_MIN_VOICED_MS, Platform, SOCKET_RECONNECT_MS, VOICE_DEFERRED_FRAME_MAX_MS, VOICE_ENGINE_NONE, VOICE_GATE_ATTACK_MS, VOICE_GATE_FRAME_MS, VOICE_GATE_MIN_MS, activeCommandPanel, activeJarvisBargeInGateDbfs, activePermissionInfoId, activeVoiceBargeInCandidateRef, activeVoiceBargeInReferenceTextRef, activeVoiceGateDbfs, activeVoiceGateMaxMs, activeVoiceGatePrerollMs, activeVoiceGateReleaseMs, activeVoiceSegmentMs, activeVoiceUtteranceIdRef, activity, agentRunActive, allowedWorkspaceRoot, alwaysOnEnabled, alwaysOnEnabledRef, apiBaseUrl, apiVoiceInputActive, appClientIdRef, appendSessionTimelineEvent, appendTimelineEvent, appendVoiceTranscriptSegment, applySessionDetail, applySessionSync, artifactDetailLoading, artifactError, artifacts, artifactsLoading, assignFleetGroupTask, assignFleetTask, assistantAudioRef, assistantAudioTextRef, assistantDeltaBufferRef, assistantDeltaFlushTimerRef, assistantDraft, attachmentUploadInFlight, buildWsBaseUrl, bytesToBase64, chatRunActive, chatRunActiveRef, chatWsRef, clearAssistantDeltaFlushTimer, clearSidebarChatTooltipTimer, clearSidebarSearch, clearToolPackInfoHideTimer, clearTranscriptAutoScrollResumeTimer, closeSidebarSearchModal, commandSuggestionMenuRef, completedTaskBoards, composerInputHeight, composerTextRegionRef, concatFloat32, configureAgent, configureHeadlessRuntime, configuredHebrewVoiceGateDbfs, configuredJarvisBargeInGateDbfs, configuredModelGroups, configuredVoiceGateDbfs, confirmAction, confirmationDialog, contextUsageHovered, continueFleetQueue, conversationMode, conversationModeRef, copyFleetEnrollmentToken, createApprovedConfirmation, createAudioContext, createClientId, createFleetEnrollment, createFleetGroupFromFirstWorker, createFleetLocalWorker, createLocalToolTimelineEvent, createVoiceGateState, currentAvailableToolPacks, currentDisabledPackReasons, currentEnabledToolPacks, currentJarvisSttBackend, currentJarvisSttLabel, currentJarvisTtsBackend, currentJarvisTtsLabel, currentWorkspaceBySessionRef, defaultTelegramBotConfigId, deferredAlwaysOnFramesRef, deferredAlwaysOnSampleCountRef, deleteFleetGroup, describeError, discardDraftChat, dismissedCommandSuggestionInput, draftBranchSearch, draftBranchTriggerRef, draftChat, draftChatRef, draftGitRepoLoading, draftGitRepoState, draftProjectSearch, draftProjectTriggerRef, draftTelegramTriggerRef, dragState, drainingDeferredAlwaysOnFramesRef, emitStartupState, encodePcm16Wav, ensureSessionForOutgoingMessage, envFilePath, expandedCompletedTaskIds, expandedModelProviders, expandedPlannerProviders, externalSidebarToggleSignalRef, fleetChatPanelCollapsed, fleetChatPanelWidth, fleetDashboardCollapsed, fleetEnrollment, fleetError, fleetGroupNameDraft, fleetGroupTaskDrafts, fleetLoading, fleetPanelOpen, fleetRenameDrafts, fleetSnapshot, fleetStatus, fleetTaskBatchStatusMessage, fleetTaskDrafts, fleetTaskStatusMessage, fleetWorkerNameDraft, floatingPanelRef, flushAssistantDeltaBuffer, folderChoiceBusy, folderChoiceOpen, folderChoiceResolveRef, formatToolPackLockReason, handleDesktopConversationRealtimeEvent, handleJarvisSttBackendSelection, handleJarvisTtsBackendSelection, handleTranscriptScroll, hideSidebarChatTooltip, hideToolPackInfoPopup, hideVoicePanel, highlightedMessageIndex, historyMessageLayoutRef, historyScrollRef, hoveredProjectPath, hoveredSessionId, hoveredToolPackInfoId, input, interruptPolicy, isBlockedFleetTask, isDesktopSlashCommand, isJarvisMode, isMeaningfulJarvisBargeInText, jarvisBargeInCandidateUtteranceIdsRef, jarvisHoldToTalkMode, jarvisLatestSpokenText, jarvisLatestTranscript, jarvisMuted, jarvisPulseProgress, jarvisPushToTalkActiveRef, jarvisSpaceHotkeyActiveRef, jarvisStatusDrawerOpen, jarvisVoiceSettingsOpen, jarvisWarmRequestedRef, jobs, keepRuntimeOnAppClose, lastAssistantOutputAt, lastComposerInputOriginRef, lastMessage, lastMessageSignature, lastVoiceWarmRequestEngineRef, liveVoiceStatus, logDiagnostic, maybeResolveStartupReady, mergeLocalMessages, mergeTimelineEventState, messages, modelTriggerRef, normalizeCompletedTaskBoards, openFleetWorkerMenuId, openProjectMenuPath, openSessionMenuId, openSidebarSearchModal, openVoicePanel, orchestratorStatus, overview, overviewRefreshInFlightRef, parseComposerSlashCommand, pendingDraftSecurityPermissionMode, pendingMessagesRef, pendingSearchJump, pendingSessionSwitch, permissionsTriggerRef, pinnedToolPackInfoId, projectMenuRefs, projectMenuTriggerRefs, projectPathStatuses, pushActivity, pushProjectActivity, queuedComposerMessages, reconcileSidebarProjects, reconnectRef, referenceAutoOpenKeyRef, referenceDismissedKeyRef, refreshFleetSnapshot, refreshOverviewState, refreshSidebarCollections, refreshSidebarState, refreshVoiceRuntimeState, renameFleetWorker, requestFleetPreview, resetFleetWorker, resetFleetWorkerIdentity, resetTranscriptAutoScrollState, resolveTaskBoardState, revealProjectInSidebar, rightSidebarWidth, router, runDesktopSlashCommand, runtimeRunState, samplesDbfs, savingCloseBehavior, scheduleHideToolPackInfoPopup, scheduleSidebarChatTooltip, scheduleTranscriptAutoScrollResume, scrollRef, scrollTranscriptToEnd, searchHighlightTimerRef, searchJumpTimerRef, selectFleetIdentity, selectProjectPath, selectedArtifactDetail, selectedArtifactId, selectedVoiceEngine, selectedVoiceEngineState, sessionId, sessionIdRef, sessionMenuRefs, sessionMenuTriggerRefs, sessionName, sessionRowRefs, sessionSettingsMutationInFlight, sessions, setActiveCommandPanel, setActivePermissionInfoId, setActivity, setAlwaysOnEnabled, setArtifactDetailLoading, setArtifactError, setArtifacts, setArtifactsLoading, setAssistantDraft, setAttachmentUploadInFlight, setCachedModelGroups, setCachedPlannerModels, setChatRunActive, setCompletedTaskBoards, setComposerInputHeight, setContextUsageHovered, setConversationMode, setDismissedCommandSuggestionInput, setDraftBranchSearch, setDraftChat, setDraftGitRepoLoading, setDraftGitRepoState, setDraftProjectSearch, setDragState, setExpandedCompletedTaskIds, setExpandedModelProviders, setExpandedPlannerProviders, setFleetChatPanelCollapsed, setFleetChatPanelWidth, setFleetDashboardCollapsed, setFleetEnrollment, setFleetError, setFleetGroupNameDraft, setFleetGroupTaskDrafts, setFleetLoading, setFleetPanelOpen, setFleetRenameDrafts, setFleetSnapshot, setFleetStatus, setFleetTaskDrafts, setFleetWorkerNameDraft, setFolderChoiceBusy, setFolderChoiceOpen, setHighlightedMessageIndex, setHoveredProjectPath, setHoveredSessionId, setHoveredToolPackInfoId, setInput, setInterruptPolicy, setJarvisHoldToTalkMode, setJarvisLatestSpokenText, setJarvisLatestTranscript, setJarvisMuted, setJarvisStatusDrawerOpen, setJarvisVoiceSettingsOpen, setJobs, setKeepRuntimeOnAppClose, setLastAssistantOutputAt, setLiveVoiceStatus, setMessages, setOpenFleetWorkerMenuId, setOpenProjectMenuPath, setOpenSessionMenuId, setOrchestratorStatus, setOverview, setPendingDraftSecurityPermissionMode, setPendingSearchJump, setPendingSessionSwitch, setPinnedToolPackInfoId, setProjectMenuRef, setProjectMenuTriggerRef, setProjectPathStatuses, setQueuedComposerMessages, setRightSidebarWidth, setRuntimeRunState, setSavingCloseBehavior, setSelectedArtifactDetail, setSelectedArtifactId, setSessionId, setSessionMenuRef, setSessionMenuTriggerRef, setSessionName, setSessionRowRef, setSessionSettingsMutationInFlight, setSessions, setShowArtifactRail, setShowReferenceRail, setShowVoicePanel, setSidebarChatTooltip, setSidebarExpanded, setSidebarSearch, setSidebarSearchError, setSidebarSearchLoading, setSidebarSearchModalOpen, setSidebarSearchResults, setSidebarState, setSidebarStateReady, setSocketState, setStatus, setSttBackendChanging, setTaskBoard, setTaskBoardArmedNextTurnState, setTaskBoardCollapsed, setTelegramBotConfigs, setThinking, setTimelineEvents, setToolPackInfoButtonRef, setToolPackInfoPopup, setToolPackMutationInFlight, setTtsBackendChanging, setVoiceDraft, setVoiceEngineChanging, setVoiceError, setVoiceMode, setVoicePanelHidden, setVoiceRecording, setVoiceRunning, setVoiceState, shellRef, shortStatusText, showArtifactRail, showReferenceRail, showSidebarChatTooltip, showToolPackInfoPopup, showVoicePanel, sidebarChatTooltip, sidebarChatTooltipTimerRef, sidebarCollectionsRefreshInFlightRef, sidebarExpanded, sidebarSearch, sidebarSearchError, sidebarSearchInputRef, sidebarSearchLauncherRef, sidebarSearchLoading, sidebarSearchModalOpen, sidebarSearchModalRef, sidebarSearchRequestIdRef, sidebarSearchResults, sidebarState, sidebarStateReady, socketState, startupChatSocketReadyRef, startupSessionStateReadyRef, startupSidebarReadyRef, startupTerminalStateRef, status, stopAllFleetWorkers, stopFleetWorker, sttBackendChanging, summarizeToolPayload, takeGateFrame, taskBoard, taskBoardArmedNextTurn, taskBoardCollapsed, taskBoardStateRef, telegramBotConfigs, thinking, thinkingShineProgress, timelineEvents, toLiveDesktopMessage, toggleToolPackId, token, toolPackInfoButtonRefs, toolPackInfoHideTimerRef, toolPackInfoPopup, toolPackLabel, toolPackMutationInFlight, toolsTriggerRef, transcriptAutoScrollResumeTimerRef, transcriptAutoScrollSuspendedRef, transcriptContentHeightRef, transcriptLastScrollOffsetYRef, transcriptLastSignatureRef, transcriptMessageLayoutRef, transcriptPendingAutoScrollRef, transcriptProgrammaticScrollUntilRef, transcriptSignature, transcriptViewportHeightRef, ttsBackendChanging, unavailableEnabledToolPackReason, updateSessionHeadlessEligibility, updateSessionSecurityPermissionMode, updateSessionTelegramBotAssignment, updateSessionToolPacks, updateSidebarState, uploadAppAttachment, useEffect, userFacingError, usingHebrewVoiceEngine, voiceAudioContextRef, voiceAudioSourceRef, voiceCaptureModeRef, voiceChunkChainRef, voiceChunkSampleCountRef, voiceChunkSamplesRef, voiceChunkSequenceRef, voiceComposerBaseInputRef, voiceComposerDraftRef, voiceDraft, voiceEngineChanging, voiceError, voiceGateStateRef, voiceMode, voicePanelHidden, voicePressActiveRef, voiceCaptureNodeRef, voiceReconnectRef, voiceRecording, voiceRecordingRef, voiceRunning, voiceRunningRef, voiceSampleRateRef, voiceStartInFlightRef, voiceState, voiceStreamRef, voiceWsRef, warmSelectedVoicePath } = scope;
+  const jarvisWakeMatchStateRef = scope.jarvisWakeMatchStateRef;
+  const jarvisWakeProfileRef = scope.jarvisWakeProfileRef;
+  const pendingRunMode = scope.pendingRunMode as 'normal' | 'plan' | 'goal' | null | undefined;
+  const setPendingRunMode = scope.setPendingRunMode as ((mode: 'normal' | 'plan' | 'goal' | null) => void) | undefined;
+  const currentJarvisWakePhrase = String(scope.currentJarvisWakePhrase || JARVIS_WAKE_PHRASE).trim() || JARVIS_WAKE_PHRASE;
+  const jarvisWakeProfileReady = Boolean(scope.jarvisWakeProfileReady);
+  const setJarvisWakeEnrollmentOpen = scope.setJarvisWakeEnrollmentOpen as ((value: boolean) => void) | undefined;
   const refreshArtifacts = (...args: any[]) => scope.refreshArtifacts?.(...args);
+  const chatSocketsBySessionRef = useRef<Record<string, WebSocket>>({});
+  const chatSocketReconnectTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const chatSocketReconnectAttemptsRef = useRef<Record<string, number>>({});
+  const chatSocketRunActiveBySessionRef = useRef<Record<string, boolean>>({});
   const missingProviderApiKeyMessage = 'You have not set an API key yet. Add an API key in Setup before sending a message.';
   const hasConfiguredModelProvider = () => {
     const groups = Array.isArray(configuredModelGroups) ? configuredModelGroups : [];
@@ -25,22 +57,370 @@ export function useDesktopConversationVoiceControls(scope: DesktopConversationSc
     pushActivity(missingProviderApiKeyMessage, 'warn');
     return true;
   };
-const flushPendingMessages = () => {
-    const ws = chatWsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+  const voiceInputIssueForStatus = (status: any) => {
+    const issues = Array.isArray(status?.issues) ? status.issues.map((item: any) => String(item || '').trim()).filter(Boolean) : [];
+    if (status?.input_ok === false) {
+      return issues[0] || `${currentJarvisSttLabel} voice input is not ready.`;
+    }
+    if (!apiVoiceInputActive && selectedVoiceEngine === VOICE_ENGINE_NONE) {
+      return issues[0] || 'Select an English or Hebrew voice path first.';
+    }
+    return null;
+  };
+  const ensureJarvisVoiceInputReady = async () => {
+    let status: any = liveVoiceStatus || null;
+    let issue = voiceInputIssueForStatus(status);
+    if (!issue && apiVoiceInputActive && !status) {
+      try {
+        status = await refreshVoiceRuntimeState();
+        issue = voiceInputIssueForStatus(status);
+      } catch (error) {
+        issue = userFacingError(error, `${currentJarvisSttLabel} voice input is not ready.`);
+      }
+    }
+    if (!issue) {
+      return true;
+    }
+    voicePressActiveRef.current = false;
+    setVoiceState('error');
+    setVoiceError(issue);
+    setStatus(issue);
+    pushActivity(issue, 'warn');
+    return false;
+  };
+  const normalizeChatSessionId = (value: unknown) => String(value || '').trim();
+
+  const hasPendingMessagesForSession = (targetSessionId: string) => {
+    const normalizedTargetSessionId = normalizeChatSessionId(targetSessionId);
+    return Boolean(normalizedTargetSessionId)
+      && pendingMessagesRef.current.some((item: PendingChatMessage) => normalizeChatSessionId(item?.sessionId) === normalizedTargetSessionId);
+  };
+
+  const clearChatSocketReconnectTimer = (targetSessionId: string) => {
+    const timer = chatSocketReconnectTimersRef.current[targetSessionId];
+    if (timer) {
+      clearTimeout(timer);
+      delete chatSocketReconnectTimersRef.current[targetSessionId];
+    }
+  };
+
+  const closeSessionChatSocket = (targetSessionId: string) => {
+    const normalizedTargetSessionId = normalizeChatSessionId(targetSessionId);
+    if (!normalizedTargetSessionId) {
       return;
     }
-
-    while (pendingMessagesRef.current.length && ws.readyState === WebSocket.OPEN) {
-      const next = pendingMessagesRef.current.shift();
-      if (!next) break;
-      ws.send(JSON.stringify({
-        text: next.text,
-        session_id: next.sessionId,
-        interrupt_policy: next.interruptPolicy,
-        source_format: next.sourceFormat,
-      }));
+    clearChatSocketReconnectTimer(normalizedTargetSessionId);
+    const socket = chatSocketsBySessionRef.current[normalizedTargetSessionId];
+    delete chatSocketsBySessionRef.current[normalizedTargetSessionId];
+    delete chatSocketRunActiveBySessionRef.current[normalizedTargetSessionId];
+    delete chatSocketReconnectAttemptsRef.current[normalizedTargetSessionId];
+    if (socket && socket.readyState !== WebSocket.CLOSED && socket.readyState !== WebSocket.CLOSING) {
+      socket.close();
     }
+    if (chatWsRef.current === socket) {
+      chatWsRef.current = null;
+    }
+  };
+
+  const closeIdleBackgroundChatSocket = (targetSessionId: string, delayMs = 1500) => {
+    const normalizedTargetSessionId = normalizeChatSessionId(targetSessionId);
+    if (!normalizedTargetSessionId || normalizedTargetSessionId === normalizeChatSessionId(sessionIdRef.current)) {
+      return;
+    }
+    clearChatSocketReconnectTimer(normalizedTargetSessionId);
+    chatSocketReconnectTimersRef.current[normalizedTargetSessionId] = setTimeout(() => {
+      if (
+        normalizedTargetSessionId !== normalizeChatSessionId(sessionIdRef.current)
+        && !hasPendingMessagesForSession(normalizedTargetSessionId)
+        && !chatSocketRunActiveBySessionRef.current[normalizedTargetSessionId]
+      ) {
+        closeSessionChatSocket(normalizedTargetSessionId);
+      }
+    }, delayMs);
+  };
+
+  const sendPendingMessagesForSession = (targetSessionId: string, ws?: WebSocket | null) => {
+    const normalizedTargetSessionId = normalizeChatSessionId(targetSessionId);
+    const socket = ws || chatSocketsBySessionRef.current[normalizedTargetSessionId] || null;
+    if (!normalizedTargetSessionId || !socket || socket.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+
+    let sentAny = false;
+    const remainingMessages: PendingChatMessage[] = [];
+    for (const next of pendingMessagesRef.current as PendingChatMessage[]) {
+      if (normalizeChatSessionId(next?.sessionId) !== normalizedTargetSessionId) {
+        remainingMessages.push(next);
+        continue;
+      }
+      if (next.deliveryState === 'sent') {
+        remainingMessages.push(next);
+        continue;
+      }
+      if (socket.readyState !== WebSocket.OPEN) {
+        remainingMessages.push(next);
+        continue;
+      }
+      try {
+        socket.send(JSON.stringify({
+          text: next.text,
+          session_id: normalizedTargetSessionId,
+          interrupt_policy: next.interruptPolicy,
+          source_format: next.sourceFormat,
+          source_client_id: appClientIdRef.current,
+          client_message_id: next.clientMessageId,
+          run_mode: next.modeOptions?.runMode || undefined,
+          plan_action: next.modeOptions?.planAction || undefined,
+          plan_answer: next.modeOptions?.planAnswer || undefined,
+        }));
+        next.deliveryState = 'sent';
+        chatSocketRunActiveBySessionRef.current[normalizedTargetSessionId] = true;
+        sentAny = true;
+      } catch (error) {
+        next.deliveryState = 'queued';
+        pushActivity('Message delivery paused while chat reconnects.', 'warn');
+        try {
+          socket.close();
+        } catch (_closeError) {
+          // The close handler will reconnect when the platform exposes it.
+        }
+      }
+      remainingMessages.push(next);
+    }
+    pendingMessagesRef.current = remainingMessages;
+    return sentAny;
+  };
+
+  const flushPendingMessages = (targetSessionId?: string, ws?: WebSocket | null) => {
+    const normalizedTargetSessionId = normalizeChatSessionId(targetSessionId);
+    if (normalizedTargetSessionId) {
+      return sendPendingMessagesForSession(normalizedTargetSessionId, ws);
+    }
+
+    let sentAny = false;
+    const pendingSessionIds = Array.from(new Set(
+      (pendingMessagesRef.current as PendingChatMessage[])
+        .map((item: PendingChatMessage) => normalizeChatSessionId(item?.sessionId))
+        .filter(Boolean),
+    ));
+    for (const pendingSessionId of pendingSessionIds) {
+      const socket = chatSocketsBySessionRef.current[pendingSessionId]
+        || (pendingSessionId === normalizeChatSessionId(sessionIdRef.current) ? chatWsRef.current : null);
+      if (sendPendingMessagesForSession(pendingSessionId, socket)) {
+        sentAny = true;
+      }
+    }
+    return sentAny;
+  };
+
+  const markChatSocketRunStateFromEvent = (targetSessionId: string, event: DesktopRealtimeEvent) => {
+    const normalizedTargetSessionId = normalizeChatSessionId(targetSessionId);
+    if (!normalizedTargetSessionId) {
+      return;
+    }
+    const eventType = String(event?.type || '');
+    const payload = (event?.payload || {}) as Record<string, any>;
+    const statusMessage = String(payload.message || event?.message || '').toLowerCase();
+    const payloadRunState = String(payload.run_state || '').toLowerCase();
+    const startsRun = (
+      eventType === 'assistant_delta'
+      || eventType === 'thinking'
+      || eventType === 'tool_event'
+      || (eventType === 'status' && (payloadRunState === 'running' || statusMessage === 'running'))
+    );
+    const endsRun = (
+      eventType === 'assistant_final'
+      || eventType === 'run_failed'
+      || eventType === 'error'
+      || eventType === 'warning'
+      || (eventType === 'status' && (
+        payloadRunState === 'idle'
+        || statusMessage === 'ready'
+        || statusMessage === 'idle'
+      ))
+    );
+    if (startsRun) {
+      chatSocketRunActiveBySessionRef.current[normalizedTargetSessionId] = true;
+    }
+    if (endsRun) {
+      chatSocketRunActiveBySessionRef.current[normalizedTargetSessionId] = false;
+      closeIdleBackgroundChatSocket(normalizedTargetSessionId);
+    }
+  };
+
+  const ensureChatSocketForSession = (targetSessionId: string, options?: { selected?: boolean }) => {
+    const normalizedTargetSessionId = normalizeChatSessionId(targetSessionId);
+    if (!apiBaseUrl || !token || !normalizedTargetSessionId) {
+      return null;
+    }
+
+    const existing = chatSocketsBySessionRef.current[normalizedTargetSessionId];
+    if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
+      if (options?.selected) {
+        chatWsRef.current = existing;
+        if (existing.readyState === WebSocket.OPEN) {
+          setSocketState('connected');
+          startupChatSocketReadyRef.current = true;
+          maybeResolveStartupReady();
+        } else {
+          setSocketState('connecting');
+        }
+      }
+      return existing;
+    }
+
+    const wsBase = buildWsBaseUrl(apiBaseUrl);
+    if (!wsBase) {
+      if (options?.selected) {
+        setSocketState('Connect backend first.');
+      }
+      return null;
+    }
+
+    clearChatSocketReconnectTimer(normalizedTargetSessionId);
+    const params = new URLSearchParams({
+      token,
+      client_id: appClientIdRef.current,
+      session_id: normalizedTargetSessionId,
+    });
+    if (options?.selected) {
+      setSocketState('connecting');
+      emitStartupState('warming', 'Connecting chat');
+    }
+
+    const ws = new WebSocket(`${wsBase}/ws/app/chat?${params.toString()}`);
+    chatSocketsBySessionRef.current[normalizedTargetSessionId] = ws;
+    if (options?.selected) {
+      chatWsRef.current = ws;
+    }
+
+    const isCurrentSocket = () => chatSocketsBySessionRef.current[normalizedTargetSessionId] === ws;
+    const isSelectedSession = () => normalizeChatSessionId(sessionIdRef.current) === normalizedTargetSessionId;
+
+    ws.onopen = () => {
+      if (!isCurrentSocket()) {
+        return;
+      }
+      if (isSelectedSession()) {
+        chatWsRef.current = ws;
+        setSocketState('connected');
+        startupChatSocketReadyRef.current = true;
+        maybeResolveStartupReady();
+      }
+      chatSocketReconnectAttemptsRef.current[normalizedTargetSessionId] = 0;
+      flushPendingMessages(normalizedTargetSessionId, ws);
+    };
+
+    ws.onmessage = (messageEvent: any) => {
+      if (!isCurrentSocket()) {
+        return;
+      }
+      try {
+        const event = parseDesktopRealtimeEvent(String(messageEvent.data || '{}'));
+        if (!realtimeEventMatchesSession(event, normalizedTargetSessionId)) {
+          pushActivity('A realtime event for another chat was ignored.', 'warn');
+          return;
+        }
+        if (event.type === 'message_ack') {
+          const clientMessageId = String(event.payload.client_message_id || '').trim();
+          const status = String(event.payload.status || '').trim();
+          const retryable = event.payload.retryable === true;
+          if (clientMessageId && ['accepted', 'duplicate', 'steering'].includes(status)) {
+            pendingMessagesRef.current = (pendingMessagesRef.current as PendingChatMessage[])
+              .filter((item) => item.clientMessageId !== clientMessageId);
+            setMessages((previous: any) => previous.map((item: any) => (
+              item.messageKey === `pending:${clientMessageId}`
+                ? { ...item, pending: false }
+                : item
+            )));
+          } else if (clientMessageId && status === 'rejected') {
+            if (retryable) {
+              for (const item of pendingMessagesRef.current as PendingChatMessage[]) {
+                if (item.clientMessageId === clientMessageId) {
+                  item.deliveryState = 'queued';
+                }
+              }
+              setTimeout(() => flushPendingMessages(normalizedTargetSessionId, ws), 250);
+            } else {
+              pendingMessagesRef.current = (pendingMessagesRef.current as PendingChatMessage[])
+                .filter((item) => item.clientMessageId !== clientMessageId);
+              const deliveryError = String(event.payload.message || 'Message was not accepted.');
+              setMessages((previous: any) => previous.map((item: any) => (
+                item.messageKey === `pending:${clientMessageId}`
+                  ? { ...item, pending: false, raw: { ...(item.raw || {}), delivery_error: deliveryError } }
+                  : item
+              )));
+            }
+          }
+        }
+        markChatSocketRunStateFromEvent(normalizedTargetSessionId, event);
+        handleRealtimeEvent(event, 'chat');
+      } catch (error) {
+        pushActivity('Realtime event was skipped.', 'warn');
+      }
+    };
+
+    ws.onclose = (closeEvent) => {
+      if (chatSocketsBySessionRef.current[normalizedTargetSessionId] === ws) {
+        delete chatSocketsBySessionRef.current[normalizedTargetSessionId];
+      }
+      if (chatWsRef.current === ws) {
+        chatWsRef.current = null;
+      }
+      for (const item of pendingMessagesRef.current as PendingChatMessage[]) {
+        if (normalizeChatSessionId(item.sessionId) === normalizedTargetSessionId && item.deliveryState === 'sent') {
+          item.deliveryState = 'queued';
+        }
+      }
+
+      if (!shouldReconnectChatSocket(closeEvent.code)) {
+        clearChatSocketReconnectTimer(normalizedTargetSessionId);
+        delete chatSocketReconnectAttemptsRef.current[normalizedTargetSessionId];
+        if (isSelectedSession()) {
+          startupChatSocketReadyRef.current = false;
+          setSocketState('authentication required');
+          setStatus('Chat connection authorization expired. Reopen or sign in again.');
+        }
+        return;
+      }
+
+      const shouldReconnect = (
+        hasPendingMessagesForSession(normalizedTargetSessionId)
+        || Boolean(chatSocketRunActiveBySessionRef.current[normalizedTargetSessionId])
+      );
+      if (!shouldReconnect) {
+        delete chatSocketRunActiveBySessionRef.current[normalizedTargetSessionId];
+        if (isSelectedSession()) {
+          startupChatSocketReadyRef.current = false;
+          setSocketState('reconnecting');
+          const reconnectAttempt = chatSocketReconnectAttemptsRef.current[normalizedTargetSessionId] || 0;
+          chatSocketReconnectAttemptsRef.current[normalizedTargetSessionId] = reconnectAttempt + 1;
+          chatSocketReconnectTimersRef.current[normalizedTargetSessionId] = setTimeout(() => {
+            ensureChatSocketForSession(normalizedTargetSessionId, { selected: true });
+          }, chatReconnectDelayMs(reconnectAttempt, SOCKET_RECONNECT_MS));
+        }
+        return;
+      }
+
+      const reconnectAttempt = chatSocketReconnectAttemptsRef.current[normalizedTargetSessionId] || 0;
+      chatSocketReconnectAttemptsRef.current[normalizedTargetSessionId] = reconnectAttempt + 1;
+      chatSocketReconnectTimersRef.current[normalizedTargetSessionId] = setTimeout(() => {
+        ensureChatSocketForSession(normalizedTargetSessionId, { selected: isSelectedSession() });
+      }, chatReconnectDelayMs(reconnectAttempt, SOCKET_RECONNECT_MS));
+      if (isSelectedSession()) {
+        startupChatSocketReadyRef.current = false;
+        setSocketState('reconnecting');
+      }
+    };
+
+    ws.onerror = () => {
+      if (isSelectedSession()) {
+        startupChatSocketReadyRef.current = false;
+        setSocketState('error');
+      }
+    };
+
+    return ws;
   };
 
   const queueMessage = (
@@ -48,6 +428,7 @@ const flushPendingMessages = () => {
     sourceFormat: MessageSourceFormat,
     explicitSessionId?: string,
     policyOverride?: InterruptPolicy,
+    modeOptions?: ComposerModeOptions,
   ) => {
     const activeSessionId = explicitSessionId || sessionIdRef.current;
     if (!activeSessionId) {
@@ -58,31 +439,48 @@ const flushPendingMessages = () => {
       return;
     }
 
-    setMessages((previous: any) => [
-      ...previous,
-      {
-        role: 'user',
-        content: text,
-        timestamp: new Date().toISOString(),
-        displayLabel: sourceFormat === 'app_voice_transcript' ? 'Voice' : 'You',
-        channel: 'app',
-        sourceFormat,
-        messageKey: `pending:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
-        pending: true,
-        localSessionId: activeSessionId,
-        sourceClientId: appClientIdRef.current,
-      },
-    ]);
+    const clientMessageId = createClientMessageId(appClientIdRef.current);
+    const isSelectedSessionMessage = activeSessionId === sessionIdRef.current;
+    if (isSelectedSessionMessage) {
+      setMessages((previous: any) => [
+        ...previous,
+        {
+          role: 'user',
+          content: text,
+          timestamp: new Date().toISOString(),
+          displayLabel: sourceFormat === 'app_voice_transcript' ? 'Voice' : 'You',
+          channel: 'app',
+          sourceFormat,
+          runMode: modeOptions?.runMode || null,
+          raw: {
+            client_message_id: clientMessageId,
+            run_mode: modeOptions?.runMode || null,
+            plan_action: modeOptions?.planAction || null,
+            plan_answer: modeOptions?.planAnswer || null,
+          },
+          messageKey: `pending:${clientMessageId}`,
+          pending: true,
+          localSessionId: activeSessionId,
+          sourceClientId: appClientIdRef.current,
+        },
+      ]);
+    }
 
     pendingMessagesRef.current.push({
+      clientMessageId,
       text,
       sourceFormat,
       interruptPolicy: policyOverride ?? interruptPolicy,
       sessionId: activeSessionId,
+      deliveryState: 'queued',
+      modeOptions,
     });
-    setChatRunActive(true);
-    setRuntimeRunState('running');
-    setLastAssistantOutputAt(null);
+    chatSocketRunActiveBySessionRef.current[activeSessionId] = true;
+    if (isSelectedSessionMessage) {
+      setChatRunActive(true);
+      setRuntimeRunState('running');
+      setLastAssistantOutputAt(null);
+    }
 
     if (taskBoardArmedNextTurn && activeSessionId === sessionIdRef.current) {
       setTaskBoardArmedNextTurnState(false);
@@ -96,16 +494,18 @@ const flushPendingMessages = () => {
       ));
     }
 
-    const ws = chatWsRef.current;
+    const ws = ensureChatSocketForSession(activeSessionId, { selected: isSelectedSessionMessage });
     if (ws && ws.readyState === WebSocket.OPEN) {
-      flushPendingMessages();
-      setStatus(sourceFormat === 'app_voice_transcript' ? 'sending voice transcript' : 'sending message');
+      flushPendingMessages(activeSessionId, ws);
+      if (isSelectedSessionMessage) {
+        setStatus(sourceFormat === 'app_voice_transcript' ? 'sending voice transcript' : 'sending message');
+      }
     } else {
-      setStatus('chat reconnecting · message queued');
+      setStatus(isSelectedSessionMessage ? 'chat reconnecting · message queued' : 'message queued in background chat');
     }
   };
 
-  const queueComposerMessage = (text: string, sourceFormat: MessageSourceFormat, explicitSessionId?: string) => {
+  const queueComposerMessage = (text: string, sourceFormat: MessageSourceFormat, explicitSessionId?: string, modeOptions?: ComposerModeOptions) => {
     const activeSessionId = explicitSessionId || sessionIdRef.current;
     if (!activeSessionId) {
       setStatus('missing session');
@@ -118,6 +518,7 @@ const flushPendingMessages = () => {
         text,
         sourceFormat,
         sessionId: activeSessionId,
+        modeOptions,
         queuedAt: Date.now(),
       },
     ]);
@@ -223,15 +624,10 @@ const flushPendingMessages = () => {
   };
 
   const stopVoiceTracks = () => {
-    const processor = voiceProcessorRef.current;
-    voiceProcessorRef.current = null;
-    if (processor) {
-      processor.onaudioprocess = null;
-      try {
-        processor.disconnect();
-      } catch {
-        // no-op
-      }
+    const captureNode = voiceCaptureNodeRef.current;
+    voiceCaptureNodeRef.current = null;
+    if (captureNode) {
+      captureNode.stop();
     }
 
     const source = voiceAudioSourceRef.current;
@@ -259,6 +655,7 @@ const flushPendingMessages = () => {
     }
 
     voiceGateStateRef.current = createVoiceGateState();
+    jarvisWakeMatchStateRef.current = createJarvisWakeMatchState();
     deferredAlwaysOnFramesRef.current = [];
     deferredAlwaysOnSampleCountRef.current = 0;
     activeVoiceUtteranceIdRef.current = null;
@@ -274,6 +671,7 @@ const flushPendingMessages = () => {
     voiceChunkSampleCountRef.current = 0;
     activeVoiceUtteranceIdRef.current = null;
     voiceGateStateRef.current = createVoiceGateState();
+    jarvisWakeMatchStateRef.current = createJarvisWakeMatchState();
     deferredAlwaysOnFramesRef.current = [];
     deferredAlwaysOnSampleCountRef.current = 0;
     drainingDeferredAlwaysOnFramesRef.current = false;
@@ -306,6 +704,35 @@ const flushPendingMessages = () => {
     audio.src = '';
   };
 
+  const deactivateVoiceRuntime = (nextState = 'idle') => {
+    if (voiceReconnectRef.current) {
+      clearTimeout(voiceReconnectRef.current);
+      voiceReconnectRef.current = null;
+    }
+    if (voiceWsRef.current) {
+      voiceWsRef.current.close();
+      voiceWsRef.current = null;
+    }
+    voiceStartInFlightRef.current = false;
+    voicePressActiveRef.current = false;
+    alwaysOnEnabledRef.current = false;
+    setAlwaysOnEnabled(false);
+    stopVoiceTracks();
+    resetVoiceCaptureBuffers();
+    voiceRunningRef.current = false;
+    voiceRecordingRef.current = false;
+    setVoiceRunning(false);
+    setVoiceRecording(false);
+    setVoiceMode('push_to_talk');
+    setVoiceDraft('');
+    setVoiceError(null);
+    setLiveVoiceStatus(null);
+    setJarvisLatestTranscript('');
+    setJarvisLatestSpokenText('');
+    setVoiceState(nextState);
+    void cleanupAssistantAudio();
+  };
+
   const playAssistantAudio = async (audioBase64: string, mimeType: string, text?: string) => {
     if (!audioBase64 || typeof globalThis.Audio === 'undefined') {
       return;
@@ -328,6 +755,9 @@ const flushPendingMessages = () => {
       }
     };
     try {
+      if (conversationModeRef.current === 'jarvis') {
+        setVoiceState('speaking');
+      }
       await audio.play();
     } catch (error) {
       if (assistantAudioRef.current === audio) {
@@ -335,6 +765,9 @@ const flushPendingMessages = () => {
         assistantAudioTextRef.current = '';
       }
       pushActivity('Assistant audio did not play.', 'warn');
+      if (conversationModeRef.current === 'jarvis' && alwaysOnEnabledRef.current) {
+        setVoiceState('always_on');
+      }
       logDiagnostic('desktop.voice.audio', 'assistant audio playback failed', describeError(error), 'warn');
     }
   };
@@ -410,6 +843,10 @@ const flushPendingMessages = () => {
       setStatus('voice socket unavailable');
       return false;
     }
+    if (conversationModeRef.current === 'jarvis' && assistantAudioRef.current && !options?.preserveAssistantAudio) {
+      setStatus('Jarvis is speaking. Use interrupt to stop it.');
+      return false;
+    }
 
     voiceCaptureModeRef.current = mode;
     voiceChunkSequenceRef.current = 0;
@@ -445,10 +882,18 @@ const flushPendingMessages = () => {
     setVoiceRunning(true);
     setVoiceRecording(true);
     setStatus(mode === 'always_on' ? 'always-on voice segment detected' : 'voice listening');
+    const wakeVerifiedLocally = (
+      mode === 'always_on'
+      && conversationModeRef.current === 'jarvis'
+      && !jarvisHoldToTalkMode
+    );
     ws.send(JSON.stringify({
       type: 'voice_start',
       session_id: sessionIdRef.current,
       surface_mode: conversationModeRef.current,
+      capture_mode: mode,
+      wake_phrase: mode === 'always_on' && conversationModeRef.current === 'jarvis' ? currentJarvisWakePhrase : undefined,
+      wake_verified_locally: wakeVerifiedLocally || undefined,
       utterance_id: utteranceId,
       barge_in_candidate: options?.bargeInCandidate || undefined,
     }));
@@ -475,11 +920,19 @@ const flushPendingMessages = () => {
     const autoSend = commit && mode === 'always_on' ? shouldAutoSendAlwaysOnVoice() : true;
     const utteranceId = activeVoiceUtteranceIdRef.current;
     const bargeInCandidate = activeVoiceBargeInCandidateRef.current;
+    const wakeVerifiedLocally = (
+      mode === 'always_on'
+      && conversationModeRef.current === 'jarvis'
+      && !jarvisHoldToTalkMode
+    );
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({
         type: commit ? 'voice_commit' : 'voice_cancel',
         session_id: sessionIdRef.current,
         surface_mode: conversationModeRef.current,
+        capture_mode: mode,
+        wake_phrase: mode === 'always_on' && conversationModeRef.current === 'jarvis' ? currentJarvisWakePhrase : undefined,
+        wake_verified_locally: wakeVerifiedLocally || undefined,
         utterance_id: utteranceId,
         interrupt_policy: commit ? interruptPolicy : 'none',
         auto_send: autoSend,
@@ -561,14 +1014,27 @@ const flushPendingMessages = () => {
     const aboveThreshold = frameDbfs >= activeVoiceGateDbfs;
     const aboveBargeInThreshold = frameDbfs >= activeJarvisBargeInGateDbfs;
     const assistantAudioActive = conversationModeRef.current === 'jarvis' && Boolean(assistantAudioRef.current);
+    const isJarvisAlwaysOn = conversationModeRef.current === 'jarvis';
     const attackFrames = Math.max(1, Math.ceil(VOICE_GATE_ATTACK_MS / VOICE_GATE_FRAME_MS));
-    const releaseFrames = Math.max(1, Math.ceil(activeVoiceGateReleaseMs / VOICE_GATE_FRAME_MS));
+    const releaseMs = isJarvisAlwaysOn ? Math.max(activeVoiceGateReleaseMs, 2000) : activeVoiceGateReleaseMs;
+    const releaseFrames = Math.max(1, Math.ceil(releaseMs / VOICE_GATE_FRAME_MS));
     const prerollFrames = Math.max(1, Math.ceil(activeVoiceGatePrerollMs / VOICE_GATE_FRAME_MS));
     const minFrames = Math.max(1, Math.ceil(VOICE_GATE_MIN_MS / VOICE_GATE_FRAME_MS));
     const bargeInMinFrames = Math.max(minFrames, Math.ceil(JARVIS_BARGE_IN_MIN_VOICED_MS / VOICE_GATE_FRAME_MS));
     const maxFrames = Math.max(minFrames, Math.ceil(activeVoiceGateMaxMs / VOICE_GATE_FRAME_MS));
+    const requiresWakeAudioMatch = isJarvisAlwaysOn && !jarvisHoldToTalkMode;
+    const wakeMinFrames = Math.max(1, Math.ceil(JARVIS_WAKE_MATCH_MIN_MS / VOICE_GATE_FRAME_MS));
+    const wakeMaxFrames = Math.max(wakeMinFrames, Math.ceil(JARVIS_WAKE_MATCH_MAX_MS / VOICE_GATE_FRAME_MS));
+    const wakeReleaseFrames = Math.max(1, Math.ceil(JARVIS_WAKE_MATCH_RELEASE_MS / VOICE_GATE_FRAME_MS));
+    const wakeScoreEveryFrames = Math.max(1, Math.ceil(JARVIS_WAKE_MATCH_SCORE_EVERY_MS / VOICE_GATE_FRAME_MS));
 
     if (!gate.recording) {
+      if (isJarvisAlwaysOn && (assistantAudioActive || voiceRunningRef.current || voiceRecordingRef.current)) {
+        gate.prerollFrames = [];
+        gate.aboveFrames = 0;
+        jarvisWakeMatchStateRef.current = createJarvisWakeMatchState();
+        return;
+      }
       const startAboveThreshold = assistantAudioActive ? aboveBargeInThreshold : aboveThreshold;
       const canStartQueuedJarvisSegment = (
         apiVoiceInputActive
@@ -584,15 +1050,110 @@ const flushPendingMessages = () => {
         gate.prerollFrames.shift();
       }
       gate.aboveFrames = startAboveThreshold ? gate.aboveFrames + 1 : 0;
-      if (gate.aboveFrames < attackFrames) {
+      const wakeState = jarvisWakeMatchStateRef.current;
+      if (!wakeState.active && gate.aboveFrames < attackFrames) {
         return;
       }
 
-      if (!beginVoiceSegment('always_on', {
-        preserveAssistantAudio: assistantAudioActive,
-        bargeInCandidate: assistantAudioActive,
-      })) {
+      if (requiresWakeAudioMatch) {
+        const profile = jarvisWakeProfileRef?.current || null;
+        if (!jarvisWakeProfileReady || !profile) {
+          setJarvisWakeEnrollmentOpen?.(true);
+          setStatus('Train a local wake phrase before using Jarvis always-on listening');
+          voiceGateStateRef.current = createVoiceGateState();
+          jarvisWakeMatchStateRef.current = createJarvisWakeMatchState();
+          return;
+        }
+
+        if (!wakeState.active) {
+          wakeState.active = true;
+          wakeState.frames = [...gate.prerollFrames];
+          wakeState.sampleCount = wakeState.frames.reduce((sum: number, item: Float32Array) => sum + item.length, 0);
+          wakeState.frameCount = wakeState.frames.length;
+          wakeState.voicedFrames = gate.aboveFrames;
+          wakeState.belowFrames = aboveThreshold ? 0 : 1;
+          wakeState.lastScoreFrame = 0;
+          wakeState.bestDistance = null;
+        } else {
+          wakeState.frames.push(frame);
+          wakeState.sampleCount += frame.length;
+          wakeState.frameCount += 1;
+          if (aboveThreshold) {
+            wakeState.voicedFrames += 1;
+            wakeState.belowFrames = 0;
+          } else {
+            wakeState.belowFrames += 1;
+          }
+        }
+
+        const shouldScoreWake = (
+          wakeState.frameCount >= wakeMinFrames
+          && wakeState.frameCount - wakeState.lastScoreFrame >= wakeScoreEveryFrames
+        );
+        if (shouldScoreWake) {
+          wakeState.lastScoreFrame = wakeState.frameCount;
+          const score = scoreJarvisWakeCandidate(
+            concatFloat32(wakeState.frames, wakeState.sampleCount),
+            voiceSampleRateRef.current,
+            profile,
+          );
+          wakeState.bestDistance = Math.min(wakeState.bestDistance ?? Number.POSITIVE_INFINITY, score.distance);
+          wakeState.matchedFrames = score.matched ? wakeState.matchedFrames + 1 : 0;
+          if (wakeState.matchedFrames >= 2) {
+            const matchedAudio = concatFloat32(wakeState.frames, wakeState.sampleCount);
+            const profileDurationMs = profile.signatures.reduce(
+              (sum: number, signature: any) => sum + Number(signature.durationMs || 0),
+              0,
+            ) / Math.max(1, profile.signatures.length);
+            const wakeSampleCount = Math.max(
+              0,
+              Math.min(matchedAudio.length, Math.round(voiceSampleRateRef.current * profileDurationMs / 1000)),
+            );
+            const commandTail = matchedAudio.subarray(wakeSampleCount);
+            playJarvisWakeTone();
+            if (!beginVoiceSegment('always_on')) {
+              voiceGateStateRef.current = createVoiceGateState();
+              jarvisWakeMatchStateRef.current = createJarvisWakeMatchState();
+              return;
+            }
+
+            gate.recording = true;
+            gate.activeFrames = Math.ceil(commandTail.length / Math.max(1, frame.length));
+            gate.voicedFrames = gate.activeFrames;
+            gate.belowFrames = 0;
+            gate.prerollFrames = [];
+            if (commandTail.length) {
+              appendVoiceChunkSamples(commandTail);
+            }
+            jarvisWakeMatchStateRef.current = createJarvisWakeMatchState();
+            setStatus(`Wake phrase "${currentJarvisWakePhrase}" matched · listening`);
+            logDiagnostic('desktop.voice.wake', 'wake phrase matched', {
+              phrase: currentJarvisWakePhrase,
+              distance: score.distance,
+              threshold: score.threshold,
+              durationMs: score.durationMs,
+              releaseMs,
+            });
+            return;
+          }
+        }
+
+        const shouldRejectWake = wakeState.belowFrames >= wakeReleaseFrames || wakeState.frameCount >= wakeMaxFrames;
+        if (shouldRejectWake) {
+          logDiagnostic('desktop.voice.wake', 'ignored audio without wake match', {
+            phrase: currentJarvisWakePhrase,
+            bestDistance: wakeState.bestDistance,
+            frameCount: wakeState.frameCount,
+          });
+          voiceGateStateRef.current = createVoiceGateState();
+          jarvisWakeMatchStateRef.current = createJarvisWakeMatchState();
+        }
+        return;
+      }
+
+      if (!beginVoiceSegment('always_on')) {
         voiceGateStateRef.current = createVoiceGateState();
+        jarvisWakeMatchStateRef.current = createJarvisWakeMatchState();
         return;
       }
 
@@ -624,6 +1185,7 @@ const flushPendingMessages = () => {
     const requiredVoicedFrames = activeVoiceBargeInCandidateRef.current ? bargeInMinFrames : minFrames;
     const shouldCommit = gate.voicedFrames >= requiredVoicedFrames;
     voiceGateStateRef.current = createVoiceGateState();
+    jarvisWakeMatchStateRef.current = createJarvisWakeMatchState();
     void finishVoiceSegment(shouldCommit, 'always_on');
   };
 
@@ -676,15 +1238,10 @@ const flushPendingMessages = () => {
     if (!normalizedTurnId || !jarvisBargeInCandidateUtteranceIdsRef.current.has(normalizedTurnId)) {
       return false;
     }
-    if (!isMeaningfulJarvisBargeInText(text)) {
-      return false;
-    }
     jarvisBargeInCandidateUtteranceIdsRef.current.delete(normalizedTurnId);
-    if (assistantAudioRef.current) {
-      void cleanupAssistantAudio();
-      setStatus('Jarvis interruption accepted');
-      pushActivity(`Jarvis heard you while speaking: ${text}`, 'accent');
-    }
+    void cleanupAssistantAudio();
+    setStatus('Jarvis interrupted · applying your correction');
+    pushActivity(`Jarvis accepted voice interrupt: ${text}`, 'accent');
     return true;
   };
 
@@ -695,7 +1252,7 @@ const flushPendingMessages = () => {
     }
   };
 
-  const handleRealtimeEvent = (event: RealtimeEvent, channel: RealtimeChannel) => handleDesktopConversationRealtimeEvent(scope, event, channel);
+  const handleRealtimeEvent = (event: DesktopRealtimeEvent, channel: 'chat' | 'voice') => handleDesktopConversationRealtimeEvent(scope, event, channel);
   const executeSlashCommand = async (text: string) => {
     const commandLabel = text.trim().split(/\s+/, 1)[0] || '/command';
     setStatus(`${commandLabel} requested`);
@@ -872,8 +1429,55 @@ const flushPendingMessages = () => {
       setActiveCommandPanel(null);
       appendLocalSystemMessage(`Model switched to ${model}.`, 'Command Result');
       pushActivity(`Model switched to ${model}`, 'accent');
-      await refreshSidebarState(activeSessionId, true);
+      await Promise.all([
+        refreshSidebarState(activeSessionId, true),
+        refreshOverviewState(activeSessionId, { quiet: true }),
+      ]);
       setStatus(`model ${model}`);
+    } catch (error) {
+      const message = describeError(error);
+      setStatus(message);
+      appendLocalSystemMessage(message, 'Command Error');
+      pushActivity(message, 'error');
+    }
+  };
+
+  const chooseVariant = async (variant: string) => {
+    const label = modelVariantDisplayLabel(variant);
+    if (!sessionIdRef.current && draftChatRef.current) {
+      setDraftChat((current: any) => (
+        current
+          ? {
+              ...current,
+              variant,
+            }
+          : current
+      ));
+      setActiveCommandPanel(null);
+      setStatus(`draft variant ${label}`);
+      return;
+    }
+    const activeSessionId = requireActiveDesktopSession();
+    if (!activeSessionId) return;
+    setStatus(`switching variant to ${label}`);
+    try {
+      await configureAgent(apiBaseUrl, token, { variant }, activeSessionId);
+      setOverview((previous: any) => (
+        previous
+          ? {
+              ...previous,
+              current_variant: variant,
+            }
+          : previous
+      ));
+      setActiveCommandPanel(null);
+      appendLocalSystemMessage(`Variant switched to ${label}.`, 'Command Result');
+      pushActivity(`Variant switched to ${label}`, 'accent');
+      await Promise.all([
+        refreshSidebarState(activeSessionId, true),
+        refreshOverviewState(activeSessionId, { quiet: true }),
+      ]);
+      setStatus(`variant ${label}`);
     } catch (error) {
       const message = describeError(error);
       setStatus(message);
@@ -898,20 +1502,20 @@ const flushPendingMessages = () => {
     }
     const activeSessionId = requireActiveDesktopSession();
     if (!activeSessionId) return;
-    setStatus(plannerModel ? `switching planner to ${plannerModel}` : 'restoring automatic planner selection');
+    setStatus(plannerModel ? `switching planner to ${plannerModel}` : 'setting planner to mirror the main model');
     try {
       await configureAgent(apiBaseUrl, token, { planner_model: plannerModel }, activeSessionId);
       setActiveCommandPanel(null);
       appendLocalSystemMessage(
         plannerModel
           ? `Planner model pinned to ${plannerModel}.`
-          : 'Planner model reset to automatic cheapest supported selection.',
+          : 'Planner model set to automatic. It will mirror the main model.',
         'Command Result',
       );
       pushActivity(
         plannerModel
           ? `Planner model pinned to ${plannerModel}`
-          : 'Planner model reset to automatic selection',
+          : 'Planner model set to automatic',
         'accent',
       );
       await refreshSidebarState(activeSessionId, true);
@@ -1138,15 +1742,23 @@ const flushPendingMessages = () => {
     if (!items.length) {
       return;
     }
-    setQueuedComposerMessages((current: any) => current.filter((entry: any) => !items.some((item: any) => item.id === entry.id)));
-    items.forEach((item: any) => {
-      queueMessage(item.text, item.sourceFormat, item.sessionId, actionPolicy);
+    const sendableItems = items.filter((item: any) => {
+      const itemRunMode = String(item.modeOptions?.runMode || '').trim();
+      return !(agentRunActive && (itemRunMode === 'plan' || itemRunMode === 'goal'));
+    });
+    if (!sendableItems.length) {
+      setStatus('mode-tagged messages stay queued until the current run finishes');
+      return;
+    }
+    setQueuedComposerMessages((current: any) => current.filter((entry: any) => !sendableItems.some((item: any) => item.id === entry.id)));
+    sendableItems.forEach((item: any) => {
+      queueMessage(item.text, item.sourceFormat, item.sessionId, actionPolicy, item.modeOptions);
     });
     setStatus(actionPolicy === 'after_tool' ? 'queued steering for the next safe tool boundary' : 'steering current run');
   };
 
-  const sendText = async () => {
-    const trimmed = input.trim();
+  const sendTextValue = async (textValue: string, options?: ComposerModeOptions) => {
+    const trimmed = textValue.trim();
     if (!trimmed) return;
 
     if (isDesktopSlashCommand(trimmed)) {
@@ -1165,9 +1777,18 @@ const flushPendingMessages = () => {
       return;
     }
 
-    const rawInput = input;
+    const rawInput = textValue;
+    const selectedRunMode = options?.runMode || pendingRunMode || null;
+    const modeOptions: ComposerModeOptions | undefined = selectedRunMode || options?.planAction || options?.planAnswer
+      ? {
+          runMode: selectedRunMode || 'normal',
+          planAction: options?.planAction || null,
+          planAnswer: options?.planAnswer || null,
+        }
+      : undefined;
     const runWasActive = agentRunActive;
     setComposerInputValue('');
+    setPendingRunMode?.(null);
     setAssistantDraft('');
     setThinking('Thinking');
     setLastAssistantOutputAt(null);
@@ -1175,6 +1796,19 @@ const flushPendingMessages = () => {
     setChatRunActive(true);
     setRuntimeRunState('running');
     setStatus(draftChatRef.current || !sessionIdRef.current ? 'preparing chat' : 'sending message');
+
+    if (runWasActive && draftChatRef.current) {
+      setPendingSessionSwitch({
+        mode: 'draft_send',
+        projectPath: draftChatRef.current.projectPath,
+        text: trimmed,
+        sourceFormat: 'app_text',
+        modeOptions,
+      });
+      setThinking('');
+      setStatus('Current run is still active. Stop it before creating and sending to the new chat.');
+      return;
+    }
 
     let targetSessionId: string | null = null;
     try {
@@ -1197,15 +1831,78 @@ const flushPendingMessages = () => {
     }
 
     if (runWasActive) {
-      if (interruptPolicy === 'none') {
-        queueComposerMessage(trimmed, 'app_text', targetSessionId);
+      if (selectedRunMode === 'plan' || selectedRunMode === 'goal' || interruptPolicy === 'none') {
+        queueComposerMessage(trimmed, 'app_text', targetSessionId, modeOptions);
       } else {
-        queueMessage(trimmed, 'app_text', targetSessionId, interruptPolicy);
+        queueMessage(trimmed, 'app_text', targetSessionId, interruptPolicy, modeOptions);
       }
       return;
     }
 
-    queueMessage(trimmed, 'app_text', targetSessionId);
+    queueMessage(trimmed, 'app_text', targetSessionId, undefined, modeOptions);
+  };
+
+  const sendText = async () => {
+    await sendTextValue(input);
+  };
+
+  const approveProposedPlan = async (planText: string) => {
+    const trimmedPlan = String(planText || '').trim();
+    if (!trimmedPlan) {
+      return;
+    }
+    await sendTextValue(`PLEASE IMPLEMENT THIS PLAN:\n${trimmedPlan}`, {
+      runMode: 'normal',
+      planAction: 'approve',
+    });
+  };
+
+  const answerPlanQuestion = async (
+    questionId: string,
+    answerText: string,
+    optionId?: string | null,
+  ) => {
+    const trimmedAnswer = String(answerText || '').trim();
+    const trimmedQuestionId = String(questionId || '').trim();
+    if (!trimmedQuestionId || !trimmedAnswer) {
+      return;
+    }
+    await sendTextValue(trimmedAnswer, {
+      runMode: 'plan',
+      planAction: 'answer_question',
+      planAnswer: {
+        question_id: trimmedQuestionId,
+        option_id: optionId || null,
+        freeform_text: optionId ? null : trimmedAnswer,
+      },
+    });
+  };
+
+  const updateModeState = async (action: 'exit_plan' | 'dismiss_plan' | 'clear_goal', reason?: string) => {
+    const activeSessionId = sessionIdRef.current;
+    if (!activeSessionId) {
+      setStatus('missing session');
+      return;
+    }
+    try {
+      const detail = await updateSessionModeState(apiBaseUrl, token, activeSessionId, { action, reason });
+      applySessionDetail(detail);
+      setStatus(action === 'clear_goal' ? 'goal cleared' : 'plan mode closed');
+    } catch (error) {
+      setStatus(userFacingError(error, 'Mode state was not updated.'));
+    }
+  };
+
+  const dismissPlanMode = async () => {
+    await updateModeState('dismiss_plan', 'Dismissed from desktop composer');
+  };
+
+  const exitPlanMode = async () => {
+    await updateModeState('exit_plan', 'Exited from desktop composer');
+  };
+
+  const clearActiveGoal = async () => {
+    await updateModeState('clear_goal', 'Cleared by user');
   };
 
   const uploadComposerAttachments = async (files: File[]) => {
@@ -1325,91 +2022,48 @@ const flushPendingMessages = () => {
       return;
     }
 
-    let disposed = false;
-
-    const connect = () => {
-      if (disposed) return;
-      const wsBase = buildWsBaseUrl(apiBaseUrl);
-      if (!wsBase) {
-        setSocketState('Connect backend first.');
-        return;
-      }
-
-      const params = new URLSearchParams({
-        token,
-        client_id: appClientIdRef.current,
-      });
-      if (sessionIdRef.current) {
-        params.set('session_id', sessionIdRef.current);
-      }
-
-      setSocketState('connecting');
-      emitStartupState('warming', 'Connecting chat');
-      const ws = new WebSocket(`${wsBase}/ws/app/chat?${params.toString()}`);
-      chatWsRef.current = ws;
-
-      ws.onopen = () => {
-        if (disposed) return;
-        setSocketState('connected');
-        startupChatSocketReadyRef.current = true;
-        flushPendingMessages();
-        maybeResolveStartupReady();
-      };
-
-      ws.onmessage = (messageEvent: any) => {
-        if (disposed) return;
-        try {
-          handleRealtimeEvent(JSON.parse(String(messageEvent.data || '{}')) as RealtimeEvent, 'chat');
-        } catch (error) {
-          pushActivity('Realtime event was skipped.', 'warn');
-        }
-      };
-
-      ws.onclose = () => {
-        if (chatWsRef.current === ws) {
-          chatWsRef.current = null;
-        }
-        if (!disposed) {
-          startupChatSocketReadyRef.current = false;
-          setSocketState('reconnecting');
-          reconnectRef.current = setTimeout(connect, SOCKET_RECONNECT_MS);
-        }
-      };
-
-      ws.onerror = () => {
-        startupChatSocketReadyRef.current = false;
-        setSocketState('error');
-      };
-    };
-
-    connect();
+    const selectedChatSessionId = normalizeChatSessionId(sessionId);
+    const selectedSocket = ensureChatSocketForSession(selectedChatSessionId, { selected: true });
 
     return () => {
-      disposed = true;
-      if (reconnectRef.current) {
-        clearTimeout(reconnectRef.current);
-        reconnectRef.current = null;
-      }
-      if (chatWsRef.current) {
-        chatWsRef.current.close();
+      if (chatWsRef.current === selectedSocket) {
         chatWsRef.current = null;
+      }
+      if (
+        selectedChatSessionId
+        && !hasPendingMessagesForSession(selectedChatSessionId)
+        && !chatSocketRunActiveBySessionRef.current[selectedChatSessionId]
+      ) {
+        closeSessionChatSocket(selectedChatSessionId);
       }
     };
   }, [apiBaseUrl, sessionId, token]);
 
+  useEffect(() => () => {
+    for (const targetSessionId of Object.keys(chatSocketReconnectTimersRef.current)) {
+      clearChatSocketReconnectTimer(targetSessionId);
+    }
+    for (const targetSessionId of Object.keys(chatSocketsBySessionRef.current)) {
+      closeSessionChatSocket(targetSessionId);
+    }
+  }, []);
+
   useEffect(() => {
+    if (!isJarvisMode) {
+      deactivateVoiceRuntime('idle');
+      return;
+    }
     if (!apiBaseUrl || !token) {
-      setVoiceState('unavailable');
-      setVoiceRunning(false);
+      deactivateVoiceRuntime('unavailable');
       return;
     }
     if (!sessionId) {
-      setVoiceState('idle');
-      setVoiceRunning(false);
+      deactivateVoiceRuntime('idle');
       return;
     }
 
     let disposed = false;
+    let reconnectAttempt = 0;
     const connect = () => {
       if (disposed) return;
       const wsBase = buildWsBaseUrl(apiBaseUrl);
@@ -1433,7 +2087,13 @@ const flushPendingMessages = () => {
 
       ws.onopen = () => {
         if (disposed || isStaleVoiceSocket()) return;
-        setVoiceState('ready');
+        reconnectAttempt = 0;
+        if (alwaysOnEnabledRef.current && voiceStreamRef.current) {
+          setVoiceState('always_on');
+          setStatus(`always-on voice listening for "${currentJarvisWakePhrase}"`);
+        } else {
+          setVoiceState('ready');
+        }
         setVoiceError(null);
         logDiagnostic('desktop.voice.ws', 'connected', { sessionId: sessionIdRef.current || null });
       };
@@ -1441,7 +2101,12 @@ const flushPendingMessages = () => {
       ws.onmessage = (messageEvent: any) => {
         if (disposed || isStaleVoiceSocket()) return;
         try {
-          handleRealtimeEvent(JSON.parse(String(messageEvent.data || '{}')) as RealtimeEvent, 'voice');
+          const event = parseDesktopRealtimeEvent(String(messageEvent.data || '{}'));
+          if (!realtimeEventMatchesSession(event, sessionId)) {
+            pushActivity('A voice event for another chat was ignored.', 'warn');
+            return;
+          }
+          handleRealtimeEvent(event, 'voice');
         } catch (error) {
           const message = describeError(error);
           pushActivity(`Voice websocket parse failed: ${message}`, 'warn');
@@ -1449,21 +2114,39 @@ const flushPendingMessages = () => {
         }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (closeEvent) => {
         if (voiceWsRef.current === ws) {
           voiceWsRef.current = null;
         }
         if (!disposed && !isStaleVoiceSocket()) {
+          const reconnectable = shouldReconnectChatSocket(closeEvent.code);
+          const preserveAlwaysOnCapture = (
+            reconnectable
+            && voiceCaptureModeRef.current === 'always_on'
+            && alwaysOnEnabledRef.current
+            && Boolean(voiceStreamRef.current)
+          );
           voicePressActiveRef.current = false;
-          alwaysOnEnabledRef.current = false;
-          setAlwaysOnEnabled(false);
-          stopVoiceTracks();
           voiceRunningRef.current = false;
           voiceRecordingRef.current = false;
           setVoiceRunning(false);
           setVoiceRecording(false);
+          resetVoiceCaptureBuffers();
+          if (!preserveAlwaysOnCapture) {
+            alwaysOnEnabledRef.current = false;
+            setAlwaysOnEnabled(false);
+            stopVoiceTracks();
+          }
+          if (!reconnectable) {
+            setVoiceState('authentication required');
+            setVoiceError('Voice connection authorization expired. Reopen or sign in again.');
+            setStatus('Voice connection authorization expired. Reopen or sign in again.');
+            return;
+          }
           setVoiceState('reconnecting');
-          voiceReconnectRef.current = setTimeout(connect, SOCKET_RECONNECT_MS);
+          const delayMs = chatReconnectDelayMs(reconnectAttempt, SOCKET_RECONNECT_MS);
+          reconnectAttempt += 1;
+          voiceReconnectRef.current = setTimeout(connect, delayMs);
         }
       };
 
@@ -1471,16 +2154,14 @@ const flushPendingMessages = () => {
         if (disposed || isStaleVoiceSocket()) {
           return;
         }
-        voicePressActiveRef.current = false;
-        alwaysOnEnabledRef.current = false;
-        setAlwaysOnEnabled(false);
-        stopVoiceTracks();
-        voiceRunningRef.current = false;
-        voiceRecordingRef.current = false;
-        setVoiceRunning(false);
-        setVoiceRecording(false);
         setVoiceState('error');
         setVoiceError('voice socket error');
+        logDiagnostic('desktop.voice.ws', 'voice socket error', { sessionId: sessionIdRef.current || null }, 'warn');
+        try {
+          ws.close();
+        } catch {
+          // The close handler owns capture cleanup and reconnect state.
+        }
       };
     };
 
@@ -1488,25 +2169,15 @@ const flushPendingMessages = () => {
 
     return () => {
       disposed = true;
-      if (voiceReconnectRef.current) {
-        clearTimeout(voiceReconnectRef.current);
-        voiceReconnectRef.current = null;
-      }
-      if (voiceWsRef.current) {
-        voiceWsRef.current.close();
-        voiceWsRef.current = null;
-      }
-      alwaysOnEnabledRef.current = false;
-      setAlwaysOnEnabled(false);
-      stopVoiceTracks();
-      resetVoiceCaptureBuffers();
-      voiceRunningRef.current = false;
-      voiceRecordingRef.current = false;
-      void cleanupAssistantAudio();
+      deactivateVoiceRuntime('idle');
     };
-  }, [apiBaseUrl, sessionId, selectedVoiceEngine, token]);
+  }, [apiBaseUrl, isJarvisMode, sessionId, selectedVoiceEngine, token]);
 
   const ensureSessionForVoiceCapture = async () => {
+    if (agentRunActive && draftChatRef.current) {
+      setStatus('Stop the current task before starting voice in a new chat.');
+      return null;
+    }
     let targetSessionId: string | null = null;
     try {
       targetSessionId = await ensureSessionForOutgoingMessage();
@@ -1523,6 +2194,9 @@ const flushPendingMessages = () => {
   };
 
   const waitForVoiceSocketOpen = async (timeoutMs = 4000) => {
+    if (!isJarvisMode) {
+      return false;
+    }
     if (voiceWsRef.current?.readyState === WebSocket.OPEN) {
       return true;
     }
@@ -1538,6 +2212,10 @@ const flushPendingMessages = () => {
   };
 
   const startVoiceCapture = async () => {
+    if (!isJarvisMode) {
+      voicePressActiveRef.current = false;
+      return;
+    }
     if (voiceStartInFlightRef.current) {
       voicePressActiveRef.current = false;
       return;
@@ -1548,9 +2226,7 @@ const flushPendingMessages = () => {
       setStatus('voice unavailable');
       return;
     }
-    if ((!apiVoiceInputActive && selectedVoiceEngine === VOICE_ENGINE_NONE) || liveVoiceStatus?.input_ok === false) {
-      voicePressActiveRef.current = false;
-      setStatus(liveVoiceStatus?.issues?.[0] || 'Select an English or Hebrew voice path first.');
+    if (!await ensureJarvisVoiceInputReady()) {
       return;
     }
     if (voiceEngineChanging || (!apiVoiceInputActive && selectedVoiceEngineState === 'warming')) {
@@ -1610,15 +2286,12 @@ const flushPendingMessages = () => {
       }
       voiceSampleRateRef.current = context.sampleRate;
       const source = context.createMediaStreamSource(stream);
-      const processor = context.createScriptProcessor(VOICE_PROCESSOR_BUFFER_SIZE, 1, 1);
       voiceAudioSourceRef.current = source;
-      voiceProcessorRef.current = processor;
-      processor.onaudioprocess = (event: any) => {
-        const input = event.inputBuffer.getChannelData(0);
-        processVoiceSamples(new Float32Array(input));
-      };
-      source.connect(processor);
-      processor.connect(context.destination);
+      voiceCaptureNodeRef.current = await createDesktopAudioCapture(context, source, processVoiceSamples);
+      if (!voicePressActiveRef.current) {
+        stopVoiceTracks();
+        return;
+      }
       if (!beginVoiceSegment('push_to_talk')) {
         stopVoiceTracks();
       }
@@ -1646,6 +2319,14 @@ const flushPendingMessages = () => {
   };
 
   const startAlwaysOnVoice = async () => {
+    if (!isJarvisMode) {
+      return;
+    }
+    if (!jarvisWakeProfileReady) {
+      setJarvisWakeEnrollmentOpen?.(true);
+      setStatus('Train a local wake phrase before using Jarvis always-on listening');
+      return;
+    }
     if (voiceStartInFlightRef.current) {
       return;
     }
@@ -1654,8 +2335,7 @@ const flushPendingMessages = () => {
       setStatus('voice unavailable');
       return;
     }
-    if ((!apiVoiceInputActive && selectedVoiceEngine === VOICE_ENGINE_NONE) || liveVoiceStatus?.input_ok === false) {
-      setStatus(liveVoiceStatus?.issues?.[0] || 'Select an English or Hebrew voice path first.');
+    if (!await ensureJarvisVoiceInputReady()) {
       return;
     }
     if (voiceEngineChanging || (!apiVoiceInputActive && selectedVoiceEngineState === 'warming')) {
@@ -1695,8 +2375,9 @@ const flushPendingMessages = () => {
       setVoiceRunning(false);
       setVoiceRecording(false);
       setVoiceState('always_on');
-      setStatus('always-on voice listening');
+      setStatus(`always-on voice listening for "${currentJarvisWakePhrase}"`);
       voiceGateStateRef.current = createVoiceGateState();
+      jarvisWakeMatchStateRef.current = createJarvisWakeMatchState();
       deferredAlwaysOnFramesRef.current = [];
       deferredAlwaysOnSampleCountRef.current = 0;
       activeVoiceUtteranceIdRef.current = null;
@@ -1715,16 +2396,13 @@ const flushPendingMessages = () => {
       }
       voiceSampleRateRef.current = context.sampleRate;
       const source = context.createMediaStreamSource(stream);
-      const processor = context.createScriptProcessor(VOICE_PROCESSOR_BUFFER_SIZE, 1, 1);
       voiceAudioSourceRef.current = source;
-      voiceProcessorRef.current = processor;
-      processor.onaudioprocess = (event: any) => {
-        const input = event.inputBuffer.getChannelData(0);
-        processVoiceSamples(new Float32Array(input));
-      };
-      source.connect(processor);
-      processor.connect(context.destination);
-      pushActivity(apiVoiceInputActive ? 'Always-on realtime voice mode enabled.' : 'Always-on local Whisper voice mode enabled.', 'accent');
+      voiceCaptureNodeRef.current = await createDesktopAudioCapture(context, source, processVoiceSamples);
+      if (!alwaysOnEnabledRef.current) {
+        stopVoiceTracks();
+        return;
+      }
+      pushActivity(apiVoiceInputActive ? 'Always-on API voice mode enabled.' : 'Always-on local Whisper voice mode enabled.', 'accent');
     } catch (error) {
       alwaysOnEnabledRef.current = false;
       setAlwaysOnEnabled(false);
@@ -1748,6 +2426,7 @@ const flushPendingMessages = () => {
     setAlwaysOnEnabled(false);
     const wasRecording = voiceGateStateRef.current.recording || voiceRecording;
     voiceGateStateRef.current = createVoiceGateState();
+    jarvisWakeMatchStateRef.current = createJarvisWakeMatchState();
     deferredAlwaysOnFramesRef.current = [];
     deferredAlwaysOnSampleCountRef.current = 0;
     activeVoiceUtteranceIdRef.current = null;
@@ -1772,6 +2451,7 @@ const flushPendingMessages = () => {
     setAlwaysOnEnabled(false);
     const wasRecording = voiceGateStateRef.current.recording || voiceRecordingRef.current;
     voiceGateStateRef.current = createVoiceGateState();
+    jarvisWakeMatchStateRef.current = createJarvisWakeMatchState();
     deferredAlwaysOnFramesRef.current = [];
     deferredAlwaysOnSampleCountRef.current = 0;
     activeVoiceUtteranceIdRef.current = null;
@@ -1792,14 +2472,19 @@ const flushPendingMessages = () => {
     if (!isJarvisMode) {
       return;
     }
-    if (jarvisHoldToTalkMode || jarvisMuted || !alwaysOnEnabledRef.current) {
-      setJarvisHoldToTalkMode(false);
+    if (jarvisHoldToTalkMode) {
       jarvisPushToTalkActiveRef.current = false;
-      if (jarvisHoldToTalkMode && (voiceRecordingRef.current || voicePressActiveRef.current)) {
+      if (voiceRecordingRef.current || voicePressActiveRef.current) {
         void stopVoiceCapture(true);
       }
-      setVoiceMode('always_on');
+      setJarvisMuted(true);
+      setVoiceMode('push_to_talk');
+      setStatus('Push To Talk is armed; hold the core to speak');
+      return;
+    }
+    if (jarvisMuted || !alwaysOnEnabledRef.current) {
       setJarvisMuted(false);
+      setVoiceMode('always_on');
       if (!voiceRunningRef.current && !voiceRecordingRef.current) {
         void startAlwaysOnVoice();
       } else {
@@ -1839,7 +2524,7 @@ const flushPendingMessages = () => {
     if (alwaysOnEnabledRef.current) {
       await stopAlwaysOnVoice();
     }
-    setStatus('Push To Talk enabled');
+    setStatus('Push To Talk enabled. Hold the core or Space to speak.');
   };
 
   const startJarvisPushToTalk = async () => {
@@ -1885,6 +2570,7 @@ const flushPendingMessages = () => {
 
   const cancelAlwaysOnSegment = async () => {
     voiceGateStateRef.current = createVoiceGateState();
+    jarvisWakeMatchStateRef.current = createJarvisWakeMatchState();
     deferredAlwaysOnFramesRef.current = [];
     deferredAlwaysOnSampleCountRef.current = 0;
     activeVoiceUtteranceIdRef.current = null;
@@ -1892,5 +2578,58 @@ const flushPendingMessages = () => {
     activeVoiceBargeInReferenceTextRef.current = '';
     await finishVoiceSegment(false, 'always_on');
   };
-  return { flushPendingMessages, queueMessage, queueComposerMessage, setComposerInputValue, handleComposerContentSizeChange, handleComposerMeasureLayout, handleComposerInputChange, appendLocalMessage, appendLocalSystemMessage, requireActiveDesktopSession, stopVoiceTracks, resetVoiceCaptureBuffers, cleanupAssistantAudio, playAssistantAudio, sendVoiceChunk, flushVoiceChunk, appendVoiceChunkSamples, beginVoiceSegment, shouldAutoSendAlwaysOnVoice, finishVoiceSegment, rememberDeferredAlwaysOnFrame, processAlwaysOnFrame, drainDeferredAlwaysOnFrames, processVoiceSamples, acceptJarvisBargeInTranscript, clearJarvisBargeInCandidate, handleRealtimeEvent, executeSlashCommand, runSlashCommandFromComposer, runVerboseCommand, openCommandPanelForInput, chooseModel, choosePlannerModel, toggleCurrentSessionToolPack, updateChatTelegramBotAssignment, updateChatHeadlessEligibility, updateChatSecurityPermissionMode, updateDraftSecurityPermissionMode, setSleepChatForBot, sendQueuedComposerSlice, sendText, uploadComposerAttachments, openComposerAttachmentPicker, selectCommandSuggestion, handleComposerKeyPress, ensureSessionForVoiceCapture, waitForVoiceSocketOpen, startVoiceCapture, stopVoiceCapture, startAlwaysOnVoice, stopAlwaysOnVoice, pauseJarvisMicrophone, toggleJarvisMute, setJarvisPushToTalkMode, startJarvisPushToTalk, stopJarvisPushToTalk, cancelAlwaysOnSegment };
+  const retryFailedTurn = (failure: Record<string, any>, providerId: string, modelId: string) => {
+    const targetSessionId = normalizeChatSessionId(sessionIdRef.current);
+    const runId = String(failure?.run_id || '').trim();
+    if (!targetSessionId || !runId || !providerId || !modelId) {
+      setStatus('Choose an available provider and model before retrying.');
+      return;
+    }
+    const socket = ensureChatSocketForSession(targetSessionId, { selected: true });
+    if (!socket) {
+      setStatus('Chat connection is unavailable. Reconnect before retrying.');
+      return;
+    }
+    const sendRetry = () => {
+      socket.send(JSON.stringify({
+        type: 'retry_failed_turn',
+        session_id: targetSessionId,
+        run_id: runId,
+        provider_id: providerId,
+        model_id: modelId,
+        source_client_id: appClientIdRef.current,
+      }));
+      chatSocketRunActiveBySessionRef.current[targetSessionId] = true;
+      scope.setProviderFailure?.(null);
+      setChatRunActive(true);
+      setRuntimeRunState('running');
+      setThinking('Retrying');
+      setStatus(`Retrying with ${modelId}`);
+    };
+    if (socket.readyState === WebSocket.OPEN) {
+      sendRetry();
+    } else {
+      socket.addEventListener('open', sendRetry, { once: true });
+    }
+  };
+  scope.retryFailedTurn = retryFailedTurn;
+  useEffect(() => {
+    if (
+      isJarvisMode
+      && !jarvisHoldToTalkMode
+      && !jarvisMuted
+      && jarvisWakeProfileReady
+      && apiBaseUrl
+      && token
+      && !alwaysOnEnabledRef.current
+    ) {
+      void startAlwaysOnVoice();
+    }
+    return () => {
+      if (alwaysOnEnabledRef.current) {
+        void stopAlwaysOnVoice();
+      }
+    };
+  }, [apiBaseUrl, isJarvisMode, jarvisHoldToTalkMode, jarvisMuted, jarvisWakeProfileReady, token]);
+  return { flushPendingMessages, queueMessage, queueComposerMessage, setComposerInputValue, handleComposerContentSizeChange, handleComposerMeasureLayout, handleComposerInputChange, appendLocalMessage, appendLocalSystemMessage, requireActiveDesktopSession, stopVoiceTracks, resetVoiceCaptureBuffers, cleanupAssistantAudio, playAssistantAudio, sendVoiceChunk, flushVoiceChunk, appendVoiceChunkSamples, beginVoiceSegment, shouldAutoSendAlwaysOnVoice, finishVoiceSegment, rememberDeferredAlwaysOnFrame, processAlwaysOnFrame, drainDeferredAlwaysOnFrames, processVoiceSamples, acceptJarvisBargeInTranscript, clearJarvisBargeInCandidate, handleRealtimeEvent, executeSlashCommand, runSlashCommandFromComposer, runVerboseCommand, openCommandPanelForInput, chooseModel, chooseVariant, choosePlannerModel, toggleCurrentSessionToolPack, updateChatTelegramBotAssignment, updateChatHeadlessEligibility, updateChatSecurityPermissionMode, updateDraftSecurityPermissionMode, setSleepChatForBot, sendQueuedComposerSlice, sendTextValue, sendText, approveProposedPlan, answerPlanQuestion, dismissPlanMode, exitPlanMode, clearActiveGoal, uploadComposerAttachments, openComposerAttachmentPicker, selectCommandSuggestion, handleComposerKeyPress, ensureSessionForVoiceCapture, waitForVoiceSocketOpen, startVoiceCapture, stopVoiceCapture, startAlwaysOnVoice, stopAlwaysOnVoice, pauseJarvisMicrophone, toggleJarvisMute, setJarvisPushToTalkMode, startJarvisPushToTalk, stopJarvisPushToTalk, cancelAlwaysOnSegment };
 }
