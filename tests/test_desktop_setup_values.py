@@ -37,6 +37,15 @@ def test_desktop_setup_value_helpers_execute_with_typescript_transpile():
         });
         const setup = moduleRef.exports;
 
+        const normalized = setup.normalizeDesktopSetupValues({
+          DEFAULT_WORKSPACE: 'C:/Work',
+          EMPLOAI_REMOTE_DESKTOP_NAME: null,
+        });
+        assert.strictEqual(normalized.DEFAULT_WORKSPACE, 'C:/Work');
+        assert.strictEqual(normalized.EMPLOAI_REMOTE_DESKTOP_NAME, '');
+        assert.strictEqual(normalized.VOICE_DEFAULT_ENGINE, '');
+        assert.strictEqual(setup.normalizeDesktopSetupValues(undefined).DEFAULT_WORKSPACE, '');
+
         const values = {
           DEFAULT_WORKSPACE: ' C:/Work ',
           PLANNER_MODEL: 'gpt-5.4',

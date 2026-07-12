@@ -1,5 +1,41 @@
 import type { DesktopSetupValues } from '@/lib/desktopBridge';
 
+const EMPTY_DESKTOP_SETUP_VALUES: DesktopSetupValues = {
+  TELEGRAM_BOT_TOKEN: '',
+  ALLOWED_USER_IDS: '',
+  EMPLOAI_REMOTE_CONTROL_BASE_URL: '',
+  EMPLOAI_REMOTE_CONTROL_EMAIL: '',
+  EMPLOAI_REMOTE_CONTROL_PASSWORD: '',
+  EMPLOAI_REMOTE_DESKTOP_NAME: '',
+  EMPLOAI_REMOTE_DESKTOP_KEY: '',
+  DEFAULT_WORKSPACE: '',
+  PLANNER_MODEL: '',
+  INTERRUPT_POLICY_DEFAULT: '',
+  OPENAI_PROVIDER_MODE: '',
+  OPENAI_API_KEY: '',
+  ANTHROPIC_API_KEY: '',
+  GOOGLE_API_KEY: '',
+  XAI_API_KEY: '',
+  DEEPSEEK_API_KEY: '',
+  NVIDIA_API_KEY: '',
+  OPENROUTER_API_KEY: '',
+  VOICE_DEFAULT_ENGINE: '',
+  VOICE_ENGLISH_REQUESTED: '',
+  VOICE_HEBREW_REQUESTED: '',
+};
+
+export function normalizeDesktopSetupValues(
+  values: Partial<DesktopSetupValues> | null | undefined,
+): DesktopSetupValues {
+  const normalized = { ...EMPTY_DESKTOP_SETUP_VALUES };
+  const incoming = values || {};
+  (Object.keys(normalized) as Array<keyof DesktopSetupValues>).forEach((key) => {
+    const value = incoming[key];
+    normalized[key] = typeof value === 'string' ? value : value == null ? '' : String(value);
+  });
+  return normalized;
+}
+
 export const LOCAL_SETUP_SECRET_FIELDS = new Set<string>([
   'OPENAI_API_KEY',
   'ANTHROPIC_API_KEY',

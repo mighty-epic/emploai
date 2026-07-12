@@ -8,7 +8,7 @@ import { DesktopSetupOnboardingSection } from './DesktopSetupOnboardingSection';
 import { DesktopSetupSharedSettingsSection } from './DesktopSetupSharedSettingsSection';
 import { DesktopSetupVoiceSection } from './DesktopSetupVoiceSection';
 import { VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW, VOICE_ENGINE_NONE } from './desktopVoicePolicy';
-import { configuredProviderChipLabels } from './setupValues';
+import { configuredProviderChipLabels, normalizeDesktopSetupValues } from './setupValues';
 import { buildOnboardingSuggestion, type OnboardingSuggestion } from './desktopOnboardingStatus';
 import { PairingQrCode } from '../components/PairingQrCode';
 import { buildPairingQrValue } from '../lib/pairingQr';
@@ -141,9 +141,9 @@ const API_KEY_FIELDS: { key: keyof DesktopSetupValues; label: string }[] = [
   { key: 'OPENROUTER_API_KEY', label: 'OpenRouter API key' },
 ];
 
-function setupValuesWithoutPlannerOverride(values: DesktopSetupValues): DesktopSetupValues {
+function setupValuesWithoutPlannerOverride(values: Partial<DesktopSetupValues> | null | undefined): DesktopSetupValues {
   return {
-    ...values,
+    ...normalizeDesktopSetupValues(values),
     PLANNER_MODEL: '',
   };
 }
