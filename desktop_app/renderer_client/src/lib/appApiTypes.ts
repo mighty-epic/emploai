@@ -246,6 +246,7 @@ export type SessionDetail = {
   timeline_events: SessionTimelineEvent[];
   task_board?: TaskBoard | null;
   completed_task_boards: TaskBoard[];
+  provider_availability: Array<Record<string, unknown>>;
   task_board_armed_next_turn: boolean;
   is_running: boolean;
   run_state: 'idle' | 'running';

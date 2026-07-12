@@ -160,6 +160,12 @@ class RemoteControlStoreSyncMixin:
             state["project_groups"] = list(snapshot.get("project_groups") or _project_groups_from_sessions(normalized_sessions))
             if isinstance(snapshot.get("sidebar_state"), dict):
                 state["sidebar_state"] = dict(snapshot.get("sidebar_state") or {})
+            if isinstance(snapshot.get("provider_availability"), list):
+                state["provider_availability"] = [
+                    dict(item)
+                    for item in list(snapshot.get("provider_availability") or [])[:100]
+                    if isinstance(item, dict)
+                ]
             existing_fleet_state = _normalize_fleet_state(state.get("fleet"))
             seed_identity_id = default_identity_id if not existing_fleet_state.get("active_identity_id") else None
             fleet_state = self._ensure_fleet_selection_locked(user_id=int(user_id), state=state, preferred_identity_id=seed_identity_id)

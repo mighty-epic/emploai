@@ -518,6 +518,24 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
     borderTopColor: UI.color.border,
     backgroundColor: UI.color.surface,
   },
+  footerStatusDot: {
+    backgroundColor: UI.color.textSubtle,
+  },
+  footerStatusDotSuccess: {
+    backgroundColor: UI.color.success,
+  },
+  footerStatusDotError: {
+    backgroundColor: UI.color.danger,
+  },
+  footerStatusText: {
+    color: UI.color.textSubtle,
+  },
+  footerStatusTextSuccess: {
+    color: UI.color.success,
+  },
+  footerStatusTextError: {
+    color: UI.color.danger,
+  },
   secondaryButton: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,

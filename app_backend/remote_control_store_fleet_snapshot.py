@@ -112,6 +112,13 @@ class RemoteControlStoreFleetSnapshotMixin:
                 "active_identity_updated_at": _utc_iso(fleet_state.get("active_identity_updated_at")),
                 "instances": instances,
                 "manager": next((item for item in instances if item.get("role") == "manager"), None),
+                "desktops": [
+                    self._desktop_view(row)
+                    for row in self._conn.execute(
+                        "SELECT * FROM desktops WHERE user_id = ? ORDER BY created_at ASC",
+                        (int(user_id),),
+                    ).fetchall()
+                ],
                 "workers": workers,
                 "groups": [
                     {

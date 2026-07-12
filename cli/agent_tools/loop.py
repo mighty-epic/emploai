@@ -29,6 +29,12 @@ from shared.provider_errors import (
     normalize_provider_error,
 )
 from shared.provider_failures import provider_failure_from_info
+from shared.provider_availability import (
+    active_provider_block,
+    mark_provider_success,
+    provider_failure_from_block,
+    record_provider_failure,
+)
 from shared.openai_api import responses_store_disabled_for_client, responses_store_disabled_for_model
 from shared.security_policy import redact_json, redact_text
 
@@ -702,6 +708,9 @@ def run_tool_loop(
         messages.append({"role": "system", "content": effective_system})
 
     for turn in range(max_turns):
+        active_block = active_provider_block(requested_provider, model_id)
+        if active_block:
+            return LoopResult(content="", failure=provider_failure_from_block(active_block))
         _drop_prior_ephemeral_runtime_context(messages)
         before_model_turn_cb = callbacks.get("before_model_turn")
         if before_model_turn_cb:
@@ -1128,14 +1137,22 @@ def run_tool_loop(
         except Exception as e:
             _finish_visible_stream()
             info = normalize_provider_error(e, payload_kind="text")
+            failure = provider_failure_from_info(
+                info,
+                provider_id=requested_provider,
+                model_id=model_id,
+            ).to_dict()
+            availability = record_provider_failure(failure)
+            if availability:
+                for key in ("blocked_until", "reset_at", "retry_after_seconds", "scope"):
+                    if availability.get(key) is not None:
+                        failure[key] = availability[key]
             return LoopResult(
                 content="",
-                failure=provider_failure_from_info(
-                    info,
-                    provider_id=provider,
-                    model_id=model_id,
-                ).to_dict(),
+                failure=failure,
             )
+
+        mark_provider_success(requested_provider, model_id)
         
         # Format tool calls for history
         formatted_tc = []

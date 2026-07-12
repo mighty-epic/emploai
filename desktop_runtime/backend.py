@@ -815,8 +815,28 @@ def _run_remote_control_worker() -> int:
 def _fleet_yggdrasil_status() -> dict[str, Any]:
     _, home, _ = _runtime_paths()
     from shared.fleet_yggdrasil import yggdrasil_status
+    from shared.fleet_connection import load_fleet_connection
 
-    return yggdrasil_status(home)
+    status = yggdrasil_status(home)
+    connection = load_fleet_connection(home)
+    transport = connection.get("transport") if isinstance(connection.get("transport"), dict) else {}
+    desktop = connection.get("desktop") if isinstance(connection.get("desktop"), dict) else {}
+    worker = connection.get("worker") if isinstance(connection.get("worker"), dict) else {}
+    relay_status = _read_remote_control_status_record(home) if connection else {}
+    status["connection"] = {
+        "configured": bool(connection),
+        "role": "worker" if connection else "manager",
+        "managerUrl": str(connection.get("managerUrl") or connection.get("apiBaseUrl") or "").strip() or None,
+        "managerYggdrasilIp": str(transport.get("managerYggdrasilIp") or "").strip() or None,
+        "pairedAt": transport.get("pairedAt"),
+        "desktopId": str(desktop.get("desktop_id") or "").strip() or None,
+        "desktopName": str(desktop.get("device_name") or relay_status.get("desktopName") or "").strip() or None,
+        "workerId": str(worker.get("worker_id") or "").strip() or None,
+        "workerName": str(worker.get("display_name") or "").strip() or None,
+        "relayState": str(relay_status.get("state") or "").strip() or None,
+        "relayDetail": str(relay_status.get("detail") or "").strip() or None,
+    }
+    return status
 
 
 def _fleet_yggdrasil_bootstrap(
@@ -1021,6 +1041,7 @@ def _fleet_yggdrasil_join_worker(
         device_key=identity["device_key"],
     )
     if start_worker:
+        _stop_remote_control_worker(home)
         _write_remote_control_status_record(
             home,
             state="starting",

@@ -733,6 +733,7 @@ class AgentOverviewView(BaseModel):
     active_visual_monitors: int = 0
     task_board: Optional[TaskBoardView] = None
     completed_task_boards: List[TaskBoardView] = Field(default_factory=list)
+    provider_availability: List[Dict[str, Any]] = Field(default_factory=list)
     task_board_armed_next_turn: bool = False
     available_tool_packs: List[str] = Field(default_factory=list)
     enabled_tool_packs: List[str] = Field(default_factory=list)
@@ -1187,6 +1188,7 @@ class FleetSnapshotResponse(BaseModel):
     active_identity_updated_at: Optional[str] = None
     instances: List[FleetInstanceView] = Field(default_factory=list)
     manager: Optional[FleetInstanceView] = None
+    desktops: List[Dict[str, Any]] = Field(default_factory=list)
     workers: List[FleetWorkerView] = Field(default_factory=list)
     groups: List[Dict[str, Any]] = Field(default_factory=list)
     tasks: List[FleetTaskView] = Field(default_factory=list)
@@ -1278,6 +1280,11 @@ class FleetCompleteEnrollmentResponse(BaseModel):
     worker: FleetWorkerView
 
 
+class ProviderAvailabilitySyncRequest(BaseModel):
+    records: List[Dict[str, Any]] = Field(default_factory=list, max_length=100)
+    source: str = Field(default="yggdrasil", max_length=80)
+
+
 class FleetAssignTaskRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=20000)
     source: str = Field(default="manager", max_length=80)
@@ -1352,6 +1359,7 @@ class FleetDeleteWorkerResponse(BaseModel):
     deleted: bool = False
     worker_id: str
     wipe_state: bool = True
+    connection_revoked: bool = False
 
 
 class RemoteDesktopSyncEnvelope(BaseModel):
@@ -1366,6 +1374,7 @@ class RemoteDesktopSyncEnvelope(BaseModel):
     jobs: List[Dict[str, Any]] = Field(default_factory=list)
     project_groups: List[Dict[str, Any]] = Field(default_factory=list)
     sidebar_state: Dict[str, Any] = Field(default_factory=dict)
+    provider_availability: Optional[List[Dict[str, Any]]] = None
 
 
 class RemoteDesktopSocketMessage(BaseModel):

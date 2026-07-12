@@ -10,6 +10,9 @@ MAX_DEVICE_KEY_CHARS = 256
 FLEET_PREVIEW_MODE = "screen_summary_or_low_rate_preview"
 MIN_FLEET_ENROLLMENT_TTL_SECONDS = 60
 MAX_FLEET_ENROLLMENT_TTL_SECONDS = 60 * 60 * 24
+# Directly paired Fleet desktops remain authorized until the manager removes
+# their worker. A zero expiry is already treated as durable by the session store.
+FLEET_WORKER_SESSION_TTL_SECONDS = 0
 
 
 def normalize_worker_enrollment_identity(

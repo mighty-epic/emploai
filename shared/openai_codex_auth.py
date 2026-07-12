@@ -96,6 +96,12 @@ def _write_store(payload: Mapping[str, Any]) -> None:
 
 
 def delete_codex_auth() -> Dict[str, Any]:
+    try:
+        from shared.provider_availability import clear_provider_availability
+
+        clear_provider_availability(CODEX_PROVIDER)
+    except Exception:
+        pass
     path = codex_auth_path()
     purpose = f"EmploAI OpenAI Codex auth: {path}"
     for candidate in (path, path.with_suffix(f"{path.suffix}.bak")):
@@ -269,6 +275,12 @@ def _store_tokens(token_payload: Mapping[str, Any], *, base_url: Optional[str] =
         "last_refresh": _utc_now_iso(),
     }
     _write_store(store)
+    try:
+        from shared.provider_availability import clear_provider_availability
+
+        clear_provider_availability(CODEX_PROVIDER)
+    except Exception:
+        pass
     return store
 
 

@@ -29,7 +29,7 @@ export function handleDesktopConversationRealtimeEvent(
   event: DesktopRealtimeEvent,
   channel: RealtimeChannel,
 ) {
-    const { acceptJarvisBargeInTranscript, activeVoiceUtteranceIdRef, alwaysOnEnabledRef, appendLocalSystemMessage, appendTimelineEvent, appendVoiceTranscriptSegment, applySessionSync, artifacts, assistantDeltaBufferRef, assistantDeltaFlushTimerRef, clearAssistantDeltaFlushTimer, clearConversationSelection, clearJarvisBargeInCandidate, conversationModeRef, createLocalToolTimelineEvent, drainDeferredAlwaysOnFrames, flushAssistantDeltaBuffer, id, lastComposerInputOriginRef, normalizeCompletedTaskBoards, playAssistantAudio, pushActivity, refreshOverviewState, refreshSidebarCollections, refreshSidebarState, remoteAuthStatus, resolveTaskBoardState, run_state, selectedArtifactId, sessionIdRef, setArtifacts, setAssistantDraft, setChatRunActive, setCompletedTaskBoards, setComposerInputValue, setFleetError, setFleetSnapshot, setFleetStatus, setInput, setJarvisLatestTranscript, setLastAssistantOutputAt, setMessages, setOverview, setRuntimeRunState, setSelectedArtifactId, setSessionId, setSocketState, setStatus, setTaskBoard, setTaskBoardArmedNextTurnState, setThinking, setVoiceDraft, setVoiceError, setVoiceRecording, setVoiceRunning, setVoiceState, shouldAutoSendAlwaysOnVoice, status, summarizeToolPayload, toLiveDesktopMessage, voiceComposerBaseInputRef, voiceComposerDraftRef, voiceRecordingRef, voiceRunningRef } = context;
+    const { acceptJarvisBargeInTranscript, activeVoiceUtteranceIdRef, alwaysOnEnabledRef, appendLocalSystemMessage, appendTimelineEvent, appendVoiceTranscriptSegment, applySessionSync, artifacts, assistantDeltaBufferRef, assistantDeltaFlushTimerRef, clearAssistantDeltaFlushTimer, clearConversationSelection, clearJarvisBargeInCandidate, conversationModeRef, createLocalToolTimelineEvent, drainDeferredAlwaysOnFrames, flushAssistantDeltaBuffer, id, lastComposerInputOriginRef, normalizeCompletedTaskBoards, pauseJarvisMicrophone, playAssistantAudio, pushActivity, refreshOverviewState, refreshSidebarCollections, refreshSidebarState, remoteAuthStatus, resolveTaskBoardState, run_state, selectedArtifactId, sessionIdRef, setArtifacts, setAssistantDraft, setChatRunActive, setCompletedTaskBoards, setComposerInputValue, setFleetError, setFleetSnapshot, setFleetStatus, setInput, setJarvisLatestTranscript, setJarvisMuted, setLastAssistantOutputAt, setMessages, setOverview, setRuntimeRunState, setSelectedArtifactId, setSessionId, setSocketState, setStatus, setTaskBoard, setTaskBoardArmedNextTurnState, setThinking, setVoiceDraft, setVoiceError, setVoiceRecording, setVoiceRunning, setVoiceState, shouldAutoSendAlwaysOnVoice, status, summarizeToolPayload, toLiveDesktopMessage, voiceComposerBaseInputRef, voiceComposerDraftRef, voiceRecordingRef, voiceRunningRef } = context;
     const payload = (event.payload || {}) as Record<string, any>;
     const payloadTurnId = typeof payload.turn_id === 'string' ? payload.turn_id.trim() : '';
     const incomingSessionId = typeof event.session_id === 'string' ? event.session_id.trim() : '';
@@ -276,6 +276,11 @@ export function handleDesktopConversationRealtimeEvent(
       setChatRunActive(false);
       setRuntimeRunState('idle');
       setStatus(`Provider blocked · ${message}`);
+      if (conversationModeRef.current === 'jarvis') {
+        setJarvisMuted?.(true);
+        setVoiceError(message);
+        void Promise.resolve(pauseJarvisMicrophone?.()).finally(() => setVoiceState('error'));
+      }
       setOverview((previous: any) => (
         previous ? { ...previous, run_state: 'idle', provider_blocked: payload } : previous
       ));

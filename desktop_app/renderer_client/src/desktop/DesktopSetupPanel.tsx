@@ -264,6 +264,8 @@ export function DesktopSetupPanel({
   const [desktopShortcutFailed, setDesktopShortcutFailed] = useState(false);
   const [dismissPromptOpen, setDismissPromptOpen] = useState(false);
   const [dismissSaveError, setDismissSaveError] = useState('');
+  const [savingChanges, setSavingChanges] = useState(false);
+  const [saveFeedback, setSaveFeedback] = useState<{ tone: 'neutral' | 'success' | 'error'; message: string } | null>(null);
   const validationTimersRef = useRef<Record<string, ReturnType<typeof setTimeout> | null>>({});
   const validationRunRef = useRef<Record<string, number>>({});
   const editedValueKeysRef = useRef<Set<keyof DesktopSetupValues>>(new Set());
@@ -534,6 +536,7 @@ export function DesktopSetupPanel({
 
   const updateValue = (key: keyof DesktopSetupValues, nextValue: string) => {
     editedValueKeysRef.current.add(key);
+    setSaveFeedback(null);
     setValues((current) => ({ ...current, [key]: nextValue }));
     if (LIVE_VALIDATION_FIELDS.includes(key)) {
       scheduleFieldValidation(key, nextValue);
@@ -615,12 +618,17 @@ export function DesktopSetupPanel({
       ? `${selectedVoicePack?.title || 'English voice pack'} ready (${voiceModel}${voiceDraftModel ? ` + ${voiceDraftModel}` : ''})`
       : `${selectedVoicePack?.title || 'Voice pack'} unavailable`;
   const visibleVoiceIssue = selectedVoiceEngine === VOICE_ENGINE_NONE ? null : voiceIssues[0];
+  const standaloneMode = Boolean(remoteAuthStatus?.cloudDisabled || remoteAuthStatus?.standalone);
+  useEffect(() => {
+    if (standaloneMode && activeTab === 'remote') setActiveTab('general');
+  }, [standaloneMode, activeTab]);
   const memoryDirty = memoryDraft !== memoryBaselineRef.current;
   const sharedSettingsDirty = Boolean(
     sharedSettingsDraft
     && JSON.stringify(sharedSettingsDraft) !== sharedSettingsBaselineRef.current
   );
   const settingsDirty = editedValueKeysRef.current.size > 0 || memoryDirty || sharedSettingsDirty;
+  const saveBusy = Boolean(saving || memorySaving || sharedSettingsSaving || savingChanges);
   const requestDismiss = () => {
     if (!onDismiss) return;
     if (settingsDirty) {
@@ -630,27 +638,82 @@ export function DesktopSetupPanel({
     }
     onDismiss();
   };
-  const saveDirtySections = async () => {
-    setDismissSaveError('');
+  const persistDirtySections = async () => {
+    const savedSections: Array<'setup' | 'memory' | 'local'> = [];
+    if (editedValueKeysRef.current.size > 0) {
+      await saveEditedValues();
+      savedSections.push('setup');
+    }
+    if (memoryDirty) {
+      if (!onSaveMemory) throw new Error('Memory saving is unavailable.');
+      const memorySaved = await onSaveMemory(memoryDraft);
+      if (memorySaved === false) throw new Error('Memory was not saved.');
+      memoryBaselineRef.current = memoryDraft;
+      savedSections.push('memory');
+    }
+    if (sharedSettingsDirty) {
+      if (!onSaveSharedSettings) throw new Error('Local settings saving is unavailable.');
+      const sharedSaved = await onSaveSharedSettings();
+      if (sharedSaved === false) throw new Error(standaloneMode ? 'Local settings were not saved.' : 'Shared settings were not saved.');
+      sharedSettingsBaselineRef.current = sharedSettingsDraft ? JSON.stringify(sharedSettingsDraft) : '';
+      savedSections.push('local');
+    }
+    return savedSections;
+  };
+  const saveAllChanges = async () => {
+    if (!settingsDirty || saveBusy) return;
+    setSavingChanges(true);
+    setSaveFeedback(null);
     try {
-      if (editedValueKeysRef.current.size > 0) await saveEditedValues();
-      if (memoryDirty) {
-        if (!onSaveMemory) throw new Error('Memory saving is unavailable.');
-        const memorySaved = await onSaveMemory(memoryDraft);
-        if (memorySaved === false) throw new Error('Memory was not saved.');
-        memoryBaselineRef.current = memoryDraft;
-      }
-      if (sharedSettingsDirty) {
-        if (!onSaveSharedSettings) throw new Error('Shared settings saving is unavailable.');
-        const sharedSaved = await onSaveSharedSettings();
-        if (sharedSaved === false) throw new Error('Shared settings were not saved.');
-        sharedSettingsBaselineRef.current = sharedSettingsDraft ? JSON.stringify(sharedSettingsDraft) : '';
-      }
+      const savedSections = await persistDirtySections();
+      const localOnly = savedSections.length === 1 && savedSections[0] === 'local';
+      setSaveFeedback({
+        tone: 'success',
+        message: localOnly ? 'Local runtime settings saved and applied.' : 'All changes saved and applied.',
+      });
+    } catch (saveError) {
+      setSaveFeedback({
+        tone: 'error',
+        message: saveError instanceof Error ? saveError.message : 'Settings were not saved.',
+      });
+    } finally {
+      setSavingChanges(false);
+    }
+  };
+  const saveSharedSettingsSection = async () => {
+    if (!onSaveSharedSettings || saveBusy) return;
+    setSavingChanges(true);
+    setSaveFeedback(null);
+    try {
+      const sharedSaved = await onSaveSharedSettings();
+      if (sharedSaved === false) throw new Error(standaloneMode ? 'Local settings were not saved.' : 'Shared settings were not saved.');
+      sharedSettingsBaselineRef.current = sharedSettingsDraft ? JSON.stringify(sharedSettingsDraft) : '';
+      setSaveFeedback({
+        tone: 'success',
+        message: standaloneMode ? 'Local runtime settings saved and applied.' : 'Shared settings saved.',
+      });
+    } catch (saveError) {
+      setSaveFeedback({
+        tone: 'error',
+        message: saveError instanceof Error ? saveError.message : 'Settings were not saved.',
+      });
+    } finally {
+      setSavingChanges(false);
+    }
+  };
+  const saveDirtySections = async () => {
+    if (saveBusy) return;
+    setDismissSaveError('');
+    setSavingChanges(true);
+    try {
+      await persistDirtySections();
       setDismissPromptOpen(false);
       onDismiss?.();
     } catch (saveError) {
       setDismissSaveError(saveError instanceof Error ? saveError.message : 'Settings were not saved.');
       setDismissPromptOpen(true);
+    } finally {
+      setSavingChanges(false);
     }
   };
   const discardDirtySections = () => {
@@ -694,13 +757,8 @@ export function DesktopSetupPanel({
 
   const fallbackBotId = telegramBotConfigs[0]?.id || null;
   const allowedTelegramUserIds = parseTelegramUserIds(values.ALLOWED_USER_IDS);
-  const standaloneMode = Boolean(remoteAuthStatus?.cloudDisabled || remoteAuthStatus?.standalone);
   const settingsTabs = standaloneMode
-    ? SETTINGS_TABS.map((tab) => (
-        tab.key === 'remote'
-          ? { ...tab, label: 'Workers', description: 'Local desktop and other computers' }
-          : tab
-      ))
+    ? SETTINGS_TABS.filter((tab) => tab.key !== 'remote')
     : SETTINGS_TABS;
   const selectedSettingsTab = settingsTabs.find((item) => item.key === activeTab) || settingsTabs[0];
   const maxConcurrentValue = Math.min(12, Math.max(1, Number.parseInt(maxConcurrentChatsDraft || '4', 10) || 4));
@@ -966,11 +1024,14 @@ export function DesktopSetupPanel({
                 {sharedSettingsDraft && onSharedSettingsDraftChange && onSaveSharedSettings ? (
                   <DesktopSetupSharedSettingsSection
                     draft={sharedSettingsDraft}
-                    saving={sharedSettingsSaving}
+                    saving={saveBusy}
                     status={sharedSettingsStatus}
                     standaloneMode={standaloneMode}
-                    onChange={onSharedSettingsDraftChange}
-                    onSave={onSaveSharedSettings}
+                    onChange={(draft) => {
+                      setSaveFeedback(null);
+                      onSharedSettingsDraftChange(draft);
+                    }}
+                    onSave={() => void saveSharedSettingsSection()}
                   />
                 ) : null}
 
@@ -1373,7 +1434,10 @@ export function DesktopSetupPanel({
 
                   <TextInput
                     value={memoryDraft}
-                    onChangeText={setMemoryDraft}
+                    onChangeText={(value) => {
+                      setSaveFeedback(null);
+                      setMemoryDraft(value);
+                    }}
                     style={[styles.input, styles.memoryEditor]}
                     placeholder="Long-term memory will appear here"
                     placeholderTextColor="#7f93b5"
@@ -1933,14 +1997,14 @@ export function DesktopSetupPanel({
             </Text>
             {dismissSaveError ? <Text accessibilityLiveRegion="polite" style={{ color: '#ff9b9b', fontSize: 13 }}>{dismissSaveError}</Text> : null}
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'flex-end' }}>
-              <Pressable accessibilityRole="button" onPress={() => setDismissPromptOpen(false)} style={[styles.secondaryButton, { minHeight: 44, justifyContent: 'center' }]}>
+              <Pressable accessibilityRole="button" disabled={saveBusy} onPress={() => setDismissPromptOpen(false)} style={[styles.secondaryButton, { minHeight: 44, justifyContent: 'center' }, saveBusy ? styles.primaryButtonDisabled : null]}>
                 <Text style={styles.secondaryButtonText}>Cancel</Text>
               </Pressable>
-              <Pressable accessibilityRole="button" onPress={discardDirtySections} style={[styles.secondaryButton, { minHeight: 44, justifyContent: 'center' }]}>
+              <Pressable accessibilityRole="button" disabled={saveBusy} onPress={discardDirtySections} style={[styles.secondaryButton, { minHeight: 44, justifyContent: 'center' }, saveBusy ? styles.primaryButtonDisabled : null]}>
                 <Text style={styles.secondaryButtonText}>Discard</Text>
               </Pressable>
-              <Pressable accessibilityRole="button" onPress={() => void saveDirtySections()} style={[styles.primaryButton, { minHeight: 44, justifyContent: 'center' }]}>
-                <Text style={styles.primaryButtonText}>Save</Text>
+              <Pressable accessibilityRole="button" disabled={saveBusy} onPress={() => void saveDirtySections()} style={[styles.primaryButton, { minHeight: 44, justifyContent: 'center' }, saveBusy ? styles.primaryButtonDisabled : null]}>
+                <Text style={styles.primaryButtonText}>{saveBusy ? 'Saving…' : 'Save'}</Text>
               </Pressable>
             </View>
           </View>
@@ -1948,17 +2012,35 @@ export function DesktopSetupPanel({
       ) : null}
 
       <View style={styles.footer}>
-        {onDismiss ? (
-          <Pressable style={styles.secondaryButton} onPress={requestDismiss} disabled={saving}>
-            <Text style={styles.secondaryButtonText}>Close</Text>
-          </Pressable>
-        ) : <View />}
+        <View style={styles.footerLeading}>
+          {onDismiss ? (
+            <Pressable accessibilityRole="button" style={styles.secondaryButton} onPress={requestDismiss} disabled={saveBusy}>
+              <Text style={styles.secondaryButtonText}>Close</Text>
+            </Pressable>
+          ) : null}
+          <View accessibilityLiveRegion="polite" style={styles.footerStatus}>
+            <View style={[
+              styles.footerStatusDot,
+              saveFeedback?.tone === 'success' ? styles.footerStatusDotSuccess : null,
+              saveFeedback?.tone === 'error' ? styles.footerStatusDotError : null,
+            ]} />
+            <Text style={[
+              styles.footerStatusText,
+              saveFeedback?.tone === 'success' ? styles.footerStatusTextSuccess : null,
+              saveFeedback?.tone === 'error' ? styles.footerStatusTextError : null,
+            ]}>
+              {saveFeedback?.message || (settingsDirty ? 'Unsaved changes' : 'No unsaved changes')}
+            </Text>
+          </View>
+        </View>
         <Pressable
-          style={[styles.primaryButton, saving ? styles.primaryButtonDisabled : null]}
-          onPress={saveEditedValues}
-          disabled={saving}
+          accessibilityRole="button"
+          accessibilityLabel="Save settings changes"
+          style={[styles.primaryButton, (!settingsDirty || saveBusy) ? styles.primaryButtonDisabled : null]}
+          onPress={() => void saveAllChanges()}
+          disabled={!settingsDirty || saveBusy}
         >
-          <Text style={styles.primaryButtonText}>{saving ? 'Saving...' : primaryActionLabel}</Text>
+          <Text style={styles.primaryButtonText}>{saveBusy ? 'Saving…' : setupState.required ? primaryActionLabel : 'Save Changes'}</Text>
         </Pressable>
       </View>
     </View>

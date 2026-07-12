@@ -991,6 +991,43 @@ const baseStyles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
+  footerLeading: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  footerStatus: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  footerStatusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 99,
+    backgroundColor: '#7f7f7f',
+  },
+  footerStatusDotSuccess: {
+    backgroundColor: '#75c69a',
+  },
+  footerStatusDotError: {
+    backgroundColor: '#e07884',
+  },
+  footerStatusText: {
+    flex: 1,
+    color: '#989898',
+    fontSize: 12,
+  },
+  footerStatusTextSuccess: {
+    color: '#9ddab8',
+  },
+  footerStatusTextError: {
+    color: '#f3b5bd',
+  },
   secondaryButton: {
     borderRadius: 14,
     backgroundColor: '#1e1e1e',

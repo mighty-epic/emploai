@@ -814,6 +814,210 @@ def register_event_routes(app):
 
             )
 
+    @app.put("/api/app/automations/{job_id}", response_model=JobDetailView)
+
+    @app.put("/api/app/jobs/{job_id}", response_model=JobDetailView)
+
+    async def update_job(
+
+        job_id: str,
+
+        request: JobCreateRequest,
+
+        authorization: Optional[str] = Header(default=None),
+
+    ) -> JobDetailView:
+
+        auth = _resolve_token(authorization)
+
+        if _is_remote_session_auth(auth):
+
+            raise HTTPException(status_code=409, detail="Automation changes must run on the local desktop backend")
+
+        user_id = int(auth["user_id"])
+
+        store = _get_remote_control_store()
+
+        try:
+
+            existing = store.get_automation(user_id=user_id, automation_id=job_id)
+
+        except KeyError as exc:
+
+            raise HTTPException(status_code=404, detail="Automation not found") from exc
+
+        interval_seconds, error = parse_schedule_with_error(request.schedule)
+
+        if error or not interval_seconds:
+
+            raise HTTPException(status_code=400, detail=error or "Invalid schedule")
+
+        clean_name = str(request.name or "").strip()
+
+        clean_prompt = str(request.prompt or "").strip()
+
+        if not clean_name or not clean_prompt:
+
+            raise HTTPException(status_code=400, detail="Name and task are required")
+
+        scheduler = get_scheduler()
+
+        scheduler_job = scheduler.get_job(job_id)
+
+        if scheduler_job:
+
+            scheduler.update_job(
+
+                job_id,
+
+                name=clean_name,
+
+                prompt=clean_prompt,
+
+                schedule_text=request.schedule,
+
+                interval_seconds=interval_seconds,
+
+                enabled=bool(existing.get("enabled", True)),
+
+            )
+
+        else:
+
+            scheduler.add_job(
+
+                name=clean_name,
+
+                prompt=clean_prompt,
+
+                interval_seconds=interval_seconds,
+
+                enabled=bool(existing.get("enabled", True)),
+
+                schedule_text=request.schedule,
+
+                owner_user_id=user_id,
+
+                origin_session_id=existing.get("origin_session_id"),
+
+                origin_telegram_bot_config_id=existing.get("origin_telegram_bot_config_id"),
+
+                origin_workspace=existing.get("origin_workspace"),
+
+                origin_model=existing.get("origin_model"),
+
+                origin_enabled_tool_packs=list(existing.get("origin_enabled_tool_packs") or []),
+
+                job_id=job_id,
+
+            )
+
+        scheduler_job = scheduler.get_job(job_id)
+
+        scheduler_payload = _bridge_for_user(user_id).get_job(job_id)
+
+        request_metadata = dict(request.metadata or {})
+
+        request_metadata.pop("cloud_mirror_policy", None)
+
+        confirmation_expires_at = None
+
+        if existing.get("confirmation_expires_at"):
+
+            try:
+
+                confirmation_expires_at = datetime.fromisoformat(
+
+                    str(existing["confirmation_expires_at"]).replace("Z", "+00:00")
+
+                ).timestamp()
+
+            except (TypeError, ValueError):
+
+                confirmation_expires_at = None
+
+        durable = store.upsert_automation(
+
+            user_id=user_id,
+
+            automation_id=job_id,
+
+            name=clean_name,
+
+            prompt=clean_prompt,
+
+            schedule=request.schedule,
+
+            schedule_mode=str(request_metadata.get("schedule_mode") or existing.get("schedule_mode") or "schedule"),
+
+            enabled=bool(existing.get("enabled", True)),
+
+            status="active" if bool(existing.get("enabled", True)) else "paused",
+
+            target_kind=request.target_kind or "active_identity",
+
+            target_identity_id=request.target_identity_id,
+
+            target_group_id=request.target_group_id,
+
+            target_chat_id=request.target_chat_id or existing.get("origin_session_id"),
+
+            chat_target=request.chat_target or "existing_or_new",
+
+            permission_mode=request.permission_mode or "standard",
+
+            tool_packs=list(request.tool_packs or []),
+
+            metadata={
+
+                **dict(existing.get("metadata") or {}),
+
+                **request_metadata,
+
+                "updated_from": "desktop_automations",
+
+            },
+
+            next_run_at=getattr(scheduler_job, "next_run", None),
+
+            one_time=bool(getattr(scheduler_job, "one_time", False)),
+
+            requires_confirmation=bool(existing.get("requires_confirmation", False)),
+
+            confirmation_status=existing.get("confirmation_status"),
+
+            confirmation_expires_at=confirmation_expires_at,
+
+        )
+
+        store.append_automation_event(
+
+            user_id=user_id,
+
+            automation_id=job_id,
+
+            kind="automation_updated",
+
+            event_type="automation_updated",
+
+            event_source="desktop",
+
+            content=f"Automation '{clean_name}' was updated.",
+
+            status="active" if bool(existing.get("enabled", True)) else "paused",
+
+            target_identity_id=request.target_identity_id,
+
+            target_chat_id=request.target_chat_id or existing.get("origin_session_id"),
+
+            importance="normal",
+
+            metadata={"schedule": request.schedule},
+
+        )
+
+        return JobDetailView(**{**durable, **scheduler_payload})
+
     @app.get("/api/app/runtime/orchestrator", response_model=RuntimeOrchestratorView)
 
     async def runtime_orchestrator_status(authorization: Optional[str] = Header(default=None)) -> RuntimeOrchestratorView:

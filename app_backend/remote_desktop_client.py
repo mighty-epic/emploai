@@ -238,6 +238,15 @@ async def _collect_local_snapshot(local_api_base_url: str, local_token: str) -> 
             url=f"{local_api_base_url}/api/app/sidebar-state",
             token=local_token,
         )
+        try:
+            provider_availability = await _request_json(
+                client,
+                method="GET",
+                url=f"{local_api_base_url}/api/app/provider-availability",
+                token=local_token,
+            )
+        except Exception:
+            provider_availability = {"records": []}
         current_session_id = str(profile.get("current_session_id") or "").strip() or None
         session_details: Dict[str, Any] = {}
         if current_session_id:
@@ -259,6 +268,7 @@ async def _collect_local_snapshot(local_api_base_url: str, local_token: str) -> 
             "session_details": session_details,
             "jobs": jobs,
             "sidebar_state": dict(sidebar_state.get("state") or {}),
+            "provider_availability": list(provider_availability.get("records") or []),
         }
 
 
@@ -403,6 +413,16 @@ async def _handle_command(
 ) -> Optional[Dict[str, Any]]:
     timeout = httpx.Timeout(120.0, connect=30.0, read=120.0, write=120.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
+        if command_name == "provider_availability_sync":
+            records = [item for item in list(payload.get("records") or [])[:100] if isinstance(item, dict)]
+            return await _request_json(
+                client,
+                method="POST",
+                url=f"{local_api_base_url}/api/app/provider-availability/sync",
+                token=local_token,
+                json_body={"records": records, "source": "paired_yggdrasil_manager"},
+            )
+
         if command_name == "http_request":
             return await _relay_local_http_request(
                 client,
@@ -807,6 +827,7 @@ async def _snapshot_loop(
             "session_details": snapshot.get("session_details") or {},
             "jobs": snapshot.get("jobs") or [],
             "sidebar_state": snapshot.get("sidebar_state") or {},
+            "provider_availability": snapshot.get("provider_availability") or [],
         }
         signature = json.dumps(envelope, sort_keys=True, ensure_ascii=False)
         if signature != last_signature:
@@ -852,6 +873,7 @@ async def _send_snapshot_once(
                 "session_details": snapshot.get("session_details") or {},
                 "jobs": snapshot.get("jobs") or [],
                 "sidebar_state": snapshot.get("sidebar_state") or {},
+                "provider_availability": snapshot.get("provider_availability") or [],
             },
         },
     )

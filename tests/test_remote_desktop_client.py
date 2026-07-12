@@ -119,6 +119,33 @@ def test_fleet_stop_task_records_pending_stop_without_active_session():
         remote_desktop_client.FLEET_STOP_REQUESTED_TASKS.clear()
 
 
+def test_provider_availability_sync_uses_narrow_local_endpoint(monkeypatch):
+    captured = {}
+
+    async def fake_request_json(_client, **kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "changed": True, "records": kwargs["json_body"]["records"]}
+
+    monkeypatch.setattr(remote_desktop_client, "_request_json", fake_request_json)
+
+    result = asyncio.run(
+        remote_desktop_client._handle_command(
+            command_name="provider_availability_sync",
+            payload={"records": [{"provider_id": "openai-codex", "identity_fingerprint": "a" * 64}]},
+            local_api_base_url="http://127.0.0.1:8787",
+            local_token="local-token",
+            remote_ws=None,
+            send_lock=asyncio.Lock(),
+        )
+    )
+
+    assert result["changed"] is True
+    assert captured["method"] == "POST"
+    assert captured["url"].endswith("/api/app/provider-availability/sync")
+    assert captured["token"] == "local-token"
+    assert captured["json_body"]["source"] == "paired_yggdrasil_manager"
+
+
 def test_fleet_worker_preview_command_returns_screen_capture(monkeypatch):
     sent: list[dict] = []
 

@@ -244,6 +244,14 @@ export type DesktopFleetSnapshot = {
   active_identity_updated_at?: string | null;
   instances?: Array<Record<string, unknown>>;
   manager?: Record<string, unknown> | null;
+  desktops?: Array<{
+    desktop_id: string;
+    display_name?: string | null;
+    status?: string | null;
+    detail?: string | null;
+    last_seen_at?: string | null;
+    last_heartbeat_at?: string | null;
+  }>;
   workers: DesktopFleetWorker[];
   groups?: Array<Record<string, unknown>>;
   tasks: DesktopFleetTask[];
@@ -259,6 +267,50 @@ export type DesktopFleetEnrollment = {
   enrollment_token: string;
   expires_in_seconds: number;
   display_name?: string | null;
+};
+
+export type DesktopFleetYggdrasilConnection = {
+  configured: boolean;
+  role: 'manager' | 'worker';
+  managerUrl?: string | null;
+  managerYggdrasilIp?: string | null;
+  pairedAt?: number | null;
+  desktopId?: string | null;
+  desktopName?: string | null;
+  workerId?: string | null;
+  workerName?: string | null;
+  relayState?: string | null;
+  relayDetail?: string | null;
+};
+
+export type DesktopFleetYggdrasilStatus = {
+  available: boolean;
+  running: boolean;
+  address?: string | null;
+  public_key?: string | null;
+  installHint?: string | null;
+  connection?: DesktopFleetYggdrasilConnection | null;
+};
+
+export type DesktopFleetYggdrasilPairing = {
+  ok: boolean;
+  transport: 'yggdrasil';
+  managerUrl: string;
+  managerYggdrasilIp: string;
+  pairingToken: string;
+  expiresAt: number;
+  expiresInSeconds: number;
+  managerBindChanged?: boolean;
+};
+
+export type DesktopFleetYggdrasilJoinResult = {
+  ok: boolean;
+  transport: 'yggdrasil';
+  managerUrl: string;
+  worker?: DesktopFleetWorker | null;
+  desktop?: Record<string, unknown> | null;
+  remoteWorkerStarted: boolean;
+  deviceName: string;
 };
 
 export type DesktopSetupValues = {
@@ -573,6 +625,10 @@ type DesktopBridge = {
     setIdentityActiveChat: (payload: { identityId?: string; identity_id?: string; chatId?: string | null; chat_id?: string | null; source?: string }) => Promise<Record<string, unknown>>;
     createLocalWorker: (payload?: { displayName?: string | null; display_name?: string | null; metadata?: Record<string, unknown> }) => Promise<DesktopFleetWorker>;
     createEnrollment: (payload?: { displayName?: string | null; display_name?: string | null; expiresInSeconds?: number | null; expires_in_seconds?: number | null; metadata?: Record<string, unknown> }) => Promise<DesktopFleetEnrollment>;
+    yggdrasilStatus: () => Promise<DesktopFleetYggdrasilStatus>;
+    yggdrasilBootstrap: () => Promise<Record<string, unknown>>;
+    yggdrasilCreatePairing: (payload?: { displayName?: string | null; expiresInSeconds?: number | null }) => Promise<DesktopFleetYggdrasilPairing>;
+    yggdrasilJoin: (payload: { pairingToken: string; deviceName?: string | null }) => Promise<DesktopFleetYggdrasilJoinResult>;
     renameWorker: (payload: { workerId?: string; worker_id?: string; displayName?: string; display_name?: string; queuePolicy?: string; queue_policy?: string; metadata?: Record<string, unknown> }) => Promise<DesktopFleetWorker>;
     resetWorker: (payload: { workerId?: string; worker_id?: string; reason?: string | null; metadata?: Record<string, unknown>; confirmationId?: string | null; confirmation_id?: string | null }) => Promise<Record<string, unknown>>;
     deleteWorker: (payload: { workerId?: string; worker_id?: string; wipeState?: boolean; wipe_state?: boolean; confirmationId?: string | null; confirmation_id?: string | null }) => Promise<Record<string, unknown>>;
@@ -1218,6 +1274,36 @@ export function subscribeDesktopExitRequest(callback: (payload: Record<string, a
 
 export async function listDesktopRemoteAccountDesktops(): Promise<DesktopRemoteAccountDesktop[]> {
   return [];
+}
+
+export async function loadDesktopFleetYggdrasilStatus(): Promise<DesktopFleetYggdrasilStatus | null> {
+  const bridge = getDesktopBridge();
+  if (!bridge?.fleet?.yggdrasilStatus) return null;
+  return bridge.fleet.yggdrasilStatus();
+}
+
+export async function bootstrapDesktopFleetYggdrasil(): Promise<Record<string, unknown> | null> {
+  const bridge = getDesktopBridge();
+  if (!bridge?.fleet?.yggdrasilBootstrap) return null;
+  return bridge.fleet.yggdrasilBootstrap();
+}
+
+export async function createDesktopFleetYggdrasilPairing(
+  displayName?: string | null,
+  expiresInSeconds = 30 * 60,
+): Promise<DesktopFleetYggdrasilPairing | null> {
+  const bridge = getDesktopBridge();
+  if (!bridge?.fleet?.yggdrasilCreatePairing) return null;
+  return bridge.fleet.yggdrasilCreatePairing({ displayName: displayName || null, expiresInSeconds });
+}
+
+export async function joinDesktopFleetYggdrasil(
+  pairingToken: string,
+  deviceName?: string | null,
+): Promise<DesktopFleetYggdrasilJoinResult | null> {
+  const bridge = getDesktopBridge();
+  if (!bridge?.fleet?.yggdrasilJoin) return null;
+  return bridge.fleet.yggdrasilJoin({ pairingToken, deviceName: deviceName || null });
 }
 
 export async function createDesktopShortcut() {

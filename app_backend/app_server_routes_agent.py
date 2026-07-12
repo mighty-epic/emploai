@@ -4,6 +4,40 @@ from __future__ import annotations
 
 def register_agent_routes(app):
 
+    @app.get("/api/app/provider-availability")
+
+    async def provider_availability(authorization: Optional[str] = Header(default=None)) -> dict[str, Any]:
+
+        _resolve_token(authorization)
+
+        from shared.provider_availability import provider_availability_snapshot
+
+        return {"records": provider_availability_snapshot(public_only=True)}
+
+    @app.post("/api/app/provider-availability/sync")
+
+    async def sync_provider_availability(
+
+        request: ProviderAvailabilitySyncRequest,
+
+        authorization: Optional[str] = Header(default=None),
+
+    ) -> dict[str, Any]:
+
+        _resolve_token(authorization)
+
+        from shared.provider_availability import merge_provider_availability, provider_availability_snapshot
+
+        changed = merge_provider_availability(
+
+            request.records,
+
+            source=str(request.source or "yggdrasil"),
+
+        )
+
+        return {"ok": True, "changed": changed, "records": provider_availability_snapshot(public_only=True)}
+
     @app.get("/api/app/me", response_model=AppUserProfile)
 
     async def me(authorization: Optional[str] = Header(default=None)) -> AppUserProfile:
@@ -481,6 +515,32 @@ def register_agent_routes(app):
         if not changed_provider_keys:
 
             return AgentActionResponse(action="provider_keys_reload", message="No provider keys were changed.")
+
+        provider_by_key = {
+
+            "OPENAI_API_KEY": "openai",
+
+            "ANTHROPIC_API_KEY": "anthropic",
+
+            "GOOGLE_API_KEY": "google",
+
+            "GEMINI_API_KEY": "google",
+
+            "XAI_API_KEY": "xai",
+
+            "DEEPSEEK_API_KEY": "deepseek",
+
+            "NVIDIA_API_KEY": "nvidia",
+
+            "OPENROUTER_API_KEY": "openrouter",
+
+        }
+
+        from shared.provider_availability import clear_provider_availability
+
+        for provider in {provider_by_key[key] for key in changed_provider_keys if key in provider_by_key}:
+
+            clear_provider_availability(provider)
 
         if changed_provider_keys & {"OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"}:
 

@@ -1688,6 +1688,22 @@ export async function controlAgentRun(
   });
 }
 
+export async function updateJob(apiBaseUrl: string, token: string, jobId: string, payload: JobCreatePayload) {
+  return requestJson<ScheduledJob>({
+    scope: 'automations.update',
+    url: `${apiBaseUrl}/api/app/automations/${encodeURIComponent(jobId)}`,
+    init: {
+      method: 'PUT',
+      headers: {
+        ...authHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    },
+    timeoutMs: 30000,
+  });
+}
+
 export async function stopIdentityTree(
   apiBaseUrl: string,
   token: string,

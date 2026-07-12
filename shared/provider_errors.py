@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, Optional
 
 from shared.security_policy import redact_text
@@ -33,6 +36,8 @@ class ProviderErrorInfo:
     retryable: bool = False
     safe_alternate_allowed: bool = False
     code: str = PROVIDER_FAILURE_UNKNOWN
+    reset_at: Optional[str] = None
+    retry_after_seconds: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -42,7 +47,67 @@ class ProviderErrorInfo:
             "retryable": self.retryable,
             "safe_alternate_allowed": self.safe_alternate_allowed,
             "code": self.code,
+            "reset_at": self.reset_at,
+            "retry_after_seconds": self.retry_after_seconds,
         }
+
+
+def _duration_seconds(value: Any) -> Optional[int]:
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    try:
+        return max(0, int(float(text)))
+    except ValueError:
+        pass
+    match = re.fullmatch(r"([0-9.]+)\s*(ms|s|m|h)", text)
+    if match:
+        multiplier = {"ms": 0.001, "s": 1.0, "m": 60.0, "h": 3600.0}[match.group(2)]
+        return max(0, int(float(match.group(1)) * multiplier))
+    try:
+        return max(0, int(parsedate_to_datetime(text).timestamp() - time.time()))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _provider_reset_metadata(exc: BaseException) -> tuple[Optional[str], Optional[int]]:
+    text = str(exc or "")
+    headers: Dict[str, Any] = {}
+    for source in (getattr(exc, "headers", None), getattr(getattr(exc, "response", None), "headers", None)):
+        try:
+            headers.update({str(key).lower(): value for key, value in dict(source or {}).items()})
+        except Exception:
+            continue
+
+    retry_after: Optional[int] = None
+    for key in ("retry-after", "x-ratelimit-reset-seconds", "x-ratelimit-reset-requests"):
+        value = headers.get(key)
+        retry_after = _duration_seconds(value)
+        if retry_after is not None:
+            break
+    if retry_after is None:
+        match = re.search(r'["\'](?:resets_in_seconds|reset_in_seconds|retry_after_seconds)["\']\s*:\s*([0-9.]+)', text, re.I)
+        if match:
+            try:
+                retry_after = max(0, int(float(match.group(1))))
+            except (TypeError, ValueError):
+                retry_after = None
+
+    reset_timestamp: Optional[float] = None
+    match = re.search(r'["\'](?:resets_at|reset_at)["\']\s*:\s*["\']?([0-9.]+)', text, re.I)
+    if match:
+        try:
+            reset_timestamp = float(match.group(1))
+        except (TypeError, ValueError):
+            reset_timestamp = None
+    if reset_timestamp is None and retry_after is not None:
+        reset_timestamp = time.time() + retry_after
+    reset_at = (
+        datetime.fromtimestamp(reset_timestamp, timezone.utc).isoformat().replace("+00:00", "Z")
+        if reset_timestamp and reset_timestamp > 0
+        else None
+    )
+    return reset_at, retry_after
 
 
 def _status_code(exc: BaseException) -> Optional[int]:
@@ -75,6 +140,7 @@ def _error_code_text(exc: BaseException) -> str:
 def normalize_provider_error(exc: BaseException, *, payload_kind: str = "text") -> ProviderErrorInfo:
     status = _status_code(exc)
     text = _error_code_text(exc)
+    reset_at, retry_after_seconds = _provider_reset_metadata(exc)
     clean_message = redact_text(str(exc))
     if len(clean_message) > 600:
         clean_message = clean_message[:597] + "..."
@@ -145,6 +211,8 @@ def normalize_provider_error(exc: BaseException, *, payload_kind: str = "text") 
             retryable=False,
             safe_alternate_allowed=False,
             code=PROVIDER_FAILURE_USAGE_LIMIT,
+            reset_at=reset_at,
+            retry_after_seconds=retry_after_seconds,
         )
 
     billing_markers = (
@@ -161,6 +229,8 @@ def normalize_provider_error(exc: BaseException, *, payload_kind: str = "text") 
             retryable=False,
             safe_alternate_allowed=False,
             code=PROVIDER_FAILURE_BILLING,
+            reset_at=reset_at,
+            retry_after_seconds=retry_after_seconds,
         )
 
     quota_markers = (
@@ -176,6 +246,8 @@ def normalize_provider_error(exc: BaseException, *, payload_kind: str = "text") 
             retryable=False,
             safe_alternate_allowed=False,
             code=PROVIDER_FAILURE_QUOTA,
+            reset_at=reset_at,
+            retry_after_seconds=retry_after_seconds,
         )
 
     rate_limit_markers = (
@@ -191,6 +263,8 @@ def normalize_provider_error(exc: BaseException, *, payload_kind: str = "text") 
             retryable=True,
             safe_alternate_allowed=False,
             code=PROVIDER_FAILURE_RATE_LIMIT,
+            reset_at=reset_at,
+            retry_after_seconds=retry_after_seconds,
         )
 
     auth_markers = (
@@ -208,6 +282,8 @@ def normalize_provider_error(exc: BaseException, *, payload_kind: str = "text") 
             retryable=status == 429,
             safe_alternate_allowed=False,
             code=PROVIDER_FAILURE_AUTHENTICATION,
+            reset_at=reset_at,
+            retry_after_seconds=retry_after_seconds,
         )
 
     connectivity_markers = (
@@ -226,6 +302,8 @@ def normalize_provider_error(exc: BaseException, *, payload_kind: str = "text") 
             retryable=True,
             safe_alternate_allowed=False,
             code=PROVIDER_FAILURE_CONNECTIVITY,
+            reset_at=reset_at,
+            retry_after_seconds=retry_after_seconds,
         )
 
     transient_markers = (
@@ -244,6 +322,8 @@ def normalize_provider_error(exc: BaseException, *, payload_kind: str = "text") 
             retryable=True,
             safe_alternate_allowed=False,
             code=PROVIDER_FAILURE_TRANSIENT,
+            reset_at=reset_at,
+            retry_after_seconds=retry_after_seconds,
         )
 
     return ProviderErrorInfo(

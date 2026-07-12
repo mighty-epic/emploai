@@ -15,11 +15,22 @@ body,
   background: #07111f;
 }
 
-textarea:focus,
-input:focus,
-button:focus {
-  outline: none !important;
-  box-shadow: none !important;
+textarea:focus:not(:focus-visible),
+input:focus:not(:focus-visible),
+button:focus:not(:focus-visible),
+[role="button"]:focus:not(:focus-visible) {
+  outline: none;
+}
+
+textarea:focus-visible,
+input:focus-visible,
+button:focus-visible,
+[role="button"]:focus-visible,
+[role="tab"]:focus-visible,
+[role="radio"]:focus-visible {
+  outline: 2px solid #78d8e4 !important;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px rgba(92, 200, 215, 0.14) !important;
 }
 
 #desktop-composer-input,

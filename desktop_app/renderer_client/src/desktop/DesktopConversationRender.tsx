@@ -13,6 +13,7 @@ import { DesktopConversationOverlays } from './DesktopConversationOverlays';
 import { DesktopConversationSidebarDock } from './DesktopConversationSidebarDock';
 import { DesktopLiveCommandCard } from './DesktopLiveCommandCard';
 import { DesktopProviderFailureCard } from './DesktopProviderFailureCard';
+import { DesktopProviderAvailabilityBanner } from './DesktopProviderAvailabilityBanner';
 import { DesktopArchiveUndoToast } from './DesktopArchiveUndoToast';
 import type { DesktopConversationScope } from './DesktopConversationScope';
 import { extractProposedPlan, planQuestionFromMessage, visiblePlanText, modeStatusLabel } from './desktopChatModes';
@@ -616,6 +617,13 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
               failure={scope.providerFailure}
               modelGroups={Array.isArray(scope.draftModelGroups) ? scope.draftModelGroups : []}
               onRetry={(providerId, modelId) => scope.retryFailedTurn?.(scope.providerFailure, providerId, modelId)}
+              onOpenSettings={() => scope.onOpenSetup?.()}
+            />
+          ) : null}
+
+          {!scope.providerFailure && Array.isArray(overview?.provider_availability) ? (
+            <DesktopProviderAvailabilityBanner
+              records={overview.provider_availability}
               onOpenSettings={() => scope.onOpenSetup?.()}
             />
           ) : null}

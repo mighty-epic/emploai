@@ -6,6 +6,7 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const { mergeBootstrapCache } = require('./bootstrap_cache');
 const { createRemoteControlServices } = require('./remote_control_services');
+const { createFleetYggdrasilServices } = require('./fleet_yggdrasil_services');
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -91,6 +92,7 @@ function tokenHashPrefix(token) {
 }
 
 let remoteControlService = null;
+let fleetYggdrasilService = null;
 
 function remoteControlServices() {
   if (!remoteControlService) {
@@ -104,6 +106,13 @@ function remoteControlServices() {
     });
   }
   return remoteControlService;
+}
+
+function fleetYggdrasilServices() {
+  if (!fleetYggdrasilService) {
+    fleetYggdrasilService = createFleetYggdrasilServices({ runBackendJson });
+  }
+  return fleetYggdrasilService;
 }
 
 
@@ -2145,6 +2154,10 @@ app.whenReady().then(async () => {
   ipcMain.handle('emploai:fleet:set-identity-active-chat', async (_event, payload) => remoteControlServices().fleetSetIdentityActiveChat(payload || {}));
   ipcMain.handle('emploai:fleet:create-local-worker', async (_event, payload) => remoteControlServices().fleetCreateLocalWorker(payload || {}));
   ipcMain.handle('emploai:fleet:create-enrollment', async (_event, payload) => remoteControlServices().fleetCreateEnrollment(payload || {}));
+  ipcMain.handle('emploai:fleet:yggdrasil-status', async () => fleetYggdrasilServices().status());
+  ipcMain.handle('emploai:fleet:yggdrasil-bootstrap', async () => fleetYggdrasilServices().bootstrap());
+  ipcMain.handle('emploai:fleet:yggdrasil-create-pairing', async (_event, payload) => fleetYggdrasilServices().createPairing(payload || {}));
+  ipcMain.handle('emploai:fleet:yggdrasil-join', async (_event, payload) => fleetYggdrasilServices().join(payload || {}));
   ipcMain.handle('emploai:fleet:rename-worker', async (_event, payload) => remoteControlServices().fleetRenameWorker(payload || {}));
   ipcMain.handle('emploai:fleet:reset-worker', async (_event, payload) => remoteControlServices().fleetResetWorker(payload || {}));
   ipcMain.handle('emploai:fleet:delete-worker', async (_event, payload) => remoteControlServices().fleetDeleteWorker(payload || {}));

@@ -2,6 +2,12 @@ from __future__ import annotations
 
 # Split from app_server.py; dependencies are injected by the app_server facade.
 
+from shared.provider_availability import (
+    merge_provider_availability,
+    provider_availability_snapshot,
+    provider_availability_sync_targets,
+)
+
 async def _handle_remote_desktop_ws(websocket: WebSocket, auth: Dict[str, Any]) -> None:
 
     if not _is_remote_session_auth(auth) or str(auth.get("actor_kind") or "") != "desktop":
@@ -134,6 +140,24 @@ async def _handle_remote_desktop_ws(websocket: WebSocket, auth: Dict[str, Any]) 
 
                 snapshot = RemoteDesktopSyncEnvelope.model_validate(message.payload or {})
 
+                incoming_provider_availability = snapshot.provider_availability
+
+                provider_availability_changed = False
+
+                aggregate_provider_availability = provider_availability_snapshot(public_only=True)
+
+                if incoming_provider_availability is not None:
+
+                    provider_availability_changed = merge_provider_availability(
+
+                        incoming_provider_availability,
+
+                        source=f"paired_yggdrasil_worker:{desktop_id}",
+
+                    )
+
+                    aggregate_provider_availability = provider_availability_snapshot(public_only=True)
+
                 before_state = store.get_shared_state(user_id=user_id)
 
                 store.update_shared_snapshot(
@@ -145,6 +169,42 @@ async def _handle_remote_desktop_ws(websocket: WebSocket, auth: Dict[str, Any]) 
                     snapshot=snapshot.model_dump(),
 
                 )
+
+                if incoming_provider_availability is not None:
+
+                    sync_targets = provider_availability_sync_targets(
+
+                        origin_desktop_id=desktop_id,
+
+                        connected_desktop_ids=manager.connected_desktop_ids_for_user(user_id),
+
+                        incoming_records=incoming_provider_availability,
+
+                        aggregate_records=aggregate_provider_availability,
+
+                        aggregate_changed=provider_availability_changed,
+
+                    )
+
+                    for target_desktop_id in sync_targets:
+
+                        try:
+
+                            await manager.send_command(
+
+                                desktop_id=target_desktop_id,
+
+                                user_id=user_id,
+
+                                command_type="provider_availability_sync",
+
+                                payload={"records": aggregate_provider_availability},
+
+                            )
+
+                        except Exception:
+
+                            logger.exception("[fleet] failed syncing provider availability to %s", target_desktop_id)
 
                 previous_session_id = str(before_state.get("current_session_id") or "").strip() or None
 

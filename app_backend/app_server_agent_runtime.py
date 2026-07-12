@@ -2,6 +2,8 @@ from __future__ import annotations
 
 # Split from app_server.py; dependencies are injected by the app_server facade.
 
+from shared.provider_availability import applicable_provider_availability_snapshot
+
 def _workspace_root() -> Path:
 
     runtime_home = os.getenv("EMPLOAI_HOME", "").strip()
@@ -1095,6 +1097,8 @@ def _agent_overview(runtime, bridge: "AppSessionBridge", *, history_count: int =
         "task_board": task_board_view(get_display_task_board(runtime)),
 
         "completed_task_boards": completed_task_board_views(runtime),
+
+        "provider_availability": applicable_provider_availability_snapshot(),
 
         "task_board_armed_next_turn": get_task_board_armed_next_turn(runtime),
 

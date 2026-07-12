@@ -872,22 +872,30 @@ class TelegramSession:
         provider = config.get("provider", "anthropic")
 
         if provider == "openai":
-            return self.openai_client, provider
-        if provider == "openai-codex":
-            return self.openai_codex_client, provider
-        if provider == "anthropic":
-            return self.anthropic_client, provider
-        if provider == "xai":
-            return self.xai_client, provider
-        if provider == "deepseek":
-            return self.deepseek_client, provider
-        if provider == "openrouter":
-            return self.openrouter_client, provider
-        if provider == "nvidia":
-            return self.nvidia_client, provider
-        if provider == "google":
-            return self.gemini_openai_client or self.google_client, provider
-        return None, provider
+            client = self.openai_client
+        elif provider == "openai-codex":
+            client = self.openai_codex_client
+        elif provider == "anthropic":
+            client = self.anthropic_client
+        elif provider == "xai":
+            client = self.xai_client
+        elif provider == "deepseek":
+            client = self.deepseek_client
+        elif provider == "openrouter":
+            client = self.openrouter_client
+        elif provider == "nvidia":
+            client = self.nvidia_client
+        elif provider == "google":
+            client = self.gemini_openai_client or self.google_client
+        else:
+            client = None
+        if client is not None:
+            from shared.provider_availability import active_provider_block
+
+            model_id = str(config.get("id") or model_name)
+            if active_provider_block(provider, model_id):
+                return None, provider
+        return client, provider
 
     def get_client_for_model(self):
         """Get the appropriate LLM client for the current model."""

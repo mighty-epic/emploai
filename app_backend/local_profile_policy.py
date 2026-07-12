@@ -8,6 +8,9 @@ from typing import Any, Dict, List, Optional
 MAX_DISPLAY_NAME_CHARS = 160
 MAX_DEVICE_PLATFORM_CHARS = 80
 MAX_DEVICE_KEY_CHARS = 256
+MAX_PROFILE_DICT_KEYS = 100
+
+
 def default_user_profile() -> Dict[str, Any]:
     return {
         "schema_version": 1,

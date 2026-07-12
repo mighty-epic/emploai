@@ -87,7 +87,7 @@ def create_fleet_enrollment_router(deps: FleetEnrollmentRouterDeps) -> APIRouter
             raise HTTPException(status_code=404, detail="Unknown worker enrollment") from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        expires_at = float(result.get("expires_at") or time.time())
+        expires_at = float(result.get("expires_at") or 0)
         try:
             deps.publish_fleet_delta(
                 user_id=int(result["user"]["user_id"]),
@@ -99,7 +99,7 @@ def create_fleet_enrollment_router(deps: FleetEnrollmentRouterDeps) -> APIRouter
             logger.exception("[fleet] failed publishing worker enrollment delta")
         return FleetCompleteEnrollmentResponse(
             session_token=str(result["session_token"]),
-            expires_in_seconds=max(0, int(expires_at - time.time())),
+            expires_in_seconds=max(0, int(expires_at - time.time())) if expires_at > 0 else 0,
             user_id=int(result["user"]["user_id"]),
             desktop=RemoteDesktopView.model_validate(result["desktop"]),
             worker=FleetWorkerView.model_validate(result["worker"]),

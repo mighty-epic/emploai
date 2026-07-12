@@ -13,6 +13,8 @@ import { isFleetWorkerAvailable } from './desktopFleetWorkerState';
 import { DesktopJarvisWakeEnrollmentPanel } from './DesktopJarvisWakeEnrollmentPanel';
 import { desktopConversationJarvisVisualStyles } from './DesktopConversationJarvisStage.visualStyles';
 import { MonoIcon } from './DesktopConversationView.components';
+import { DesktopProviderAvailabilityBanner } from './DesktopProviderAvailabilityBanner';
+import { DesktopProviderFailureCard } from './DesktopProviderFailureCard';
 import { mergeDesktopVisualStyles } from './mergeDesktopVisualStyles';
 
 type JarvisStageProps = {
@@ -56,6 +58,9 @@ function firstFiniteNumber(...values: unknown[]) {
 }
 
 function statusWord(scope: DesktopConversationScope) {
+  if (scope.providerFailure) {
+    return 'ERROR';
+  }
   if (
     scope.voiceError
     || scope.liveVoiceStatus?.input_ok === false
@@ -485,6 +490,24 @@ export function DesktopConversationJarvisStage({ scope }: JarvisStageProps) {
         </View>
       </View>
 
+      {scope.providerFailure ? (
+        <View style={hudStyles.providerAlert}>
+          <DesktopProviderFailureCard
+            failure={scope.providerFailure}
+            modelGroups={Array.isArray(scope.draftModelGroups) ? scope.draftModelGroups : []}
+            onRetry={(providerId, modelId) => scope.retryFailedTurn?.(scope.providerFailure, providerId, modelId)}
+            onOpenSettings={() => scope.onOpenSetup?.()}
+          />
+        </View>
+      ) : Array.isArray(scope.overview?.provider_availability) ? (
+        <View style={hudStyles.providerAlert}>
+          <DesktopProviderAvailabilityBanner
+            records={scope.overview.provider_availability}
+            onOpenSettings={() => scope.onOpenSetup?.()}
+          />
+        </View>
+      ) : null}
+
       <View style={hudStyles.console}>
         <View style={hudStyles.telemetry}>
           <TelemetryItem label="WORKERS ONLINE" value={`${onlineWorkers} / ${totalWorkers || 0}`} accent />
@@ -735,6 +758,13 @@ const hudBaseStyles = StyleSheet.create({
           backgroundSize: '100% 100%, 34px 34px, 34px 34px',
         } as any)
       : null),
+  },
+  providerAlert: {
+    position: 'absolute',
+    top: 58,
+    left: 18,
+    right: 18,
+    zIndex: 10,
   },
   hudCorner: {
     position: 'absolute',

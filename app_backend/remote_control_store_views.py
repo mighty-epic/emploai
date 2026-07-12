@@ -667,6 +667,7 @@ class RemoteControlStoreViewMixin:
             raise ValueError("Fleet sessions are desktop-only")
 
         now = time.time()
+        expires_at = now + token_ttl_seconds if int(token_ttl_seconds or 0) > 0 else 0.0
         session_token = secrets.token_urlsafe(48)
         token_hash = _hash_token(session_token)
         normalized_key = (device_key or "").strip()[:MAX_DEVICE_KEY_CHARS] or None
@@ -689,14 +690,14 @@ class RemoteControlStoreViewMixin:
                 token_hash, user_id, actor_kind, desktop_id, mobile_id, created_at, last_used_at, expires_at, revoked_at
             ) VALUES(?, ?, 'desktop', ?, NULL, ?, ?, ?, NULL)
             """,
-            (token_hash, user_id, desktop_id, now, now, now + token_ttl_seconds),
+            (token_hash, user_id, desktop_id, now, now, expires_at),
         )
         self._ensure_shared_state_locked(user_id)
         refreshed_user = self._conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
         desktop = self._conn.execute("SELECT * FROM desktops WHERE desktop_id = ?", (desktop_id,)).fetchone()
         return {
             "session_token": session_token,
-            "expires_at": now + token_ttl_seconds,
+            "expires_at": expires_at,
             "user": self._user_view(refreshed_user),
             "actor_kind": "desktop",
             "desktop": self._desktop_view(desktop),

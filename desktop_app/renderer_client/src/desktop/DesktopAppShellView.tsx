@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Image, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Platform, Pressable, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { InfoHint } from '@/components/InfoHint';
@@ -7,7 +7,6 @@ import {
   copyDesktopText,
   openDesktopChromeExtensions,
   openDesktopPath,
-  requestDesktopFleetWorkerPreview,
   loadDesktopDiagnostics,
   requestDesktopExit,
   runDesktopEditCommand,
@@ -45,7 +44,6 @@ const CONVERSATION_HEADER_TABS = [
   { tab: 'chat', mode: 'chat', label: 'Chat' },
   { tab: 'jarvis', mode: 'jarvis', label: 'Jarvis' },
   { tab: 'fleet', mode: 'fleet', label: 'Fleet' },
-  { tab: 'remote', mode: null, label: 'Remote' },
 ] as const;
 
 export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
@@ -194,7 +192,6 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
     wakeDesktopFromSleepMode,
     reconnectDesktopAfterWindowReopen,
     recoverReadyRuntimeFromStatus,
-    remoteRuntimes,
     effectiveRuntimeStatus,
     localRuntimeReady,
     runtimeProcessDetected,
@@ -252,22 +249,25 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
   const [remoteAuthResendCooldownSeconds, setRemoteAuthResendCooldownSeconds] = useState(0);
   const [conversationHeaderControls, setConversationHeaderControls] = useState<DesktopConversationHeaderControls | null>(null);
   const [pendingSurfaceMode, setPendingSurfaceMode] = useState(requestedSurfaceMode);
-  const [remoteEnrollment, setRemoteEnrollment] = useState<Record<string, any> | null>(null);
-  const [remotePreviewByWorker, setRemotePreviewByWorker] = useState<Record<string, Record<string, any>>>({});
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
   const [exitBusy, setExitBusy] = useState(false);
   const [exitError, setExitError] = useState<string | null>(null);
   const [startupSkeletonExpired, setStartupSkeletonExpired] = useState(false);
   const remoteAuthPasswordRequirements = passwordRequirementStatus(String(remoteAuthPassword || ''));
 
-  const activateDesktopSurface = (tab: 'chat' | 'jarvis' | 'fleet' | 'remote', pushHistory = true) => {
-    if (tab === 'remote') {
-      setActiveTab('remote');
-    } else {
-      setActiveTab('local');
-      setPendingSurfaceMode(tab);
-      conversationHeaderControls?.setMode(tab);
-    }
+  useEffect(() => {
+    if (String(requestedTab || '').trim().toLowerCase() !== 'remote') return;
+    setPendingSurfaceMode('fleet');
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.set('tab', 'fleet');
+    window.history.replaceState({ ...window.history.state, desktopTab: 'fleet' }, '', nextUrl.toString());
+  }, [requestedTab]);
+
+  const activateDesktopSurface = (tab: 'chat' | 'jarvis' | 'fleet', pushHistory = true) => {
+    setActiveTab('local');
+    setPendingSurfaceMode(tab);
+    conversationHeaderControls?.setMode(tab);
     if (pushHistory && Platform.OS === 'web' && typeof window !== 'undefined') {
       const nextUrl = new URL(window.location.href);
       nextUrl.searchParams.set('tab', tab);
@@ -280,17 +280,13 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
     const restoreSurfaceFromHistory = () => {
       const tab = String(new URL(window.location.href).searchParams.get('tab') || 'chat').toLowerCase();
       activateDesktopSurface(
-        tab === 'remote' || tab === 'fleet' || tab === 'jarvis' ? tab : 'chat',
+        tab === 'remote' || tab === 'fleet' ? 'fleet' : tab === 'jarvis' ? 'jarvis' : 'chat',
         false,
       );
     };
     window.addEventListener('popstate', restoreSurfaceFromHistory);
     return () => window.removeEventListener('popstate', restoreSurfaceFromHistory);
   }, [conversationHeaderControls]);
-
-  useEffect(() => {
-    if (activeTab !== 'remote') setRemotePreviewByWorker({});
-  }, [activeTab]);
 
   useEffect(() => subscribeDesktopExitRequest(() => {
     setExitError(null);
@@ -382,39 +378,6 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
       { id: 'help-updates', label: 'Check for Updates', action: () => void refreshUpdateStatus(true) },
       { id: 'help-about', label: 'About', action: () => setNotice(`EmploAI Desktop · ${accountEmail}`) },
     ],
-  };
-
-  const requestRemotePreview = async (workerId: string) => {
-    setRemotePreviewByWorker((current) => ({
-      ...current,
-      [workerId]: { state: 'loading', detail: 'Requesting one view-only capture…' },
-    }));
-    try {
-      const result = await requestDesktopFleetWorkerPreview(workerId);
-      const capture = result?.capture;
-      if (!result?.ok || !capture?.image_base64) {
-        throw new Error(result?.detail || 'The paired desktop did not return a preview.');
-      }
-      const capturedAtValue = Number(capture.captured_at || Date.now());
-      const capturedAt = new Date(capturedAtValue > 1_000_000_000_000 ? capturedAtValue : capturedAtValue * 1000);
-      setRemotePreviewByWorker((current) => ({
-        ...current,
-        [workerId]: {
-          state: 'ready',
-          imageUri: `data:${capture.mime_type || 'image/jpeg'};base64,${capture.image_base64}`,
-          capturedAt: capturedAt.toLocaleString(),
-          detail: `${capture.width} × ${capture.height} · manual capture`,
-        },
-      }));
-    } catch (previewError) {
-      setRemotePreviewByWorker((current) => ({
-        ...current,
-        [workerId]: {
-          state: 'error',
-          detail: userFacingError(previewError, 'The paired desktop preview is unavailable.'),
-        },
-      }));
-    }
   };
 
   useEffect(() => {
@@ -960,9 +923,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
         <View style={[styles.windowChromeRight, webWindowNoDragStyle]}>
           <View accessibilityRole="tablist" style={styles.headerSurfaceTabs}>
               {CONVERSATION_HEADER_TABS.map((item) => {
-                const selected = item.tab === 'remote'
-                  ? activeTab === 'remote'
-                  : activeTab === 'local' && (conversationHeaderControls?.mode || pendingSurfaceMode) === item.mode;
+                const selected = activeTab === 'local' && (conversationHeaderControls?.mode || pendingSurfaceMode) === item.mode;
                 return (
                   <Pressable
                     key={`header-surface-${item.tab}`}
@@ -1070,7 +1031,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
             </Pressable>
           </View>
         </View>
-      ) : activeTab === 'local' ? (
+      ) : (
         <View style={styles.tabBody}>
           {bootstrap && localRuntimeReady && startupPhase === 'ready' ? (
             <View style={styles.conversationBootShell}>
@@ -1143,107 +1104,6 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
             </View>
           )}
         </View>
-      ) : (
-        <ScrollView style={styles.tabBody} contentContainerStyle={styles.remoteBody}>
-          <View style={styles.remoteIntro}>
-            <Text style={styles.remoteIntroTitle}>Your paired desktops</Text>
-            <Text style={styles.remoteIntroText}>
-              Assign and review Fleet work on machines owned by this account. Remote previews are manual, view-only snapshots—there is no screen streaming or remote input.
-            </Text>
-            <View style={styles.remoteActionRow}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Enroll a paired desktop"
-                style={styles.remotePrimaryButton}
-                onPress={() => void createRemotePairingTokenFromAccount()
-                  .then((pairing: Record<string, any>) => setRemoteEnrollment(pairing))
-                  .catch((enrollError: unknown) => setNotice(userFacingError(enrollError, 'A pairing code could not be created.')))}
-              >
-                <Text style={styles.remotePrimaryButtonText}>Enroll Machine</Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Open Fleet to create workers and assign tasks"
-                style={styles.remoteSecondaryButton}
-                onPress={() => activateDesktopSurface('fleet')}
-              >
-                <Text style={styles.remoteSecondaryButtonText}>Open Fleet</Text>
-              </Pressable>
-            </View>
-            {remoteEnrollment?.pairing_token ? (
-              <View accessibilityLiveRegion="polite" style={styles.remoteEnrollment}>
-                <Text style={styles.remoteEnrollmentLabel}>PAIRING CODE · EXPIRES IN {Number(remoteEnrollment.expires_in_seconds || 0)} SECONDS</Text>
-                <Text selectable style={styles.remoteEnrollmentCode}>{String(remoteEnrollment.pairing_token)}</Text>
-              </View>
-            ) : null}
-          </View>
-          {!remoteRuntimes.length ? (
-            <View style={styles.remoteEmpty} accessibilityLiveRegion="polite">
-              <Text style={styles.remoteTitle}>No paired desktops yet</Text>
-              <Text style={styles.remoteDetail}>Enroll a machine above. It will appear here after it signs in and sends its first heartbeat.</Text>
-            </View>
-          ) : null}
-          {remoteRuntimes.map((runtime: any) => (
-            <View key={runtime.id} style={styles.remoteCard}>
-              <View style={styles.remoteHeader}>
-                <View>
-                  <Text style={styles.remoteTitle}>{runtime.name}</Text>
-                  <Text style={styles.remoteMeta}>{runtime.hostLabel}</Text>
-                </View>
-                <View style={styles.remoteStatusBadge}>
-                  <Text style={styles.remoteStatusText}>{runtime.status}</Text>
-                </View>
-              </View>
-              <View style={styles.remoteDetailRow}>
-                <Text style={styles.remoteDetail}>
-                  {`${Number(runtime.workerCount || 0)} workers · ${Number(runtime.activeCount || 0)} active · ${Number(runtime.queuedCount || 0)} queued`}
-                </Text>
-                <InfoHint text={runtime.detail} />
-              </View>
-              {runtime.latestReport ? (
-                <View style={styles.remoteReport}>
-                  <Text style={styles.remoteSectionLabel}>LATEST REPORT</Text>
-                  <Text numberOfLines={3} style={styles.remoteDetail}>{runtime.latestReport}</Text>
-                </View>
-              ) : null}
-              {(runtime.workers || []).map((worker: any) => {
-                const preview = remotePreviewByWorker[worker.id];
-                const offline = runtime.status !== 'connected';
-                return (
-                  <View key={worker.id} style={styles.remoteWorker}>
-                    <View style={styles.remoteWorkerHeader}>
-                      <View style={styles.remoteWorkerIdentity}>
-                        <Text style={styles.remoteWorkerName}>{worker.name}</Text>
-                        <Text style={styles.remoteMeta}>{worker.activeTaskId ? 'Task active' : worker.status}</Text>
-                      </View>
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel={`Request a view-only preview from ${worker.name}`}
-                        accessibilityHint="Captures one bounded screenshot. It does not enable remote input."
-                        accessibilityState={{ disabled: offline || preview?.state === 'loading' }}
-                        disabled={offline || preview?.state === 'loading'}
-                        onPress={() => void requestRemotePreview(worker.id)}
-                        style={[styles.remotePreviewButton, offline ? styles.remoteButtonDisabled : null]}
-                      >
-                        <Text style={styles.remoteSecondaryButtonText}>
-                          {preview?.state === 'loading' ? 'Requesting…' : 'Request Preview'}
-                        </Text>
-                      </Pressable>
-                    </View>
-                    {preview ? (
-                      <View accessibilityLiveRegion="polite" style={styles.remotePreviewPanel}>
-                        {preview.imageUri ? <Image accessibilityLabel={`View-only preview from ${worker.name}`} source={{ uri: preview.imageUri }} resizeMode="contain" style={styles.remotePreviewImage} /> : null}
-                        <Text style={preview.state === 'error' ? styles.remoteErrorText : styles.remoteMeta}>
-                          {[preview.detail, preview.capturedAt ? `Captured ${preview.capturedAt}` : ''].filter(Boolean).join(' · ')}
-                        </Text>
-                      </View>
-                    ) : null}
-                  </View>
-                );
-              })}
-            </View>
-          ))}
-        </ScrollView>
       )}
       {showSetup && bootstrap?.setupState ? (
         <View style={styles.setupOverlay} pointerEvents="box-none">

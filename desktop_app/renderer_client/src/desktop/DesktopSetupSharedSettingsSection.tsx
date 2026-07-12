@@ -20,17 +20,27 @@ type Props = {
 
 function ToggleRow({
   title,
+  description,
   value,
   onPress,
 }: {
   title: string;
+  description?: string;
   value: boolean;
   onPress: () => void;
 }) {
   return (
-    <Pressable style={styles.settingRow} onPress={onPress}>
+    <Pressable
+      accessibilityRole="switch"
+      accessibilityLabel={title}
+      accessibilityHint={description}
+      accessibilityState={{ checked: value }}
+      style={styles.settingRow}
+      onPress={onPress}
+    >
       <View style={styles.settingRowCopy}>
         <Text style={styles.settingRowTitle}>{title}</Text>
+        {description ? <Text style={styles.settingRowDescription}>{description}</Text> : null}
       </View>
       <View style={[styles.toggleSwitch, value ? styles.toggleSwitchActive : null]}>
         <View style={[styles.toggleSwitchKnob, value ? styles.toggleSwitchKnobActive : null]} />
@@ -80,8 +90,8 @@ export function DesktopSetupSharedSettingsSection({ draft, saving = false, statu
               autoCorrect={false}
             />
           </View>
-          <ToggleRow title="Sleep mode" value={draft.sleepModeEnabled} onPress={() => update({ sleepModeEnabled: !draft.sleepModeEnabled })} />
-          <ToggleRow title="Verbose feed" value={draft.verboseMode} onPress={() => update({ verboseMode: !draft.verboseMode })} />
+          <ToggleRow title="Sleep mode" description="Allow the local runtime to continue approved background work while the app is not active." value={draft.sleepModeEnabled} onPress={() => update({ sleepModeEnabled: !draft.sleepModeEnabled })} />
+          <ToggleRow title="Verbose feed" description="Show detailed tool and runtime activity in chat." value={draft.verboseMode} onPress={() => update({ verboseMode: !draft.verboseMode })} />
           {!standaloneMode ? (
             <ToggleRow
               title="Cloud chat backup"
@@ -149,7 +159,7 @@ export function DesktopSetupSharedSettingsSection({ draft, saving = false, statu
           <Pressable style={[styles.primaryButton, saving ? styles.primaryButtonDisabled : null]} onPress={onSave} disabled={saving}>
             <Text style={styles.primaryButtonText}>{saving ? 'Saving...' : standaloneMode ? 'Save Local Settings' : 'Save Shared Settings'}</Text>
           </Pressable>
-          {status ? <Text style={styles.helperText}>{status}</Text> : null}
+          {status ? <Text accessibilityLiveRegion="polite" style={styles.helperText}>{status}</Text> : null}
         </View>
       </View>
     </View>

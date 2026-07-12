@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # Split from app_server.py; dependencies are injected by the app_server facade.
 from shared.provider_failures import get_failed_turn
+from shared.provider_availability import active_provider_block, provider_failure_from_block
 
 def register_screen_ws_routes(app):
 
@@ -1000,6 +1001,17 @@ def register_screen_ws_routes(app):
                         model_provider = str(MODEL_CONFIGS.get(model_key, {}).get("provider") or "").strip().lower()
                         if selected_provider and selected_provider != model_provider:
                             raise RuntimeError("The selected provider does not match the selected model.")
+                        provider_model_id = str(MODEL_CONFIGS.get(model_key, {}).get("id") or model_key)
+                        provider_block = active_provider_block(model_provider, provider_model_id)
+                        if provider_block:
+                            await send_model(
+                                RealtimeServerEvent(
+                                    type="run_failed",
+                                    session_id=req_session_id,
+                                    payload=provider_failure_from_block(provider_block, run_id=retry_run_id),
+                                )
+                            )
+                            continue
                         runtime.current_model = model_key
                         text = str(failed_turn.get("user_message") or "").strip()
                         if not text:

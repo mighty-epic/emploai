@@ -150,6 +150,7 @@ from app_backend.models import (
     RuntimeActionRequest,
     ProcessWaitUpdateRequest,
     PlannerContractStatusRequest,
+    ProviderAvailabilitySyncRequest,
 )
 from app_backend.routers.app_confirmations import AppConfirmationsRouterDeps, create_app_confirmations_router
 from app_backend.routers.app_files import AppFilesRouterDeps, create_app_files_router
@@ -166,6 +167,7 @@ from app_backend.remote_command_broker import (
     pump_remote_desktop_command_broker,
     request_remote_desktop_command_via_broker,
 )
+from app_backend.fleet_policy import FLEET_WORKER_SESSION_TTL_SECONDS
 from app_backend.remote_control_runtime import get_remote_desktop_manager, remote_control_routing_status, remote_control_sqlite_broker_enabled
 from app_backend.remote_control_store import (
     REMOTE_SESSION_TTL_SECONDS,

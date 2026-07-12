@@ -1603,6 +1603,25 @@ def save_setup_values(
     save_runtime_config(home, runtime_config)
 
     save_env(env_file, merged)
+    provider_by_key = {
+        "OPENAI_API_KEY": "openai",
+        "ANTHROPIC_API_KEY": "anthropic",
+        "GOOGLE_API_KEY": "google",
+        "XAI_API_KEY": "xai",
+        "DEEPSEEK_API_KEY": "deepseek",
+        "NVIDIA_API_KEY": "nvidia",
+        "OPENROUTER_API_KEY": "openrouter",
+    }
+    changed_providers = {
+        provider
+        for key, provider in provider_by_key.items()
+        if key in updates and str(updates.get(key) or "").strip() != str(existing.get(key) or "").strip()
+    }
+    if changed_providers:
+        from shared.provider_availability import clear_provider_availability
+
+        for provider in changed_providers:
+            clear_provider_availability(provider)
     state = load_release_state(home)
     state["last_onboarded_version"] = current_release_version(source_root)
     state[TELEGRAM_REBIND_REQUIRED_STATE_KEY] = False

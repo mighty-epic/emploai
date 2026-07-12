@@ -305,19 +305,10 @@ class CronScheduler:
             one_time=one_time,
         )
         
-        async def _add():
-            async with self._lock:
-                self.jobs[job_id] = job
-                self._save_jobs()
-        
-        # Run in event loop if available, else run directly
-        try:
-            loop = asyncio.get_running_loop()
-            asyncio.create_task(_add())
-        except RuntimeError:
-            # No event loop running
-            self.jobs[job_id] = job
-            self._save_jobs()
+        # This method is synchronous by contract. Persist before returning so API
+        # callers can immediately inspect or update the job they just created.
+        self.jobs[job_id] = job
+        self._save_jobs()
         
         print(f"[Cron] Added job '{name}' (ID: {job_id}, interval: {interval_seconds}s)")
         return job_id
@@ -379,6 +370,7 @@ class CronScheduler:
             job.prompt = prompt
         if schedule_text is not None:
             job.schedule = schedule_text
+            job.one_time = _parse_delay(schedule_text) is not None
         if interval_seconds is not None:
             job.interval_seconds = interval_seconds
         if timezone_offset_hours is not None:

@@ -1,6 +1,8 @@
 import type { DesktopConversationScope } from './DesktopConversationScope';
 import { DesktopModelPickerMenu } from './DesktopModelPickerMenu';
 import { DesktopFleetPreviewPanel } from './DesktopFleetPreviewPanel';
+import { DesktopFleetConnectionPanel } from './DesktopFleetConnectionPanel';
+import { DesktopFleetMachinesPanel } from './DesktopFleetMachinesPanel';
 import { fleetWorkerStatusLabel } from './desktopFleetWorkerState';
 import { useEffect } from 'react'; type NativeSyntheticEvent<T = any> = any; type ActiveCommandPanel = any; type ActivityItem = any; type AgentOverview = any; type ArtifactDetail = any; type ArtifactSummary = any; type ComposerInputOrigin = any; type ConversationSurfaceMode = any; type DesktopFleetEnrollment = any; type DesktopFleetIdentity = any; type DesktopFleetSnapshot = any; type DesktopFleetTask = any; type DesktopFleetWorker = any; type DesktopGitRepoState = any; type DesktopMessage = any; type DesktopPathStatus = any; type DesktopRuntimeStatus = any; type DesktopSidebarProjectActivity = any; type DesktopSidebarState = any; type DesktopVoicePackState = any; type DesktopVoiceRuntimeStatus = any; type InterruptPolicy = any; type JarvisSttBackend = any; type JarvisTtsBackend = any; type LayoutChangeEvent = any; type MessageSourceFormat = any; type ModelProviderGroup = any; type NativeScrollEvent = any; type PendingSearchJump = any; type QueuedComposerMessage = any; type QueuedMessage = any; type RealtimeChannel = any; type RealtimeEvent = any; type ReferenceEntry = any; type RuntimeOrchestratorStatus = any; type ScheduledJob = any; type SearchResultTarget = any; type SecurityPermissionMode = any; type SessionDetail = any; type SessionMessage = any; type SessionSearchResult = any; type SessionSummary = any; type SessionTimelineEvent = any; type SidebarChatTooltipState = any; type SidebarDragState = any; type SidebarDraftChat = any; type SidebarProjectGroup = any; type StartupReadinessState = any; type TaskBoard = any; type TelegramBotConfig = any; type TextInputContentSizeChangeEventData = any; type ToolPackInfoPopupState = any; type VoiceCaptureMode = any; type VoiceGateState = any;
 import { useReducedMotion } from './useReducedMotion';
@@ -1400,8 +1402,12 @@ useEffect(() => {
       ) : (
         <>
 
+      <DesktopFleetConnectionPanel onFleetChanged={() => void scope.refreshFleetSnapshot?.({ quiet: true })} />
+      <DesktopFleetMachinesPanel snapshot={fleetSnapshot} />
+
       <View style={styles.fleetCreateCard}>
-        <Text style={styles.fleetSectionTitle}>Create Worker</Text>
+        <Text style={styles.fleetSectionTitle}>Workers on this desktop</Text>
+        <Text style={styles.fleetPanelText}>Create an additional worker identity that runs locally on this machine.</Text>
         <TextInput
           style={styles.fleetInput}
           placeholder="Optional worker name"
@@ -1417,26 +1423,7 @@ useEffect(() => {
           >
             <Text style={styles.fleetPrimaryActionText}>Local Worker</Text>
           </Pressable>
-          <Pressable
-            style={[styles.fleetSecondaryAction, fleetLoading ? styles.fleetActionDisabled : null]}
-            disabled={fleetLoading}
-            onPress={() => void createFleetEnrollment()}
-          >
-            <Text style={styles.fleetSecondaryActionText}>Enrollment Code</Text>
-          </Pressable>
         </View>
-        {fleetEnrollment ? (
-          <View style={styles.fleetEnrollmentCard}>
-            <View style={styles.fleetEnrollmentHeader}>
-              <Text style={styles.fleetEnrollmentLabel}>Remote enrollment token</Text>
-              <Text style={styles.fleetEnrollmentMeta}>{Math.round(fleetEnrollment.expires_in_seconds / 60)} min</Text>
-            </View>
-            <Text style={styles.fleetEnrollmentToken} selectable>{fleetEnrollment.enrollment_token}</Text>
-            <Pressable style={styles.fleetSecondaryAction} onPress={() => void copyFleetEnrollmentToken()}>
-              <Text style={styles.fleetSecondaryActionText}>Copy Token</Text>
-            </Pressable>
-          </View>
-        ) : null}
       </View>
 
       <View style={styles.fleetWorkersSection}>
@@ -1627,7 +1614,7 @@ useEffect(() => {
         ) : (
           <View style={styles.emptyCard}>
             <Text style={styles.emptyTitle}>No workers yet</Text>
-            <Text style={styles.emptyText}>Create a local worker or generate a remote enrollment token to start the fleet.</Text>
+            <Text style={styles.emptyText}>Create a local worker above, or connect another desktop through the private network panel.</Text>
           </View>
         )}
       </View>

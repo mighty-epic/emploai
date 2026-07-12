@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 from app_backend import app_server
+from app_backend.local_profile_policy import sanitize_user_profile
 from app_backend.remote_control_store import RemoteControlPlaneStore
 from shared.fleet_connection import (
     FLEET_CONNECTION_FILENAME,
@@ -19,6 +20,18 @@ from shared.standalone_policy import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_local_profile_sanitizer_keeps_bounded_profile_data():
+    profile = sanitize_user_profile(
+        {
+            "preferences": {"verbose_mode": True},
+            "metadata": {f"field_{index}": index for index in range(150)},
+        }
+    )
+
+    assert profile["preferences"]["verbose_mode"] is True
+    assert len(profile["metadata"]) == 100
 
 
 def test_hosted_modes_cannot_be_enabled_by_environment(monkeypatch):

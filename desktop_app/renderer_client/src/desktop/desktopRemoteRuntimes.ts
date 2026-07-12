@@ -18,6 +18,7 @@ export function remoteRuntimesFromFleetSnapshot(
   const workers = Array.isArray(fleet.workers) ? fleet.workers : [];
   const tasks = Array.isArray(fleet.tasks) ? fleet.tasks : [];
   const reports = Array.isArray(fleet.reports) ? fleet.reports : [];
+  const desktops = Array.isArray(fleet.desktops) ? fleet.desktops : [];
   const manager = fleet.manager && typeof fleet.manager === 'object' ? fleet.manager : null;
   const managerDesktopId = text(manager?.desktop_id);
   const grouped = new Map<string, DesktopFleetWorker[]>();
@@ -34,21 +35,27 @@ export function remoteRuntimesFromFleetSnapshot(
   }
 
   return Array.from(grouped.entries()).map(([desktopId, machineWorkers]) => {
+    const desktop = desktops.find((item) => text(item.desktop_id) === desktopId);
     const workerIds = new Set(machineWorkers.map((worker) => worker.worker_id));
     const activeCount = tasks.filter((task) => workerIds.has(task.worker_id) && task.status === 'running').length;
     const queuedCount = tasks.filter((task) => workerIds.has(task.worker_id) && task.status === 'queued').length;
     const latestReport = reports.find((report) => workerIds.has(report.worker_id));
-    const lastSeenAt = machineWorkers
+    const workerLastSeenAt = machineWorkers
       .map((worker) => text(worker.last_seen_at))
       .filter(Boolean)
       .sort()
       .at(-1) || '';
+    const lastSeenAt = text(desktop?.last_heartbeat_at || desktop?.last_seen_at) || workerLastSeenAt;
     const isManager = desktopId === managerDesktopId;
-    const connected = isManager || machineWorkers.some((worker) => !['offline', 'disconnected'].includes(text(worker.status).toLowerCase()));
+    const connected = isManager
+      || text(desktop?.status).toLowerCase() === 'online'
+      || machineWorkers.some((worker) => !['offline', 'disconnected'].includes(text(worker.status).toLowerCase()));
 
     return {
       id: desktopId,
-      name: isManager ? text(manager?.display_name) || 'This computer' : machineName(machineWorkers[0]),
+      name: isManager
+        ? text(manager?.display_name || desktop?.display_name) || 'This computer'
+        : text(desktop?.display_name) || machineName(machineWorkers[0]),
       hostLabel: lastSeenAt ? `Last seen ${lastSeenAt}` : isManager ? 'Local manager' : 'No heartbeat yet',
       status: connected ? 'connected' : 'offline',
       detail: `${machineWorkers.length} workers · ${activeCount} active · ${queuedCount} queued`,

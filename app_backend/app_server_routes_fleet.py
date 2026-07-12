@@ -125,7 +125,7 @@ def register_fleet_routes(app):
 
                 remote_auth_rate_limit_max_attempts=REMOTE_AUTH_RATE_LIMIT_MAX_ATTEMPTS,
 
-                remote_session_ttl_seconds=REMOTE_SESSION_TTL_SECONDS,
+                remote_session_ttl_seconds=FLEET_WORKER_SESSION_TTL_SECONDS,
 
             )
 

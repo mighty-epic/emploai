@@ -215,7 +215,6 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
     wakeDesktopFromSleepMode,
     reconnectDesktopAfterWindowReopen,
     recoverReadyRuntimeFromStatus,
-    remoteRuntimes,
     effectiveRuntimeStatus,
     localRuntimeReady,
     runtimeProcessDetected,
@@ -462,15 +461,18 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
       }
       applyBootstrap(setupPayload, { preserveLoadingState: true });
 
-      if (bootstrap?.apiBaseUrl && bootstrap?.accessToken) {
+      const runtimeApiBaseUrl = setupPayload.apiBaseUrl || bootstrap?.apiBaseUrl;
+      const runtimeAccessToken = setupPayload.accessToken || bootstrap?.accessToken;
+      const runtimeSessionId = setupPayload.currentSessionId ?? bootstrap?.currentSessionId;
+      if (runtimeApiBaseUrl && runtimeAccessToken) {
         const runtimeTasks = [
           configureAgent(
-            bootstrap.apiBaseUrl,
-            bootstrap.accessToken,
+            runtimeApiBaseUrl,
+            runtimeAccessToken,
             runtimePayload,
-            bootstrap.currentSessionId,
+            runtimeSessionId,
           ),
-          configureHeadlessRuntime(bootstrap.apiBaseUrl, bootstrap.accessToken, {
+          configureHeadlessRuntime(runtimeApiBaseUrl, runtimeAccessToken, {
             enabled: sharedSettingsDraft.sleepModeEnabled,
           }).then((next) => setOrchestratorStatus(next)),
         ];

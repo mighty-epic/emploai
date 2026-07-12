@@ -64,3 +64,20 @@ def test_failed_turn_retry_is_preserved_and_consumed_exactly_once():
 
     with pytest.raises(ValueError, match="already been retried"):
         consume_failed_turn_retry(session, "run-123")
+
+
+def test_usage_limit_reset_metadata_is_extracted_without_exposing_raw_payload():
+    error = ProviderException(
+        'Provider error: {"error":{"type":"usage_limit_reached","resets_at":1893456000,"resets_in_seconds":120}}'
+    )
+    info = normalize_provider_error(error)
+    failure = provider_failure_from_info(
+        info,
+        provider_id="openai-codex",
+        model_id="gpt-5.5",
+    ).to_dict()
+
+    assert failure["code"] == "usage_limit_reached"
+    assert failure["retry_after_seconds"] == 120
+    assert failure["reset_at"] == "2030-01-01T00:00:00Z"
+    assert "resets_in_seconds" not in failure["user_message"]

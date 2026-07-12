@@ -2,6 +2,30 @@
 
 EmploAI can keep Fleet manager/worker delegation without the cloud backend by using a local Yggdrasil overlay.
 
+## Recommended Desktop Flow
+
+Fleet is the single place for local workers and connected desktops. There is no separate Remote surface and no EmploAI sign-in.
+
+On the manager computer:
+
+1. Start EmploAI and open **Fleet**.
+2. Enter the name you want to use for the worker.
+3. Select **Create & Copy Connection Code**.
+4. Approve the Windows administrator prompt if Yggdrasil needs to be installed or started.
+
+On the worker computer:
+
+1. Start EmploAI and open **Fleet**.
+2. Enter the worker computer's name.
+3. Paste the complete code from the manager.
+4. Select **Connect This Desktop** and approve the Windows prompt if shown.
+
+Create and Connect automatically install or start Yggdrasil when necessary. The one code carries the Yggdrasil manager address and a one-time Fleet enrollment secret, so there is no second enrollment step or second code.
+
+The worker should appear in the manager's Fleet after its first heartbeat. The same worker card handles tasks, reports, queue policy, stop/reset actions, and manual view-only previews. Connection codes are single-use and expire after 30 minutes by default. Once accepted, the paired worker connection has no time-based expiry and reconnects after restarts until the manager resets or deletes that worker.
+
+The commands below are a troubleshooting and headless-server alternative to the desktop flow.
+
 ## Bootstrap
 
 The desktop start command runs Yggdrasil bootstrap best-effort:

@@ -20,6 +20,10 @@ class ProviderFailure:
     provider_status_code: Optional[int] = None
     run_id: Optional[str] = None
     recovery_actions: list[str] = field(default_factory=list)
+    reset_at: Optional[str] = None
+    retry_after_seconds: Optional[int] = None
+    blocked_until: Optional[str] = None
+    scope: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -34,6 +38,10 @@ class ProviderFailure:
             payload["run_id"] = self.run_id
         if self.provider_status_code is not None:
             payload["provider_status_code"] = self.provider_status_code
+        for key in ("reset_at", "retry_after_seconds", "blocked_until", "scope"):
+            value = getattr(self, key)
+            if value is not None:
+                payload[key] = value
         return payload
 
 
@@ -59,6 +67,8 @@ def provider_failure_from_info(
     actions = ["switch_provider"]
     if info.retryable:
         actions.insert(0, "retry")
+    elif info.reset_at or info.retry_after_seconds is not None:
+        actions.insert(0, "retry_after_reset")
     actions.append("open_settings")
     return ProviderFailure(
         code=info.code,
@@ -69,6 +79,8 @@ def provider_failure_from_info(
         provider_status_code=info.status_code,
         run_id=run_id,
         recovery_actions=actions,
+        reset_at=info.reset_at,
+        retry_after_seconds=info.retry_after_seconds,
     )
 
 
