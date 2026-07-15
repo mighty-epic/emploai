@@ -1298,7 +1298,11 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
   const installUpdateNow = async () => {
     setInstallingUpdate(true);
     setError(null);
-    setNotice('Preparing desktop update…');
+    setNotice(
+      updateStatus?.dirty
+        ? `Backing up ${updateStatus.dirtyCount || 'local'} project changes before updating…`
+        : 'Preparing desktop update…'
+    );
     try {
       if (bootstrap?.apiBaseUrl && bootstrap?.accessToken) {
         setNotice('Stopping local agent work before updating…');
@@ -1316,7 +1320,11 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
           }
         }
       }
-      setNotice('Pulling the desktop update. EmploAI will close and reopen when the new commit is ready.');
+      setNotice(
+        updateStatus?.dirty
+          ? 'Local project changes are being preserved. EmploAI will close and reopen on the new commit.'
+          : 'Pulling the desktop update. EmploAI will close and reopen when the new commit is ready.'
+      );
       const result = await installDesktopUpdate();
       if (result && result.message && !result.launched) {
         if (result.ok) {

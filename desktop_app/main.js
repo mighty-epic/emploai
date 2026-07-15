@@ -7,6 +7,7 @@ const { pathToFileURL } = require('url');
 const { mergeBootstrapCache } = require('./bootstrap_cache');
 const { createRemoteControlServices } = require('./remote_control_services');
 const { createFleetYggdrasilServices } = require('./fleet_yggdrasil_services');
+const { createGitUpdateServices, gitUpdateSafetyState } = require('./git_update_services');
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -52,6 +53,7 @@ let gitAutoUpdateStartupTimer = null;
 let gitAutoUpdateTimer = null;
 let gitAutoUpdateInFlight = false;
 let gitUpdateInstallPromise = null;
+let gitUpdateService = null;
 
 function desktopDebugShortcutsEnabled() {
   return (
@@ -691,6 +693,13 @@ async function runGit(args, options = {}) {
   return result.stdout.trim();
 }
 
+function gitUpdateServices() {
+  if (!gitUpdateService) {
+    gitUpdateService = createGitUpdateServices({ runGit });
+  }
+  return gitUpdateService;
+}
+
 function resolveNpmCommand() {
   return process.platform === 'win32' ? 'npm.cmd' : 'npm';
 }
@@ -775,19 +784,7 @@ async function getGitAheadBehind(targetRef) {
 }
 
 async function getGitDirtyState() {
-  try {
-    const output = await runGit(['status', '--porcelain'], { maxBuffer: 2 * 1024 * 1024 });
-    const entries = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    return {
-      dirty: entries.length > 0,
-      count: entries.length,
-    };
-  } catch (_error) {
-    return {
-      dirty: false,
-      count: 0,
-    };
-  }
+  return gitUpdateServices().getDirtyState();
 }
 
 function gitUpdateErrorStatus(error) {
@@ -840,15 +837,20 @@ async function checkUpdates(_force = false) {
     const updateAvailable = behind > 0 || (behind === 0 && ahead === 0 && currentCommit !== latestCommit);
     const diverged = ahead > 0 && behind > 0;
     const pullTarget = parseRemoteBranch(targetRef);
-    const blocked = Boolean(updateAvailable && (dirtyState.dirty || diverged || !pullTarget));
+    const { blocked, requiresManualUpdate } = gitUpdateSafetyState({
+      updateAvailable,
+      dirty: dirtyState.dirty,
+      diverged,
+      pullTarget,
+    });
     const updateLabel = behind > 0 ? pluralizeCommit(behind) : shortCommit(latestCommit);
     const message = updateAvailable
-      ? dirtyState.dirty
-        ? `Update ready (${updateLabel}), but ${dirtyState.count} local change${dirtyState.count === 1 ? '' : 's'} must be committed or stashed first.`
-        : diverged
-          ? `Update ready (${updateLabel}), but this branch has local commits and cannot fast-forward cleanly.`
-          : !pullTarget
-            ? `Update ready (${updateLabel}), but no pullable remote branch is configured for this checkout.`
+      ? diverged
+        ? `Update ready (${updateLabel}), but this branch has local commits and cannot fast-forward cleanly.`
+        : !pullTarget
+          ? `Update ready (${updateLabel}), but no pullable remote branch is configured for this checkout.`
+          : dirtyState.dirty
+            ? `Update ready (${updateLabel}). ${dirtyState.count} local project change${dirtyState.count === 1 ? '' : 's'} will be backed up automatically before updating.`
             : `Update ready: ${updateLabel}.`
       : ahead > 0
         ? `No update pending; this checkout is ${pluralizeCommit(ahead)} ahead.`
@@ -886,6 +888,8 @@ async function checkUpdates(_force = false) {
       dirty: dirtyState.dirty,
       dirtyCount: dirtyState.count,
       blocked,
+      requiresManualUpdate,
+      localChangesWillBePreserved: Boolean(updateAvailable && dirtyState.dirty && !blocked),
     };
   } catch (error) {
     return {
@@ -1009,26 +1013,78 @@ async function installUpdate() {
     }
 
     const beforeCommit = status.currentCommit || '';
+    let localChangesBackup = null;
+    if (status.dirty) {
+      localChangesBackup = await gitUpdateServices().preserveLocalChanges(status.dirtyCount);
+      const cleanState = await getGitDirtyState();
+      if (cleanState.dirty) {
+        return {
+          ok: false,
+          launched: false,
+          blocked: true,
+          message: 'Some local project files could not be backed up safely. The update was not applied.',
+          status,
+        };
+      }
+    }
+
     const remoteBranch = parseRemoteBranch(status.upstream);
     const pullArgs = remoteBranch
       ? ['pull', '--ff-only', remoteBranch.remote, remoteBranch.branch]
       : ['pull', '--ff-only'];
-    await runGit(pullArgs, { timeoutMs: 5 * 60 * 1000 });
-    const afterCommit = await runGit(['rev-parse', 'HEAD']);
-    const changedFiles = await gitChangedFiles(beforeCommit, afterCommit);
-    await installNpmDependenciesForUpdate(changedFiles);
-    await rebuildRendererForUpdate();
-    relaunchDesktopApp();
-    return {
-      ok: true,
-      launched: true,
-      pulled: true,
-      restarted: true,
-      previousCommit: beforeCommit,
-      currentCommit: afterCommit,
-      changedFiles,
-      message: `Updated to ${shortCommit(afterCommit)}. Restarting EmploAI.`,
-    };
+    try {
+      await runGit(pullArgs, { timeoutMs: 5 * 60 * 1000 });
+      const afterCommit = await runGit(['rev-parse', 'HEAD']);
+      const changedFiles = await gitChangedFiles(beforeCommit, afterCommit);
+      await installNpmDependenciesForUpdate(changedFiles);
+      await rebuildRendererForUpdate();
+      relaunchDesktopApp();
+      const preservedMessage = localChangesBackup
+        ? ` ${localChangesBackup.count} local project change${localChangesBackup.count === 1 ? ' was' : 's were'} preserved in an automatic Git backup.`
+        : '';
+      return {
+        ok: true,
+        launched: true,
+        pulled: true,
+        restarted: true,
+        previousCommit: beforeCommit,
+        currentCommit: afterCommit,
+        changedFiles,
+        preservedLocalChanges: localChangesBackup?.count || 0,
+        localChangesBackup: localChangesBackup?.label || null,
+        message: `Updated to ${shortCommit(afterCommit)}.${preservedMessage} Restarting EmploAI.`,
+      };
+    } catch (error) {
+      let restoredLocalChanges = false;
+      let currentCommit = beforeCommit;
+      try {
+        currentCommit = await runGit(['rev-parse', 'HEAD']);
+      } catch (_error) {
+        // Keep the known pre-update commit for recovery reporting.
+      }
+      if (localChangesBackup && currentCommit === beforeCommit) {
+        try {
+          restoredLocalChanges = await gitUpdateServices().restoreLocalChanges(localChangesBackup);
+        } catch (_restoreError) {
+          restoredLocalChanges = false;
+        }
+      }
+      const detail = error instanceof Error ? error.message : String(error || 'Desktop update failed.');
+      const recovery = localChangesBackup
+        ? restoredLocalChanges
+          ? ' Your local project changes were restored.'
+          : ' Your local project changes remain safe in the automatic Git backup.'
+        : '';
+      return {
+        ok: false,
+        launched: false,
+        blocked: false,
+        updatedCheckout: currentCommit !== beforeCommit,
+        preservedLocalChanges: localChangesBackup?.count || 0,
+        localChangesBackup: localChangesBackup?.label || null,
+        message: `${detail}${recovery}`,
+      };
+    }
   })().finally(() => {
     gitUpdateInstallPromise = null;
   });
@@ -1047,7 +1103,7 @@ async function runAutomaticGitUpdateCheck(reason) {
       type: 'update_status',
       payload: status,
     });
-    if (status.ok && status.updateAvailable && !status.blocked) {
+    if (status.ok && status.updateAvailable && !status.blocked && !status.requiresManualUpdate) {
       emitRuntimeEvent({
         type: 'update_installing',
         payload: { reason },

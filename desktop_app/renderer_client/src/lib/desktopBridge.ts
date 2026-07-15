@@ -485,6 +485,8 @@ export type DesktopUpdateStatus = {
   dirty?: boolean;
   dirtyCount?: number;
   blocked?: boolean;
+  requiresManualUpdate?: boolean;
+  localChangesWillBePreserved?: boolean;
 };
 
 export type DesktopFleetPreviewCapture = {

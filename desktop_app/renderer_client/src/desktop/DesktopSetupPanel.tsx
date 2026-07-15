@@ -1368,6 +1368,11 @@ export function DesktopSetupPanel({
                   <Text style={styles.helperText}>
                     Check the public Git repository for new commits, pull fast-forward updates, rebuild, and restart EmploAI.
                   </Text>
+                  {updateStatus?.localChangesWillBePreserved ? (
+                    <Text style={styles.helperText} accessibilityLiveRegion="polite">
+                      Update will safely back up {updateStatus.dirtyCount || 'your'} changed project files first. Chats, credentials, memory, and other local runtime data stay in place and are not part of the Git update.
+                    </Text>
+                  ) : null}
 
                   <View style={styles.pathActions}>
                     <Pressable
@@ -1383,7 +1388,13 @@ export function DesktopSetupPanel({
                         onPress={() => onInstallUpdate?.()}
                         disabled={installingUpdate}
                       >
-                        <Text style={styles.pathButtonText}>{installingUpdate ? 'Updating...' : 'Update And Restart'}</Text>
+                        <Text style={styles.pathButtonText}>
+                          {installingUpdate
+                            ? 'Updating…'
+                            : updateStatus?.localChangesWillBePreserved
+                              ? 'Update Safely & Restart'
+                              : 'Update & Restart'}
+                        </Text>
                       </Pressable>
                     ) : null}
                   </View>
