@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 # Split from app_server.py; dependencies are injected by the app_server facade.
+from app_backend.fleet_queue_policy import resolve_manual_queue_review_report_id
 
 def register_fleet_routes(app):
 
@@ -109,6 +110,110 @@ def register_fleet_routes(app):
 
         return desktop_id or None
 
+    def _paired_desktop_for_action(auth: Dict[str, Any], desktop_id: str) -> Dict[str, Any]:
+        clean_desktop_id = str(desktop_id or "").strip()
+        snapshot = _get_remote_control_store().get_fleet_snapshot(
+            user_id=int(auth["user_id"]),
+            desktop_id=_fleet_snapshot_desktop_id(auth),
+        )
+        desktop = next(
+            (
+                item for item in list(snapshot.get("desktops") or [])
+                if str(item.get("desktop_id") or "") == clean_desktop_id
+            ),
+            None,
+        )
+        if not desktop:
+            raise HTTPException(status_code=404, detail="Unknown paired computer")
+        local_desktop_id = str(auth.get("desktop_id") or "").strip()
+        if clean_desktop_id == local_desktop_id:
+            raise HTTPException(status_code=400, detail="Choose another connected computer")
+        if not _remote_desktop_connection_session_is_active(
+            desktop_id=clean_desktop_id,
+            user_id=int(auth["user_id"]),
+        ):
+            raise HTTPException(status_code=409, detail="That computer is not connected")
+        return desktop
+
+    def _paired_computer_permissions_for_action(auth: Dict[str, Any], desktop_id: str) -> Dict[str, Any]:
+        _paired_desktop_for_action(auth, desktop_id)
+        state = _get_remote_control_store().connection_permission_state(
+            user_id=int(auth["user_id"]),
+            desktop_id=desktop_id,
+        )
+        if str(state.get("source") or "") != "paired_desktop":
+            raise HTTPException(
+                status_code=409,
+                detail="The computer is connected with an older Fleet protocol. Update and restart EmploAI on that computer before delegating or changing access.",
+            )
+        return state
+
+    async def _send_paired_computer_command(
+        auth: Dict[str, Any],
+        *,
+        desktop_id: str,
+        command_name: str,
+        payload: Dict[str, Any],
+    ) -> str:
+        _paired_desktop_for_action(auth, desktop_id)
+        manager = get_remote_desktop_manager()
+        if remote_control_sqlite_broker_enabled() and not manager.is_connected_for_user(desktop_id, int(auth["user_id"])):
+            try:
+                return dispatch_remote_desktop_command_via_broker(
+                    store=_get_remote_control_store(),
+                    user_id=int(auth["user_id"]),
+                    desktop_id=desktop_id,
+                    command_name=command_name,
+                    payload=payload,
+                    ttl_seconds=30,
+                )
+            except KeyError as exc:
+                raise HTTPException(status_code=409, detail="That computer is unavailable") from exc
+        try:
+            return await manager.send_command(
+                desktop_id=desktop_id,
+                user_id=int(auth["user_id"]),
+                command_type=command_name,
+                payload=payload,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    async def _request_paired_computer_command(
+        auth: Dict[str, Any],
+        *,
+        desktop_id: str,
+        command_name: str,
+        payload: Dict[str, Any],
+        timeout_seconds: float = 30.0,
+    ) -> Dict[str, Any]:
+        _paired_desktop_for_action(auth, desktop_id)
+        manager = get_remote_desktop_manager()
+        try:
+            if remote_control_sqlite_broker_enabled() and not manager.is_connected_for_user(desktop_id, int(auth["user_id"])):
+                return await request_remote_desktop_command_via_broker(
+                    store=_get_remote_control_store(),
+                    user_id=int(auth["user_id"]),
+                    desktop_id=desktop_id,
+                    command_name=command_name,
+                    payload=payload,
+                    timeout_seconds=timeout_seconds,
+                )
+            reply = await manager.request_command(
+                desktop_id=desktop_id,
+                user_id=int(auth["user_id"]),
+                command_type=command_name,
+                payload=payload,
+                timeout_seconds=timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(status_code=504, detail="That computer did not answer in time") from exc
+        except (KeyError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if not bool(reply.get("ok", False)):
+            raise HTTPException(status_code=int(reply.get("status_code") or 409), detail=str(reply.get("error") or "The computer rejected the request"))
+        return dict(reply.get("result") or {})
+
     app.include_router(
 
         create_fleet_enrollment_router(
@@ -172,6 +277,115 @@ def register_fleet_routes(app):
         )
 
         return [FleetIdentityView.model_validate(item) for item in list(snapshot.get("identities") or [])]
+
+    @app.post("/api/fleet/desktops/{desktop_id}/delegations")
+    async def fleet_delegate_to_computer(
+        desktop_id: str,
+        request: FleetComputerDelegationRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        auth = _require_fleet_manager_auth(authorization)
+        store = _get_remote_control_store()
+        permissions = _paired_computer_permissions_for_action(auth, desktop_id)
+        permission_key = "delegate_workers" if request.target_kind == "worker" else "delegate_manager"
+        if not bool((permissions.get("permissions") or {}).get(permission_key, False)):
+            raise HTTPException(status_code=403, detail="That computer has not allowed this delegation target")
+        delegation = store.create_computer_delegation(
+            user_id=int(auth["user_id"]),
+            desktop_id=desktop_id,
+            prompt=request.prompt,
+            target_kind=request.target_kind,
+            target_selector=request.target_selector,
+            metadata=request.metadata,
+        )
+        try:
+            await _send_paired_computer_command(
+                auth,
+                desktop_id=desktop_id,
+                command_name="fleet_delegate",
+                payload={
+                    "delegation_id": delegation["delegation_id"],
+                    "prompt": request.prompt,
+                    "target_kind": request.target_kind,
+                    "target_selector": request.target_selector,
+                    "metadata": request.metadata,
+                },
+            )
+            delegation = store.update_computer_delegation(
+                user_id=int(auth["user_id"]),
+                delegation_id=delegation["delegation_id"],
+                status="running",
+            )
+        except Exception as exc:
+            delegation = store.update_computer_delegation(
+                user_id=int(auth["user_id"]),
+                delegation_id=delegation["delegation_id"],
+                status="failed",
+                report={"summary": str(exc), "blockers": ["The paired computer was unavailable."]},
+            )
+            raise
+        _publish_fleet_delta(
+            user_id=int(auth["user_id"]),
+            event_type="fleet_delegation_status",
+            payload={"delegation": delegation},
+            origin_channel="manager",
+        )
+        return delegation
+
+    @app.post("/api/fleet/desktops/{desktop_id}/workers")
+    async def fleet_create_worker_on_computer(
+        desktop_id: str,
+        request: FleetRemoteWorkerCreateRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        auth = _require_fleet_manager_auth(authorization)
+        store = _get_remote_control_store()
+        permissions = _paired_computer_permissions_for_action(auth, desktop_id)
+        if not bool((permissions.get("permissions") or {}).get("create_workers", False)):
+            raise HTTPException(status_code=403, detail="That computer has not allowed remote worker creation")
+        result = await _request_paired_computer_command(
+            auth,
+            desktop_id=desktop_id,
+            command_name="fleet_create_local_worker",
+            payload={"display_name": request.display_name},
+        )
+        return {
+            "ok": True,
+            "desktop_id": desktop_id,
+            "display_name": request.display_name,
+            "result": result,
+            "note": "The worker exists only on the paired computer and was not copied into this Fleet database.",
+        }
+
+    @app.post("/api/fleet/desktops/{desktop_id}/permissions/request")
+    async def fleet_request_computer_permissions(
+        desktop_id: str,
+        request: FleetConnectionPermissionRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        auth = _require_fleet_manager_auth(authorization)
+        _paired_computer_permissions_for_action(auth, desktop_id)
+        store = _get_remote_control_store()
+        permission_request = store.create_connection_permission_request(
+            user_id=int(auth["user_id"]),
+            desktop_id=desktop_id,
+            requested=request.permissions,
+            reason=request.reason,
+        )
+        try:
+            await _request_paired_computer_command(
+                auth,
+                desktop_id=desktop_id,
+                command_name="fleet_permission_request",
+                payload={
+                    "request_id": permission_request["request_id"],
+                    "permissions": permission_request["requested"],
+                    "reason": permission_request.get("reason"),
+                },
+            )
+        except Exception:
+            raise
+        return permission_request
 
     @app.put("/api/fleet/active-identity", response_model=FleetActiveIdentityResponse)
 
@@ -1316,22 +1530,15 @@ def register_fleet_routes(app):
         )
 
         if latest_report:
+            try:
 
-            report_status = str(latest_report.get("status") or "").strip().lower()
+                reviewed_report_id = resolve_manual_queue_review_report_id(
 
-            report_confidence = str(latest_report.get("confidence") or "").strip().lower()
+                    latest_report,
 
-            if report_status != "completed" or report_confidence == "low":
-
-                raise HTTPException(
-
-                    status_code=409,
-
-                    detail="Latest worker report requires manager review before queued work can continue",
+                    request.reviewed_report_id,
 
                 )
-
-            try:
 
                 worker = store.mark_worker_queue_reviewed(
 
@@ -1339,7 +1546,7 @@ def register_fleet_routes(app):
 
                     worker_id=worker_id,
 
-                    reviewed_report_id=request.reviewed_report_id or latest_report.get("report_id"),
+                    reviewed_report_id=reviewed_report_id,
 
                     source=request.source,
 

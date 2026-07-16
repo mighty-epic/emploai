@@ -161,6 +161,7 @@ from app_backend import remote_control_store_automations as _remote_control_stor
 from app_backend import remote_control_store_commands as _remote_control_store_commands
 from app_backend import remote_control_store_core as _remote_control_store_core
 from app_backend import remote_control_store_fleet_resources as _remote_control_store_fleet_resources
+from app_backend import remote_control_store_fleet_connections as _remote_control_store_fleet_connections
 from app_backend import remote_control_store_fleet_snapshot as _remote_control_store_fleet_snapshot
 from app_backend import remote_control_store_fleet_workers as _remote_control_store_fleet_workers
 from app_backend import remote_control_store_identity as _remote_control_store_identity
@@ -171,6 +172,7 @@ from app_backend.remote_control_store_automations import RemoteControlStoreAutom
 from app_backend.remote_control_store_commands import RemoteControlStoreCommandMixin
 from app_backend.remote_control_store_core import RemoteControlStoreCoreMixin
 from app_backend.remote_control_store_fleet_resources import RemoteControlStoreFleetResourceMixin
+from app_backend.remote_control_store_fleet_connections import RemoteControlStoreFleetConnectionMixin
 from app_backend.remote_control_store_fleet_snapshot import RemoteControlStoreFleetSnapshotMixin
 from app_backend.remote_control_store_fleet_workers import RemoteControlStoreFleetWorkerMixin
 from app_backend.remote_control_store_identity import RemoteControlStoreIdentityMixin
@@ -185,6 +187,7 @@ _REMOTE_CONTROL_STORE_MIXIN_MODULES = (
     _remote_control_store_fleet_snapshot,
     _remote_control_store_fleet_workers,
     _remote_control_store_fleet_resources,
+    _remote_control_store_fleet_connections,
     _remote_control_store_sync,
     _remote_control_store_automations,
     _remote_control_store_archive,
@@ -210,6 +213,7 @@ class RemoteControlPlaneStore(
     RemoteControlStoreFleetSnapshotMixin,
     RemoteControlStoreFleetWorkerMixin,
     RemoteControlStoreFleetResourceMixin,
+    RemoteControlStoreFleetConnectionMixin,
     RemoteControlStoreSyncMixin,
     RemoteControlStoreAutomationMixin,
     RemoteControlStoreArchiveMixin,

@@ -8,6 +8,7 @@ from app_backend.fleet_queue_policy import (
     QUEUE_POLICY_REVIEW_REQUIRED,
     normalize_queue_policy,
     report_allows_auto_continue,
+    resolve_manual_queue_review_report_id,
 )
 
 
@@ -52,3 +53,33 @@ def test_every_unsafe_terminal_report_pauses():
         {"status": "completed", "confidence": "high", "summary": "Report", "evidence": [{}], "blockers": ["blocked"]},
     ]:
         assert report_allows_auto_continue(malformed) is False
+
+
+def test_manual_review_can_continue_after_explicitly_acknowledging_failed_report():
+    report = {
+        "report_id": "rpt_failed",
+        "status": "failed",
+        "confidence": "low",
+        "summary": "Provider unavailable",
+        "blockers": ["Provider unavailable"],
+        "evidence": [],
+    }
+
+    assert resolve_manual_queue_review_report_id(report, "rpt_failed") == "rpt_failed"
+    with pytest.raises(ValueError, match="Explicitly review"):
+        resolve_manual_queue_review_report_id(report, None)
+    with pytest.raises(ValueError, match="does not match"):
+        resolve_manual_queue_review_report_id(report, "rpt_other")
+
+
+def test_safe_success_report_keeps_backward_compatible_implicit_review():
+    report = {
+        "report_id": "rpt_success",
+        "status": "completed",
+        "confidence": "high",
+        "summary": "Work completed",
+        "blockers": [],
+        "evidence": [{"kind": "result"}],
+    }
+
+    assert resolve_manual_queue_review_report_id(report, None) == "rpt_success"

@@ -1403,7 +1403,7 @@ useEffect(() => {
         <>
 
       <DesktopFleetConnectionPanel onFleetChanged={() => void scope.refreshFleetSnapshot?.({ quiet: true })} />
-      <DesktopFleetMachinesPanel snapshot={fleetSnapshot} />
+      <DesktopFleetMachinesPanel snapshot={fleetSnapshot} onChanged={() => void scope.refreshFleetSnapshot?.({ quiet: true })} />
 
       <View style={styles.fleetCreateCard}>
         <Text style={styles.fleetSectionTitle}>Workers on this desktop</Text>

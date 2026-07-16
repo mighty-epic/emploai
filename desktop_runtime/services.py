@@ -284,7 +284,11 @@ def _ensure_remote_control_worker(
     config_fingerprint: str = "",
 ) -> RemoteControlServiceStatus:
     if not configured:
-        _stop_remote_control_worker(home)
+        # The supervisor calls this repeatedly.  Trust the PID record here so
+        # an unpaired manager does not launch a system-wide PowerShell process
+        # scan every cycle.  Explicit stop/unpair flows still perform the
+        # broader scan when they need to clean up an orphaned worker.
+        _stop_remote_control_worker(home, scan_processes=False)
         return _remote_control_service_status(home, configured=False)
 
     record = _read_remote_control_pid_record(home) or {}
@@ -465,6 +469,7 @@ def _process_command_line(pid: int) -> str:
                 capture_output=True,
                 text=True,
                 check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             return result.stdout.strip()
 
@@ -500,6 +505,7 @@ def _process_ids_for_command_markers(*markers: str) -> set[int]:
                 capture_output=True,
                 text=True,
                 check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         else:
             result = subprocess.run(
@@ -550,6 +556,7 @@ def _process_executable_path(pid: int) -> str:
                 capture_output=True,
                 text=True,
                 check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             return result.stdout.strip()
 

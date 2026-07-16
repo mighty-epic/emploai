@@ -528,6 +528,50 @@ def test_ensure_remote_control_worker_cleans_duplicate_local_workers(monkeypatch
     assert launched == [tmp_path]
 
 
+def test_unpaired_remote_control_supervision_does_not_scan_all_processes(monkeypatch, tmp_path: Path):
+    stop_calls: list[bool] = []
+
+    monkeypatch.setattr(
+        desktop_backend,
+        "_stop_remote_control_worker",
+        lambda _home, scan_processes=True: stop_calls.append(scan_processes),
+    )
+    monkeypatch.setattr(
+        desktop_backend,
+        "_remote_control_service_status",
+        lambda _home, configured: desktop_backend.RemoteControlServiceStatus(
+            configured=configured,
+            state="not_configured",
+        ),
+    )
+
+    status = desktop_backend._ensure_remote_control_worker(tmp_path, configured=False)
+
+    assert stop_calls == [False]
+    assert status.state == "not_configured"
+
+
+def test_windows_process_scan_is_created_without_a_console(monkeypatch):
+    import desktop_runtime.services as runtime_services
+
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured.update(kwargs)
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(runtime_services, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(
+        runtime_services,
+        "subprocess",
+        SimpleNamespace(run=fake_run, CREATE_NO_WINDOW=0x08000000),
+    )
+
+    assert runtime_services._process_ids_for_command_markers("run-remote-control-worker") == set()
+    assert captured["creationflags"] == 0x08000000
+
+
 def test_runtime_compatibility_issue_flags_app_only_runtime_when_telegram_is_configured(monkeypatch, tmp_path: Path):
     config = DesktopRuntimeConfig(
         enabled=True,

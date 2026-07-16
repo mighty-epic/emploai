@@ -1,9 +1,94 @@
 import asyncio
 import json
 
+import httpx
 import pytest
 
 from app_backend import remote_desktop_client
+
+
+def _http_status_error(status_code: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", "http://127.0.0.1:8787/api/app/me")
+    response = httpx.Response(status_code, request=request)
+    return httpx.HTTPStatusError("local runtime request failed", request=request, response=response)
+
+
+def test_local_runtime_credentials_refresh_once_after_unauthorized(monkeypatch):
+    credentials = remote_desktop_client.LocalRuntimeCredentials(
+        api_base_url="http://127.0.0.1:8787",
+        access_token="stale-token",
+    )
+    attempts = []
+    monkeypatch.setattr(
+        remote_desktop_client,
+        "start_runtime_context",
+        lambda: {"apiBaseUrl": "http://127.0.0.1:8787", "accessToken": "fresh-token"},
+    )
+
+    async def operation(api_base_url, access_token):
+        attempts.append((api_base_url, access_token))
+        if access_token == "stale-token":
+            raise _http_status_error(401)
+        return "ok"
+
+    result = asyncio.run(remote_desktop_client._with_local_runtime_credentials(credentials, operation))
+
+    assert result == "ok"
+    assert attempts == [
+        ("http://127.0.0.1:8787", "stale-token"),
+        ("http://127.0.0.1:8787", "fresh-token"),
+    ]
+    assert credentials.access_token == "fresh-token"
+
+
+def test_local_runtime_credentials_do_not_retry_non_auth_failure(monkeypatch):
+    credentials = remote_desktop_client.LocalRuntimeCredentials(
+        api_base_url="http://127.0.0.1:8787",
+        access_token="current-token",
+    )
+    refreshed = []
+    monkeypatch.setattr(remote_desktop_client, "start_runtime_context", lambda: refreshed.append(True))
+
+    async def operation(_api_base_url, _access_token):
+        raise _http_status_error(503)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(remote_desktop_client._with_local_runtime_credentials(credentials, operation))
+
+    assert refreshed == []
+
+
+def test_command_result_unwraps_http_json_detail():
+    sent = []
+
+    class FakeWebSocket:
+        async def send(self, payload):
+            sent.append(json.loads(payload))
+
+    request = httpx.Request("GET", "http://127.0.0.1:8787/api/app/screenshot/current")
+    response = httpx.Response(
+        503,
+        request=request,
+        json={"detail": "Screenshot capture is unavailable while the Windows desktop is locked."},
+    )
+    error = httpx.HTTPStatusError("capture failed", request=request, response=response)
+
+    asyncio.run(
+        remote_desktop_client._send_command_result(
+            FakeWebSocket(),
+            asyncio.Lock(),
+            command_id="cmd-preview",
+            ok=False,
+            error=error,
+        )
+    )
+
+    assert sent[0]["payload"] == {
+        "ok": False,
+        "status_code": 503,
+        "error": "Screenshot capture is unavailable while the Windows desktop is locked.",
+        "error_type": "HTTPStatusError",
+    }
 
 
 def test_terminal_local_chat_event_error_marks_errors_and_known_warnings_terminal():
@@ -18,7 +103,7 @@ def test_terminal_local_chat_event_error_marks_errors_and_known_warnings_termina
     ) is None
 
 
-def test_relay_local_chat_command_fails_fast_after_forwarding_local_error(monkeypatch):
+def test_relay_local_chat_command_keeps_local_events_private_on_error(monkeypatch):
     local_sent: list[dict] = []
     remote_sent: list[dict] = []
 
@@ -76,19 +161,7 @@ def test_relay_local_chat_command_fails_fast_after_forwarding_local_error(monkey
             "source_client_id": "mobile-client",
         }
     ]
-    assert remote_sent == [
-        {
-            "type": "sync_event",
-            "payload": {
-                "type": "error",
-                "session_id": "sess-provider",
-                "payload": {
-                    "message": "Provider authentication, quota, or permission error.",
-                    "code": "provider_auth_or_quota_error",
-                },
-            },
-        }
-    ]
+    assert remote_sent == []
 
 
 def test_fleet_stop_task_records_pending_stop_without_active_session():
@@ -119,106 +192,75 @@ def test_fleet_stop_task_records_pending_stop_without_active_session():
         remote_desktop_client.FLEET_STOP_REQUESTED_TASKS.clear()
 
 
-def test_provider_availability_sync_uses_narrow_local_endpoint(monkeypatch):
-    captured = {}
-
-    async def fake_request_json(_client, **kwargs):
-        captured.update(kwargs)
-        return {"ok": True, "changed": True, "records": kwargs["json_body"]["records"]}
-
-    monkeypatch.setattr(remote_desktop_client, "_request_json", fake_request_json)
-
-    result = asyncio.run(
-        remote_desktop_client._handle_command(
-            command_name="provider_availability_sync",
-            payload={"records": [{"provider_id": "openai-codex", "identity_fingerprint": "a" * 64}]},
-            local_api_base_url="http://127.0.0.1:8787",
-            local_token="local-token",
-            remote_ws=None,
-            send_lock=asyncio.Lock(),
-        )
-    )
-
-    assert result["changed"] is True
-    assert captured["method"] == "POST"
-    assert captured["url"].endswith("/api/app/provider-availability/sync")
-    assert captured["token"] == "local-token"
-    assert captured["json_body"]["source"] == "paired_yggdrasil_manager"
-
-
-def test_fleet_worker_preview_command_returns_screen_capture(monkeypatch):
-    sent: list[dict] = []
-
-    capture = {
-        "mime_type": "image/jpeg",
-        "image_base64": "d29ya2VyLXByZXZpZXc=",
-        "width": 1280,
-        "height": 720,
-        "backend": "test",
-        "captured_at": 1.0,
-    }
-
-    class FakeResponse:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return capture
-
-    class FakeAsyncClient:
-        def __init__(self, **_kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return None
-
-        async def get(self, *_args, **_kwargs):
-            return FakeResponse()
-
-    monkeypatch.setattr(remote_desktop_client.httpx, "AsyncClient", FakeAsyncClient)
-
-    class FakeRemoteWebSocket:
-        async def send(self, payload):
-            sent.append(json.loads(payload))
-
-    async def scenario():
-        return await remote_desktop_client._handle_command(
-            command_name="fleet_worker_preview",
-            payload={
-                "preview_id": "fpv_test",
-                "worker_id": "wrk_preview",
-                "display_name": "Preview Worker",
-            },
-            local_api_base_url="http://127.0.0.1:8787",
-            local_token="local-token",
-            remote_ws=FakeRemoteWebSocket(),
-            send_lock=asyncio.Lock(),
+def test_provider_availability_sync_is_rejected_by_privacy_boundary():
+    with pytest.raises(PermissionError, match="provider"):
+        asyncio.run(
+            remote_desktop_client._handle_command(
+                command_name="provider_availability_sync",
+                payload={"records": [{"provider_id": "openai-codex"}]},
+                local_api_base_url="http://127.0.0.1:8787",
+                local_token="local-token",
+                remote_ws=None,
+                send_lock=asyncio.Lock(),
+            )
         )
 
-    result = asyncio.run(scenario())
 
-    assert result["preview_id"] == "fpv_test"
-    assert result["worker_id"] == "wrk_preview"
-    assert result["status"] == "captured"
-    assert result["capture"] == capture
-    assert sent == [
-        {
-            "type": "status",
-            "payload": {
-                "message": "Preview requested for Preview Worker.",
-                "fleet_preview": {
-                    "preview_id": "fpv_test",
-                    "worker_id": "wrk_preview",
-                    "status": "captured",
-                    "detail": result["detail"],
-                    "view_only": True,
-                },
-            },
-        }
-    ]
+@pytest.mark.parametrize(
+    "command_name",
+    [
+        "http_request",
+        "create_session",
+        "activate_session",
+        "delete_session",
+        "rename_session",
+        "chat_send",
+        "pause_run",
+        "stop_run",
+        "restart_runtime",
+        "update_sidebar_state",
+    ],
+)
+def test_direct_runtime_and_state_commands_are_rejected_by_privacy_boundary(command_name):
+    with pytest.raises(PermissionError, match="direct runtime"):
+        asyncio.run(
+            remote_desktop_client._handle_command(
+                command_name=command_name,
+                payload={},
+                local_api_base_url="http://127.0.0.1:8787",
+                local_token="local-token",
+                remote_ws=None,
+                send_lock=asyncio.Lock(),
+            )
+        )
+
+
+def test_unknown_paired_computer_command_is_rejected_explicitly():
+    with pytest.raises(ValueError, match="Unsupported paired-computer command"):
+        asyncio.run(
+            remote_desktop_client._handle_command(
+                command_name="copy_everything",
+                payload={},
+                local_api_base_url="http://127.0.0.1:8787",
+                local_token="local-token",
+                remote_ws=None,
+                send_lock=asyncio.Lock(),
+            )
+        )
+
+
+def test_screen_preview_is_not_part_of_paired_computer_protocol():
+    with pytest.raises(PermissionError, match="not part"):
+        asyncio.run(
+            remote_desktop_client._handle_command(
+                command_name="fleet_worker_preview",
+                payload={"preview_id": "fpv_test", "worker_id": "wrk_preview"},
+                local_api_base_url="http://127.0.0.1:8787",
+                local_token="local-token",
+                remote_ws=None,
+                send_lock=asyncio.Lock(),
+            )
+        )
 
 
 def test_fleet_run_task_honors_pending_stop_before_local_chat(monkeypatch):

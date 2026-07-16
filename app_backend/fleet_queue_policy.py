@@ -29,3 +29,20 @@ def report_allows_auto_continue(report: Dict[str, Any]) -> bool:
         and bool(evidence or artifacts)
         and bool(str(report.get("summary") or "").strip())
     )
+
+
+def resolve_manual_queue_review_report_id(
+    report: Dict[str, Any],
+    requested_report_id: Any,
+) -> str:
+    expected_report_id = str(report.get("report_id") or "").strip()
+    requested = str(requested_report_id or "").strip()
+    if not expected_report_id:
+        raise ValueError("Latest worker report is missing its report ID")
+    if requested and requested != expected_report_id:
+        raise ValueError("reviewed_report_id does not match the latest worker report")
+    if not requested and not report_allows_auto_continue(report):
+        raise ValueError(
+            "Explicitly review the latest failed, blocked, low-confidence, or incomplete report before continuing"
+        )
+    return requested or expected_report_id

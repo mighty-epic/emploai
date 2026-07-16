@@ -12,7 +12,7 @@ from shared.fleet_connection import write_fleet_connection
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_enrolled_desktop_is_visible_in_the_unified_fleet_snapshot(tmp_path: Path):
+def test_yggdrasil_enrollment_adds_computer_without_creating_worker_or_identity(tmp_path: Path):
     store = RemoteControlPlaneStore(root_path=tmp_path)
     manager = store.ensure_standalone_manager_desktop(
         user_id=0,
@@ -34,16 +34,15 @@ def test_enrolled_desktop_is_visible_in_the_unified_fleet_snapshot(tmp_path: Pat
     )
 
     snapshot = store.get_fleet_snapshot(user_id=0, desktop_id=manager["desktop_id"])
-    worker = next(item for item in snapshot["workers"] if item["worker_id"] == completed["worker"]["worker_id"])
     desktop_ids = {item["desktop_id"] for item in snapshot["desktops"]}
 
-    assert worker["metadata"]["machine_name"] == "Worker PC"
-    assert worker["metadata"]["device_platform"] == "windows"
-    assert worker["metadata"]["transport"] == "yggdrasil"
-    assert worker["machine_desktop_id"] in desktop_ids
+    assert completed["worker"] is None
+    assert completed["desktop"]["desktop_id"] in desktop_ids
+    assert snapshot["workers"] == []
+    assert all(item.get("desktop_id") != completed["desktop"]["desktop_id"] for item in snapshot["identities"])
 
 
-def test_worker_pairing_is_durable_rotates_on_repair_and_revokes_on_delete(tmp_path: Path):
+def test_computer_pairing_is_durable_and_rotates_session_without_creating_worker(tmp_path: Path):
     store = RemoteControlPlaneStore(root_path=tmp_path)
     manager = store.ensure_standalone_manager_desktop(
         user_id=0,
@@ -71,15 +70,14 @@ def test_worker_pairing_is_durable_rotates_on_repair_and_revokes_on_delete(tmp_p
 
     assert first["expires_at"] == 0
     assert second["expires_at"] == 0
-    assert first["worker"]["worker_id"] == second["worker"]["worker_id"]
+    assert first["worker"] is None
+    assert second["worker"] is None
+    assert first["desktop"]["desktop_id"] == second["desktop"]["desktop_id"]
     assert first["session_token"] != second["session_token"]
     assert store.resolve_session_token(first["session_token"]) is None
     assert store.resolve_session_token(second["session_token"])["desktop_id"] == second["desktop"]["desktop_id"]
 
-    deleted = store.delete_worker(user_id=0, worker_id=second["worker"]["worker_id"])
-
-    assert deleted["connection_revoked"] is True
-    assert store.resolve_session_token(second["session_token"]) is None
+    assert store.get_fleet_snapshot(user_id=0, desktop_id=manager["desktop_id"])["workers"] == []
 
 
 def test_yggdrasil_status_exposes_connection_without_session_token(tmp_path: Path, monkeypatch):
@@ -113,7 +111,7 @@ def test_yggdrasil_status_exposes_connection_without_session_token(tmp_path: Pat
 
     assert status["connection"] == {
         "configured": True,
-        "role": "worker",
+        "role": "paired",
         "managerUrl": "http://[200::abcd]:8787",
         "managerYggdrasilIp": "200::abcd",
         "pairedAt": 1234,
@@ -123,6 +121,14 @@ def test_yggdrasil_status_exposes_connection_without_session_token(tmp_path: Pat
         "workerName": "Build worker",
         "relayState": "connected",
         "relayDetail": "Worker relay connected.",
+        "permissions": {
+            "delegate_manager": True,
+            "delegate_workers": True,
+            "create_workers": False,
+        },
+        "pendingRequest": None,
+        "lastDecision": None,
+        "updatedAt": None,
     }
     serialized = json.dumps(status)
     assert "secret-worker-session" not in serialized
@@ -177,7 +183,8 @@ def test_desktop_has_one_fleet_surface_and_redirects_legacy_remote_links():
     assert "No EmploAI account" in fleet_panel
     assert "joinDesktopFleetYggdrasil" in fleet_panel
     assert "Create & Copy Connection Code" in fleet_panel
-    assert "completed connection does not expire" in fleet_panel
+    assert "completed pairings reconnect after restarts" in fleet_panel
+    assert "It does not copy" in fleet_panel or "stay local" in fleet_panel
     assert "yggdrasilCreatePairing" in preload
     assert "yggdrasilJoin" in preload
     assert "SETTINGS_TABS.filter((tab) => tab.key !== 'remote')" in settings

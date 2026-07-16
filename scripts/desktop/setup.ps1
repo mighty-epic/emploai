@@ -35,6 +35,20 @@ function Invoke-Checked {
     }
 }
 
+function Invoke-NpmInDirectory {
+    param(
+        [string] $Directory,
+        [string[]] $NpmArgs
+    )
+
+    Push-Location -LiteralPath $Directory
+    try {
+        & npm @NpmArgs
+    } finally {
+        Pop-Location
+    }
+}
+
 function Get-PythonRuntime {
     $configured = "$env:EMPLOAI_DESKTOP_PYTHON".Trim()
     if ($configured) {
@@ -81,11 +95,11 @@ Assert-Command "npm"
 $PythonRuntime = Get-PythonRuntime
 
 Invoke-Checked "Installing desktop shell dependencies" {
-    npm --prefix $DesktopAppDir install
+    Invoke-NpmInDirectory $DesktopAppDir @("ci")
 }
 
 Invoke-Checked "Installing desktop renderer dependencies" {
-    npm --prefix $RendererDir install
+    Invoke-NpmInDirectory $RendererDir @("ci")
 }
 
 if (-not $SkipPython) {
@@ -100,7 +114,7 @@ if (-not $SkipPython) {
 
 if (-not $SkipRendererBuild) {
     Invoke-Checked "Building desktop renderer" {
-        npm --prefix $RendererDir run export:web
+        Invoke-NpmInDirectory $RendererDir @("run", "export:web")
     }
 }
 

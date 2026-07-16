@@ -102,7 +102,7 @@ def create_fleet_enrollment_router(deps: FleetEnrollmentRouterDeps) -> APIRouter
             expires_in_seconds=max(0, int(expires_at - time.time())) if expires_at > 0 else 0,
             user_id=int(result["user"]["user_id"]),
             desktop=RemoteDesktopView.model_validate(result["desktop"]),
-            worker=FleetWorkerView.model_validate(result["worker"]),
+            worker=FleetWorkerView.model_validate(result["worker"]) if result.get("worker") else None,
         )
 
     return router

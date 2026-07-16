@@ -816,6 +816,7 @@ def _fleet_yggdrasil_status() -> dict[str, Any]:
     _, home, _ = _runtime_paths()
     from shared.fleet_yggdrasil import yggdrasil_status
     from shared.fleet_connection import load_fleet_connection
+    from shared.fleet_connection_policy import connection_policy_view
 
     status = yggdrasil_status(home)
     connection = load_fleet_connection(home)
@@ -825,7 +826,7 @@ def _fleet_yggdrasil_status() -> dict[str, Any]:
     relay_status = _read_remote_control_status_record(home) if connection else {}
     status["connection"] = {
         "configured": bool(connection),
-        "role": "worker" if connection else "manager",
+        "role": "paired" if connection else "manager",
         "managerUrl": str(connection.get("managerUrl") or connection.get("apiBaseUrl") or "").strip() or None,
         "managerYggdrasilIp": str(transport.get("managerYggdrasilIp") or "").strip() or None,
         "pairedAt": transport.get("pairedAt"),
@@ -835,8 +836,37 @@ def _fleet_yggdrasil_status() -> dict[str, Any]:
         "workerName": str(worker.get("display_name") or "").strip() or None,
         "relayState": str(relay_status.get("state") or "").strip() or None,
         "relayDetail": str(relay_status.get("detail") or "").strip() or None,
+        **connection_policy_view(connection),
     }
     return status
+
+
+def _fleet_yggdrasil_permissions(
+    *,
+    permissions_json: str | None = None,
+    request_id: str | None = None,
+    decision: str | None = None,
+) -> dict[str, Any]:
+    _prepare_environment(apply_cloud_overlay=False)
+    _, home, _ = _runtime_paths()
+    from shared.fleet_connection_policy import (
+        decide_permission_request,
+        load_connection_policy,
+        set_connection_permissions,
+    )
+
+    if decision:
+        return decide_permission_request(
+            home,
+            request_id=str(request_id or ""),
+            approve=str(decision).strip().lower() == "approve",
+        )
+    if permissions_json:
+        parsed = json.loads(str(permissions_json))
+        if not isinstance(parsed, dict):
+            raise ValueError("permissions must be a JSON object")
+        return set_connection_permissions(home, parsed, source="local_user")
+    return load_connection_policy(home)
 
 
 def _fleet_yggdrasil_bootstrap(
@@ -955,7 +985,15 @@ def _fleet_yggdrasil_create_pairing(
     if not _desktop_runtime_bind_is_yggdrasil_reachable(config):
         raise RuntimeError(
             "The manager backend is still bound to loopback only. "
-            "Run this command again with --configure-manager-bind so workers can reach it over Yggdrasil."
+            "Run this command again with --configure-manager-bind so paired computers can reach it over Yggdrasil."
+        )
+
+    manager_firewall: dict[str, Any] | None = None
+    if configure_manager_bind:
+        from shared.windows_fleet_firewall import ensure_windows_yggdrasil_firewall
+
+        manager_firewall = ensure_windows_yggdrasil_firewall(
+            port=int(config.port or DEFAULT_DESKTOP_PORT),
         )
 
     bootstrap = _bootstrap_payload(force_launch=True, resolve_current_session=False)
@@ -971,7 +1009,7 @@ def _fleet_yggdrasil_create_pairing(
         method="POST",
         token=local_token,
         payload={
-            "display_name": display_name or "Yggdrasil worker",
+            "display_name": display_name or "Additional computer",
             "expires_in_seconds": max(60, int(expires_in_seconds or DEFAULT_PAIRING_TTL_SECONDS)),
             "metadata": {
                 "transport": "yggdrasil",
@@ -1001,6 +1039,7 @@ def _fleet_yggdrasil_create_pairing(
         "runtimeHome": str(home),
         "sourceRoot": str(root),
         "managerBindChanged": bind_changed,
+        "managerFirewall": manager_firewall,
         "backendApiBaseUrl": local_api_base_url,
     }
 
@@ -1045,7 +1084,7 @@ def _fleet_yggdrasil_join_worker(
         _write_remote_control_status_record(
             home,
             state="starting",
-            detail="Yggdrasil Fleet worker relay is starting in the background.",
+            detail="Yggdrasil paired-computer relay is starting in the background.",
             desktop_name=identity["device_name"],
         )
         _launch_detached_remote_control_worker(home)
@@ -1056,6 +1095,7 @@ def _fleet_yggdrasil_join_worker(
         "worker": completed.get("worker") or {},
         "desktop": completed.get("desktop") or {},
         "sessionPath": str(fleet_connection_path(home)),
+        "pairedComputerRelayStarted": bool(start_worker),
         "remoteWorkerStarted": bool(start_worker),
         "deviceName": identity["device_name"],
     }
@@ -1084,7 +1124,26 @@ def _run_daemon(host: str | None, port: int | None) -> int:
         _stop_remote_control_worker(home)
 
     print(f"Starting EmploAI backend in {mode} mode", flush=True)
-    asyncio.run(_run_desktop_runtime_server(host=run_host, port=run_port))
+    from desktop_runtime.service_supervisor import BackgroundServiceSupervisor
+    from shared.fleet_connection import fleet_connection_configured
+
+    def supervise_background_services() -> None:
+        configured = fleet_connection_configured(home)
+        _ensure_remote_control_worker(
+            home,
+            configured=configured,
+            config_fingerprint=_fleet_connection_config_fingerprint(home) if configured else "",
+        )
+
+    service_supervisor = BackgroundServiceSupervisor(
+        supervise_background_services,
+        initial_delay_seconds=5.0,
+    )
+    service_supervisor.start()
+    try:
+        asyncio.run(_run_desktop_runtime_server(host=run_host, port=run_port))
+    finally:
+        service_supervisor.stop()
     return 0
 
 
@@ -1188,14 +1247,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     ygg_pair_parser = subparsers.add_parser(
         "fleet-yggdrasil-pair",
-        help="create a standalone Yggdrasil Fleet pairing token for a remote worker",
+        help="create a standalone Yggdrasil Fleet pairing token for another computer",
     )
-    ygg_pair_parser.add_argument("--display-name", default="Yggdrasil worker")
+    ygg_pair_parser.add_argument("--display-name", default="Additional computer")
     ygg_pair_parser.add_argument("--expires-in-seconds", type=int, default=30 * 60)
     ygg_pair_parser.add_argument(
         "--configure-manager-bind",
         action="store_true",
-        help="bind the manager backend on IPv6 so Yggdrasil workers can reach it",
+        help="bind the manager backend on IPv6 so paired computers can reach it",
     )
 
     ygg_join_parser = subparsers.add_parser(
@@ -1205,7 +1264,25 @@ def _build_parser() -> argparse.ArgumentParser:
     ygg_join_parser.add_argument("pairing_token")
     ygg_join_parser.add_argument("--device-name", default=None)
     ygg_join_parser.add_argument("--device-key", default=None)
-    ygg_join_parser.add_argument("--no-start-worker", action="store_true")
+    ygg_join_parser.add_argument(
+        "--no-start-relay",
+        action="store_true",
+        help="save the connection without starting its durable paired-computer relay",
+    )
+    ygg_join_parser.add_argument(
+        "--no-start-worker",
+        dest="no_start_relay",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+
+    ygg_permissions_parser = subparsers.add_parser(
+        "fleet-yggdrasil-permissions",
+        help="read or update permissions owned by this paired computer",
+    )
+    ygg_permissions_parser.add_argument("--set-json", default=None)
+    ygg_permissions_parser.add_argument("--request-id", default=None)
+    ygg_permissions_parser.add_argument("--decision", choices=["approve", "deny"], default=None)
 
     run_parser = subparsers.add_parser("run-daemon", help="run the managed local runtime daemon")
     run_parser.add_argument("--host", default=None)
@@ -1373,7 +1450,19 @@ def main(argv: list[str] | None = None) -> int:
                     pairing_token=str(args.pairing_token or ""),
                     device_name=args.device_name,
                     device_key=args.device_key,
-                    start_worker=not bool(args.no_start_worker),
+                    start_worker=not bool(args.no_start_relay),
+                )
+            )
+        except Exception as exc:
+            return _json_error_print(exc)
+
+    if args.command == "fleet-yggdrasil-permissions":
+        try:
+            return _json_print(
+                _fleet_yggdrasil_permissions(
+                    permissions_json=args.set_json,
+                    request_id=args.request_id,
+                    decision=args.decision,
                 )
             )
         except Exception as exc:

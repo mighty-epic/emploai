@@ -7,13 +7,15 @@ import {
   createDesktopFleetYggdrasilPairing,
   joinDesktopFleetYggdrasil,
   loadDesktopFleetYggdrasilStatus,
+  setDesktopFleetConnectionPermissions,
+  decideDesktopFleetPermissionRequest,
   type DesktopFleetYggdrasilPairing,
   type DesktopFleetYggdrasilStatus,
 } from '@/lib/desktopBridge';
 import { userFacingError } from '../../lib/diagnostics';
 import { DESKTOP_UI as UI } from './desktopUiTokens';
 
-type BusyAction = 'refresh' | 'bootstrap' | 'pair' | 'join' | null;
+type BusyAction = 'refresh' | 'bootstrap' | 'pair' | 'join' | 'permissions' | null;
 
 function connectionSummary(status: DesktopFleetYggdrasilStatus | null) {
   if (!status) return 'Checking private network…';
@@ -21,9 +23,9 @@ function connectionSummary(status: DesktopFleetYggdrasilStatus | null) {
   if (!status.running) return 'Private network is installed but stopped';
   if (status.connection?.configured) {
     const relay = status.connection.relayState ? ` · relay ${status.connection.relayState}` : '';
-    return `Connected to a Fleet manager${relay}`;
+    return `Paired to a Fleet manager${relay}`;
   }
-  return 'Private network ready · this desktop can manage workers';
+  return 'Private network ready · this desktop can manage paired computers';
 }
 
 function formatRemaining(seconds: number) {
@@ -39,8 +41,8 @@ export function DesktopFleetConnectionPanel({ onFleetChanged }: { onFleetChanged
   const [message, setMessage] = useState('Checking how this desktop is connected…');
   const [error, setError] = useState<string | null>(null);
   const [pairing, setPairing] = useState<DesktopFleetYggdrasilPairing | null>(null);
-  const [workerName, setWorkerName] = useState('Remote worker');
-  const [deviceName, setDeviceName] = useState('EmploAI worker');
+  const [computerName, setComputerName] = useState('Additional computer');
+  const [deviceName, setDeviceName] = useState('Additional computer');
   const [joinCode, setJoinCode] = useState('');
   const [nowSeconds, setNowSeconds] = useState(() => Math.floor(Date.now() / 1000));
 
@@ -74,7 +76,43 @@ export function DesktopFleetConnectionPanel({ onFleetChanged }: { onFleetChanged
     [pairing, nowSeconds],
   );
   const networkReady = Boolean(status?.running && status?.address);
-  const connectedAsWorker = Boolean(status?.connection?.configured);
+  const connectedToManager = Boolean(status?.connection?.configured);
+  const connectionPermissions = status?.connection?.permissions || {
+    delegate_manager: true,
+    delegate_workers: true,
+    create_workers: false,
+  };
+  const pendingPermissionRequest = status?.connection?.pendingRequest as Record<string, any> | null | undefined;
+
+  const updatePermission = async (key: keyof typeof connectionPermissions) => {
+    setBusy('permissions');
+    setError(null);
+    try {
+      await setDesktopFleetConnectionPermissions({ ...connectionPermissions, [key]: !connectionPermissions[key] });
+      await refresh(true);
+      setMessage('Connection permissions saved on this computer. The manager will see the change automatically.');
+    } catch (permissionError) {
+      setError(userFacingError(permissionError, 'Connection permissions could not be saved.'));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const decidePermission = async (approve: boolean) => {
+    const requestId = String(pendingPermissionRequest?.requestId || '');
+    if (!requestId) return;
+    setBusy('permissions');
+    setError(null);
+    try {
+      await decideDesktopFleetPermissionRequest(requestId, approve);
+      await refresh(true);
+      setMessage(approve ? 'Permission request approved.' : 'Permission request denied.');
+    } catch (permissionError) {
+      setError(userFacingError(permissionError, 'The permission request could not be decided.'));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const prepareNetwork = async () => {
     setBusy('bootstrap');
@@ -95,9 +133,9 @@ export function DesktopFleetConnectionPanel({ onFleetChanged }: { onFleetChanged
   const createPairing = async () => {
     setBusy('pair');
     setError(null);
-    setMessage('Preparing Yggdrasil and creating one code for both the private connection and worker enrollment…');
+    setMessage('Preparing Yggdrasil and creating one code for this computer connection…');
     try {
-      const result = await createDesktopFleetYggdrasilPairing(workerName, 30 * 60);
+      const result = await createDesktopFleetYggdrasilPairing(computerName, 30 * 60);
       if (!result?.pairingToken) throw new Error('A complete Yggdrasil pairing code was not returned.');
       setPairing(result);
       setNowSeconds(Math.floor(Date.now() / 1000));
@@ -119,7 +157,7 @@ export function DesktopFleetConnectionPanel({ onFleetChanged }: { onFleetChanged
     if (!pairing?.pairingToken) return;
     try {
       await copyDesktopText(pairing.pairingToken);
-      setMessage('Pairing code copied. Paste it only into Fleet on the worker desktop.');
+      setMessage('Pairing code copied. Paste it only into Fleet on the computer you want to connect.');
     } catch (copyError) {
       setError(userFacingError(copyError, 'The pairing code was not copied.'));
     }
@@ -128,13 +166,13 @@ export function DesktopFleetConnectionPanel({ onFleetChanged }: { onFleetChanged
   const joinManager = async () => {
     setBusy('join');
     setError(null);
-    setMessage('Preparing Yggdrasil, enrolling this worker, and saving its permanent Fleet connection…');
+    setMessage('Preparing Yggdrasil, enrolling this computer, and saving its durable Fleet connection…');
     try {
       const result = await joinDesktopFleetYggdrasil(joinCode, deviceName);
       if (!result?.ok) throw new Error('The manager did not accept this desktop.');
       setJoinCode('');
       await refresh(true);
-      setMessage(`Connected as ${result.deviceName || deviceName}. This pairing now survives restarts until the manager removes the worker.`);
+      setMessage(`Connected as ${result.deviceName || deviceName}. No agents or chats were copied; this pairing now survives restarts.`);
       onFleetChanged?.();
     } catch (joinError) {
       setError(userFacingError(joinError, 'This desktop could not join the Fleet. Check that both desktops are online and the code has not expired.'));
@@ -150,7 +188,7 @@ export function DesktopFleetConnectionPanel({ onFleetChanged }: { onFleetChanged
           <Text style={styles.eyebrow}>PRIVATE DESKTOP NETWORK</Text>
           <Text style={styles.title}>Connect computers with Yggdrasil</Text>
           <Text style={styles.description}>
-            One code prepares the direct connection and enrolls the worker. No EmploAI account, hosted relay, or remote input.
+            One code connects the computers. No EmploAI account or hosted relay; chats, agents, settings, files, and provider state stay local.
           </Text>
         </View>
         <View style={[styles.statusPill, networkReady ? styles.statusPillReady : null]}>
@@ -205,27 +243,27 @@ export function DesktopFleetConnectionPanel({ onFleetChanged }: { onFleetChanged
           <View style={styles.rolePane}>
             <Text style={styles.stepLabel}>ON THE MANAGER</Text>
             <Text style={styles.stepTitle}>1. Create the single connection code</Text>
-            <Text style={styles.stepText}>EmploAI prepares Yggdrasil, creates the enrollment, and copies one complete code for the other desktop.</Text>
-            <Text style={styles.inputLabel}>Worker name</Text>
+            <Text style={styles.stepText}>EmploAI prepares Yggdrasil, creates a computer-only enrollment, and copies one complete code for the other desktop.</Text>
+            <Text style={styles.inputLabel}>Other computer’s name</Text>
             <TextInput
-              accessibilityLabel="Name for the remote Fleet worker"
-              value={workerName}
-              onChangeText={setWorkerName}
-              placeholder="Remote worker"
+              accessibilityLabel="Name for the computer being connected"
+              value={computerName}
+              onChangeText={setComputerName}
+              placeholder="Example: Windows VPS"
               placeholderTextColor={UI.color.textSubtle}
               style={styles.input}
             />
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Create and copy one Yggdrasil Fleet connection code"
-              accessibilityState={{ disabled: busy !== null || connectedAsWorker }}
-              disabled={busy !== null || connectedAsWorker}
+              accessibilityState={{ disabled: busy !== null || connectedToManager }}
+              disabled={busy !== null || connectedToManager}
               onPress={() => void createPairing()}
-              style={[styles.primaryButton, (busy !== null || connectedAsWorker) ? styles.disabled : null]}
+              style={[styles.primaryButton, (busy !== null || connectedToManager) ? styles.disabled : null]}
             >
               <Text style={styles.primaryButtonText}>{busy === 'pair' ? 'Preparing & Creating…' : 'Create & Copy Connection Code'}</Text>
             </Pressable>
-            {connectedAsWorker ? <Text style={styles.roleHint}>This desktop is already configured as a worker. Create codes from its manager instead.</Text> : null}
+            {connectedToManager ? <Text style={styles.roleHint}>This computer is already paired to a manager. Create additional codes on that manager computer.</Text> : null}
             {pairing ? (
               <View style={[styles.codeBox, pairingRemaining === 0 ? styles.codeBoxExpired : null]}>
                 <View style={styles.codeHeader}>
@@ -252,10 +290,10 @@ export function DesktopFleetConnectionPanel({ onFleetChanged }: { onFleetChanged
             <Text style={styles.stepText}>EmploAI prepares Yggdrasil automatically, enrolls this machine, and saves a durable connection.</Text>
             <Text style={styles.inputLabel}>This desktop’s name</Text>
             <TextInput
-              accessibilityLabel="Name of this worker desktop"
+              accessibilityLabel="Name of this computer"
               value={deviceName}
               onChangeText={setDeviceName}
-              placeholder="EmploAI worker"
+              placeholder="Example: Windows VPS"
               placeholderTextColor={UI.color.textSubtle}
               style={styles.input}
             />
@@ -273,26 +311,76 @@ export function DesktopFleetConnectionPanel({ onFleetChanged }: { onFleetChanged
             />
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Connect this desktop to the Fleet manager as a worker"
-              accessibilityState={{ disabled: busy !== null || !joinCode.trim() || connectedAsWorker }}
-              disabled={busy !== null || !joinCode.trim() || connectedAsWorker}
+              accessibilityLabel="Connect this computer to the Fleet manager"
+              accessibilityState={{ disabled: busy !== null || !joinCode.trim() || connectedToManager }}
+              disabled={busy !== null || !joinCode.trim() || connectedToManager}
               onPress={() => void joinManager()}
-              style={[styles.secondaryButton, (busy !== null || !joinCode.trim() || connectedAsWorker) ? styles.disabled : null]}
+              style={[styles.secondaryButton, (busy !== null || !joinCode.trim() || connectedToManager) ? styles.disabled : null]}
             >
-              <Text style={styles.secondaryButtonText}>{busy === 'join' ? 'Preparing & Connecting…' : connectedAsWorker ? 'Connected Permanently' : 'Connect This Desktop'}</Text>
+              <Text style={styles.secondaryButtonText}>{busy === 'join' ? 'Preparing & Connecting…' : connectedToManager ? 'Paired Permanently' : 'Connect This Computer'}</Text>
             </Pressable>
-            {connectedAsWorker ? (
+            {connectedToManager ? (
               <View style={styles.connectedDetail}>
-                <Text style={styles.connectedTitle}>{status?.connection?.workerName || status?.connection?.desktopName || 'Worker connected'}</Text>
+                <Text style={styles.connectedTitle}>{status?.connection?.desktopName || 'Computer connected'}</Text>
                 <Text style={styles.roleHint}>{status?.connection?.relayDetail || `Manager ${status?.connection?.managerYggdrasilIp || status?.connection?.managerUrl || ''}`}</Text>
               </View>
             ) : null}
           </View>
         </View>
 
-      <Text style={styles.footerText}>
-        The code expires after one use or 30 minutes; the completed connection does not expire. It reconnects after restarts until the manager resets or removes that worker.
-      </Text>
+      {connectedToManager ? (
+        <View style={styles.permissionSection}>
+          <View style={styles.permissionHeading}>
+            <View>
+              <Text style={styles.stepLabel}>THIS COMPUTER CONTROLS ACCESS</Text>
+              <Text style={styles.stepTitle}>What the paired manager may request</Text>
+            </View>
+            <Text style={styles.roleHint}>Changes stay on this computer and take effect immediately.</Text>
+          </View>
+          {pendingPermissionRequest ? (
+            <View style={styles.permissionRequest} accessibilityLiveRegion="polite">
+              <View style={styles.permissionRequestCopy}>
+                <Text style={styles.connectedTitle}>Manager permission request</Text>
+                <Text style={styles.roleHint}>{String(pendingPermissionRequest.reason || 'The manager requested different connection permissions.')}</Text>
+              </View>
+              <View style={styles.requestActions}>
+                <Pressable accessibilityRole="button" accessibilityLabel="Deny manager permission request" accessibilityState={{ disabled: busy !== null }} disabled={busy !== null} onPress={() => void decidePermission(false)} style={styles.ghostButton}><Text style={styles.ghostButtonText}>Deny</Text></Pressable>
+                <Pressable accessibilityRole="button" accessibilityLabel="Approve manager permission request" accessibilityState={{ disabled: busy !== null }} disabled={busy !== null} onPress={() => void decidePermission(true)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Approve</Text></Pressable>
+              </View>
+            </View>
+          ) : null}
+          <View style={styles.permissionGrid}>
+            {([
+              ['delegate_manager', 'Delegate to this computer’s manager agent', 'Task messages in; reports and requests out.'],
+              ['delegate_workers', 'Delegate to existing local workers', 'The manager supplies a local worker name; identities are not copied.'],
+              ['create_workers', 'Create new workers on this computer', 'Creates the worker here only when explicitly requested.'],
+            ] as const).map(([key, label, detail]) => {
+              const enabled = Boolean(connectionPermissions[key]);
+              return (
+                <Pressable
+                  key={key}
+                  accessibilityRole="switch"
+                  accessibilityState={{ checked: enabled, disabled: busy !== null }}
+                  disabled={busy !== null}
+                  onPress={() => void updatePermission(key)}
+                  style={[styles.permissionRow, enabled ? styles.permissionRowEnabled : null]}
+                >
+                  <View style={styles.permissionCopy}>
+                    <Text style={styles.permissionLabel}>{label}</Text>
+                    <Text style={styles.roleHint}>{detail}</Text>
+                  </View>
+                  <Text style={[styles.permissionValue, enabled ? styles.permissionValueOn : null]}>{enabled ? 'ALLOWED' : 'BLOCKED'}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      ) : null}
+
+      <View style={styles.howToConnect}>
+        <Text style={styles.stepLabel}>CONNECT TWO OR MORE COMPUTERS</Text>
+        <Text style={styles.footerText}>On the manager, create one code for each additional computer. On each other computer, paste its code once and connect. Repeat from the same manager for computer three, four, and beyond. Codes are single-use; completed pairings reconnect after restarts.</Text>
+      </View>
     </View>
   );
 }
@@ -329,7 +417,7 @@ const styles = StyleSheet.create({
   primaryButtonText: { color: UI.color.accentInk, fontSize: 11, fontWeight: '900' },
   secondaryButton: { minHeight: 44, paddingHorizontal: 15, borderRadius: UI.radius.control, borderWidth: 1, borderColor: UI.color.accentBorder, backgroundColor: UI.color.accentSoft, alignItems: 'center', justifyContent: 'center' },
   secondaryButtonText: { color: UI.color.accentStrong, fontSize: 11, fontWeight: '800' },
-  ghostButton: { minHeight: 40, paddingHorizontal: 13, borderRadius: UI.radius.control, borderWidth: 1, borderColor: UI.color.border, alignItems: 'center', justifyContent: 'center' },
+  ghostButton: { minHeight: 44, paddingHorizontal: 13, borderRadius: UI.radius.control, borderWidth: 1, borderColor: UI.color.border, alignItems: 'center', justifyContent: 'center' },
   ghostButtonText: { color: UI.color.textMuted, fontSize: 10, fontWeight: '800' },
   disabled: { opacity: 0.42 },
   codeBox: { marginTop: 3, padding: 12, gap: 9, borderRadius: UI.radius.panel, borderWidth: 1, borderColor: UI.color.accentBorder, backgroundColor: UI.color.canvas },
@@ -341,5 +429,18 @@ const styles = StyleSheet.create({
   roleHint: { color: UI.color.textSubtle, fontSize: 10, lineHeight: 15 },
   connectedDetail: { padding: 11, borderRadius: UI.radius.control, borderWidth: 1, borderColor: UI.color.border, backgroundColor: UI.color.surface },
   connectedTitle: { color: UI.color.success, fontSize: 11, fontWeight: '800' },
-  footerText: { paddingHorizontal: 18, paddingVertical: 13, color: UI.color.textSubtle, fontSize: 10, lineHeight: 15 },
+  permissionSection: { padding: 18, gap: 12, borderTopWidth: 1, borderColor: UI.color.border, backgroundColor: UI.color.surface },
+  permissionHeading: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 },
+  permissionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  permissionRow: { flexGrow: 1, flexBasis: 300, minWidth: 260, minHeight: 64, padding: 11, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control, backgroundColor: UI.color.canvas, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  permissionRowEnabled: { borderColor: UI.color.accentBorder, backgroundColor: UI.color.accentSoft },
+  permissionCopy: { flex: 1, gap: 3 },
+  permissionLabel: { color: UI.color.text, fontSize: 10, fontWeight: '800' },
+  permissionValue: { color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: 8, fontWeight: '900' },
+  permissionValueOn: { color: UI.color.success },
+  permissionRequest: { padding: 11, borderWidth: 1, borderColor: UI.color.warning, borderRadius: UI.radius.control, backgroundColor: UI.color.warningSoft, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 12 },
+  permissionRequestCopy: { flex: 1, minWidth: 240, gap: 4 },
+  requestActions: { flexDirection: 'row', gap: 8 },
+  howToConnect: { paddingHorizontal: 18, paddingVertical: 13, borderTopWidth: 1, borderColor: UI.color.border, backgroundColor: UI.color.canvas },
+  footerText: { marginTop: 5, color: UI.color.textSubtle, fontSize: 10, lineHeight: 15 },
 });

@@ -5,6 +5,25 @@ function text(value: unknown) {
   return String(value || '').trim();
 }
 
+function formatLastSeen(value: unknown) {
+  const raw = text(value);
+  const timestamp = Date.parse(raw);
+  if (!raw || !Number.isFinite(timestamp)) return '';
+  const elapsedSeconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+  if (elapsedSeconds < 15) return 'Last seen just now';
+  if (elapsedSeconds < 60) return `Last seen ${elapsedSeconds}s ago`;
+  const elapsedMinutes = Math.round(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) return `Last seen ${elapsedMinutes}m ago`;
+  const elapsedHours = Math.round(elapsedMinutes / 60);
+  if (elapsedHours < 24) return `Last seen ${elapsedHours}h ago`;
+  return `Last seen ${new Date(timestamp).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })}`;
+}
+
 function machineName(worker: DesktopFleetWorker) {
   const metadata = worker.metadata || {};
   return text(metadata.machine_name || metadata.device_name || metadata.desktop_name) || 'Paired computer';
@@ -30,8 +49,9 @@ export function remoteRuntimesFromFleetSnapshot(
     machineWorkers.push(worker);
     grouped.set(desktopId, machineWorkers);
   }
-  if (managerDesktopId && !grouped.has(managerDesktopId)) {
-    grouped.set(managerDesktopId, []);
+  for (const desktop of desktops) {
+    const desktopId = text(desktop.desktop_id);
+    if (desktopId && !grouped.has(desktopId)) grouped.set(desktopId, []);
   }
 
   return Array.from(grouped.entries()).map(([desktopId, machineWorkers]) => {
@@ -48,6 +68,7 @@ export function remoteRuntimesFromFleetSnapshot(
     const lastSeenAt = text(desktop?.last_heartbeat_at || desktop?.last_seen_at) || workerLastSeenAt;
     const isManager = desktopId === managerDesktopId;
     const connected = isManager
+      || text(desktop?.status).toLowerCase() === 'connected'
       || text(desktop?.status).toLowerCase() === 'online'
       || machineWorkers.some((worker) => !['offline', 'disconnected'].includes(text(worker.status).toLowerCase()));
 
@@ -56,9 +77,9 @@ export function remoteRuntimesFromFleetSnapshot(
       name: isManager
         ? text(manager?.display_name || desktop?.display_name) || 'This computer'
         : text(desktop?.display_name) || machineName(machineWorkers[0]),
-      hostLabel: lastSeenAt ? `Last seen ${lastSeenAt}` : isManager ? 'Local manager' : 'No heartbeat yet',
+      hostLabel: lastSeenAt ? formatLastSeen(lastSeenAt) : isManager ? 'Local manager' : 'No heartbeat yet',
       status: connected ? 'connected' : 'offline',
-      detail: `${machineWorkers.length} workers · ${activeCount} active · ${queuedCount} queued`,
+      detail: `${machineWorkers.length} local agents visible here · ${activeCount} active · ${queuedCount} queued`,
       workerCount: machineWorkers.length,
       activeCount,
       queuedCount,
@@ -70,8 +91,8 @@ export function remoteRuntimesFromFleetSnapshot(
         activeTaskId: worker.active_task_id || null,
       })),
       preview: {
-        state: connected ? 'connecting' : 'offline',
-        message: connected ? 'Manual view-only previews are requested from a worker.' : 'Computer is offline.',
+        state: 'offline',
+        message: 'Screen access is not part of a paired-computer Fleet connection.',
         updatedAt: null,
       },
     };

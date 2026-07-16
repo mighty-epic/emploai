@@ -31,7 +31,7 @@ function createFleetYggdrasilServices({ runBackendJson }) {
   );
 
   const createPairing = async (payload = {}) => {
-    const displayName = cleanLabel(payload.displayName || payload.display_name, 'Yggdrasil worker');
+    const displayName = cleanLabel(payload.displayName || payload.display_name, 'Paired computer');
     const requestedTtl = Number(payload.expiresInSeconds || payload.expires_in_seconds || 30 * 60);
     const expiresInSeconds = Math.min(24 * 60 * 60, Math.max(60, Math.trunc(requestedTtl || 30 * 60)));
     await bootstrap();
@@ -47,7 +47,7 @@ function createFleetYggdrasilServices({ runBackendJson }) {
 
   const join = async (payload = {}) => {
     const pairingToken = cleanPairingToken(payload.pairingToken || payload.pairing_token);
-    const deviceName = cleanLabel(payload.deviceName || payload.device_name, 'EmploAI worker');
+    const deviceName = cleanLabel(payload.deviceName || payload.device_name, 'EmploAI computer');
     await bootstrap();
     return runBackendJson([
       'fleet-yggdrasil-join',
@@ -57,7 +57,26 @@ function createFleetYggdrasilServices({ runBackendJson }) {
     ], { timeoutMs: 60_000 });
   };
 
-  return { status, bootstrap, createPairing, join };
+  const permissions = () => runBackendJson(['fleet-yggdrasil-permissions'], { timeoutMs: 15_000 });
+
+  const setPermissions = (payload = {}) => runBackendJson([
+    'fleet-yggdrasil-permissions',
+    '--set-json',
+    JSON.stringify(payload.permissions || {}),
+  ], { timeoutMs: 15_000 });
+
+  const decidePermissionRequest = (payload = {}) => {
+    const requestId = String(payload.requestId || payload.request_id || '').trim();
+    const decision = payload.approve ? 'approve' : 'deny';
+    if (!requestId) throw new Error('requestId is required');
+    return runBackendJson([
+      'fleet-yggdrasil-permissions',
+      '--request-id', requestId,
+      '--decision', decision,
+    ], { timeoutMs: 15_000 });
+  };
+
+  return { status, bootstrap, createPairing, join, permissions, setPermissions, decidePermissionRequest };
 }
 
 module.exports = {

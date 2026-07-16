@@ -90,6 +90,31 @@ def test_update_yggdrasil_peers_config_is_idempotent_when_peers_exist():
     assert updated == config
 
 
+def test_update_yggdrasil_peers_config_repairs_indented_windows_config_with_trailing_duplicate():
+    config = """{
+  PrivateKey: abc123
+  Peers: []
+  IfName: Yggdrasil
+}
+
+Peers: [
+  tls://peer-one.example:1234
+]
+"""
+
+    updated, changed = fleet_yggdrasil.update_yggdrasil_peers_config(
+        config,
+        ["tls://peer-one.example:1234", "quic://peer-two.example:4321"],
+    )
+
+    assert changed is True
+    assert updated.count("Peers:") == 1
+    assert "  Peers: [" in updated
+    assert updated.rstrip().endswith("}")
+    assert updated.index("Peers:") < updated.rindex("}")
+    assert "quic://peer-two.example:4321" in updated
+
+
 def test_complete_worker_enrollment_writes_local_fleet_connection(tmp_path, monkeypatch):
     manager_url = fleet_yggdrasil.manager_url_for_yggdrasil("0200::abcd", 8787)
     payload = fleet_yggdrasil.build_pairing_payload(

@@ -289,6 +289,42 @@ class RemoteControlStoreCoreMixin:
                     used_at REAL,
                     revoked_at REAL
                 );
+                CREATE TABLE IF NOT EXISTS fleet_connection_permissions (
+                    user_id INTEGER NOT NULL,
+                    desktop_id TEXT NOT NULL,
+                    permissions TEXT NOT NULL DEFAULT '{}',
+                    pending_request TEXT,
+                    last_decision TEXT,
+                    source TEXT,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY(user_id, desktop_id)
+                );
+                CREATE TABLE IF NOT EXISTS fleet_permission_requests (
+                    request_id TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    desktop_id TEXT NOT NULL,
+                    requested TEXT NOT NULL DEFAULT '{}',
+                    reason TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at REAL NOT NULL,
+                    decided_at REAL
+                );
+                CREATE TABLE IF NOT EXISTS fleet_delegations (
+                    delegation_id TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    desktop_id TEXT NOT NULL,
+                    target_kind TEXT NOT NULL,
+                    target_selector TEXT,
+                    prompt TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    report TEXT NOT NULL DEFAULT '{}',
+                    metadata TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    started_at REAL,
+                    completed_at REAL,
+                    canceled_at REAL
+                );
                 CREATE TABLE IF NOT EXISTS fleet_tasks (
                     task_id TEXT PRIMARY KEY,
                     user_id INTEGER NOT NULL,
@@ -535,6 +571,8 @@ class RemoteControlStoreCoreMixin:
                 CREATE INDEX IF NOT EXISTS idx_fleet_workers_user ON fleet_workers(user_id, status);
                 CREATE INDEX IF NOT EXISTS idx_fleet_tasks_worker ON fleet_tasks(user_id, worker_id, status, queue_position);
                 CREATE INDEX IF NOT EXISTS idx_fleet_reports_worker ON fleet_reports(user_id, worker_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_fleet_delegations_desktop ON fleet_delegations(user_id, desktop_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_fleet_permission_requests_desktop ON fleet_permission_requests(user_id, desktop_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_fleet_audit_user ON fleet_audit_events(user_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_automations_user ON automations(user_id, enabled, next_run_at);
                 CREATE INDEX IF NOT EXISTS idx_automation_events_user ON automation_events(user_id, created_at);

@@ -237,6 +237,43 @@ function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, get
     return fleetApi('/api/fleet/snapshot');
   }
 
+  async function fleetDelegateToComputer(payload = {}) {
+    const desktopId = String(payload.desktop_id || payload.desktopId || '').trim();
+    const prompt = String(payload.prompt || '').trim();
+    if (!desktopId || !prompt) throw new Error('desktop_id and prompt are required');
+    return fleetApi(`/api/fleet/desktops/${encodeURIComponent(desktopId)}/delegations`, {
+      method: 'POST',
+      body: {
+        prompt,
+        target_kind: payload.target_kind || payload.targetKind || 'manager',
+        target_selector: payload.target_selector || payload.targetSelector || null,
+        metadata: payload.metadata || {},
+      },
+    });
+  }
+
+  async function fleetCreateWorkerOnComputer(payload = {}) {
+    const desktopId = String(payload.desktop_id || payload.desktopId || '').trim();
+    const displayName = String(payload.display_name || payload.displayName || '').trim();
+    if (!desktopId || !displayName) throw new Error('desktop_id and display_name are required');
+    return fleetApi(`/api/fleet/desktops/${encodeURIComponent(desktopId)}/workers`, {
+      method: 'POST',
+      body: { display_name: displayName },
+    });
+  }
+
+  async function fleetRequestComputerPermissions(payload = {}) {
+    const desktopId = String(payload.desktop_id || payload.desktopId || '').trim();
+    if (!desktopId) throw new Error('desktop_id is required');
+    return fleetApi(`/api/fleet/desktops/${encodeURIComponent(desktopId)}/permissions/request`, {
+      method: 'POST',
+      body: {
+        permissions: payload.permissions || {},
+        reason: payload.reason || null,
+      },
+    });
+  }
+
   async function fleetSetActiveIdentity(payload = {}) {
     const identityId = String(payload.identity_id || payload.identityId || '').trim();
     if (!identityId) {
@@ -608,6 +645,9 @@ function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, get
     sanitizeSetupValuesForLocal,
     rememberRuntimeSecretOverlay,
     fleetSnapshot,
+    fleetDelegateToComputer,
+    fleetCreateWorkerOnComputer,
+    fleetRequestComputerPermissions,
     fleetSetActiveIdentity,
     fleetSetIdentityActiveChat,
     fleetCreateLocalWorker,

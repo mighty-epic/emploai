@@ -2,12 +2,6 @@ from __future__ import annotations
 
 # Split from app_server.py; dependencies are injected by the app_server facade.
 
-from shared.provider_availability import (
-    merge_provider_availability,
-    provider_availability_snapshot,
-    provider_availability_sync_targets,
-)
-
 async def _handle_remote_desktop_ws(websocket: WebSocket, auth: Dict[str, Any]) -> None:
 
     if not _is_remote_session_auth(auth) or str(auth.get("actor_kind") or "") != "desktop":
@@ -136,105 +130,127 @@ async def _handle_remote_desktop_ws(websocket: WebSocket, auth: Dict[str, Any]) 
 
                 continue
 
-            if message.type == "state_snapshot":
+            if message.type == "fleet_permission_state":
 
-                snapshot = RemoteDesktopSyncEnvelope.model_validate(message.payload or {})
+                try:
 
-                incoming_provider_availability = snapshot.provider_availability
-
-                provider_availability_changed = False
-
-                aggregate_provider_availability = provider_availability_snapshot(public_only=True)
-
-                if incoming_provider_availability is not None:
-
-                    provider_availability_changed = merge_provider_availability(
-
-                        incoming_provider_availability,
-
-                        source=f"paired_yggdrasil_worker:{desktop_id}",
-
-                    )
-
-                    aggregate_provider_availability = provider_availability_snapshot(public_only=True)
-
-                before_state = store.get_shared_state(user_id=user_id)
-
-                store.update_shared_snapshot(
-
-                    user_id=user_id,
-
-                    desktop_id=desktop_id,
-
-                    snapshot=snapshot.model_dump(),
-
-                )
-
-                if incoming_provider_availability is not None:
-
-                    sync_targets = provider_availability_sync_targets(
-
-                        origin_desktop_id=desktop_id,
-
-                        connected_desktop_ids=manager.connected_desktop_ids_for_user(user_id),
-
-                        incoming_records=incoming_provider_availability,
-
-                        aggregate_records=aggregate_provider_availability,
-
-                        aggregate_changed=provider_availability_changed,
-
-                    )
-
-                    for target_desktop_id in sync_targets:
-
-                        try:
-
-                            await manager.send_command(
-
-                                desktop_id=target_desktop_id,
-
-                                user_id=user_id,
-
-                                command_type="provider_availability_sync",
-
-                                payload={"records": aggregate_provider_availability},
-
-                            )
-
-                        except Exception:
-
-                            logger.exception("[fleet] failed syncing provider availability to %s", target_desktop_id)
-
-                previous_session_id = str(before_state.get("current_session_id") or "").strip() or None
-
-                current_session_id = str(snapshot.current_session_id or "").strip() or None
-
-                if current_session_id != previous_session_id:
-
-                    publish_current_session_changed(
+                    permission_state = store.record_connection_permission_state(
 
                         user_id=user_id,
 
-                        session_id=current_session_id,
+                        desktop_id=desktop_id,
 
-                        previous_session_id=previous_session_id,
+                        policy=dict(message.payload or {}),
 
-                        origin_channel="app",
-
-                        reason="remote_snapshot",
+                        source="paired_desktop",
 
                     )
+
+                    _publish_fleet_delta(
+
+                        user_id=user_id,
+
+                        event_type="fleet_permission_state",
+
+                        payload={"desktop_id": desktop_id, "permission_state": permission_state},
+
+                        origin_channel="worker",
+
+                    )
+
+                except Exception:
+
+                    logger.exception("[fleet] failed applying paired-computer permission state")
+
+                continue
+
+            if message.type == "fleet_delegation_status":
+
+                payload = dict(message.payload or {})
+
+                delegation_id = str(payload.get("delegation_id") or "").strip()
+
+                if delegation_id:
+
+                    try:
+
+                        delegation = store.update_computer_delegation(
+
+                            user_id=user_id,
+
+                            delegation_id=delegation_id,
+
+                            status=str(payload.get("status") or "running"),
+
+                        )
+
+                        _publish_fleet_delta(
+
+                            user_id=user_id,
+
+                            event_type="fleet_delegation_status",
+
+                            payload={"delegation": delegation},
+
+                            origin_channel="worker",
+
+                        )
+
+                    except Exception:
+
+                        logger.exception("[fleet] failed applying computer delegation status")
+
+                continue
+
+            if message.type == "fleet_delegation_report":
+
+                payload = dict(message.payload or {})
+
+                delegation_id = str(payload.get("delegation_id") or "").strip()
+
+                if delegation_id:
+
+                    try:
+
+                        delegation = store.update_computer_delegation(
+
+                            user_id=user_id,
+
+                            delegation_id=delegation_id,
+
+                            status=str(payload.get("status") or "completed"),
+
+                            report=payload,
+
+                        )
+
+                        _publish_fleet_delta(
+
+                            user_id=user_id,
+
+                            event_type="fleet_delegation_report",
+
+                            payload={"delegation": delegation},
+
+                            origin_channel="worker",
+
+                        )
+
+                    except Exception:
+
+                        logger.exception("[fleet] failed applying computer delegation report")
+
+                continue
+
+            if message.type == "state_snapshot":
+
+                logger.warning("[fleet] ignored legacy paired-computer state snapshot from %s", desktop_id)
 
                 continue
 
             if message.type == "sync_event":
 
-                payload = dict(message.payload or {})
-
-                payload.setdefault("origin_channel", "app")
-
-                get_channel_sync_hub().publish(user_id=user_id, event=payload)
+                logger.warning("[fleet] ignored legacy paired-computer sync event from %s", desktop_id)
 
                 continue
 

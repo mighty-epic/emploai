@@ -1,4 +1,5 @@
 import importlib
+from pathlib import Path
 
 
 def test_desktop_runtime_imports_from_preferred_package_name():
@@ -14,3 +15,15 @@ def test_legacy_deploy_windows_runtime_import_paths_alias_preferred_modules():
     assert importlib.import_module("deploy.windows.release_backend") is importlib.import_module("desktop_runtime.backend")
     assert importlib.import_module("deploy.windows.release_runtime") is importlib.import_module("desktop_runtime.config")
     assert importlib.import_module("deploy.windows.release_update") is importlib.import_module("desktop_runtime.update")
+
+
+def test_windows_desktop_scripts_do_not_pass_spaced_paths_through_npm_prefix():
+    root = Path(__file__).resolve().parents[1]
+    for script_name in ("setup.ps1", "start.ps1"):
+        script = (root / "scripts" / "desktop" / script_name).read_text(encoding="utf-8")
+        assert "function Invoke-NpmInDirectory" in script
+        assert "Push-Location -LiteralPath $Directory" in script
+        assert "npm --prefix $DesktopAppDir" not in script
+        assert "npm --prefix $RendererDir" not in script
+        assert 'Invoke-NpmInDirectory $DesktopAppDir @("ci")' in script
+        assert 'Invoke-NpmInDirectory $RendererDir @("ci")' in script

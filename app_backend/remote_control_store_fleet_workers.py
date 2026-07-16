@@ -375,72 +375,82 @@ class RemoteControlStoreFleetWorkerMixin:
                 ensure_manager=False,
             )
             desktop_id = str((session.get("desktop") or {}).get("desktop_id") or "")
-            existing_worker = self._conn.execute(
-                "SELECT * FROM fleet_workers WHERE user_id = ? AND kind = 'remote' AND machine_desktop_id = ? ORDER BY created_at ASC LIMIT 1",
-                (user_id, desktop_id),
-            ).fetchone()
-            worker_id = str(existing_worker["worker_id"]) if existing_worker else f"wrk_{secrets.token_hex(8)}"
-            instance_id = str(existing_worker["instance_id"]) if existing_worker else f"win_{secrets.token_hex(8)}"
-            worker_metadata = _json_loads(existing_worker["metadata"], {}) if existing_worker else {}
-            if not isinstance(worker_metadata, dict):
-                worker_metadata = {}
             enrollment_metadata = _json_loads(enrollment["metadata"], {})
-            if isinstance(enrollment_metadata, dict):
+            if not isinstance(enrollment_metadata, dict):
+                enrollment_metadata = {}
+            connection_only = str(enrollment_metadata.get("transport") or "").strip().lower() == "yggdrasil"
+            created_worker = None
+            if not connection_only:
+                existing_worker = self._conn.execute(
+                    "SELECT * FROM fleet_workers WHERE user_id = ? AND kind = 'remote' AND machine_desktop_id = ? ORDER BY created_at ASC LIMIT 1",
+                    (user_id, desktop_id),
+                ).fetchone()
+                worker_id = str(existing_worker["worker_id"]) if existing_worker else f"wrk_{secrets.token_hex(8)}"
+                instance_id = str(existing_worker["instance_id"]) if existing_worker else f"win_{secrets.token_hex(8)}"
+                worker_metadata = _json_loads(existing_worker["metadata"], {}) if existing_worker else {}
+                if not isinstance(worker_metadata, dict):
+                    worker_metadata = {}
                 worker_metadata.update(enrollment_metadata)
-            worker_metadata.update(
-                {
-                    "machine_name": identity["device_name"] or name,
-                    "device_platform": identity["device_platform"],
-                    "transport": "yggdrasil",
-                }
-            )
+                worker_metadata.update(
+                    {
+                        "machine_name": identity["device_name"] or name,
+                        "device_platform": identity["device_platform"],
+                    }
+                )
+                if existing_worker:
+                    self._conn.execute(
+                        "UPDATE fleet_workers SET display_name = ?, detail = NULL, metadata = ?, updated_at = ?, last_seen_at = ? WHERE worker_id = ?",
+                        (name, _json_dumps(worker_metadata), now, now, worker_id),
+                    )
+                    self._conn.execute(
+                        "UPDATE fleet_instances SET display_name = ?, status = 'active', metadata = ?, updated_at = ?, reset_at = NULL WHERE instance_id = ?",
+                        (name, _json_dumps({"kind": "remote", **worker_metadata}), now, instance_id),
+                    )
+                else:
+                    self._conn.execute(
+                        """
+                        INSERT INTO fleet_workers(
+                            worker_id, user_id, kind, machine_desktop_id, instance_id, display_name, status, detail,
+                            group_id, active_task_id, metadata, created_at, updated_at, last_seen_at
+                        ) VALUES(?, ?, 'remote', ?, ?, ?, 'idle', NULL, NULL, NULL, ?, ?, ?, ?)
+                        """,
+                        (worker_id, user_id, desktop_id, instance_id, name, _json_dumps(worker_metadata), now, now, now),
+                    )
+                    self._conn.execute(
+                        """
+                        INSERT INTO fleet_instances(
+                            instance_id, user_id, role, desktop_id, worker_id, display_name, status, metadata, created_at, updated_at, reset_at
+                        ) VALUES(?, ?, 'worker', ?, ?, ?, 'active', ?, ?, ?, NULL)
+                        """,
+                        (instance_id, user_id, desktop_id, worker_id, name, _json_dumps({"kind": "remote", **worker_metadata}), now, now),
+                    )
+                created_worker = self._worker_view(
+                    self._conn.execute("SELECT * FROM fleet_workers WHERE worker_id = ?", (worker_id,)).fetchone()
+                )
             new_token_hash = _hash_token(str(session.get("session_token") or ""))
             self._conn.execute(
                 "UPDATE remote_sessions SET revoked_at = ? WHERE desktop_id = ? AND token_hash <> ? AND revoked_at IS NULL",
                 (now, desktop_id, new_token_hash),
             )
-            if existing_worker:
-                self._conn.execute(
-                    "UPDATE fleet_workers SET display_name = ?, detail = NULL, metadata = ?, updated_at = ?, last_seen_at = ? WHERE worker_id = ?",
-                    (name, _json_dumps(worker_metadata), now, now, worker_id),
-                )
-                self._conn.execute(
-                    "UPDATE fleet_instances SET display_name = ?, status = 'active', metadata = ?, updated_at = ?, reset_at = NULL WHERE instance_id = ?",
-                    (name, _json_dumps({"kind": "remote", **worker_metadata}), now, instance_id),
-                )
-            else:
-                self._conn.execute(
-                    """
-                    INSERT INTO fleet_workers(
-                        worker_id, user_id, kind, machine_desktop_id, instance_id, display_name, status, detail,
-                        group_id, active_task_id, metadata, created_at, updated_at, last_seen_at
-                    ) VALUES(?, ?, 'remote', ?, ?, ?, 'idle', NULL, NULL, NULL, ?, ?, ?, ?)
-                    """,
-                    (worker_id, user_id, desktop_id, instance_id, name, _json_dumps(worker_metadata), now, now, now),
-                )
-                self._conn.execute(
-                    """
-                    INSERT INTO fleet_instances(
-                        instance_id, user_id, role, desktop_id, worker_id, display_name, status, metadata, created_at, updated_at, reset_at
-                    ) VALUES(?, ?, 'worker', ?, ?, ?, 'active', ?, ?, ?, NULL)
-                    """,
-                    (instance_id, user_id, desktop_id, worker_id, name, _json_dumps({"kind": "remote", **worker_metadata}), now, now),
-                )
             self._conn.execute("UPDATE fleet_enrollments SET used_at = ? WHERE enrollment_id = ?", (now, enrollment["enrollment_id"]))
             self._audit_locked(
                 user_id=user_id,
-                event_type="worker_enrolled",
+                event_type="computer_paired" if connection_only else "worker_enrolled",
                 actor_kind="enrollment",
                 actor_id=enrollment["enrollment_id"],
-                target_kind="worker",
-                target_id=worker_id,
-                metadata={"desktop_id": desktop_id, "reconnected": bool(existing_worker)},
+                target_kind="desktop" if connection_only else "worker",
+                target_id=desktop_id if connection_only else str((created_worker or {}).get("worker_id") or ""),
+                metadata={
+                    "desktop_id": desktop_id,
+                    "transport": "yggdrasil",
+                    "creates_worker": not connection_only,
+                },
             )
             self._conn.commit()
             self._secure_db_files()
             return {
                 **session,
-                "worker": self._worker_view(self._conn.execute("SELECT * FROM fleet_workers WHERE worker_id = ?", (worker_id,)).fetchone()),
+                "worker": created_worker,
             }
 
     def delete_worker(self, *, user_id: int, worker_id: str, wipe_state: bool = True) -> Dict[str, Any]:

@@ -6,10 +6,10 @@ import base64
 import json
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 import httpx
 from websockets.asyncio.client import ClientConnection, connect as websocket_connect
@@ -18,6 +18,13 @@ from app_backend.local_runtime_server import start_runtime_context
 from app_backend.fleet_worker_report import extract_worker_report
 from shared.atomic_io import atomic_write_json
 from shared.fleet_connection import load_fleet_connection
+from shared.fleet_connection_policy import (
+    connection_policy_view,
+    load_connection_policy,
+    normalize_connection_permissions,
+    policy_signature,
+    record_permission_request,
+)
 from shared.runtime_paths import runtime_home
 
 
@@ -28,26 +35,11 @@ REMOTE_CONTROL_DESKTOP_KEY_ENV = "EMPLOAI_REMOTE_DESKTOP_KEY"
 REMOTE_CONTROL_STATUS_PATH_ENV = "EMPLOAI_REMOTE_CONTROL_STATUS_PATH"
 FLEET_ACTIVE_TASK_SESSIONS: Dict[str, str] = {}
 FLEET_STOP_REQUESTED_TASKS: set[str] = set()
-SNAPSHOT_INTERVAL_SECONDS = 1.2
+CONNECTION_STATE_INTERVAL_SECONDS = 1.2
 HEARTBEAT_INTERVAL_SECONDS = 12.0
 POST_FINAL_RELAY_GRACE_SECONDS = 2.0
 REMOTE_CLIENT_ID = "remote-desktop-bridge"
 REMOTE_WS_MAX_SIZE_BYTES = 96 * 1024 * 1024
-
-_FORWARDED_REQUEST_HEADERS = {
-    "accept",
-    "accept-language",
-    "content-type",
-}
-_FORWARDED_RESPONSE_HEADERS = {
-    "cache-control",
-    "content-disposition",
-    "content-language",
-    "content-type",
-    "etag",
-    "last-modified",
-}
-
 
 @dataclass
 class RemoteDesktopConfig:
@@ -56,6 +48,53 @@ class RemoteDesktopConfig:
     desktop_id: str
     desktop_name: str
     device_key: str
+
+
+@dataclass
+class LocalRuntimeCredentials:
+    api_base_url: str
+    access_token: str
+    _refresh_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+
+    @classmethod
+    def from_bootstrap(cls, payload: Dict[str, Any]) -> "LocalRuntimeCredentials":
+        api_base_url = str(payload.get("apiBaseUrl") or "").strip()
+        access_token = str(payload.get("accessToken") or "").strip()
+        if not api_base_url or not access_token:
+            raise RuntimeError("Local desktop runtime is not available for remote relay")
+        return cls(api_base_url=api_base_url, access_token=access_token)
+
+    async def refresh_if_stale(self, stale_access_token: str) -> None:
+        async with self._refresh_lock:
+            if self.access_token != stale_access_token:
+                return
+            bootstrap = await asyncio.to_thread(start_runtime_context)
+            refreshed = LocalRuntimeCredentials.from_bootstrap(bootstrap)
+            self.api_base_url = refreshed.api_base_url
+            self.access_token = refreshed.access_token
+
+
+def _is_local_runtime_auth_error(exc: BaseException) -> bool:
+    return bool(
+        isinstance(exc, httpx.HTTPStatusError)
+        and exc.response is not None
+        and int(exc.response.status_code) == 401
+    )
+
+
+async def _with_local_runtime_credentials(
+    credentials: LocalRuntimeCredentials,
+    operation: Callable[[str, str], Awaitable[Any]],
+) -> Any:
+    api_base_url = credentials.api_base_url
+    access_token = credentials.access_token
+    try:
+        return await operation(api_base_url, access_token)
+    except Exception as exc:
+        if not _is_local_runtime_auth_error(exc):
+            raise
+    await credentials.refresh_if_stale(access_token)
+    return await operation(credentials.api_base_url, credentials.access_token)
 
 
 def _remote_status_path() -> Optional[Path]:
@@ -115,13 +154,13 @@ def load_remote_desktop_config() -> RemoteDesktopConfig:
     desktop_name = str(
         os.getenv(REMOTE_CONTROL_DESKTOP_NAME_ENV, "")
         or (desktop or {}).get("display_name")
-        or "EmploAI Fleet Worker"
+        or "Paired EmploAI Computer"
     ).strip()
     device_key = str(os.getenv(REMOTE_CONTROL_DESKTOP_KEY_ENV, "") or "").strip() or "desktop-default"
     if not remote_base_url:
         raise RuntimeError("A locally paired Yggdrasil Fleet manager is required")
     if not session_token or not desktop_id:
-        raise RuntimeError("The Fleet connection is missing its worker session token or desktop identity")
+        raise RuntimeError("The Fleet connection is missing its session token or paired-computer identity")
     return RemoteDesktopConfig(
         remote_base_url=remote_base_url,
         session_token=session_token,
@@ -135,7 +174,7 @@ def _ws_url_from_base(base_url: str, path: str) -> str:
     normalized = _normalize_base_url(base_url)
     if normalized.startswith("http://"):
         return f"ws://{normalized[len('http://'):]}/{path.lstrip('/')}"
-    raise RuntimeError("Fleet workers only connect to directly paired Yggdrasil managers over HTTP")
+    raise RuntimeError("Paired computers only connect to their Yggdrasil manager over HTTP")
 
 
 async def _request_json(
@@ -159,150 +198,9 @@ async def _request_json(
     return payload
 
 
-async def _request_list(
-    client: httpx.AsyncClient,
-    *,
-    url: str,
-    token: str,
-) -> list[dict[str, Any]]:
-    response = await client.get(url, headers={"Authorization": f"Bearer {token}"})
-    response.raise_for_status()
-    payload = response.json()
-    if not isinstance(payload, list):
-        raise RuntimeError(f"Unexpected response shape from {url}")
-    return [item for item in payload if isinstance(item, dict)]
-
-
-def _filtered_headers(raw: Dict[str, Any], allowed: set[str]) -> Dict[str, str]:
-    headers: Dict[str, str] = {}
-    for key, value in dict(raw or {}).items():
-        normalized = str(key or "").strip().lower()
-        if not normalized or normalized not in allowed:
-            continue
-        headers[normalized] = str(value)
-    return headers
-
-
-async def _relay_local_http_request(
-    client: httpx.AsyncClient,
-    *,
-    local_api_base_url: str,
-    local_token: str,
-    payload: Dict[str, Any],
-) -> Dict[str, Any]:
-    method = str(payload.get("method") or "GET").strip().upper()
-    path = str(payload.get("path") or "").strip()
-    query_string = str(payload.get("query_string") or "").strip()
-    if not path.startswith("/api/app/"):
-        raise RuntimeError("Remote HTTP relay only supports /api/app paths")
-
-    url = f"{local_api_base_url.rstrip('/')}{path}"
-    if query_string:
-        url = f"{url}?{query_string}"
-
-    headers = _filtered_headers(dict(payload.get("headers") or {}), _FORWARDED_REQUEST_HEADERS)
-    headers["authorization"] = f"Bearer {local_token}"
-
-    body_base64 = str(payload.get("body_base64") or "")
-    body = base64.b64decode(body_base64) if body_base64 else b""
-    response = await client.request(method, url, headers=headers, content=body)
-    response_headers = _filtered_headers(dict(response.headers), _FORWARDED_RESPONSE_HEADERS)
-    return {
-        "status_code": int(response.status_code),
-        "headers": response_headers,
-        "body_base64": base64.b64encode(response.content).decode("ascii"),
-    }
-
-
-async def _collect_local_snapshot(local_api_base_url: str, local_token: str) -> Dict[str, Any]:
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        profile = await _request_json(
-            client,
-            method="GET",
-            url=f"{local_api_base_url}/api/app/me",
-            token=local_token,
-        )
-        sessions = await _request_list(
-            client,
-            url=f"{local_api_base_url}/api/app/sessions",
-            token=local_token,
-        )
-        jobs = await _request_list(
-            client,
-            url=f"{local_api_base_url}/api/app/jobs",
-            token=local_token,
-        )
-        sidebar_state = await _request_json(
-            client,
-            method="GET",
-            url=f"{local_api_base_url}/api/app/sidebar-state",
-            token=local_token,
-        )
-        try:
-            provider_availability = await _request_json(
-                client,
-                method="GET",
-                url=f"{local_api_base_url}/api/app/provider-availability",
-                token=local_token,
-            )
-        except Exception:
-            provider_availability = {"records": []}
-        current_session_id = str(profile.get("current_session_id") or "").strip() or None
-        session_details: Dict[str, Any] = {}
-        if current_session_id:
-            try:
-                detail = await _request_json(
-                    client,
-                    method="GET",
-                    url=f"{local_api_base_url}/api/app/sessions/{current_session_id}",
-                    token=local_token,
-                )
-                session_details[current_session_id] = detail
-            except Exception:
-                logger.exception("Failed collecting local detail for session %s", current_session_id)
-        return {
-            "current_session_id": current_session_id,
-            "current_model": profile.get("current_model"),
-            "current_variant": profile.get("current_variant"),
-            "sessions": sessions,
-            "session_details": session_details,
-            "jobs": jobs,
-            "sidebar_state": dict(sidebar_state.get("state") or {}),
-            "provider_availability": list(provider_availability.get("records") or []),
-        }
-
-
 async def _send_json(ws: ClientConnection, send_lock: asyncio.Lock, payload: Dict[str, Any]) -> None:
     async with send_lock:
         await ws.send(json.dumps(payload))
-
-
-def _map_local_ws_event_to_sync_event(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    event_type = str(data.get("type") or "").strip()
-    session_id = str(data.get("session_id") or "").strip() or None
-    payload = dict(data.get("payload") or {})
-    if event_type in {
-        "user_message",
-        "assistant_delta",
-        "assistant_final",
-        "run_failed",
-        "tool_event",
-        "log",
-        "status",
-        "warning",
-        "error",
-        "task_board",
-        "timeline_event",
-        "session_sync",
-        "current_session_changed",
-        "artifact_created",
-    }:
-        return {
-            "type": event_type,
-            "session_id": session_id,
-            "payload": payload,
-        }
-    return None
 
 
 def _terminal_local_chat_event_error(data: Dict[str, Any]) -> Optional[str]:
@@ -370,16 +268,6 @@ async def _relay_local_chat_command(
                     break
                 raise
             data = json.loads(raw)
-            mapped = _map_local_ws_event_to_sync_event(data)
-            if mapped is not None:
-                await _send_json(
-                    remote_ws,
-                    send_lock,
-                    {
-                        "type": "sync_event",
-                        "payload": mapped,
-                    },
-                )
             event_type = str(data.get("type") or "")
             if event_type == "assistant_final":
                 seen_assistant_final = True
@@ -413,99 +301,186 @@ async def _handle_command(
 ) -> Optional[Dict[str, Any]]:
     timeout = httpx.Timeout(120.0, connect=30.0, read=120.0, write=120.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        if command_name == "provider_availability_sync":
-            records = [item for item in list(payload.get("records") or [])[:100] if isinstance(item, dict)]
-            return await _request_json(
-                client,
-                method="POST",
-                url=f"{local_api_base_url}/api/app/provider-availability/sync",
-                token=local_token,
-                json_body={"records": records, "source": "paired_yggdrasil_manager"},
+        home = runtime_home()
+        policy = load_connection_policy(home) if home else connection_policy_view({})
+        permissions = normalize_connection_permissions(policy.get("permissions"))
+
+        if command_name == "fleet_permission_request":
+            if not home:
+                raise RuntimeError("The local runtime home is unavailable")
+            return record_permission_request(
+                home,
+                request_id=str(payload.get("request_id") or "").strip() or None,
+                requested=dict(payload.get("permissions") or {}),
+                reason=str(payload.get("reason") or "").strip() or None,
             )
 
-        if command_name == "http_request":
-            return await _relay_local_http_request(
-                client,
-                local_api_base_url=local_api_base_url,
-                local_token=local_token,
-                payload=payload,
-            )
-
-        if command_name == "create_session":
+        if command_name == "fleet_create_local_worker":
+            if not permissions.get("create_workers", False):
+                raise PermissionError("Creating workers from the paired manager is not allowed on this computer")
+            display_name = str(payload.get("display_name") or "").strip()
+            if not display_name:
+                raise ValueError("display_name is required")
             response = await client.post(
-                f"{local_api_base_url}/api/app/sessions",
+                f"{local_api_base_url}/api/fleet/workers/local",
                 headers={"Authorization": f"Bearer {local_token}"},
                 json={
-                    "name": payload.get("name"),
-                    "workspace": payload.get("workspace"),
-                        "workspace_id": payload.get("workspace_id"),
-                        "workspace_binding_status": payload.get("workspace_binding_status"),
-                        "telegram_bot_config_id": payload.get("telegram_bot_config_id"),
-                        "enabled_tool_packs": payload.get("enabled_tool_packs") or [],
-                        "security_permission_mode": payload.get("security_permission_mode"),
-                        "headless_eligible": bool(payload.get("headless_eligible", False)),
-                        "fleet_identity_id": payload.get("fleet_identity_id"),
-                        "fleet_identity_role": payload.get("fleet_identity_role"),
-                        "fleet_worker_id": payload.get("fleet_worker_id"),
+                    "display_name": display_name,
+                    "metadata": {"created_by": "paired_manager_request"},
+                },
+            )
+            response.raise_for_status()
+            created = response.json()
+            worker = created if isinstance(created, dict) else {}
+            return {
+                "created": True,
+                "display_name": str(worker.get("display_name") or display_name),
+                "detail": "The worker was created locally on the paired computer.",
+            }
+
+        if command_name == "fleet_delegate":
+            delegation_id = str(payload.get("delegation_id") or "").strip()
+            prompt = str(payload.get("prompt") or "").strip()
+            target_kind = str(payload.get("target_kind") or "manager").strip().lower()
+            target_selector = str(payload.get("target_selector") or "").strip()
+            if not delegation_id or not prompt:
+                raise ValueError("delegation_id and prompt are required")
+            if target_kind not in {"manager", "worker"}:
+                raise ValueError("target_kind must be manager or worker")
+            permission_key = "delegate_workers" if target_kind == "worker" else "delegate_manager"
+            if not permissions.get(permission_key, False):
+                raise PermissionError(f"Delegating to the local {target_kind} agent is not allowed on this computer")
+
+            await _send_json(
+                remote_ws,
+                send_lock,
+                {
+                    "type": "fleet_delegation_status",
+                    "payload": {"delegation_id": delegation_id, "status": "running"},
+                },
+            )
+            try:
+                local_fleet = await _request_json(
+                    client,
+                    method="GET",
+                    url=f"{local_api_base_url}/api/fleet/snapshot",
+                    token=local_token,
+                )
+                identities = [item for item in list(local_fleet.get("identities") or []) if isinstance(item, dict)]
+                if target_kind == "manager":
+                    identity = next((item for item in identities if str(item.get("role") or "") == "manager"), None)
+                else:
+                    needle = target_selector.casefold()
+                    identity = next(
+                        (
+                            item for item in identities
+                            if str(item.get("role") or "") == "worker"
+                            and needle
+                            and needle in {
+                                str(item.get("identity_id") or "").casefold(),
+                                str(item.get("worker_id") or "").casefold(),
+                                str(item.get("display_name") or "").casefold(),
+                            }
+                        ),
+                        None,
+                    )
+                if not identity:
+                    target_label = f"worker {target_selector!r}" if target_kind == "worker" else "manager"
+                    raise LookupError(f"The local {target_label} agent was not found")
+
+                response = await client.post(
+                    f"{local_api_base_url}/api/app/sessions",
+                    headers={"Authorization": f"Bearer {local_token}"},
+                    json={
+                        "name": f"Delegation {delegation_id[-6:]}",
+                        "enabled_tool_packs": [],
+                        "headless_eligible": True,
+                        "fleet_identity_id": identity.get("identity_id"),
+                        "fleet_identity_role": identity.get("role"),
+                        "fleet_worker_id": identity.get("worker_id"),
                     },
                 )
-            response.raise_for_status()
-            result = response.json()
-            return result if isinstance(result, dict) else {}
+                response.raise_for_status()
+                created = response.json()
+                session_payload = created.get("session") if isinstance(created, dict) else {}
+                session_id = str((session_payload or {}).get("id") or "").strip() or None
+                if not session_id:
+                    raise RuntimeError("The local agent session could not be created")
+                FLEET_ACTIVE_TASK_SESSIONS[delegation_id] = session_id
+                result = await _relay_local_chat_command(
+                    local_api_base_url=local_api_base_url,
+                    local_token=local_token,
+                    session_id=session_id,
+                    text=prompt,
+                    source_format="fleet_delegation",
+                    interrupt_policy="none",
+                    source_client_id=f"fleet-delegation:{delegation_id}",
+                    remote_ws=remote_ws,
+                    send_lock=send_lock,
+                )
+                failure = result.get("failure") if isinstance(result.get("failure"), dict) else None
+                summary = str(result.get("assistant_text") or "").strip()
+                report = {
+                    "delegation_id": delegation_id,
+                    "status": "failed" if failure else "completed",
+                    "summary": str((failure or {}).get("user_message") or summary or "Delegation completed."),
+                    "evidence": [],
+                    "artifacts": [],
+                    "blockers": [
+                        {
+                            "code": str(failure.get("code") or "provider_failed"),
+                            "message": str(failure.get("user_message") or "The provider could not complete this delegation."),
+                        }
+                    ] if failure else [],
+                    "confidence": "low" if failure else "medium",
+                    "next_suggested_action": "Review the provider configuration on the paired computer." if failure else None,
+                    "target_kind": target_kind,
+                    "target_label": str(identity.get("display_name") or target_kind),
+                }
+                parsed = extract_worker_report(summary) if summary and not failure else None
+                if parsed:
+                    for key in ("status", "summary", "evidence", "artifacts", "blockers", "confidence", "next_suggested_action"):
+                        if parsed.get(key) is not None:
+                            report[key] = parsed.get(key)
+                await _send_json(remote_ws, send_lock, {"type": "fleet_delegation_report", "payload": report})
+                return report
+            except Exception as exc:
+                report = {
+                    "delegation_id": delegation_id,
+                    "status": "failed",
+                    "summary": "The paired computer could not complete the delegation.",
+                    "evidence": [],
+                    "artifacts": [],
+                    "blockers": [str(exc)],
+                    "confidence": "low",
+                    "next_suggested_action": "Check the target agent name and connection permissions, then retry.",
+                    "target_kind": target_kind,
+                }
+                await _send_json(remote_ws, send_lock, {"type": "fleet_delegation_report", "payload": report})
+                raise
+            finally:
+                FLEET_ACTIVE_TASK_SESSIONS.pop(delegation_id, None)
 
-        if command_name == "activate_session":
-            session_id = str(payload.get("session_id") or "").strip()
-            if not session_id:
-                return None
-            response = await client.post(
-                f"{local_api_base_url}/api/app/sessions/{session_id}/activate",
-                headers={"Authorization": f"Bearer {local_token}"},
+        if command_name in {
+            "provider_availability_sync",
+            "http_request",
+            "create_session",
+            "activate_session",
+            "delete_session",
+            "rename_session",
+            "chat_send",
+            "pause_run",
+            "stop_run",
+            "restart_runtime",
+            "update_sidebar_state",
+        }:
+            raise PermissionError(
+                "Paired computers accept Fleet delegation envelopes only; direct runtime, chat, session, provider, sidebar, and HTTP control is disabled"
             )
-            response.raise_for_status()
-            result = response.json()
-            return result if isinstance(result, dict) else {}
-
-        if command_name == "delete_session":
-            session_id = str(payload.get("session_id") or "").strip()
-            if not session_id:
-                return None
-            response = await client.delete(
-                f"{local_api_base_url}/api/app/sessions/{session_id}",
-                headers={"Authorization": f"Bearer {local_token}"},
-            )
-            response.raise_for_status()
-            result = response.json()
-            return result if isinstance(result, dict) else {}
-
-        if command_name == "rename_session":
-            session_id = str(payload.get("session_id") or "").strip()
-            name = str(payload.get("name") or "").strip()
-            if not session_id or not name:
-                return None
-            response = await client.put(
-                f"{local_api_base_url}/api/app/sessions/{session_id}",
-                headers={"Authorization": f"Bearer {local_token}"},
-                json={"name": name},
-            )
-            response.raise_for_status()
-            result = response.json()
-            return result if isinstance(result, dict) else {}
-
-        if command_name == "chat_send":
-            await _relay_local_chat_command(
-                local_api_base_url=local_api_base_url,
-                local_token=local_token,
-                session_id=str(payload.get("session_id") or "").strip() or None,
-                text=str(payload.get("text") or ""),
-                source_format=str(payload.get("source_format") or "app_text"),
-                interrupt_policy=str(payload.get("interrupt_policy") or "none"),
-                source_client_id=str(payload.get("source_client_id") or "").strip() or None,
-                remote_ws=remote_ws,
-                send_lock=send_lock,
-            )
-            return None
 
         if command_name == "fleet_run_task":
+            if not permissions.get("delegate_workers", False):
+                raise PermissionError("Delegating to local workers is not allowed on this computer")
             task_id = str(payload.get("task_id") or "").strip()
             worker_id = str(payload.get("worker_id") or "").strip()
             worker_name = str(payload.get("worker_name") or "").strip() or "Worker"
@@ -699,45 +674,7 @@ async def _handle_command(
                 FLEET_STOP_REQUESTED_TASKS.discard(task_id)
 
         if command_name == "fleet_worker_preview":
-            preview_id = str(payload.get("preview_id") or "").strip()
-            worker_id = str(payload.get("worker_id") or "").strip()
-            worker_name = str(payload.get("display_name") or payload.get("worker_name") or "").strip() or "Worker"
-            if not preview_id or not worker_id:
-                raise ValueError("preview_id and worker_id are required")
-            response = await client.get(
-                f"{local_api_base_url}/api/app/screenshot/current",
-                headers={"Authorization": f"Bearer {local_token}"},
-                params={"max_width": 1280, "quality": 68},
-            )
-            response.raise_for_status()
-            capture = response.json()
-            if not isinstance(capture, dict) or not str(capture.get("image_base64") or "").strip():
-                raise RuntimeError("Worker desktop returned an empty preview capture")
-            detail = f"Captured the current desktop used by {worker_name}."
-            await _send_json(
-                remote_ws,
-                send_lock,
-                {
-                    "type": "status",
-                    "payload": {
-                        "message": f"Preview requested for {worker_name}.",
-                        "fleet_preview": {
-                            "preview_id": preview_id,
-                            "worker_id": worker_id,
-                            "status": "captured",
-                            "detail": detail,
-                            "view_only": True,
-                        },
-                    },
-                },
-            )
-            return {
-                "preview_id": preview_id,
-                "worker_id": worker_id,
-                "status": "captured",
-                "detail": detail,
-                "capture": capture,
-            }
+            raise PermissionError("Screen previews are not part of a paired-computer Fleet connection")
 
         if command_name == "fleet_stop_task":
             task_id = str(payload.get("task_id") or "").strip()
@@ -759,80 +696,26 @@ async def _handle_command(
             response.raise_for_status()
             return {"stopped": True, "task_id": task_id, "session_id": session_id}
 
-        if command_name == "pause_run":
-            target = str(payload.get("session_id") or "").strip() or None
-            params = f"?session_id={target}" if target else ""
-            response = await client.post(
-                f"{local_api_base_url}/api/app/agent/control/pause{params}",
-                headers={"Authorization": f"Bearer {local_token}"},
-            )
-            response.raise_for_status()
-            return None
-
-        if command_name == "stop_run":
-            target = str(payload.get("session_id") or "").strip() or None
-            params = f"?session_id={target}" if target else ""
-            response = await client.post(
-                f"{local_api_base_url}/api/app/agent/control/stop{params}",
-                headers={"Authorization": f"Bearer {local_token}"},
-            )
-            response.raise_for_status()
-            return None
-
-        if command_name == "restart_runtime":
-            target = str(payload.get("session_id") or "").strip() or None
-            params = f"?session_id={target}" if target else ""
-            response = await client.post(
-                f"{local_api_base_url}/api/app/agent/control/restart{params}",
-                headers={"Authorization": f"Bearer {local_token}"},
-            )
-            response.raise_for_status()
-            return None
-
-        if command_name == "update_sidebar_state":
-            response = await client.put(
-                f"{local_api_base_url}/api/app/sidebar-state",
-                headers={
-                    "Authorization": f"Bearer {local_token}",
-                    "Content-Type": "application/json",
-                },
-                json={"state": dict(payload.get("state") or {})},
-            )
-            response.raise_for_status()
-            return None
-
-    return None
+        raise ValueError(f"Unsupported paired-computer command: {command_name or '<empty>'}")
 
 
-async def _snapshot_loop(
+async def _connection_state_loop(
     ws: ClientConnection,
     *,
     send_lock: asyncio.Lock,
-    local_api_base_url: str,
-    local_token: str,
     desktop_id: str,
     desktop_name: str,
 ) -> None:
     last_signature = ""
     last_heartbeat_at = 0.0
     while True:
-        snapshot = await _collect_local_snapshot(local_api_base_url, local_token)
-        envelope = {
-            "desktop_id": desktop_id,
-            "desktop_name": desktop_name,
-            "current_session_id": snapshot.get("current_session_id"),
-            "current_model": snapshot.get("current_model"),
-            "current_variant": snapshot.get("current_variant"),
-            "sessions": snapshot.get("sessions") or [],
-            "session_details": snapshot.get("session_details") or {},
-            "jobs": snapshot.get("jobs") or [],
-            "sidebar_state": snapshot.get("sidebar_state") or {},
-            "provider_availability": snapshot.get("provider_availability") or [],
-        }
-        signature = json.dumps(envelope, sort_keys=True, ensure_ascii=False)
+        home = runtime_home()
+        policy = load_connection_policy(home) if home else connection_policy_view({})
+        envelope = {"desktop_id": desktop_id, "desktop_name": desktop_name, **policy}
+        signature = policy_signature(envelope)
         if signature != last_signature:
             last_signature = signature
-            await _send_json(ws, send_lock, {"type": "state_snapshot", "payload": envelope})
+            await _send_json(ws, send_lock, {"type": "fleet_permission_state", "payload": envelope})
 
         now = asyncio.get_running_loop().time()
         if now - last_heartbeat_at >= HEARTBEAT_INTERVAL_SECONDS:
@@ -845,38 +728,7 @@ async def _snapshot_loop(
                     "payload": {"detail": "desktop client alive"},
                 },
             )
-        await asyncio.sleep(SNAPSHOT_INTERVAL_SECONDS)
-
-
-async def _send_snapshot_once(
-    ws: ClientConnection,
-    *,
-    send_lock: asyncio.Lock,
-    local_api_base_url: str,
-    local_token: str,
-    desktop_id: str,
-    desktop_name: str,
-) -> None:
-    snapshot = await _collect_local_snapshot(local_api_base_url, local_token)
-    await _send_json(
-        ws,
-        send_lock,
-        {
-            "type": "state_snapshot",
-            "payload": {
-                "desktop_id": desktop_id,
-                "desktop_name": desktop_name,
-                "current_session_id": snapshot.get("current_session_id"),
-                "current_model": snapshot.get("current_model"),
-                "current_variant": snapshot.get("current_variant"),
-                "sessions": snapshot.get("sessions") or [],
-                "session_details": snapshot.get("session_details") or {},
-                "jobs": snapshot.get("jobs") or [],
-                "sidebar_state": snapshot.get("sidebar_state") or {},
-                "provider_availability": snapshot.get("provider_availability") or [],
-            },
-        },
-    )
+        await asyncio.sleep(CONNECTION_STATE_INTERVAL_SECONDS)
 
 
 async def _send_command_result(
@@ -896,7 +748,15 @@ async def _send_command_result(
     else:
         if isinstance(error, httpx.HTTPStatusError) and error.response is not None:
             payload["status_code"] = int(error.response.status_code)
-            payload["error"] = error.response.text or str(error)
+            try:
+                response_payload = error.response.json()
+            except Exception:
+                response_payload = None
+            if isinstance(response_payload, dict):
+                response_detail = response_payload.get("detail") or response_payload.get("message")
+            else:
+                response_detail = None
+            payload["error"] = str(response_detail or error.response.text or str(error)).strip()[:2000]
         else:
             payload["error"] = str(error or "Remote desktop command failed")
         payload["error_type"] = type(error).__name__ if error else "RuntimeError"
@@ -918,14 +778,10 @@ async def run_remote_desktop_client() -> None:
     remote_token = config.session_token
     desktop_id = config.desktop_id
 
-    local_bootstrap = start_runtime_context()
-    local_api_base_url = str(local_bootstrap.get("apiBaseUrl") or "").strip()
-    local_token = str(local_bootstrap.get("accessToken") or "").strip()
-    if not local_api_base_url or not local_token:
-        raise RuntimeError("Local desktop runtime is not available for remote relay")
+    credentials = LocalRuntimeCredentials.from_bootstrap(start_runtime_context())
     _write_remote_status(
         state="starting",
-        detail="Fleet worker paired. Connecting directly to its manager...",
+        detail="Computer paired. Connecting directly to its manager...",
         desktop_id=desktop_id,
         desktop_name=config.desktop_name,
     )
@@ -940,18 +796,16 @@ async def run_remote_desktop_client() -> None:
             async with websocket_connect(remote_ws_url, max_size=REMOTE_WS_MAX_SIZE_BYTES) as ws:
                 _write_remote_status(
                     state="running",
-                    detail="Fleet worker is connected directly to its Yggdrasil manager.",
+                    detail="Paired computer is connected directly to its Yggdrasil manager.",
                     desktop_id=desktop_id,
                     desktop_name=config.desktop_name,
                     ready=True,
                 )
                 send_lock = asyncio.Lock()
-                snapshot_task = asyncio.create_task(
-                    _snapshot_loop(
+                connection_state_task = asyncio.create_task(
+                    _connection_state_loop(
                         ws,
                         send_lock=send_lock,
-                        local_api_base_url=local_api_base_url,
-                        local_token=local_token,
                         desktop_id=desktop_id,
                         desktop_name=config.desktop_name,
                     )
@@ -965,13 +819,16 @@ async def run_remote_desktop_client() -> None:
                     if not command_name:
                         return
                     try:
-                        result = await _handle_command(
-                            command_name=command_name,
-                            payload=payload,
-                            local_api_base_url=local_api_base_url,
-                            local_token=local_token,
-                            remote_ws=ws,
-                            send_lock=send_lock,
+                        result = await _with_local_runtime_credentials(
+                            credentials,
+                            lambda api_base_url, access_token: _handle_command(
+                                command_name=command_name,
+                                payload=payload,
+                                local_api_base_url=api_base_url,
+                                local_token=access_token,
+                                remote_ws=ws,
+                                send_lock=send_lock,
+                            ),
                         )
                         await _send_command_result(
                             ws,
@@ -989,18 +846,6 @@ async def run_remote_desktop_client() -> None:
                             ok=False,
                             error=exc,
                         )
-                    finally:
-                        try:
-                            await _send_snapshot_once(
-                                ws,
-                                send_lock=send_lock,
-                                local_api_base_url=local_api_base_url,
-                                local_token=local_token,
-                                desktop_id=desktop_id,
-                                desktop_name=config.desktop_name,
-                            )
-                        except Exception:
-                            logger.exception("Failed sending post-command remote snapshot")
 
                 try:
                     async for raw in ws:
@@ -1011,7 +856,7 @@ async def run_remote_desktop_client() -> None:
                         command_tasks.add(task)
                         task.add_done_callback(command_tasks.discard)
                 finally:
-                    snapshot_task.cancel()
+                    connection_state_task.cancel()
                     for task in list(command_tasks):
                         task.cancel()
         except asyncio.CancelledError:

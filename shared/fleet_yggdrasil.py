@@ -343,26 +343,56 @@ def fetch_public_peers(*, limit: int = DEFAULT_PUBLIC_PEER_LIMIT) -> list[str]:
     return peers or list(FALLBACK_PUBLIC_PEERS[:max(1, limit)])
 
 
-def render_peers_block(peers: list[str]) -> str:
+def render_peers_block(peers: list[str], *, indent: str = "") -> str:
     clean = [str(peer or "").strip() for peer in peers if str(peer or "").strip()]
-    return "Peers: [\n" + "\n".join(f"  {peer}" for peer in clean) + "\n]"
+    return (
+        f"{indent}Peers: [\n"
+        + "\n".join(f"{indent}  {peer}" for peer in clean)
+        + f"\n{indent}]"
+    )
+
+
+def _peer_block_matches(config_text: str) -> list[re.Match[str]]:
+    inline_pattern = re.compile(r"(?m)^(?P<indent>[ \t]*)Peers:\s*\[\s*\]\s*$")
+    multiline_pattern = re.compile(
+        r"(?ms)^(?P<indent>[ \t]*)Peers:\s*\[\s*\n.*?^(?P=indent)\]\s*$"
+    )
+    matches = [*inline_pattern.finditer(config_text), *multiline_pattern.finditer(config_text)]
+    return sorted(matches, key=lambda match: match.start())
 
 
 def update_yggdrasil_peers_config(config_text: str, peers: list[str]) -> tuple[str, bool]:
     clean_peers = [str(peer or "").strip() for peer in peers if str(peer or "").strip()]
     if not clean_peers:
         return config_text, False
-    if all(peer in config_text for peer in clean_peers):
-        return config_text, False
-    block = render_peers_block(clean_peers)
-    pattern = re.compile(r"(?ms)^Peers:\s*\[(.*?)^\]")
-    if pattern.search(config_text):
-        return pattern.sub(block, config_text, count=1), True
-    inline_pattern = re.compile(r"(?m)^Peers:\s*\[\s*\]\s*$")
-    if inline_pattern.search(config_text):
-        return inline_pattern.sub(block, config_text, count=1), True
+    matches = _peer_block_matches(config_text)
+    if matches:
+        primary = matches[0]
+        indent = primary.groupdict().get("indent") or ""
+        block = render_peers_block(clean_peers, indent=indent)
+        primary_text = primary.group(0).strip()
+        duplicates = matches[1:]
+        if all(peer in primary_text for peer in clean_peers) and not duplicates:
+            return config_text, False
+
+        updated = config_text
+        for duplicate in reversed(duplicates):
+            updated = updated[: duplicate.start()] + updated[duplicate.end() :]
+        updated = updated[: primary.start()] + block + updated[primary.end() :]
+        return updated.rstrip() + "\n", True
+
+    root_close = list(re.finditer(r"(?m)^}\s*$", config_text))
+    if root_close:
+        close = root_close[-1]
+        key_indent_match = re.search(r"(?m)^(?P<indent>[ \t]+)[A-Za-z][A-Za-z0-9]*:\s*", config_text)
+        indent = key_indent_match.group("indent") if key_indent_match else "  "
+        block = render_peers_block(clean_peers, indent=indent)
+        prefix = config_text[: close.start()].rstrip()
+        suffix = config_text[close.start() :]
+        return f"{prefix}\n\n{block}\n{suffix.rstrip()}\n", True
+
     suffix = "" if config_text.endswith("\n") else "\n"
-    return f"{config_text}{suffix}\n{block}\n", True
+    return f"{config_text}{suffix}\n{render_peers_block(clean_peers)}\n", True
 
 
 def configure_yggdrasil_public_peers(*, limit: int = DEFAULT_PUBLIC_PEER_LIMIT) -> dict[str, Any]:
@@ -578,6 +608,8 @@ def write_remote_worker_session(
     completed: Mapping[str, Any],
     pairing_payload: Mapping[str, Any],
 ) -> Path:
+    from shared.fleet_connection_policy import DEFAULT_CONNECTION_PERMISSIONS
+
     token = str(completed.get("session_token") or "").strip()
     if not token:
         raise RuntimeError("Fleet enrollment did not return a worker session token")
@@ -594,5 +626,9 @@ def write_remote_worker_session(
             "managerPublicKey": pairing_payload.get("manager_public_key"),
             "pairedAt": int(time.time()),
         },
+        "connectionVersion": 2,
+        "permissions": dict(DEFAULT_CONNECTION_PERMISSIONS),
+        "permissionsUpdatedAt": int(time.time()),
+        "permissionsUpdatedBy": "pairing_default",
     }
     return write_fleet_connection(home=home, payload=payload)

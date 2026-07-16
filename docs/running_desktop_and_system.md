@@ -1,6 +1,6 @@
 # Running the EmploAI Desktop and Local System
 
-This is the operator runbook for getting EmploAI working from a fresh checkout. It covers the normal desktop launch, manual runtime commands, model providers, Jarvis voice packs, Fleet workers over Yggdrasil, diagnostics, tests, and common recovery steps.
+This is the operator runbook for getting EmploAI working from a fresh checkout. It covers the normal desktop launch, manual runtime commands, model providers, Jarvis voice packs, Fleet computer connections over Yggdrasil, diagnostics, tests, and common recovery steps.
 
 EmploAI is local-first:
 
@@ -371,7 +371,7 @@ Open Fleet and create a local worker. No network overlay is required for workers
 
 ## 13. Fleet Between Computers with Yggdrasil
 
-Yggdrasil provides direct manager/worker connectivity without an EmploAI cloud backend.
+Yggdrasil connects EmploAI computers directly without an account or EmploAI cloud backend. Pairing a computer does not create a worker and does not copy chats, agents, settings, files, or provider state.
 
 Run the setup on both computers from their EmploAI checkout:
 
@@ -385,21 +385,21 @@ Windows may request administrator permission during installation.
 
 ### Manager computer
 
-Create a short-lived pairing token:
+Create a short-lived pairing token for one additional computer:
 
 ```powershell
 npm run fleet:yggdrasil:pair
 ```
 
-The command prints an `emploai-yggdrasil-v1...` token and configures the manager runtime for Yggdrasil reachability.
+The command prints an `emploai-yggdrasil-v1...` token and configures the manager runtime for Yggdrasil reachability. Create a separate single-use code from this same manager for every additional computer.
 
 Optional token controls:
 
 ```powershell
-python -m desktop_runtime.backend fleet-yggdrasil-pair --display-name "Office worker" --expires-in-seconds 1800 --configure-manager-bind
+python -m desktop_runtime.backend fleet-yggdrasil-pair --display-name "Office computer" --expires-in-seconds 1800 --configure-manager-bind
 ```
 
-### Worker computer
+### Other computer
 
 Use the token printed by the manager:
 
@@ -407,15 +407,15 @@ Use the token printed by the manager:
 npm run fleet:yggdrasil:join -- <pairing-token>
 ```
 
-The join command writes the local Yggdrasil session and starts the remote worker relay.
+The join command saves the durable computer connection and starts its paired-computer relay. That computer keeps its own local manager and workers; the manager can send delegation messages only after the other computer reports and allows its connection permissions.
 
-To enroll without starting the worker immediately:
+To save the connection without starting the relay immediately:
 
 ```powershell
-python -m desktop_runtime.backend fleet-yggdrasil-join <pairing-token> --no-start-worker
+python -m desktop_runtime.backend fleet-yggdrasil-join <pairing-token> --no-start-relay
 ```
 
-Start the worker relay manually:
+Start the paired-computer relay manually:
 
 ```powershell
 python -m desktop_runtime.backend run-remote-control-worker

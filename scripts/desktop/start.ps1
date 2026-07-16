@@ -56,6 +56,20 @@ function Invoke-BestEffort {
     }
 }
 
+function Invoke-NpmInDirectory {
+    param(
+        [string] $Directory,
+        [string[]] $NpmArgs
+    )
+
+    Push-Location -LiteralPath $Directory
+    try {
+        & npm @NpmArgs
+    } finally {
+        Pop-Location
+    }
+}
+
 function Test-NodeModules {
     param([string] $PackageDir)
     return Test-Path (Join-Path $PackageDir "node_modules")
@@ -194,13 +208,13 @@ Ensure-CorePythonDependencies
 if (-not $NoInstall) {
     if (-not (Test-NodeModules $DesktopAppDir)) {
         Invoke-Checked "Installing desktop shell dependencies" {
-            npm --prefix $DesktopAppDir install
+            Invoke-NpmInDirectory $DesktopAppDir @("ci")
         }
     }
 
     if (-not (Test-NodeModules $RendererDir)) {
         Invoke-Checked "Installing desktop renderer dependencies" {
-            npm --prefix $RendererDir install
+            Invoke-NpmInDirectory $RendererDir @("ci")
         }
     }
 }
@@ -209,7 +223,7 @@ if ($Fast -and (Test-Path $RendererIndex)) {
     Write-Step "Using existing renderer build"
 } else {
     Invoke-Checked "Building desktop renderer" {
-        npm --prefix $RendererDir run export:web
+        Invoke-NpmInDirectory $RendererDir @("run", "export:web")
     }
 }
 
@@ -218,10 +232,10 @@ if ($skipFleet) {
     Write-Step "Skipping Fleet Yggdrasil bootstrap"
 } else {
     Invoke-BestEffort "Bootstrapping Fleet Yggdrasil transport" {
-        npm --prefix $DesktopAppDir run fleet:yggdrasil:bootstrap -- --best-effort
+        Invoke-NpmInDirectory $DesktopAppDir @("run", "fleet:yggdrasil:bootstrap", "--", "--best-effort")
     }
 }
 
 Invoke-Checked "Launching EmploAI desktop" {
-    npm --prefix $DesktopAppDir run start:electron
+    Invoke-NpmInDirectory $DesktopAppDir @("run", "start:electron")
 }

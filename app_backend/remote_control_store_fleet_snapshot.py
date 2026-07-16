@@ -39,15 +39,32 @@ class RemoteControlStoreFleetSnapshotMixin:
                 user_id=int(user_id),
                 desktop_id=scoped_desktop_id,
             )
+            all_workers = [
+                self._worker_view(row)
+                for row in self._conn.execute(
+                    "SELECT * FROM fleet_workers WHERE user_id = ? ORDER BY created_at ASC",
+                    (int(user_id),),
+                ).fetchall()
+            ]
+            hidden_connection_worker_ids = {
+                str(item.get("worker_id") or "")
+                for item in all_workers
+                if self.is_legacy_connection_worker(item)
+            }
             all_instances = [
                 self._instance_view(row)
                 for row in self._conn.execute(
                     "SELECT * FROM fleet_instances WHERE user_id = ? AND reset_at IS NULL ORDER BY created_at ASC",
                     (int(user_id),),
                 ).fetchall()
+                if str(row["worker_id"] or "") not in hidden_connection_worker_ids
             ]
             instances = self._scope_fleet_instances_to_desktop(all_instances, scoped_desktop_id)
-            all_identities = self._fleet_identities_locked(int(user_id))
+            all_identities = [
+                item
+                for item in self._fleet_identities_locked(int(user_id))
+                if str(item.get("worker_id") or "") not in hidden_connection_worker_ids
+            ]
             identities = self._scope_fleet_identities_to_desktop(all_identities, scoped_desktop_id)
             fleet_state = self._ensure_fleet_selection_locked(
                 user_id=int(user_id),
@@ -72,19 +89,14 @@ class RemoteControlStoreFleetSnapshotMixin:
                 self._bump_fleet_selection_locked(int(user_id), state)
             state = self._bump_shared_state_locked(int(user_id), state)
             fleet_state = _normalize_fleet_state(state.get("fleet"))
-            workers = [
-                self._worker_view(row)
-                for row in self._conn.execute(
-                    "SELECT * FROM fleet_workers WHERE user_id = ? ORDER BY created_at ASC",
-                    (int(user_id),),
-                ).fetchall()
-            ]
+            workers = [item for item in all_workers if str(item.get("worker_id") or "") not in hidden_connection_worker_ids]
             tasks = [
                 self._task_view(row)
                 for row in self._conn.execute(
                     "SELECT * FROM fleet_tasks WHERE user_id = ? ORDER BY queue_position ASC, created_at ASC",
                     (int(user_id),),
                 ).fetchall()
+                if str(row["worker_id"] or "") not in hidden_connection_worker_ids
             ]
             reports = [
                 self._report_view(row)
@@ -92,6 +104,7 @@ class RemoteControlStoreFleetSnapshotMixin:
                     "SELECT * FROM fleet_reports WHERE user_id = ? ORDER BY created_at DESC LIMIT 200",
                     (int(user_id),),
                 ).fetchall()
+                if str(row["worker_id"] or "") not in hidden_connection_worker_ids
             ]
             self._write_shared_state_locked(int(user_id), state)
             self._conn.commit()
@@ -119,6 +132,14 @@ class RemoteControlStoreFleetSnapshotMixin:
                         (int(user_id),),
                     ).fetchall()
                 ],
+                "connection_permissions": [
+                    self._connection_permission_view(row)
+                    for row in self._conn.execute(
+                        "SELECT * FROM fleet_connection_permissions WHERE user_id = ? ORDER BY updated_at DESC",
+                        (int(user_id),),
+                    ).fetchall()
+                ],
+                "delegations": self.list_computer_delegations(user_id=int(user_id), limit=200),
                 "workers": workers,
                 "groups": [
                     {
@@ -134,6 +155,7 @@ class RemoteControlStoreFleetSnapshotMixin:
                                 "SELECT worker_id FROM fleet_workers WHERE user_id = ? AND group_id = ? ORDER BY display_name ASC",
                                 (int(user_id), row["group_id"]),
                             ).fetchall()
+                            if str(item["worker_id"] or "") not in hidden_connection_worker_ids
                         ],
                     }
                     for row in self._conn.execute(
@@ -156,6 +178,10 @@ class RemoteControlStoreFleetSnapshotMixin:
                         "SELECT * FROM fleet_tool_grants WHERE user_id = ? ORDER BY updated_at DESC LIMIT 200",
                         (int(user_id),),
                     ).fetchall()
+                    if not (
+                        str(row["target_kind"] or "") == "worker"
+                        and str(row["target_id"] or "") in hidden_connection_worker_ids
+                    )
                 ],
                 "audit_events": [
                     {
@@ -192,7 +218,10 @@ class RemoteControlStoreFleetSnapshotMixin:
             ).fetchone()
             if not row:
                 raise KeyError("Unknown worker")
-            return self._worker_view(row)
+            worker = self._worker_view(row)
+            if self.is_legacy_connection_worker(worker):
+                raise KeyError("Unknown worker")
+            return worker
 
     def set_active_fleet_identity(
         self,

@@ -65,13 +65,27 @@ def _capture_with_scrot(path: Path):
     return Image.open(path).convert("RGB")
 
 
+def _capture_backend_error(exc: BaseException, *, platform_name: str | None = None) -> RuntimeError:
+    detail = str(exc or "").strip()
+    platform = str(platform_name or os.name).strip().lower()
+    if platform == "nt" and "bitblt" in detail.lower() and "access is denied" in detail.lower():
+        return RuntimeError(
+            "Windows desktop preview is unavailable because the interactive display cannot be captured. "
+            "Restore and unlock the RDP/desktop session, keep it visible rather than minimized, then retry."
+        )
+    return RuntimeError(detail or "Screenshot capture failed")
+
+
 def _capture_with_mss():
     if Image is None or mss is None:
         raise RuntimeError("Screenshot capture unavailable (install Pillow and mss)")
-    with mss.mss() as sct:
-        monitor_index = 1 if len(sct.monitors) > 1 else 0
-        screenshot = sct.grab(sct.monitors[monitor_index])
-        return Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
+    try:
+        with mss.mss() as sct:
+            monitor_index = 1 if len(sct.monitors) > 1 else 0
+            screenshot = sct.grab(sct.monitors[monitor_index])
+            return Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
+    except Exception as exc:
+        raise _capture_backend_error(exc) from exc
 
 
 def capture_screen_image(*, max_width: int = 1280) -> Tuple[object, str]:

@@ -1189,6 +1189,8 @@ class FleetSnapshotResponse(BaseModel):
     instances: List[FleetInstanceView] = Field(default_factory=list)
     manager: Optional[FleetInstanceView] = None
     desktops: List[Dict[str, Any]] = Field(default_factory=list)
+    connection_permissions: List[Dict[str, Any]] = Field(default_factory=list)
+    delegations: List[Dict[str, Any]] = Field(default_factory=list)
     workers: List[FleetWorkerView] = Field(default_factory=list)
     groups: List[Dict[str, Any]] = Field(default_factory=list)
     tasks: List[FleetTaskView] = Field(default_factory=list)
@@ -1277,7 +1279,23 @@ class FleetCompleteEnrollmentResponse(BaseModel):
     expires_in_seconds: int
     user_id: int
     desktop: RemoteDesktopView
-    worker: FleetWorkerView
+    worker: Optional[FleetWorkerView] = None
+
+
+class FleetComputerDelegationRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=20000)
+    target_kind: Literal["manager", "worker"] = "manager"
+    target_selector: Optional[str] = Field(default=None, max_length=160)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FleetRemoteWorkerCreateRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=160)
+
+
+class FleetConnectionPermissionRequest(BaseModel):
+    permissions: Dict[str, bool] = Field(default_factory=dict)
+    reason: Optional[str] = Field(default=None, max_length=1000)
 
 
 class ProviderAvailabilitySyncRequest(BaseModel):
