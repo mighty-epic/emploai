@@ -12,6 +12,9 @@ import {
 } from '@/lib/desktopBridge';
 import { userFacingError } from '../../lib/diagnostics';
 import { remoteRuntimesFromFleetSnapshot } from './desktopRemoteRuntimes';
+import { DesktopFleetInfoButton } from './DesktopFleetInfoButton';
+import { fleetReportSummary } from './desktopFleetWorkerState';
+import { FLEET_TYPE as TYPE } from './desktopFleetUi';
 import { DESKTOP_UI as UI } from './desktopUiTokens';
 
 type PermissionKey = 'delegate_manager' | 'delegate_workers' | 'create_workers';
@@ -128,9 +131,12 @@ export function DesktopFleetMachinesPanel({
         <View style={styles.headingCopy}>
           <Text style={styles.eyebrow}>COMPUTERS BELOW</Text>
           <Text style={styles.title}>Your direct connections</Text>
-          <Text style={styles.headingDetail}>Computers in this Fleet appear by direct relationship. Each card is one computer directly below this one. No remote identities are copied here; only explicitly allowed target labels appear.</Text>
         </View>
         <View style={styles.headingActions}>
+          <DesktopFleetInfoButton
+            label="Direct connections"
+            text="Computers in this Fleet appear by direct relationship. Each card is one computer directly below this one. No remote identities are copied; only labels that computer explicitly allows are shown."
+          />
           <Text style={styles.count}>{machines.length}</Text>
           <Pressable accessibilityRole="button" onPress={onConnectRequested} style={styles.connectButton}>
             <Text style={styles.connectButtonText}>+ Connect computer</Text>
@@ -178,7 +184,11 @@ export function DesktopFleetMachinesPanel({
                   <Text style={styles.latestValue} numberOfLines={1}>{recentDelegation?.status || 'No work yet'}</Text>
                 </View>
               </View>
-              <Text style={styles.openHint}>{selectedId === machine.id ? 'Close details' : 'Open computer'}</Text>
+              <View style={[styles.openHintPill, selectedId === machine.id ? styles.openHintPillSelected : null]}>
+                <Text style={[styles.openHint, selectedId === machine.id ? styles.openHintSelected : null]}>
+                  {selectedId === machine.id ? 'DETAILS OPEN ↓' : 'OPEN WORKSPACE →'}
+                </Text>
+              </View>
             </Pressable>
           );
         })}
@@ -206,13 +216,18 @@ export function DesktopFleetMachinesPanel({
           <View style={styles.drawer} accessibilityLiveRegion="polite">
             <View style={styles.drawerHeader}>
               <View style={styles.headingCopy}>
-                <Text style={styles.eyebrow}>DIRECT CHILD</Text>
+                <Text style={styles.drawerEyebrow}>OPEN COMPUTER WORKSPACE</Text>
                 <Text style={styles.drawerTitle}>{selectedMachine.name}</Text>
-                <Text style={styles.headingDetail}>Only capabilities this computer explicitly exposes appear below. Its conversations, files, providers, and settings remain private.</Text>
               </View>
-              <Pressable accessibilityRole="button" accessibilityLabel="Close computer details" onPress={() => setSelectedId(null)} style={styles.closeButton}>
-                <Text style={styles.closeButtonText}>×</Text>
-              </Pressable>
+              <View style={styles.drawerHeaderActions}>
+                <DesktopFleetInfoButton
+                  label={`${selectedMachine.name} privacy`}
+                  text="Only capabilities this computer explicitly exposes appear here. Its conversations, files, providers, and settings remain private on that computer."
+                />
+                <Pressable accessibilityRole="button" accessibilityLabel="Close computer details" onPress={() => setSelectedId(null)} style={styles.closeButton}>
+                  <Text style={styles.closeButtonText}>×</Text>
+                </Pressable>
+              </View>
             </View>
 
             {!protocolReady ? (
@@ -264,16 +279,25 @@ export function DesktopFleetMachinesPanel({
                   accessibilityRole="button"
                   accessibilityState={{ disabled: busy || !online || !target || !(prompts[selectedMachine.id] || '').trim() }}
                   disabled={busy || !online || !target || !(prompts[selectedMachine.id] || '').trim()}
-                  onPress={() => target && void run(
-                    `delegate:${selectedMachine.id}`,
-                    () => delegateDesktopFleetComputer(
-                      selectedMachine.id,
-                      prompts[selectedMachine.id],
-                      target.target_kind,
-                      target.target_selector,
-                    ),
-                    `Delegation sent to ${target.display_name}.`,
-                  )}
+                  onPress={() => {
+                    if (!target) return;
+                    const prompt = prompts[selectedMachine.id] || '';
+                    void run(
+                      `delegate:${selectedMachine.id}`,
+                      async () => {
+                        await delegateDesktopFleetComputer(
+                          selectedMachine.id,
+                          prompt,
+                          target.target_kind,
+                          target.target_selector,
+                        );
+                        setPrompts((current) => current[selectedMachine.id] === prompt
+                          ? { ...current, [selectedMachine.id]: '' }
+                          : current);
+                      },
+                      `Delegation sent to ${target.display_name}.`,
+                    );
+                  }}
                   style={[styles.primaryButton, (busy || !online || !target || !(prompts[selectedMachine.id] || '').trim()) ? styles.disabled : null]}
                 >
                   <Text style={styles.primaryButtonText}>{busyId === `delegate:${selectedMachine.id}` ? 'Sending…' : 'Send delegation'}</Text>
@@ -348,9 +372,16 @@ export function DesktopFleetMachinesPanel({
             <View style={styles.drawerColumns}>
               {permissions.create_workers ? (
                 <View style={styles.controlSection}>
-                  <Text style={styles.controlEyebrow}>OPTIONAL AGENT</Text>
-                  <Text style={styles.controlTitle}>Create an identity on {selectedMachine.name}</Text>
-                  <Text style={styles.emptyText}>The worker is created and stored there only. It appears here after that computer publishes its next capability update.</Text>
+                  <View style={styles.controlHeadingRow}>
+                    <View style={styles.controlHeadingCopy}>
+                      <Text style={styles.controlEyebrow}>OPTIONAL AGENT</Text>
+                      <Text style={styles.controlTitle}>Create an identity on {selectedMachine.name}</Text>
+                    </View>
+                    <DesktopFleetInfoButton
+                      label="Remote agent creation"
+                      text="The worker is created and stored there only. It appears here after that computer publishes its next capability update."
+                    />
+                  </View>
                   <TextInput
                     accessibilityLabel={`New agent name on ${selectedMachine.name}`}
                     value={workerNames[selectedMachine.id] || ''}
@@ -376,9 +407,16 @@ export function DesktopFleetMachinesPanel({
               ) : null}
 
               <View style={styles.controlSection}>
-                <Text style={styles.controlEyebrow}>CONNECTION ACCESS</Text>
-                <Text style={styles.controlTitle}>Request a permission change</Text>
-                <Text style={styles.emptyText}>The connected computer owns this decision. The request remains pending until approved there.</Text>
+                <View style={styles.controlHeadingRow}>
+                  <View style={styles.controlHeadingCopy}>
+                    <Text style={styles.controlEyebrow}>CONNECTION ACCESS</Text>
+                    <Text style={styles.controlTitle}>Request a permission change</Text>
+                  </View>
+                  <DesktopFleetInfoButton
+                    label="Connection access"
+                    text="The connected computer owns this decision. A change remains pending until someone approves it on that computer."
+                  />
+                </View>
                 <View style={styles.permissionGrid}>
                   {permissionRows.map(([key, label]) => (
                     <Pressable
@@ -411,7 +449,7 @@ export function DesktopFleetMachinesPanel({
                   <View key={delegation.delegation_id} style={styles.reportRow}>
                     <View style={styles.reportCopy}>
                       <Text style={styles.reportTarget}>{String((delegation.report || {}).target_label || delegation.target_selector || 'Main identity')}</Text>
-                      <Text style={styles.reportSummary} numberOfLines={3}>{String((delegation.report || {}).summary || delegation.prompt)}</Text>
+                      <Text style={styles.reportSummary} numberOfLines={3}>{fleetReportSummary({ summary: (delegation.report || {}).summary || delegation.prompt, provider_failure: (delegation.report || {}).provider_failure })}</Text>
                     </View>
                     <Text style={styles.reportStatus}>{delegation.status.toUpperCase()}</Text>
                   </View>
@@ -434,90 +472,96 @@ export function DesktopFleetMachinesPanel({
 const styles = StyleSheet.create({
   section: { padding: 18, gap: 14, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.large, backgroundColor: UI.color.surface },
   sectionCompact: { padding: 14 },
-  headingRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14 },
+  headingRow: { position: 'relative', zIndex: 20, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14 },
   headingCopy: { flex: 1, minWidth: 240 },
   headingActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  eyebrow: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: 9, fontWeight: '900', letterSpacing: 1.1 },
-  title: { marginTop: 5, color: UI.color.text, fontSize: 17, fontWeight: '800' },
-  headingDetail: { marginTop: 5, maxWidth: 720, color: UI.color.textMuted, fontSize: 10, lineHeight: 16 },
-  count: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: 18, fontWeight: '900' },
+  eyebrow: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: TYPE.eyebrow, fontWeight: '900', letterSpacing: 1.1 },
+  title: { marginTop: 5, color: UI.color.text, fontSize: TYPE.panelTitle, fontWeight: '800' },
+  count: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: TYPE.number, fontWeight: '900' },
   connectButton: { minHeight: 44, paddingHorizontal: 14, borderRadius: UI.radius.control, backgroundColor: UI.color.accent, alignItems: 'center', justifyContent: 'center' },
-  connectButtonText: { color: UI.color.accentInk, fontSize: 10, fontWeight: '900' },
+  connectButtonText: { color: UI.color.accentInk, fontSize: TYPE.body, fontWeight: '900' },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  machine: { flexGrow: 1, flexBasis: 245, minWidth: 220, maxWidth: 390, minHeight: 154, padding: 13, gap: 12, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.panel, backgroundColor: UI.color.surfaceMuted },
-  machineSelected: { borderColor: UI.color.accentBorder, backgroundColor: UI.color.accentSoft },
+  machine: { position: 'relative', flexGrow: 1, flexBasis: 270, minWidth: 250, maxWidth: 420, minHeight: 178, padding: 16, gap: 14, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.panel, backgroundColor: UI.color.surfaceMuted },
+  machineSelected: { borderWidth: 2, borderColor: UI.color.accent, backgroundColor: UI.color.surfaceRaised, shadowColor: UI.color.accent, shadowOpacity: 0.16, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 5 },
   machineHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   machineIdentity: { flex: 1, minWidth: 0 },
-  machineName: { color: UI.color.text, fontSize: 12, fontWeight: '900' },
-  machineMeta: { marginTop: 3, color: UI.color.textSubtle, fontSize: 9 },
+  machineName: { color: UI.color.text, fontSize: TYPE.sectionTitle, fontWeight: '900' },
+  machineMeta: { marginTop: 4, color: UI.color.textMuted, fontSize: TYPE.meta },
   statusBadge: { paddingHorizontal: 7, paddingVertical: 5, borderRadius: UI.radius.pill, borderWidth: 1 },
   statusBadgeOnline: { borderColor: UI.color.accentBorder, backgroundColor: UI.color.successSoft },
   statusBadgeOffline: { borderColor: UI.color.borderStrong, backgroundColor: UI.color.canvas },
-  statusBadgeText: { color: UI.color.textMuted, fontFamily: UI.type.mono, fontSize: 7, fontWeight: '900' },
+  statusBadgeText: { color: UI.color.textMuted, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900' },
   cardStats: { flexDirection: 'row', gap: 8 },
   stat: { minWidth: 50, paddingRight: 8, borderRightWidth: 1, borderColor: UI.color.border },
   statWide: { flex: 1, minWidth: 70 },
-  statValue: { color: UI.color.text, fontFamily: UI.type.mono, fontSize: 14, fontWeight: '900' },
+  statValue: { color: UI.color.text, fontFamily: UI.type.mono, fontSize: 17, fontWeight: '900' },
   statAttention: { color: UI.color.warning },
-  statLabel: { marginTop: 2, color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: 7, fontWeight: '800', letterSpacing: 0.6 },
-  latestValue: { marginTop: 4, color: UI.color.textMuted, fontSize: 9, fontWeight: '700' },
-  openHint: { color: UI.color.accentStrong, fontSize: 9, fontWeight: '800' },
+  statLabel: { marginTop: 3, color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '800', letterSpacing: 0.6 },
+  latestValue: { marginTop: 4, color: UI.color.textMuted, fontSize: TYPE.meta, fontWeight: '700' },
+  openHintPill: { alignSelf: 'flex-start', minHeight: 30, paddingHorizontal: 10, borderWidth: 1, borderColor: UI.color.borderStrong, borderRadius: UI.radius.pill, justifyContent: 'center', backgroundColor: UI.color.canvas },
+  openHintPillSelected: { borderColor: UI.color.accent, backgroundColor: UI.color.accent },
+  openHint: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900', letterSpacing: 0.4 },
+  openHintSelected: { color: UI.color.accentInk },
   emptyMachine: { alignItems: 'center', justifyContent: 'center', borderStyle: 'dashed' },
   emptyGlyph: { color: UI.color.accentStrong, fontSize: 26, lineHeight: 28 },
-  emptyTitle: { color: UI.color.text, fontSize: 11, fontWeight: '800', textAlign: 'center' },
-  emptyText: { color: UI.color.textSubtle, fontSize: 9, lineHeight: 14 },
-  drawer: { padding: 15, gap: 14, borderWidth: 1, borderColor: UI.color.accentBorder, borderRadius: UI.radius.panel, backgroundColor: UI.color.canvas },
-  drawerHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
-  drawerTitle: { marginTop: 4, color: UI.color.text, fontSize: 16, fontWeight: '900' },
+  emptyTitle: { color: UI.color.text, fontSize: TYPE.sectionTitle, fontWeight: '800', textAlign: 'center' },
+  emptyText: { color: UI.color.textSubtle, fontSize: TYPE.body, lineHeight: TYPE.bodyLine },
+  drawer: { marginTop: 6, padding: 18, gap: 16, borderWidth: 2, borderColor: UI.color.accent, borderRadius: UI.radius.large, backgroundColor: UI.color.surfaceRaised, shadowColor: UI.color.shadow, shadowOpacity: 0.34, shadowRadius: 26, shadowOffset: { width: 0, height: 14 }, elevation: 8 },
+  drawerHeader: { position: 'relative', zIndex: 20, flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  drawerHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  drawerEyebrow: { color: UI.color.accentInk, fontFamily: UI.type.mono, fontSize: TYPE.eyebrow, fontWeight: '900', letterSpacing: 1.1, alignSelf: 'flex-start', paddingHorizontal: 9, paddingVertical: 5, borderRadius: UI.radius.pill, backgroundColor: UI.color.accent },
+  drawerTitle: { marginTop: 8, color: UI.color.text, fontSize: TYPE.heroTitle, fontWeight: '900' },
   closeButton: { width: 44, height: 44, borderRadius: UI.radius.control, borderWidth: 1, borderColor: UI.color.border, alignItems: 'center', justifyContent: 'center' },
   closeButtonText: { color: UI.color.textMuted, fontSize: 20 },
   warning: { padding: 10, borderWidth: 1, borderColor: UI.color.warning, borderRadius: UI.radius.control, backgroundColor: UI.color.warningSoft },
-  warningText: { color: UI.color.warning, fontSize: 9, fontWeight: '700', lineHeight: 14 },
+  warningText: { color: UI.color.warning, fontSize: TYPE.body, fontWeight: '700', lineHeight: TYPE.bodyLine },
   drawerColumns: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  controlSection: { flexGrow: 1, flexBasis: 290, minWidth: 260, padding: 12, gap: 9, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control, backgroundColor: UI.color.surface },
-  controlEyebrow: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: 8, fontWeight: '900', letterSpacing: 0.9 },
-  controlTitle: { color: UI.color.text, fontSize: 11, fontWeight: '800' },
+  controlSection: { flexGrow: 1, flexBasis: 310, minWidth: 280, padding: 15, gap: 11, borderWidth: 1, borderColor: UI.color.borderStrong, borderRadius: UI.radius.panel, backgroundColor: UI.color.surface },
+  controlHeadingRow: { position: 'relative', zIndex: 20, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 },
+  controlHeadingCopy: { flex: 1, gap: 4 },
+  controlEyebrow: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: TYPE.eyebrow, fontWeight: '900', letterSpacing: 0.9 },
+  controlTitle: { color: UI.color.text, fontSize: TYPE.sectionTitle, fontWeight: '800' },
   targetList: { gap: 6 },
   targetRow: { minHeight: 52, paddingHorizontal: 10, paddingVertical: 8, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control, flexDirection: 'row', alignItems: 'center', gap: 10 },
   targetRowSelected: { borderColor: UI.color.accentBorder, backgroundColor: UI.color.accentSoft },
   targetCopy: { flex: 1 },
-  targetName: { color: UI.color.text, fontSize: 10, fontWeight: '800' },
-  targetMeta: { marginTop: 2, color: UI.color.textSubtle, fontSize: 8 },
-  targetCheck: { color: UI.color.accentStrong, fontSize: 10 },
-  inputLabel: { color: UI.color.textMuted, fontSize: 9, fontWeight: '700' },
-  input: { minHeight: 44, paddingHorizontal: 11, paddingVertical: 9, borderWidth: 1, borderColor: UI.color.borderStrong, borderRadius: UI.radius.control, backgroundColor: UI.color.canvas, color: UI.color.text, fontSize: 10 },
-  promptInput: { minHeight: 92, textAlignVertical: 'top' },
+  targetName: { color: UI.color.text, fontSize: TYPE.control, fontWeight: '800' },
+  targetMeta: { marginTop: 3, color: UI.color.textSubtle, fontSize: TYPE.meta },
+  targetCheck: { color: UI.color.accentStrong, fontSize: TYPE.control },
+  inputLabel: { color: UI.color.textMuted, fontSize: TYPE.body, fontWeight: '700' },
+  input: { minHeight: 48, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, borderColor: UI.color.borderStrong, borderRadius: UI.radius.control, backgroundColor: UI.color.canvas, color: UI.color.text, fontSize: TYPE.control },
+  promptInput: { minHeight: 112, textAlignVertical: 'top' },
   primaryButton: { minHeight: 44, paddingHorizontal: 12, borderRadius: UI.radius.control, backgroundColor: UI.color.accent, alignItems: 'center', justifyContent: 'center' },
-  primaryButtonText: { color: UI.color.accentInk, fontSize: 10, fontWeight: '900' },
+  primaryButtonText: { color: UI.color.accentInk, fontSize: TYPE.body, fontWeight: '900' },
   secondaryButton: { minHeight: 44, paddingHorizontal: 12, borderRadius: UI.radius.control, borderWidth: 1, borderColor: UI.color.accentBorder, backgroundColor: UI.color.accentSoft, alignItems: 'center', justifyContent: 'center' },
-  secondaryButtonText: { color: UI.color.accentStrong, fontSize: 10, fontWeight: '800' },
+  secondaryButtonText: { color: UI.color.accentStrong, fontSize: TYPE.body, fontWeight: '800' },
   disabled: { opacity: 0.4 },
   requestCard: { padding: 10, gap: 7, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control, backgroundColor: UI.color.canvas },
   requestBlocked: { borderColor: UI.color.warning },
   requestHeader: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
-  requestKind: { color: UI.color.warning, fontFamily: UI.type.mono, fontSize: 8, fontWeight: '900' },
-  requestStatus: { color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: 7, fontWeight: '900' },
-  requestIdentity: { color: UI.color.text, fontSize: 9, fontWeight: '800' },
-  requestMessage: { color: UI.color.textMuted, fontSize: 9, lineHeight: 14 },
-  responseText: { color: UI.color.accentStrong, fontSize: 9, lineHeight: 14 },
+  requestKind: { color: UI.color.warning, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900' },
+  requestStatus: { color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900' },
+  requestIdentity: { color: UI.color.text, fontSize: TYPE.body, fontWeight: '800' },
+  requestMessage: { color: UI.color.textMuted, fontSize: TYPE.body, lineHeight: TYPE.bodyLine },
+  responseText: { color: UI.color.accentStrong, fontSize: TYPE.body, lineHeight: TYPE.bodyLine },
   requestActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   approveButton: { minHeight: 40, paddingHorizontal: 10, borderRadius: UI.radius.control, backgroundColor: UI.color.successSoft, borderWidth: 1, borderColor: UI.color.accentBorder, alignItems: 'center', justifyContent: 'center' },
-  approveButtonText: { color: UI.color.success, fontSize: 9, fontWeight: '900' },
+  approveButtonText: { color: UI.color.success, fontSize: TYPE.body, fontWeight: '900' },
   denyButton: { minHeight: 40, paddingHorizontal: 10, borderRadius: UI.radius.control, backgroundColor: UI.color.dangerSoft, borderWidth: 1, borderColor: UI.color.danger, alignItems: 'center', justifyContent: 'center' },
-  denyButtonText: { color: UI.color.danger, fontSize: 9, fontWeight: '900' },
+  denyButtonText: { color: UI.color.danger, fontSize: TYPE.body, fontWeight: '900' },
   replyButton: { minHeight: 40, paddingHorizontal: 10, borderRadius: UI.radius.control, borderWidth: 1, borderColor: UI.color.borderStrong, alignItems: 'center', justifyContent: 'center' },
-  replyButtonText: { color: UI.color.textMuted, fontSize: 9, fontWeight: '900' },
+  replyButtonText: { color: UI.color.textMuted, fontSize: TYPE.body, fontWeight: '900' },
   permissionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   permissionButton: { flexGrow: 1, flexBasis: 120, minHeight: 44, paddingHorizontal: 8, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control, justifyContent: 'center' },
   permissionButtonOn: { borderColor: UI.color.accentBorder, backgroundColor: UI.color.accentSoft },
-  permissionButtonText: { color: UI.color.textMuted, fontSize: 8, fontWeight: '800' },
+  permissionButtonText: { color: UI.color.textMuted, fontSize: TYPE.meta, fontWeight: '800' },
   reportRow: { padding: 9, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control, flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   reportCopy: { flex: 1, gap: 3 },
-  reportTarget: { color: UI.color.text, fontSize: 9, fontWeight: '800' },
-  reportSummary: { color: UI.color.textSubtle, fontSize: 9, lineHeight: 14 },
-  reportStatus: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: 7, fontWeight: '900' },
+  reportTarget: { color: UI.color.text, fontSize: TYPE.body, fontWeight: '800' },
+  reportSummary: { color: UI.color.textSubtle, fontSize: TYPE.body, lineHeight: TYPE.bodyLine },
+  reportStatus: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900' },
   notice: { padding: 10, borderWidth: 1, borderColor: UI.color.accentBorder, borderRadius: UI.radius.control, backgroundColor: UI.color.accentSoft },
   noticeError: { borderColor: UI.color.danger, backgroundColor: UI.color.dangerSoft },
-  noticeText: { color: UI.color.textMuted, fontSize: 9 },
-  noticeErrorText: { color: UI.color.danger, fontSize: 9, fontWeight: '700' },
+  noticeText: { color: UI.color.textMuted, fontSize: TYPE.body },
+  noticeErrorText: { color: UI.color.danger, fontSize: TYPE.body, fontWeight: '700' },
 });

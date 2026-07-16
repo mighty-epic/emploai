@@ -2,7 +2,8 @@ import type { DesktopConversationScope } from './DesktopConversationScope';
 import { DesktopModelPickerMenu } from './DesktopModelPickerMenu';
 import { DesktopFleetPreviewPanel } from './DesktopFleetPreviewPanel';
 import { DesktopFleetWorkspace } from './DesktopFleetWorkspace';
-import { fleetWorkerStatusLabel } from './desktopFleetWorkerState';
+import { DesktopFleetInfoButton } from './DesktopFleetInfoButton';
+import { fleetReportSummary, fleetWorkerStatusLabel } from './desktopFleetWorkerState';
 import { useEffect } from 'react'; type NativeSyntheticEvent<T = any> = any; type ActiveCommandPanel = any; type ActivityItem = any; type AgentOverview = any; type ArtifactDetail = any; type ArtifactSummary = any; type ComposerInputOrigin = any; type ConversationSurfaceMode = any; type DesktopFleetEnrollment = any; type DesktopFleetIdentity = any; type DesktopFleetSnapshot = any; type DesktopFleetTask = any; type DesktopFleetWorker = any; type DesktopGitRepoState = any; type DesktopMessage = any; type DesktopPathStatus = any; type DesktopRuntimeStatus = any; type DesktopSidebarProjectActivity = any; type DesktopSidebarState = any; type DesktopVoicePackState = any; type DesktopVoiceRuntimeStatus = any; type InterruptPolicy = any; type JarvisSttBackend = any; type JarvisTtsBackend = any; type LayoutChangeEvent = any; type MessageSourceFormat = any; type ModelProviderGroup = any; type NativeScrollEvent = any; type PendingSearchJump = any; type QueuedComposerMessage = any; type QueuedMessage = any; type RealtimeChannel = any; type RealtimeEvent = any; type ReferenceEntry = any; type RuntimeOrchestratorStatus = any; type ScheduledJob = any; type SearchResultTarget = any; type SecurityPermissionMode = any; type SessionDetail = any; type SessionMessage = any; type SessionSearchResult = any; type SessionSummary = any; type SessionTimelineEvent = any; type SidebarChatTooltipState = any; type SidebarDragState = any; type SidebarDraftChat = any; type SidebarProjectGroup = any; type StartupReadinessState = any; type TaskBoard = any; type TelegramBotConfig = any; type TextInputContentSizeChangeEventData = any; type ToolPackInfoPopupState = any; type VoiceCaptureMode = any; type VoiceGateState = any;
 import { useReducedMotion } from './useReducedMotion';
 
@@ -1367,10 +1368,11 @@ useEffect(() => {
         <View style={styles.fleetPanelHeaderCopy}>
           <Text style={styles.fleetEyebrow}>Fleet V1</Text>
           <Text style={styles.fleetPanelTitle}>Fleet Dashboard</Text>
-          <Text style={styles.fleetPanelText}>
-            Manage worker identities, queues, reports, and device enrollment from one place.
-          </Text>
         </View>
+        <DesktopFleetInfoButton
+          label="Fleet Dashboard"
+          text="Manage connected computers, local worker identities, queues, reports, and private device enrollment from this workspace."
+        />
         <Pressable
           style={styles.panelCollapseButton}
           accessibilityRole="button"
@@ -1404,8 +1406,13 @@ useEffect(() => {
       <DesktopFleetWorkspace snapshot={fleetSnapshot} onChanged={() => void scope.refreshFleetSnapshot?.({ quiet: true })} />
 
       <View style={styles.fleetCreateCard}>
-        <Text style={styles.fleetSectionTitle}>Workers on this desktop</Text>
-        <Text style={styles.fleetPanelText}>Create an additional worker identity that runs locally on this machine.</Text>
+        <View style={styles.fleetWorkersHeader}>
+          <Text style={styles.fleetSectionTitle}>Workers on this desktop</Text>
+          <DesktopFleetInfoButton
+            label="Local workers"
+            text="Create an additional worker identity that runs only on this computer. It is not copied to connected computers."
+          />
+        </View>
         <TextInput
           style={styles.fleetInput}
           placeholder="Optional worker name"
@@ -1565,7 +1572,7 @@ useEffect(() => {
                     </View>
                     <View style={styles.fleetWorkerInfoTile} accessibilityLiveRegion="polite">
                       <Text style={styles.fleetInfoLabel}>Latest Report · {report?.confidence || 'unrated'} confidence</Text>
-                      <Text style={styles.fleetInfoValue} numberOfLines={5}>{report?.summary || 'No report yet'}</Text>
+                      <Text style={styles.fleetInfoValue} numberOfLines={5}>{fleetReportSummary(report)}</Text>
                       <Text style={styles.fleetInfoMeta}>
                         {report
                           ? `${report.status} · ${(report.blockers || []).length} blocker${(report.blockers || []).length === 1 ? '' : 's'} · ${(report.evidence || []).length + (report.artifacts || []).length} evidence`

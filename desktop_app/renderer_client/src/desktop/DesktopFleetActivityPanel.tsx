@@ -9,6 +9,9 @@ import {
   type DesktopFleetSnapshot,
 } from '@/lib/desktopBridge';
 import { userFacingError } from '../../lib/diagnostics';
+import { DesktopFleetInfoButton } from './DesktopFleetInfoButton';
+import { fleetReportSummary } from './desktopFleetWorkerState';
+import { FLEET_TYPE as TYPE } from './desktopFleetUi';
 import { DESKTOP_UI as UI } from './desktopUiTokens';
 
 type RequestKind = 'question' | 'approval' | 'blocked';
@@ -109,11 +112,16 @@ export function DesktopFleetActivityPanel({
         <View style={styles.headerCopy}>
           <Text style={styles.eyebrow}>ACTIVITY FROM ABOVE</Text>
           <Text style={styles.title}>Work on this computer</Text>
-          <Text style={styles.detail}>Incoming delegations run against identities stored here. Reports and requests cross the private connection; local conversations and files do not.</Text>
         </View>
-        <Pressable accessibilityRole="button" accessibilityLabel="Refresh local Fleet activity" disabled={loading} onPress={() => void refresh()} style={styles.refreshButton}>
-          <Text style={styles.refreshButtonText}>{loading ? 'Checking…' : 'Refresh'}</Text>
-        </Pressable>
+        <View style={styles.headerActions}>
+          <DesktopFleetInfoButton
+            label="Work on this computer"
+            text="Incoming delegations run against identities stored here. Only reports and explicit requests cross the private connection; local conversations and files stay private."
+          />
+          <Pressable accessibilityRole="button" accessibilityLabel="Refresh local Fleet activity" disabled={loading} onPress={() => void refresh()} style={styles.refreshButton}>
+            <Text style={styles.refreshButtonText}>{loading ? 'Checking…' : 'Refresh'}</Text>
+          </Pressable>
+        </View>
       </View>
 
       <View style={styles.summaryRow}>
@@ -143,7 +151,7 @@ export function DesktopFleetActivityPanel({
               </View>
               <Text style={styles.activityMessage}>{item.message}</Text>
               {item.report && Object.keys(item.report).length ? (
-                <Text style={styles.activityReport}>{String(item.report.summary || item.report.next_suggested_action || 'Report recorded.')}</Text>
+                <Text style={styles.activityReport}>{fleetReportSummary({ summary: item.report.summary || item.report.next_suggested_action || 'Report recorded.', provider_failure: item.report.provider_failure })}</Text>
               ) : null}
               <Text style={styles.activityTime}>{item.updated_at ? new Date(item.updated_at).toLocaleString() : 'Just now'}</Text>
             </View>
@@ -185,12 +193,12 @@ export function DesktopFleetActivityPanel({
                 <Pressable
                   key={kind}
                   accessibilityRole="radio"
+                  accessibilityHint={hint}
                   accessibilityState={{ checked: selected }}
                   onPress={() => setRequestKind(kind)}
                   style={[styles.kindButton, selected ? styles.kindButtonSelected : null]}
                 >
                   <Text style={[styles.kindName, selected ? styles.kindNameSelected : null]}>{label}</Text>
-                  <Text style={styles.kindHint}>{hint}</Text>
                 </Pressable>
               );
             })}
@@ -246,59 +254,58 @@ export function DesktopFleetActivityPanel({
 const styles = StyleSheet.create({
   panel: { padding: 18, gap: 14, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.large, backgroundColor: UI.color.surface },
   panelCompact: { padding: 14 },
-  header: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+  header: { position: 'relative', zIndex: 20, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
   headerCopy: { flex: 1, minWidth: 240 },
-  eyebrow: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: 9, fontWeight: '900', letterSpacing: 1.1 },
-  title: { marginTop: 5, color: UI.color.text, fontSize: 17, fontWeight: '900' },
-  detail: { marginTop: 5, maxWidth: 720, color: UI.color.textMuted, fontSize: 10, lineHeight: 16 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  eyebrow: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: TYPE.eyebrow, fontWeight: '900', letterSpacing: 1.1 },
+  title: { marginTop: 5, color: UI.color.text, fontSize: TYPE.panelTitle, fontWeight: '900' },
   refreshButton: { minHeight: 44, paddingHorizontal: 13, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control, alignItems: 'center', justifyContent: 'center' },
-  refreshButtonText: { color: UI.color.textMuted, fontSize: 9, fontWeight: '800' },
+  refreshButtonText: { color: UI.color.textMuted, fontSize: TYPE.body, fontWeight: '800' },
   summaryRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   summaryCard: { flexGrow: 1, flexBasis: 145, minWidth: 125, padding: 11, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control, backgroundColor: UI.color.canvas },
-  summaryValue: { color: UI.color.text, fontFamily: UI.type.mono, fontSize: 18, fontWeight: '900' },
+  summaryValue: { color: UI.color.text, fontFamily: UI.type.mono, fontSize: TYPE.number, fontWeight: '900' },
   summaryAttention: { color: UI.color.warning },
-  summaryLabel: { marginTop: 3, color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: 7, fontWeight: '900', letterSpacing: 0.6 },
+  summaryLabel: { marginTop: 3, color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900', letterSpacing: 0.6 },
   columns: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   column: { flexGrow: 1, flexBasis: 340, minWidth: 280, padding: 13, gap: 9, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.panel, backgroundColor: UI.color.canvas },
-  sectionEyebrow: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: 8, fontWeight: '900', letterSpacing: 0.9 },
-  sectionTitle: { color: UI.color.text, fontSize: 11, fontWeight: '800' },
+  sectionEyebrow: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: TYPE.eyebrow, fontWeight: '900', letterSpacing: 0.9 },
+  sectionTitle: { color: UI.color.text, fontSize: TYPE.sectionTitle, fontWeight: '800' },
   activityCard: { padding: 10, gap: 6, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control, backgroundColor: UI.color.surface },
   activityError: { borderColor: UI.color.danger, backgroundColor: UI.color.dangerSoft },
   activityHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 },
-  activityIdentity: { flex: 1, color: UI.color.text, fontSize: 9, fontWeight: '800' },
-  activityStatus: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: 7, fontWeight: '900' },
-  activityMessage: { color: UI.color.textMuted, fontSize: 9, lineHeight: 14 },
-  activityReport: { paddingTop: 6, borderTopWidth: 1, borderColor: UI.color.border, color: UI.color.textSubtle, fontSize: 9, lineHeight: 14 },
-  activityTime: { color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: 7 },
+  activityIdentity: { flex: 1, color: UI.color.text, fontSize: TYPE.body, fontWeight: '800' },
+  activityStatus: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900' },
+  activityMessage: { color: UI.color.textMuted, fontSize: TYPE.body, lineHeight: TYPE.bodyLine },
+  activityReport: { paddingTop: 7, borderTopWidth: 1, borderColor: UI.color.border, color: UI.color.textSubtle, fontSize: TYPE.body, lineHeight: TYPE.bodyLine },
+  activityTime: { color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: TYPE.micro },
   emptyState: { padding: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: UI.color.border, borderRadius: UI.radius.control },
-  emptyTitle: { color: UI.color.text, fontSize: 10, fontWeight: '800' },
-  emptyText: { marginTop: 4, color: UI.color.textSubtle, fontSize: 9, lineHeight: 14 },
-  inputLabel: { color: UI.color.textMuted, fontSize: 9, fontWeight: '800' },
+  emptyTitle: { color: UI.color.text, fontSize: TYPE.control, fontWeight: '800' },
+  emptyText: { marginTop: 4, color: UI.color.textSubtle, fontSize: TYPE.body, lineHeight: TYPE.bodyLine },
+  inputLabel: { color: UI.color.textMuted, fontSize: TYPE.body, fontWeight: '800' },
   identityList: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   identityButton: { minHeight: 48, paddingHorizontal: 10, paddingVertical: 7, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control, justifyContent: 'center' },
   identityButtonSelected: { borderColor: UI.color.accentBorder, backgroundColor: UI.color.accentSoft },
-  identityName: { color: UI.color.textMuted, fontSize: 9, fontWeight: '800' },
+  identityName: { color: UI.color.textMuted, fontSize: TYPE.body, fontWeight: '800' },
   identityNameSelected: { color: UI.color.accentStrong },
-  identityRole: { marginTop: 2, color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: 7, fontWeight: '900' },
+  identityRole: { marginTop: 3, color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900' },
   kindList: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  kindButton: { flexGrow: 1, flexBasis: 105, minHeight: 58, padding: 8, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control },
+  kindButton: { flexGrow: 1, flexBasis: 105, minHeight: 48, padding: 10, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control, justifyContent: 'center' },
   kindButtonSelected: { borderColor: UI.color.accentBorder, backgroundColor: UI.color.accentSoft },
-  kindName: { color: UI.color.textMuted, fontSize: 9, fontWeight: '900' },
+  kindName: { color: UI.color.textMuted, fontSize: TYPE.body, fontWeight: '900' },
   kindNameSelected: { color: UI.color.accentStrong },
-  kindHint: { marginTop: 3, color: UI.color.textSubtle, fontSize: 8, lineHeight: 12 },
-  input: { minHeight: 44, paddingHorizontal: 11, paddingVertical: 9, borderWidth: 1, borderColor: UI.color.borderStrong, borderRadius: UI.radius.control, backgroundColor: UI.color.surface, color: UI.color.text, fontSize: 10 },
-  messageInput: { minHeight: 88, textAlignVertical: 'top' },
+  input: { minHeight: 48, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, borderColor: UI.color.borderStrong, borderRadius: UI.radius.control, backgroundColor: UI.color.surface, color: UI.color.text, fontSize: TYPE.control },
+  messageInput: { minHeight: 104, textAlignVertical: 'top' },
   primaryButton: { minHeight: 44, paddingHorizontal: 12, borderRadius: UI.radius.control, backgroundColor: UI.color.accent, alignItems: 'center', justifyContent: 'center' },
-  primaryButtonText: { color: UI.color.accentInk, fontSize: 10, fontWeight: '900' },
+  primaryButtonText: { color: UI.color.accentInk, fontSize: TYPE.body, fontWeight: '900' },
   disabled: { opacity: 0.4 },
   requestHistory: { gap: 9 },
   requestGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   requestCard: { flexGrow: 1, flexBasis: 245, minWidth: 220, maxWidth: 390, padding: 10, gap: 6, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control, backgroundColor: UI.color.canvas },
   requestBlocked: { borderColor: UI.color.warning },
-  requestKind: { color: UI.color.warning, fontFamily: UI.type.mono, fontSize: 8, fontWeight: '900' },
-  response: { paddingTop: 6, borderTopWidth: 1, borderColor: UI.color.border, color: UI.color.accentStrong, fontSize: 9, lineHeight: 14 },
+  requestKind: { color: UI.color.warning, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900' },
+  response: { paddingTop: 7, borderTopWidth: 1, borderColor: UI.color.border, color: UI.color.accentStrong, fontSize: TYPE.body, lineHeight: TYPE.bodyLine },
   notice: { padding: 10, borderWidth: 1, borderColor: UI.color.accentBorder, borderRadius: UI.radius.control, backgroundColor: UI.color.accentSoft },
   noticeError: { borderColor: UI.color.danger, backgroundColor: UI.color.dangerSoft },
-  noticeText: { color: UI.color.textMuted, fontSize: 9 },
-  noticeErrorText: { color: UI.color.danger, fontSize: 9, fontWeight: '700' },
+  noticeText: { color: UI.color.textMuted, fontSize: TYPE.body },
+  noticeErrorText: { color: UI.color.danger, fontSize: TYPE.body, fontWeight: '700' },
 });

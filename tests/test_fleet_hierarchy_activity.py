@@ -200,3 +200,21 @@ def test_role_aware_renderer_contains_all_four_surfaces_and_no_free_text_remote_
     assert "Worker name on the other computer" not in machines
     assert "REQUEST THE MANAGER" in activity
     assert "INCOMING DELEGATIONS" in activity
+
+
+def test_fleet_ui_keeps_forms_clean_and_help_out_of_the_primary_scan_path():
+    machines = (ROOT / "desktop_app/renderer_client/src/desktop/DesktopFleetMachinesPanel.tsx").read_text(encoding="utf-8")
+    info = (ROOT / "desktop_app/renderer_client/src/desktop/DesktopFleetInfoButton.tsx").read_text(encoding="utf-8")
+    scale = (ROOT / "desktop_app/renderer_client/src/desktop/desktopFleetUi.ts").read_text(encoding="utf-8")
+    worker_state = (ROOT / "desktop_app/renderer_client/src/desktop/desktopFleetWorkerState.ts").read_text(encoding="utf-8")
+
+    assert "current[selectedMachine.id] === prompt" in machines
+    assert "[selectedMachine.id]: ''" in machines
+    assert "accessibilityHint={text}" in info
+    assert "tooltipText" in info
+    assert "dismissOutside" in info
+    assert "event.key === 'Escape'" in info
+    assert "zIndex: 20" in machines
+    assert "body: 12" in scale
+    assert "usage_limit_reached" in worker_state
+    assert "Provider error:" not in worker_state

@@ -8,6 +8,8 @@ import {
   type DesktopFleetYggdrasilPairing,
 } from '@/lib/desktopBridge';
 import { userFacingError } from '../../lib/diagnostics';
+import { DesktopFleetInfoButton } from './DesktopFleetInfoButton';
+import { FLEET_TYPE as TYPE } from './desktopFleetUi';
 import { DESKTOP_UI as UI } from './desktopUiTokens';
 
 export function DesktopFleetChildConnectionPanel({
@@ -81,13 +83,18 @@ export function DesktopFleetChildConnectionPanel({
         <View style={styles.headerCopy}>
           <Text style={styles.eyebrow}>ADD BELOW THIS COMPUTER</Text>
           <Text style={styles.title}>Connect another computer</Text>
-          <Text style={styles.detail}>This creates a direct child of this computer. The connection is local-only over Yggdrasil and reconnects after restarts.</Text>
         </View>
-        {onClose ? (
-          <Pressable accessibilityRole="button" accessibilityLabel="Close connection setup" onPress={onClose} style={styles.closeButton}>
-            <Text style={styles.closeButtonText}>×</Text>
-          </Pressable>
-        ) : null}
+        <View style={styles.headerActions}>
+          <DesktopFleetInfoButton
+            label="Connecting another computer"
+            text="This creates a direct child over local-only Yggdrasil and reconnects after restarts. On the other computer, open Fleet, choose Connect to a manager, and paste this single-use code."
+          />
+          {onClose ? (
+            <Pressable accessibilityRole="button" accessibilityLabel="Close connection setup" onPress={onClose} style={styles.closeButton}>
+              <Text style={styles.closeButtonText}>×</Text>
+            </Pressable>
+          ) : null}
+        </View>
       </View>
 
       {address ? (
@@ -140,40 +147,38 @@ export function DesktopFleetChildConnectionPanel({
         </View>
       ) : null}
 
-      <Text style={styles.footnote}>On the other computer: open Fleet → Connect to a manager → paste this code. You do not need to copy Yggdrasil addresses or create a separate enrollment.</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   panel: { padding: 16, gap: 13, borderWidth: 1, borderColor: UI.color.accentBorder, borderRadius: UI.radius.large, backgroundColor: UI.color.canvas },
-  header: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  header: { position: 'relative', zIndex: 20, flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   headerCopy: { flex: 1 },
-  eyebrow: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: 9, fontWeight: '900', letterSpacing: 1 },
-  title: { marginTop: 4, color: UI.color.text, fontSize: 16, fontWeight: '900' },
-  detail: { marginTop: 5, maxWidth: 680, color: UI.color.textMuted, fontSize: 10, lineHeight: 16 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  eyebrow: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: TYPE.eyebrow, fontWeight: '900', letterSpacing: 1 },
+  title: { marginTop: 5, color: UI.color.text, fontSize: TYPE.panelTitle, fontWeight: '900' },
   closeButton: { width: 44, height: 44, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control, alignItems: 'center', justifyContent: 'center' },
   closeButtonText: { color: UI.color.textMuted, fontSize: 20 },
   addressRow: { padding: 10, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control, backgroundColor: UI.color.surface },
-  addressLabel: { color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: 7, fontWeight: '900', letterSpacing: 0.8 },
-  address: { marginTop: 4, color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: 10 },
+  addressLabel: { color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900', letterSpacing: 0.8 },
+  address: { marginTop: 5, color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: TYPE.body },
   form: { gap: 8 },
-  inputLabel: { color: UI.color.textMuted, fontSize: 9, fontWeight: '800' },
-  input: { minHeight: 44, paddingHorizontal: 11, borderWidth: 1, borderColor: UI.color.borderStrong, borderRadius: UI.radius.control, backgroundColor: UI.color.surface, color: UI.color.text, fontSize: 10 },
+  inputLabel: { color: UI.color.textMuted, fontSize: TYPE.body, fontWeight: '800' },
+  input: { minHeight: 48, paddingHorizontal: 12, borderWidth: 1, borderColor: UI.color.borderStrong, borderRadius: UI.radius.control, backgroundColor: UI.color.surface, color: UI.color.text, fontSize: TYPE.control },
   primaryButton: { minHeight: 44, paddingHorizontal: 14, borderRadius: UI.radius.control, backgroundColor: UI.color.accent, alignItems: 'center', justifyContent: 'center' },
-  primaryButtonText: { color: UI.color.accentInk, fontSize: 10, fontWeight: '900' },
+  primaryButtonText: { color: UI.color.accentInk, fontSize: TYPE.body, fontWeight: '900' },
   secondaryButton: { minHeight: 44, paddingHorizontal: 12, borderWidth: 1, borderColor: UI.color.accentBorder, borderRadius: UI.radius.control, backgroundColor: UI.color.accentSoft, alignItems: 'center', justifyContent: 'center' },
-  secondaryButtonText: { color: UI.color.accentStrong, fontSize: 10, fontWeight: '900' },
+  secondaryButtonText: { color: UI.color.accentStrong, fontSize: TYPE.body, fontWeight: '900' },
   disabled: { opacity: 0.4 },
   codeBox: { padding: 11, gap: 9, borderWidth: 1, borderColor: UI.color.accentBorder, borderRadius: UI.radius.control, backgroundColor: UI.color.surface },
   codeExpired: { borderColor: UI.color.danger },
   codeHeader: { flexDirection: 'row', justifyContent: 'space-between', gap: 10 },
-  codeLabel: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: 8, fontWeight: '900' },
-  expiry: { color: UI.color.warning, fontFamily: UI.type.mono, fontSize: 8, fontWeight: '900' },
-  code: { color: UI.color.textMuted, fontFamily: UI.type.mono, fontSize: 8, lineHeight: 13 },
+  codeLabel: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900' },
+  expiry: { color: UI.color.warning, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900' },
+  code: { color: UI.color.textMuted, fontFamily: UI.type.mono, fontSize: TYPE.meta, lineHeight: TYPE.compactLine },
   notice: { padding: 10, borderWidth: 1, borderColor: UI.color.accentBorder, borderRadius: UI.radius.control, backgroundColor: UI.color.accentSoft },
   noticeError: { borderColor: UI.color.danger, backgroundColor: UI.color.dangerSoft },
-  noticeText: { color: UI.color.textMuted, fontSize: 9 },
-  noticeErrorText: { color: UI.color.danger, fontSize: 9, fontWeight: '700' },
-  footnote: { color: UI.color.textSubtle, fontSize: 9, lineHeight: 14 },
+  noticeText: { color: UI.color.textMuted, fontSize: TYPE.body },
+  noticeErrorText: { color: UI.color.danger, fontSize: TYPE.body, fontWeight: '700' },
 });

@@ -1,6 +1,7 @@
 import { Platform, StyleSheet } from 'react-native';
 
 import { DESKTOP_RECT_BUTTON_RADIUS } from './desktopUiTokens';
+import { FLEET_TYPE as TYPE } from './desktopFleetUi';
 import { COMPOSER_LINE_HEIGHT, COMPOSER_MAX_HEIGHT, COMPOSER_MIN_HEIGHT, HUD } from './DesktopConversationView.styleConstants';
 
 const SIDEBAR_ICON_STYLE = Platform.OS === 'web'
@@ -600,7 +601,7 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetCollapsedRailText: {
     color: '#8fa4c4',
-    fontSize: 10,
+    fontSize: TYPE.micro,
     fontWeight: '900',
     textTransform: 'uppercase',
     transform: [{ rotate: '-90deg' }],
@@ -626,7 +627,7 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetChatIdentityHint: {
     color: '#8fa4c4',
-    fontSize: 10,
+    fontSize: TYPE.body,
     fontWeight: '700',
   },
   fleetChatIdentityList: {
@@ -652,7 +653,7 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetChatIdentityName: {
     color: '#dfefff',
-    fontSize: 11,
+    fontSize: TYPE.control,
     fontWeight: '900',
   },
   fleetChatIdentityNameActive: {
@@ -660,7 +661,7 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetChatIdentityMeta: {
     color: '#7f95ba',
-    fontSize: 9,
+    fontSize: TYPE.micro,
     fontWeight: '800',
     textTransform: 'uppercase',
   },
@@ -669,8 +670,8 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetChatIdentityEmpty: {
     color: '#8fa4c4',
-    fontSize: 11,
-    lineHeight: 16,
+    fontSize: TYPE.body,
+    lineHeight: TYPE.bodyLine,
   },
   fleetManagerChatHeader: {
     paddingHorizontal: 12,
@@ -694,7 +695,7 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetManagerChatTitle: {
     color: '#f6fbff',
-    fontSize: 17,
+    fontSize: TYPE.panelTitle,
     fontWeight: '900',
   },
   fleetManagerChatActions: {
@@ -749,12 +750,12 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetManagerChatActionText: {
     color: '#e7f5ff',
-    fontSize: 11,
+    fontSize: TYPE.body,
     fontWeight: '900',
   },
   fleetManagerChatActionMeta: {
     color: '#8fa4c4',
-    fontSize: 9,
+    fontSize: TYPE.micro,
     fontWeight: '800',
   },
   fleetManagerChatActionIcon: {
@@ -769,7 +770,7 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetManagerChatMeta: {
     color: '#9bb3d4',
-    fontSize: 10,
+    fontSize: TYPE.micro,
     fontWeight: '800',
     borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#0a1b2d',
@@ -796,13 +797,13 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetManagerEmptyTitle: {
     color: '#f1f7ff',
-    fontSize: 13,
+    fontSize: TYPE.sectionTitle,
     fontWeight: '900',
   },
   fleetManagerEmptyText: {
     color: '#8fa4c4',
-    fontSize: 11,
-    lineHeight: 16,
+    fontSize: TYPE.body,
+    lineHeight: TYPE.bodyLine,
   },
   fleetManagerMessage: {
     borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
@@ -834,7 +835,7 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetManagerMessageLabel: {
     color: '#7d94bf',
-    fontSize: 9,
+    fontSize: TYPE.micro,
     fontWeight: '900',
     letterSpacing: 0.7,
     textTransform: 'uppercase',
@@ -844,15 +845,15 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetManagerMessageTime: {
     color: '#7d94bf',
-    fontSize: 9,
+    fontSize: TYPE.micro,
   },
   fleetManagerMessageTimeOnLight: {
     color: '#284525',
   },
   fleetManagerMessageText: {
     color: '#eef6ff',
-    fontSize: 12,
-    lineHeight: 17,
+    fontSize: TYPE.control,
+    lineHeight: 20,
   },
   fleetManagerMessageTextOnLight: {
     color: '#06130b',
@@ -868,7 +869,7 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetManagerThinkingText: {
     color: HUD.cyanSoft,
-    fontSize: 11,
+    fontSize: TYPE.body,
     fontWeight: '900',
   },
   fleetManagerQueueStack: {
@@ -892,7 +893,7 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   fleetManagerQueueText: {
     flex: 1,
     color: '#f4e7c7',
-    fontSize: 11,
+    fontSize: TYPE.body,
     fontWeight: '800',
   },
   fleetManagerQueueAction: {
@@ -905,7 +906,7 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetManagerQueueActionText: {
     color: '#e8ffae',
-    fontSize: 10,
+    fontSize: TYPE.micro,
     fontWeight: '900',
   },
   fleetManagerComposer: {
@@ -931,8 +932,8 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
     color: '#eef7ff',
     paddingHorizontal: 10,
     paddingVertical: 9,
-    fontSize: 12,
-    lineHeight: 17,
+    fontSize: TYPE.control,
+    lineHeight: 20,
     textAlignVertical: 'top',
   },
   fleetManagerComposerFooter: {
@@ -950,7 +951,7 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   fleetManagerComposerStatus: {
     flex: 1,
     color: '#8fa4c4',
-    fontSize: 10,
+    fontSize: TYPE.micro,
     fontWeight: '800',
   },
   fleetComposerIconButton: {
@@ -983,6 +984,8 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
     paddingBottom: 22,
   },
   fleetPanelHeader: {
+    position: 'relative',
+    zIndex: 20,
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 10,
@@ -993,20 +996,20 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetEyebrow: {
     color: HUD.cyan,
-    fontSize: 10,
+    fontSize: TYPE.eyebrow,
     fontWeight: '900',
     letterSpacing: 0.9,
     textTransform: 'uppercase',
   },
   fleetPanelTitle: {
     color: '#f6fbff',
-    fontSize: 17,
+    fontSize: TYPE.panelTitle,
     fontWeight: '900',
   },
   fleetPanelText: {
     color: '#8fa4c4',
-    fontSize: 11,
-    lineHeight: 16,
+    fontSize: TYPE.body,
+    lineHeight: TYPE.bodyLine,
   },
   fleetIconAction: {
     borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
@@ -1018,7 +1021,7 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetIconActionText: {
     color: '#dff8ff',
-    fontSize: 10,
+    fontSize: TYPE.body,
     fontWeight: '900',
   },
   panelCollapseButton: {
@@ -1048,19 +1051,19 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetStatusLabel: {
     color: '#7891b4',
-    fontSize: 10,
+    fontSize: TYPE.eyebrow,
     fontWeight: '900',
     textTransform: 'uppercase',
     letterSpacing: 0.8,
   },
   fleetStatusText: {
     color: '#e8f3ff',
-    fontSize: 12,
+    fontSize: TYPE.control,
     fontWeight: '700',
   },
   fleetStatusError: {
     color: '#ffb8b8',
-    fontSize: 12,
+    fontSize: TYPE.control,
     fontWeight: '800',
   },
   fleetCreateCard: {
@@ -1101,7 +1104,7 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetIdentityName: {
     color: '#dfefff',
-    fontSize: 12,
+    fontSize: TYPE.control,
     fontWeight: '900',
   },
   fleetIdentityNameActive: {
@@ -1109,7 +1112,7 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetIdentityMeta: {
     color: '#7f95ba',
-    fontSize: 10,
+    fontSize: TYPE.micro,
     fontWeight: '800',
     textTransform: 'uppercase',
   },
@@ -1118,16 +1121,16 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetSectionTitle: {
     color: '#f1f7ff',
-    fontSize: 12,
+    fontSize: TYPE.sectionTitle,
     fontWeight: '900',
   },
   fleetSectionMeta: {
     color: '#8ea5c8',
-    fontSize: 11,
+    fontSize: TYPE.body,
     fontWeight: '900',
   },
   fleetInput: {
-    minHeight: 36,
+    minHeight: 44,
     borderRadius: DESKTOP_RECT_BUTTON_RADIUS,
     backgroundColor: '#06111f',
     borderWidth: 1,
@@ -1135,7 +1138,7 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
     color: '#eef7ff',
     paddingHorizontal: 10,
     paddingVertical: 8,
-    fontSize: 12,
+    fontSize: TYPE.control,
   },
   fleetInlineInput: {
     flex: 1,
@@ -1158,7 +1161,7 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetPrimaryActionText: {
     color: '#04111d',
-    fontSize: 11,
+    fontSize: TYPE.body,
     fontWeight: '900',
   },
   fleetSecondaryAction: {
@@ -1173,7 +1176,7 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetSecondaryActionText: {
     color: '#dcf7ff',
-    fontSize: 11,
+    fontSize: TYPE.body,
     fontWeight: '900',
   },
   fleetActionDisabled: {
@@ -1194,25 +1197,27 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetEnrollmentLabel: {
     color: '#f5e3c9',
-    fontSize: 10,
+    fontSize: TYPE.eyebrow,
     fontWeight: '900',
     textTransform: 'uppercase',
     letterSpacing: 0.7,
   },
   fleetEnrollmentMeta: {
     color: HUD.amber,
-    fontSize: 10,
+    fontSize: TYPE.micro,
     fontWeight: '900',
   },
   fleetEnrollmentToken: {
     color: '#fff1d8',
-    fontSize: 12,
-    lineHeight: 17,
+    fontSize: TYPE.body,
+    lineHeight: TYPE.bodyLine,
   },
   fleetWorkersSection: {
     gap: 9,
   },
   fleetWorkersHeader: {
+    position: 'relative',
+    zIndex: 20,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -1260,12 +1265,12 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetWorkerName: {
     color: '#f6fbff',
-    fontSize: 14,
+    fontSize: TYPE.sectionTitle,
     fontWeight: '900',
   },
   fleetWorkerMeta: {
     color: '#8ba1c2',
-    fontSize: 10,
+    fontSize: TYPE.meta,
     fontWeight: '800',
     textTransform: 'uppercase',
   },
@@ -1320,7 +1325,7 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetSmallDangerActionText: {
     color: '#ffbad0',
-    fontSize: 10,
+    fontSize: TYPE.body,
     fontWeight: '900',
   },
   fleetWorkerInfoGrid: {
@@ -1336,19 +1341,19 @@ export const desktopConversationStylesPart1 = StyleSheet.create({
   },
   fleetInfoLabel: {
     color: '#7d94b8',
-    fontSize: 9,
+    fontSize: TYPE.micro,
     fontWeight: '900',
     textTransform: 'uppercase',
     letterSpacing: 0.7,
   },
   fleetInfoValue: {
     color: '#edf6ff',
-    fontSize: 11,
-    lineHeight: 15,
+    fontSize: TYPE.body,
+    lineHeight: TYPE.bodyLine,
   },
   fleetInfoMeta: {
     color: HUD.cyanSoft,
-    fontSize: 10,
+    fontSize: TYPE.meta,
     fontWeight: '900',
   },
   sidebarMenuList: {

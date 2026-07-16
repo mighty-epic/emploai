@@ -2,6 +2,7 @@ import React from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { DesktopFleetPreviewResult } from '../lib/desktopBridge';
+import { FLEET_TYPE as TYPE } from './desktopFleetUi';
 import { DESKTOP_UI as UI } from './desktopUiTokens';
 
 
@@ -70,13 +71,13 @@ const styles = StyleSheet.create({
   },
   title: {
     color: UI.color.text,
-    fontSize: 12,
+    fontSize: TYPE.sectionTitle,
     fontWeight: '700',
   },
   meta: {
     marginTop: 2,
     color: UI.color.textSubtle,
-    fontSize: 10,
+    fontSize: TYPE.meta,
   },
   closeButton: {
     paddingHorizontal: 9,
@@ -88,7 +89,7 @@ const styles = StyleSheet.create({
   },
   closeText: {
     color: UI.color.textMuted,
-    fontSize: 10,
+    fontSize: TYPE.body,
     fontWeight: '700',
   },
   image: {
@@ -100,7 +101,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 9,
     color: UI.color.textMuted,
-    fontSize: 10,
-    lineHeight: 15,
+    fontSize: TYPE.body,
+    lineHeight: TYPE.bodyLine,
   },
 });

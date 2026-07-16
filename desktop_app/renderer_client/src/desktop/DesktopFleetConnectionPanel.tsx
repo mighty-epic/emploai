@@ -13,6 +13,8 @@ import {
   type DesktopFleetYggdrasilStatus,
 } from '@/lib/desktopBridge';
 import { userFacingError } from '../../lib/diagnostics';
+import { DesktopFleetInfoButton } from './DesktopFleetInfoButton';
+import { FLEET_TYPE as TYPE } from './desktopFleetUi';
 import { DESKTOP_UI as UI } from './desktopUiTokens';
 
 type BusyAction = 'refresh' | 'bootstrap' | 'pair' | 'join' | 'permissions' | null;
@@ -187,13 +189,16 @@ export function DesktopFleetConnectionPanel({ onFleetChanged }: { onFleetChanged
         <View style={styles.headerCopy}>
           <Text style={styles.eyebrow}>PRIVATE DESKTOP NETWORK</Text>
           <Text style={styles.title}>Connect computers with Yggdrasil</Text>
-          <Text style={styles.description}>
-            One code connects the computers. No EmploAI account or hosted relay; chats, agents, settings, files, and provider state stay local.
-          </Text>
         </View>
-        <View style={[styles.statusPill, networkReady ? styles.statusPillReady : null]}>
-          <Text style={[styles.statusDot, networkReady ? styles.statusDotReady : null]}>{networkReady ? '●' : '○'}</Text>
-          <Text style={styles.statusText}>{connectionSummary(status)}</Text>
+        <View style={styles.headerActions}>
+          <DesktopFleetInfoButton
+            label="Private desktop network"
+            text="One code connects the computers. No EmploAI account or hosted relay is involved; chats, agents, settings, files, and provider state stay local."
+          />
+          <View style={[styles.statusPill, networkReady ? styles.statusPillReady : null]}>
+            <Text style={[styles.statusDot, networkReady ? styles.statusDotReady : null]}>{networkReady ? '●' : '○'}</Text>
+            <Text style={styles.statusText}>{connectionSummary(status)}</Text>
+          </View>
         </View>
       </View>
 
@@ -360,6 +365,7 @@ export function DesktopFleetConnectionPanel({ onFleetChanged }: { onFleetChanged
                 <Pressable
                   key={key}
                   accessibilityRole="switch"
+                  accessibilityHint={detail}
                   accessibilityState={{ checked: enabled, disabled: busy !== null }}
                   disabled={busy !== null}
                   onPress={() => void updatePermission(key)}
@@ -367,7 +373,6 @@ export function DesktopFleetConnectionPanel({ onFleetChanged }: { onFleetChanged
                 >
                   <View style={styles.permissionCopy}>
                     <Text style={styles.permissionLabel}>{label}</Text>
-                    <Text style={styles.roleHint}>{detail}</Text>
                   </View>
                   <Text style={[styles.permissionValue, enabled ? styles.permissionValueOn : null]}>{enabled ? 'ALLOWED' : 'BLOCKED'}</Text>
                 </Pressable>
@@ -379,7 +384,10 @@ export function DesktopFleetConnectionPanel({ onFleetChanged }: { onFleetChanged
 
       <View style={styles.howToConnect}>
         <Text style={styles.stepLabel}>CONNECT TWO OR MORE COMPUTERS</Text>
-        <Text style={styles.footerText}>On the manager, create one code for each additional computer. On each other computer, paste its code once and connect. Repeat from the same manager for computer three, four, and beyond. Codes are single-use; completed pairings reconnect after restarts.</Text>
+        <DesktopFleetInfoButton
+          label="Connecting two or more computers"
+          text="Create one code on the manager for each additional computer, then paste each code once on its destination. Repeat from the same manager for computer three, four, and beyond; completed pairings reconnect after restarts."
+        />
       </View>
     </View>
   );
@@ -387,60 +395,59 @@ export function DesktopFleetConnectionPanel({ onFleetChanged }: { onFleetChanged
 
 const styles = StyleSheet.create({
   shell: { borderWidth: 1, borderColor: UI.color.accentBorder, borderRadius: UI.radius.large, backgroundColor: UI.color.surfaceMuted, overflow: 'hidden' },
-  header: { padding: 18, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, backgroundColor: UI.color.accentSoft },
+  header: { position: 'relative', zIndex: 20, padding: 18, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, backgroundColor: UI.color.accentSoft },
   headerCopy: { flex: 1, minWidth: 280 },
-  eyebrow: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: 10, fontWeight: '800', letterSpacing: 1.2 },
-  title: { marginTop: 5, color: UI.color.text, fontSize: 18, fontWeight: '800' },
-  description: { marginTop: 6, color: UI.color.textMuted, fontSize: 12, lineHeight: 18, maxWidth: 620 },
+  headerActions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 6 },
+  eyebrow: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: TYPE.eyebrow, fontWeight: '800', letterSpacing: 1.2 },
+  title: { marginTop: 6, color: UI.color.text, fontSize: TYPE.heroTitle, fontWeight: '800' },
   statusPill: { minHeight: 36, maxWidth: 330, paddingHorizontal: 12, borderRadius: UI.radius.pill, borderWidth: 1, borderColor: UI.color.borderStrong, backgroundColor: UI.color.surface, flexDirection: 'row', alignItems: 'center', gap: 8 },
   statusPillReady: { borderColor: UI.color.accentBorder },
   statusDot: { color: UI.color.warning, fontSize: 12 },
   statusDotReady: { color: UI.color.success },
-  statusText: { flexShrink: 1, color: UI.color.textMuted, fontSize: 10, fontWeight: '700' },
+  statusText: { flexShrink: 1, color: UI.color.textMuted, fontSize: TYPE.body, fontWeight: '700' },
   notice: { minHeight: 34, paddingHorizontal: 18, paddingVertical: 9, borderTopWidth: 1, borderBottomWidth: 1, borderColor: UI.color.border, backgroundColor: UI.color.surface },
   noticeError: { backgroundColor: UI.color.dangerSoft, borderColor: UI.color.danger },
-  noticeText: { color: UI.color.textMuted, fontSize: 11 },
-  errorText: { color: UI.color.danger, fontSize: 11, fontWeight: '700' },
+  noticeText: { color: UI.color.textMuted, fontSize: TYPE.body },
+  errorText: { color: UI.color.danger, fontSize: TYPE.body, fontWeight: '700' },
   setupRow: { padding: 18, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 16 },
   setupCopy: { flex: 1, minWidth: 260 },
   addressRow: { paddingHorizontal: 18, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderBottomWidth: 1, borderColor: UI.color.border },
-  address: { marginTop: 3, color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: 12 },
+  address: { marginTop: 4, color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: TYPE.control },
   roleGrid: { flexDirection: 'row', flexWrap: 'wrap' },
   rolePane: { flex: 1, minWidth: 300, padding: 18, gap: 9, borderBottomWidth: 1, borderRightWidth: 1, borderColor: UI.color.border },
-  stepLabel: { color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: 9, fontWeight: '800', letterSpacing: 1 },
-  stepTitle: { color: UI.color.text, fontSize: 14, fontWeight: '800' },
-  stepText: { color: UI.color.textMuted, fontSize: 11, lineHeight: 17 },
-  inputLabel: { marginTop: 3, color: UI.color.textMuted, fontSize: 10, fontWeight: '700' },
-  input: { minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, borderRadius: UI.radius.control, borderWidth: 1, borderColor: UI.color.borderStrong, backgroundColor: UI.color.canvas, color: UI.color.text, fontSize: 12 },
+  stepLabel: { color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: TYPE.eyebrow, fontWeight: '800', letterSpacing: 1 },
+  stepTitle: { color: UI.color.text, fontSize: TYPE.sectionTitle, fontWeight: '800' },
+  stepText: { color: UI.color.textMuted, fontSize: TYPE.body, lineHeight: TYPE.bodyLine },
+  inputLabel: { marginTop: 3, color: UI.color.textMuted, fontSize: TYPE.body, fontWeight: '700' },
+  input: { minHeight: 48, paddingHorizontal: 12, paddingVertical: 10, borderRadius: UI.radius.control, borderWidth: 1, borderColor: UI.color.borderStrong, backgroundColor: UI.color.canvas, color: UI.color.text, fontSize: TYPE.control },
   codeInput: { minHeight: 76, fontFamily: UI.type.mono, textAlignVertical: 'top' },
   primaryButton: { minHeight: 44, paddingHorizontal: 15, borderRadius: UI.radius.control, backgroundColor: UI.color.accent, alignItems: 'center', justifyContent: 'center' },
-  primaryButtonText: { color: UI.color.accentInk, fontSize: 11, fontWeight: '900' },
+  primaryButtonText: { color: UI.color.accentInk, fontSize: TYPE.body, fontWeight: '900' },
   secondaryButton: { minHeight: 44, paddingHorizontal: 15, borderRadius: UI.radius.control, borderWidth: 1, borderColor: UI.color.accentBorder, backgroundColor: UI.color.accentSoft, alignItems: 'center', justifyContent: 'center' },
-  secondaryButtonText: { color: UI.color.accentStrong, fontSize: 11, fontWeight: '800' },
+  secondaryButtonText: { color: UI.color.accentStrong, fontSize: TYPE.body, fontWeight: '800' },
   ghostButton: { minHeight: 44, paddingHorizontal: 13, borderRadius: UI.radius.control, borderWidth: 1, borderColor: UI.color.border, alignItems: 'center', justifyContent: 'center' },
-  ghostButtonText: { color: UI.color.textMuted, fontSize: 10, fontWeight: '800' },
+  ghostButtonText: { color: UI.color.textMuted, fontSize: TYPE.body, fontWeight: '800' },
   disabled: { opacity: 0.42 },
   codeBox: { marginTop: 3, padding: 12, gap: 9, borderRadius: UI.radius.panel, borderWidth: 1, borderColor: UI.color.accentBorder, backgroundColor: UI.color.canvas },
   codeBoxExpired: { borderColor: UI.color.danger },
   codeHeader: { flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
-  codeLabel: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: 9, fontWeight: '800' },
-  codeExpiry: { color: UI.color.warning, fontFamily: UI.type.mono, fontSize: 9, fontWeight: '800' },
-  code: { color: UI.color.textMuted, fontFamily: UI.type.mono, fontSize: 9, lineHeight: 14 },
-  roleHint: { color: UI.color.textSubtle, fontSize: 10, lineHeight: 15 },
+  codeLabel: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '800' },
+  codeExpiry: { color: UI.color.warning, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '800' },
+  code: { color: UI.color.textMuted, fontFamily: UI.type.mono, fontSize: TYPE.meta, lineHeight: TYPE.compactLine },
+  roleHint: { color: UI.color.textSubtle, fontSize: TYPE.body, lineHeight: TYPE.bodyLine },
   connectedDetail: { padding: 11, borderRadius: UI.radius.control, borderWidth: 1, borderColor: UI.color.border, backgroundColor: UI.color.surface },
-  connectedTitle: { color: UI.color.success, fontSize: 11, fontWeight: '800' },
+  connectedTitle: { color: UI.color.success, fontSize: TYPE.control, fontWeight: '800' },
   permissionSection: { padding: 18, gap: 12, borderTopWidth: 1, borderColor: UI.color.border, backgroundColor: UI.color.surface },
   permissionHeading: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 },
   permissionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   permissionRow: { flexGrow: 1, flexBasis: 300, minWidth: 260, minHeight: 64, padding: 11, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control, backgroundColor: UI.color.canvas, flexDirection: 'row', alignItems: 'center', gap: 12 },
   permissionRowEnabled: { borderColor: UI.color.accentBorder, backgroundColor: UI.color.accentSoft },
   permissionCopy: { flex: 1, gap: 3 },
-  permissionLabel: { color: UI.color.text, fontSize: 10, fontWeight: '800' },
-  permissionValue: { color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: 8, fontWeight: '900' },
+  permissionLabel: { color: UI.color.text, fontSize: TYPE.body, fontWeight: '800' },
+  permissionValue: { color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900' },
   permissionValueOn: { color: UI.color.success },
   permissionRequest: { padding: 11, borderWidth: 1, borderColor: UI.color.warning, borderRadius: UI.radius.control, backgroundColor: UI.color.warningSoft, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 12 },
   permissionRequestCopy: { flex: 1, minWidth: 240, gap: 4 },
   requestActions: { flexDirection: 'row', gap: 8 },
-  howToConnect: { paddingHorizontal: 18, paddingVertical: 13, borderTopWidth: 1, borderColor: UI.color.border, backgroundColor: UI.color.canvas },
-  footerText: { marginTop: 5, color: UI.color.textSubtle, fontSize: 10, lineHeight: 15 },
+  howToConnect: { position: 'relative', zIndex: 20, paddingHorizontal: 18, paddingVertical: 8, borderTopWidth: 1, borderColor: UI.color.border, backgroundColor: UI.color.canvas, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
 });
