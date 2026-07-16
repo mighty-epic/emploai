@@ -1381,6 +1381,13 @@ export function DesktopAppShell() {
         return;
       }
 
+      if (event.type === 'update_progress' && event.payload) {
+        const progress = event.payload as { message?: string };
+        setInstallingUpdate(true);
+        if (progress.message) setNotice(progress.message);
+        return;
+      }
+
       if (event.type === 'update_installing') {
         setInstallingUpdate(true);
         setNotice('Pulling the latest desktop update…');

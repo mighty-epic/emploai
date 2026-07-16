@@ -15,6 +15,7 @@ import httpx
 from websockets.asyncio.client import ClientConnection, connect as websocket_connect
 
 from app_backend.local_runtime_server import start_runtime_context
+from app_backend.fleet_policy import FLEET_PREVIEW_MODE
 from app_backend.fleet_worker_report import extract_worker_report
 from shared.atomic_io import atomic_write_json
 from shared.fleet_connection import load_fleet_connection
@@ -741,7 +742,23 @@ async def _handle_command(
                 FLEET_STOP_REQUESTED_TASKS.discard(task_id)
 
         if command_name == "fleet_worker_preview":
-            raise PermissionError("Screen previews are not part of a paired-computer Fleet connection")
+            if payload.get("view_only") is not True or str(payload.get("mode") or "") != FLEET_PREVIEW_MODE:
+                raise PermissionError("Fleet previews must use the bounded view-only preview mode")
+            from app_backend.capture_runtime import capture_screen_snapshot
+
+            loop = asyncio.get_running_loop()
+            capture = await loop.run_in_executor(
+                None,
+                lambda: capture_screen_snapshot(max_width=1280, jpeg_quality=62),
+            )
+            encoded = str(capture.get("image_base64") or "")
+            if not encoded or len(encoded) > 2_000_000:
+                raise RuntimeError("Captured preview exceeded the safe image size limit")
+            return {
+                "status": "captured",
+                "detail": "View-only desktop preview captured.",
+                "capture": capture,
+            }
 
         if command_name == "fleet_stop_task":
             task_id = str(payload.get("task_id") or "").strip()

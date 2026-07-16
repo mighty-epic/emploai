@@ -249,12 +249,45 @@ def test_unknown_paired_computer_command_is_rejected_explicitly():
         )
 
 
-def test_screen_preview_is_not_part_of_paired_computer_protocol():
-    with pytest.raises(PermissionError, match="not part"):
+def test_screen_preview_is_bounded_and_view_only(monkeypatch):
+    monkeypatch.setattr(
+        "app_backend.capture_runtime.capture_screen_snapshot",
+        lambda **kwargs: {
+            "mime_type": "image/jpeg",
+            "image_base64": "cHJldmlldw==",
+            "width": kwargs["max_width"],
+            "height": 720,
+            "backend": "test",
+            "captured_at": 1.0,
+        },
+    )
+    result = asyncio.run(
+        remote_desktop_client._handle_command(
+            command_name="fleet_worker_preview",
+            payload={
+                "preview_id": "fpv_test",
+                "worker_id": "wrk_preview",
+                "view_only": True,
+                "mode": "screen_summary_or_low_rate_preview",
+            },
+            local_api_base_url="http://127.0.0.1:8787",
+            local_token="local-token",
+            remote_ws=None,
+            send_lock=asyncio.Lock(),
+        )
+    )
+
+    assert result["status"] == "captured"
+    assert result["capture"]["width"] == 1280
+    assert result["capture"]["image_base64"] == "cHJldmlldw=="
+
+
+def test_screen_preview_rejects_non_view_only_requests():
+    with pytest.raises(PermissionError, match="view-only"):
         asyncio.run(
             remote_desktop_client._handle_command(
                 command_name="fleet_worker_preview",
-                payload={"preview_id": "fpv_test", "worker_id": "wrk_preview"},
+                payload={"preview_id": "fpv_test", "view_only": False},
                 local_api_base_url="http://127.0.0.1:8787",
                 local_token="local-token",
                 remote_ws=None,

@@ -86,11 +86,34 @@ def test_desktop_update_ui_explains_local_data_and_keeps_manual_update_available
         / "desktop"
         / "DesktopSetupPanel.tsx"
     ).read_text(encoding="utf-8")
+    shell_view = (
+        ROOT
+        / "desktop_app"
+        / "renderer_client"
+        / "src"
+        / "desktop"
+        / "DesktopAppShellView.tsx"
+    ).read_text(encoding="utf-8")
+    overlay = (
+        ROOT
+        / "desktop_app"
+        / "renderer_client"
+        / "src"
+        / "desktop"
+        / "DesktopUpdateOverlay.tsx"
+    ).read_text(encoding="utf-8")
 
     assert "!status.requiresManualUpdate" in main
     assert "preserveLocalChanges(status.dirtyCount)" in main
     assert "Chats, credentials, memory, and other local runtime data stay in place" in settings
     assert "Update Safely & Restart" in settings
+    assert "emitUpdateProgress('pulling'" in main
+    assert "emitUpdateProgress('building'" in main
+    assert "quitAfterManagedShutdown = true" in main
+    assert "setTimeout(() => app.exit(0), 250)" in main
+    assert "DesktopUpdateOverlay" in shell_view
+    assert 'pointerEvents="auto"' in overlay
+    assert "Controls are paused while the project is updated" in overlay
 
 
 def test_git_update_backup_round_trip_with_real_tracked_and_untracked_files(tmp_path: Path):

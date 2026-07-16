@@ -22,6 +22,7 @@ import { DesktopConversationSkeleton, DesktopStatusBanner, StartupGlyph } from '
 import { styles } from './DesktopAppShell.styles';
 import { DesktopMenuBar } from './DesktopMenuBar';
 import { DesktopExitDialog } from './DesktopExitDialog';
+import { DesktopUpdateOverlay, desktopUpdatePhaseForMessage } from './DesktopUpdateOverlay';
 
 const webBackdropBlurStyle =
   Platform.OS === 'web'
@@ -415,6 +416,14 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
   const standaloneMode = Boolean(remoteAuthStatus?.cloudDisabled || remoteAuthStatus?.standalone);
   const cloudChatBackupEnabled = standaloneMode ? false : remotePreferences.cloud_chat_backup_enabled !== false;
   const cloudBackupPreferenceBusy = recoveryBusyId === 'cloud_chat_backup';
+  const updateOverlay = installingUpdate ? (
+    <DesktopUpdateOverlay
+      progress={{
+        phase: desktopUpdatePhaseForMessage(notice),
+        message: notice || 'Preparing the desktop update…',
+      }}
+    />
+  ) : null;
 
   if (remoteAuthLoggingOut) {
     return (
@@ -660,6 +669,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
   if (startupPhase === 'setup_required') {
     return (
       <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={styles.startupPage}>
+        {updateOverlay}
         {showSetup && bootstrap?.setupState ? (
           <View style={styles.startupSetupShell}>
             <DesktopSetupPanel
@@ -752,6 +762,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
     return (
       <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={styles.startupPage}>
         {confirmationDialog}
+        {updateOverlay}
         {showSetup && bootstrap?.setupState ? (
           <View style={styles.startupSetupShell}>
             <DesktopSetupPanel
@@ -878,6 +889,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
   return (
     <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={styles.page}>
       {confirmationDialog}
+      {updateOverlay}
       <View style={[styles.windowChromeBar, webWindowDragStyle]}>
         <View style={[styles.windowChromeLeft, webWindowNoDragStyle]}>
           <Pressable

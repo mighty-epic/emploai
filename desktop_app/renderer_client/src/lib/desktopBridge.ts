@@ -584,7 +584,7 @@ export type DesktopFleetPreviewCapture = {
 export type DesktopFleetPreviewResult = {
   ok: boolean;
   preview_id: string;
-  worker_id: string;
+  worker_id?: string | null;
   display_name?: string | null;
   desktop_id?: string | null;
   dispatch_status: string;
@@ -729,6 +729,7 @@ type DesktopBridge = {
     stopWorker: (payload: { workerId?: string; worker_id?: string; reason?: string | null; metadata?: Record<string, unknown> }) => Promise<Record<string, unknown>>;
     stopAll: (payload?: { reason?: string | null; metadata?: Record<string, unknown>; confirmationId?: string | null; confirmation_id?: string | null }) => Promise<Record<string, unknown>>;
     requestWorkerPreview: (payload: { workerId?: string; worker_id?: string }) => Promise<DesktopFleetPreviewResult>;
+    requestComputerPreview: (payload: { desktopId?: string; desktop_id?: string }) => Promise<DesktopFleetPreviewResult>;
     createGroup: (payload: { displayName?: string; display_name?: string; workerIds?: string[]; worker_ids?: string[]; description?: string | null; metadata?: Record<string, unknown> }) => Promise<Record<string, unknown>>;
     updateGroup: (payload: { groupId?: string; group_id?: string; displayName?: string; display_name?: string; workerIds?: string[]; worker_ids?: string[]; description?: string | null; metadata?: Record<string, unknown> }) => Promise<Record<string, unknown>>;
     deleteGroup: (payload: { groupId?: string; group_id?: string; confirmationId?: string | null; confirmation_id?: string | null }) => Promise<Record<string, unknown>>;
@@ -1125,6 +1126,14 @@ export async function requestDesktopFleetWorkerPreview(workerId: string): Promis
     return null;
   }
   return bridge.fleet.requestWorkerPreview({ workerId });
+}
+
+export async function requestDesktopFleetComputerPreview(desktopId: string): Promise<DesktopFleetPreviewResult | null> {
+  const bridge = getDesktopBridge();
+  if (!bridge?.fleet?.requestComputerPreview) {
+    return null;
+  }
+  return bridge.fleet.requestComputerPreview({ desktopId });
 }
 
 export async function createDesktopFleetGroup(displayName: string, workerIds: string[] = [], description?: string | null, metadata?: Record<string, unknown>) {

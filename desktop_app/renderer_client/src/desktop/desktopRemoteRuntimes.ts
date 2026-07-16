@@ -1,5 +1,6 @@
 import type { DesktopFleetSnapshot, DesktopFleetWorker } from '../lib/desktopBridge';
 import type { RemoteRuntimeSummary } from './models';
+import { fleetReportSummary } from './desktopFleetWorkerState';
 
 function text(value: unknown) {
   return String(value || '').trim();
@@ -53,6 +54,7 @@ export function remoteRuntimesFromFleetSnapshot(
     const desktopId = text(desktop.desktop_id);
     if (desktopId && !grouped.has(desktopId)) grouped.set(desktopId, []);
   }
+  if (managerDesktopId && !grouped.has(managerDesktopId)) grouped.set(managerDesktopId, []);
 
   return Array.from(grouped.entries()).map(([desktopId, machineWorkers]) => {
     const desktop = desktops.find((item) => text(item.desktop_id) === desktopId);
@@ -75,7 +77,7 @@ export function remoteRuntimesFromFleetSnapshot(
     return {
       id: desktopId,
       name: isManager
-        ? text(manager?.display_name || desktop?.display_name) || 'This computer'
+        ? 'This computer'
         : text(desktop?.display_name) || machineName(machineWorkers[0]),
       hostLabel: lastSeenAt ? formatLastSeen(lastSeenAt) : isManager ? 'Local manager' : 'No heartbeat yet',
       status: connected ? 'connected' : 'offline',
@@ -83,7 +85,7 @@ export function remoteRuntimesFromFleetSnapshot(
       workerCount: machineWorkers.length,
       activeCount,
       queuedCount,
-      latestReport: latestReport?.summary || null,
+      latestReport: latestReport ? fleetReportSummary(latestReport) : null,
       workers: machineWorkers.map((worker) => ({
         id: worker.worker_id,
         name: worker.display_name,
@@ -92,7 +94,7 @@ export function remoteRuntimesFromFleetSnapshot(
       })),
       preview: {
         state: 'offline',
-        message: 'Screen access is not part of a paired-computer Fleet connection.',
+        message: 'View-only preview has not been requested.',
         updatedAt: null,
       },
     };

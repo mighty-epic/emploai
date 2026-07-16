@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from app_backend.fleet_preview import request_fleet_worker_preview
+from app_backend.fleet_preview import request_fleet_desktop_preview, request_fleet_worker_preview
 from app_backend.remote_control_store import RemoteControlPlaneStore
 
 
@@ -224,3 +224,80 @@ def test_request_fleet_worker_preview_marks_unavailable_remote_desktop(tmp_path)
             "reason": "The paired desktop is offline",
         }
     ]
+
+
+def test_request_fleet_desktop_preview_captures_remote_computer_without_persisting_image(tmp_path):
+    store, user_id, manager_desktop_id = _store_with_manager(tmp_path)
+    worker = _remote_worker(store, user_id=user_id, manager_desktop_id=manager_desktop_id)
+    desktop_id = worker["machine_desktop_id"]
+    desktop = next(item for item in store.list_desktops(user_id=user_id) if item["desktop_id"] == desktop_id)
+    manager = _FakePreviewManager(
+        {
+            "status": "captured",
+            "detail": "Computer preview captured.",
+            "capture": {
+                "mime_type": "image/jpeg",
+                "image_base64": "Y29tcHV0ZXItcHJldmlldw==",
+                "width": 960,
+                "height": 540,
+                "backend": "test",
+                "captured_at": 2.0,
+            },
+        }
+    )
+
+    result = asyncio.run(
+        request_fleet_desktop_preview(
+            store=store,
+            remote_desktop_manager=manager,
+            user_id=user_id,
+            desktop=desktop,
+            manager_desktop_id=manager_desktop_id,
+            is_remote_session_active=lambda **_: True,
+        )
+    )
+
+    assert result["dispatch_status"] == "captured"
+    assert result["desktop_id"] == desktop_id
+    assert result["capture"]["image_base64"] == "Y29tcHV0ZXItcHJldmlldw=="
+    assert manager.calls[0]["payload"]["view_only"] is True
+    assert "latest_preview_request" not in store.get_worker(
+        user_id=user_id,
+        worker_id=worker["worker_id"],
+    )["metadata"]
+
+
+def test_request_fleet_desktop_preview_captures_manager_computer_locally(tmp_path):
+    store, user_id, manager_desktop_id = _store_with_manager(tmp_path)
+    desktop = next(item for item in store.list_desktops(user_id=user_id) if item["desktop_id"] == manager_desktop_id)
+    manager = _FakePreviewManager()
+
+    result = asyncio.run(
+        request_fleet_desktop_preview(
+            store=store,
+            remote_desktop_manager=manager,
+            user_id=user_id,
+            desktop=desktop,
+            manager_desktop_id=manager_desktop_id,
+            is_remote_session_active=lambda **_: True,
+            capture_local_preview=lambda **_: asyncio.sleep(
+                0,
+                result={
+                    "status": "captured",
+                    "detail": "Local computer captured.",
+                    "capture": {
+                        "mime_type": "image/jpeg",
+                        "image_base64": "bG9jYWwtY29tcHV0ZXI=",
+                        "width": 800,
+                        "height": 450,
+                        "backend": "test",
+                        "captured_at": 3.0,
+                    },
+                },
+            ),
+        )
+    )
+
+    assert result["dispatch_status"] == "captured"
+    assert result["capture"]["image_base64"] == "bG9jYWwtY29tcHV0ZXI="
+    assert manager.calls == []

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import {
@@ -31,9 +32,11 @@ function roleCopy(role: ReturnType<typeof resolveDesktopFleetHierarchyRole>) {
 export function DesktopFleetWorkspace({
   snapshot,
   onChanged,
+  localComputerContent,
 }: {
   snapshot: DesktopFleetSnapshot | null | undefined;
   onChanged?: () => void;
+  localComputerContent?: ReactNode;
 }) {
   const { width } = useWindowDimensions();
   const [status, setStatus] = useState<DesktopFleetYggdrasilStatus | null | undefined>(undefined);
@@ -104,6 +107,13 @@ export function DesktopFleetWorkspace({
             <DesktopFleetInfoButton label={title} text={detail} />
           </View>
         </View>
+        <DesktopFleetMachinesPanel
+          snapshot={snapshot}
+          onChanged={changed}
+          onConnectRequested={() => setConnectOpen(true)}
+          localComputerContent={localComputerContent}
+          showConnectAction={false}
+        />
         <DesktopFleetConnectionPanel onFleetChanged={changed} />
         {statusError ? <Text style={styles.errorText}>{statusError}</Text> : null}
       </View>
@@ -159,11 +169,12 @@ export function DesktopFleetWorkspace({
       {connectOpen ? <DesktopFleetChildConnectionPanel onClose={() => setConnectOpen(false)} onChanged={changed} /> : null}
 
       {role === 'root_manager' ? (
-        <DesktopFleetMachinesPanel snapshot={snapshot} onChanged={changed} onConnectRequested={() => setConnectOpen(true)} />
+        <DesktopFleetMachinesPanel snapshot={snapshot} onChanged={changed} onConnectRequested={() => setConnectOpen(true)} localComputerContent={localComputerContent} />
       ) : null}
 
       {role === 'leaf' ? (
         <>
+          <DesktopFleetMachinesPanel snapshot={snapshot} onChanged={changed} onConnectRequested={() => setConnectOpen(true)} localComputerContent={localComputerContent} />
           <DesktopFleetActivityPanel snapshot={snapshot} />
           <DesktopFleetUpstreamAccessPanel status={status || null} onChanged={changed} />
         </>
@@ -178,7 +189,7 @@ export function DesktopFleetWorkspace({
             </View>
             <View style={styles.intermediaryPane}>
               <View style={styles.paneLabel}><Text style={styles.paneLabelText}>↓ MANAGING COMPUTERS BELOW</Text></View>
-              <DesktopFleetMachinesPanel snapshot={snapshot} onChanged={changed} onConnectRequested={() => setConnectOpen(true)} compact />
+              <DesktopFleetMachinesPanel snapshot={snapshot} onChanged={changed} onConnectRequested={() => setConnectOpen(true)} localComputerContent={localComputerContent} compact />
             </View>
           </View>
           <DesktopFleetUpstreamAccessPanel status={status || null} onChanged={changed} />

@@ -63,6 +63,7 @@ contextBridge.exposeInMainWorld('emploaiDesktop', {
     stopWorker: (payload) => ipcRenderer.invoke('emploai:fleet:stop-worker', payload),
     stopAll: (payload) => ipcRenderer.invoke('emploai:fleet:stop-all', payload),
     requestWorkerPreview: (payload) => ipcRenderer.invoke('emploai:fleet:request-worker-preview', payload),
+    requestComputerPreview: (payload) => ipcRenderer.invoke('emploai:fleet:request-computer-preview', payload),
     createGroup: (payload) => ipcRenderer.invoke('emploai:fleet:create-group', payload),
     updateGroup: (payload) => ipcRenderer.invoke('emploai:fleet:update-group', payload),
     deleteGroup: (payload) => ipcRenderer.invoke('emploai:fleet:delete-group', payload),

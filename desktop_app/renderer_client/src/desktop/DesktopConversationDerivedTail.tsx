@@ -1,6 +1,5 @@
 import type { DesktopConversationScope } from './DesktopConversationScope';
 import { DesktopModelPickerMenu } from './DesktopModelPickerMenu';
-import { DesktopFleetPreviewPanel } from './DesktopFleetPreviewPanel';
 import { DesktopFleetWorkspace } from './DesktopFleetWorkspace';
 import { DesktopFleetInfoButton } from './DesktopFleetInfoButton';
 import { fleetReportSummary, fleetWorkerStatusLabel } from './desktopFleetWorkerState';
@@ -987,6 +986,10 @@ useEffect(() => {
         : 'Muted until armed';
   const fleetIdentities = fleetSnapshot?.identities || [];
   const fleetWorkers = fleetSnapshot?.workers || [];
+  const fleetManagerDesktopId = String((fleetSnapshot?.manager as any)?.desktop_id || '');
+  const fleetLocalWorkers = fleetWorkers.filter((worker: any) => (
+    !fleetManagerDesktopId || String(worker.machine_desktop_id || '') === fleetManagerDesktopId
+  ));
   const fleetTasks = fleetSnapshot?.tasks || [];
   const fleetReports = fleetSnapshot?.reports || [];
   const fleetGroups = fleetSnapshot?.groups || [];
@@ -1403,7 +1406,11 @@ useEffect(() => {
       ) : (
         <>
 
-      <DesktopFleetWorkspace snapshot={fleetSnapshot} onChanged={() => void scope.refreshFleetSnapshot?.({ quiet: true })} />
+      <DesktopFleetWorkspace
+        snapshot={fleetSnapshot}
+        onChanged={() => void scope.refreshFleetSnapshot?.({ quiet: true })}
+        localComputerContent={(
+          <>
 
       <View style={styles.fleetCreateCard}>
         <View style={styles.fleetWorkersHeader}>
@@ -1434,11 +1441,11 @@ useEffect(() => {
       <View style={styles.fleetWorkersSection}>
         <View style={styles.fleetWorkersHeader}>
           <Text style={styles.fleetSectionTitle}>Workers</Text>
-          <Text style={styles.fleetSectionMeta}>{fleetWorkers.length}</Text>
+          <Text style={styles.fleetSectionMeta}>{fleetLocalWorkers.length}</Text>
         </View>
-        {fleetWorkers.length ? (
+        {fleetLocalWorkers.length ? (
           <View style={styles.fleetWorkerGrid}>
-            {fleetWorkers.map((worker: any) => {
+            {fleetLocalWorkers.map((worker: any) => {
               const task = fleetTaskForWorker(worker);
               const report = fleetLatestReportForWorker(worker);
               const workerTasks = fleetTasks.filter((item: any) => item.worker_id === worker.worker_id);
@@ -1514,16 +1521,6 @@ useEffect(() => {
                           <Text style={styles.fleetSecondaryActionText}>Auto-continue Safe Success</Text>
                         </Pressable>
                         <Pressable
-                          style={[styles.fleetSecondaryAction, styles.fleetWorkerMenuAction, fleetLoading ? styles.fleetActionDisabled : null]}
-                          disabled={fleetLoading}
-                          onPress={() => {
-                            setOpenFleetWorkerMenuId(null);
-                            void requestFleetPreview(worker);
-                          }}
-                        >
-                          <Text style={styles.fleetSecondaryActionText}>Preview</Text>
-                        </Pressable>
-                        <Pressable
                           style={[styles.fleetSmallDangerAction, styles.fleetWorkerMenuAction, (fleetLoading || !task) ? styles.fleetActionDisabled : null]}
                           disabled={fleetLoading || !task}
                           onPress={() => {
@@ -1556,13 +1553,6 @@ useEffect(() => {
                       </View>
                     </View>
                   ) : null}
-
-                  <DesktopFleetPreviewPanel
-                    preview={(scope.fleetPreview as any) || null}
-                    workerId={worker.worker_id}
-                    workerName={worker.display_name}
-                    onClose={() => scope.setFleetPreview?.(null)}
-                  />
 
                   <View style={styles.fleetWorkerInfoGrid}>
                     <View style={styles.fleetWorkerInfoTile}>
@@ -1623,6 +1613,10 @@ useEffect(() => {
           </View>
         )}
       </View>
+
+          </>
+        )}
+      />
 
       <View style={styles.fleetCreateCard}>
         <Text style={styles.fleetSectionTitle}>Groups</Text>

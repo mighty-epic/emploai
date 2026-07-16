@@ -46,7 +46,12 @@ from app_backend.fleet_orchestration import (
     workspace_binding_blocker_for_task as _workspace_binding_blocker_for_task_values,
     workspace_id_for_task as _workspace_id_for_task_values,
 )
-from app_backend.fleet_preview import capture_local_worker_preview, request_fleet_worker_preview
+from app_backend.fleet_preview import (
+    capture_local_desktop_preview,
+    capture_local_worker_preview,
+    request_fleet_desktop_preview,
+    request_fleet_worker_preview,
+)
 from app_backend.fleet_local_runtime import get_local_fleet_runtime
 from app_backend.fleet_task_dispatch import try_dispatch_fleet_worker_task, try_stop_fleet_worker_task
 from app_backend.jarvis_voice_policy import (

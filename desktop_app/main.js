@@ -81,6 +81,17 @@ function emitRuntimeEvent(payload) {
   }
 }
 
+function emitUpdateProgress(phase, message) {
+  emitRuntimeEvent({
+    type: 'update_progress',
+    payload: {
+      phase: String(phase || 'preparing'),
+      message: String(message || 'Preparing the desktop update.'),
+      updatedAt: new Date().toISOString(),
+    },
+  });
+}
+
 function authDebugEnabled() {
   return String(process.env.EMPLOAI_AUTH_DEBUG || '').trim() === '1';
 }
@@ -976,7 +987,11 @@ function relaunchDesktopApp() {
   } else {
     app.relaunch();
   }
-  setTimeout(() => app.quit(), 250);
+  // The normal quit path deliberately asks the renderer how to handle active
+  // work. An updater relaunch has already coordinated that decision, so it
+  // must bypass the close prompt or the old process can remain open forever.
+  quitAfterManagedShutdown = true;
+  setTimeout(() => app.exit(0), 250);
 }
 
 async function installUpdate() {
@@ -985,6 +1000,7 @@ async function installUpdate() {
   }
 
   gitUpdateInstallPromise = (async () => {
+    emitUpdateProgress('checking', 'Confirming the latest available update…');
     const status = await checkUpdates(true);
     if (!status.ok) {
       return {
@@ -1015,6 +1031,7 @@ async function installUpdate() {
     const beforeCommit = status.currentCommit || '';
     let localChangesBackup = null;
     if (status.dirty) {
+      emitUpdateProgress('preserving', `Safely backing up ${status.dirtyCount || 'local'} project changes…`);
       localChangesBackup = await gitUpdateServices().preserveLocalChanges(status.dirtyCount);
       const cleanState = await getGitDirtyState();
       if (cleanState.dirty) {
@@ -1033,11 +1050,22 @@ async function installUpdate() {
       ? ['pull', '--ff-only', remoteBranch.remote, remoteBranch.branch]
       : ['pull', '--ff-only'];
     try {
+      emitUpdateProgress('pulling', 'Downloading the latest project changes…');
       await runGit(pullArgs, { timeoutMs: 5 * 60 * 1000 });
       const afterCommit = await runGit(['rev-parse', 'HEAD']);
       const changedFiles = await gitChangedFiles(beforeCommit, afterCommit);
+      if (changedFilesInclude(changedFiles, [
+        'desktop_app/package.json',
+        'desktop_app/package-lock.json',
+        'desktop_app/renderer_client/package.json',
+        'desktop_app/renderer_client/package-lock.json',
+      ])) {
+        emitUpdateProgress('dependencies', 'Installing updated desktop dependencies…');
+      }
       await installNpmDependenciesForUpdate(changedFiles);
+      emitUpdateProgress('building', 'Building the updated desktop interface…');
       await rebuildRendererForUpdate();
+      emitUpdateProgress('restarting', 'Update complete. Restarting EmploAI now…');
       relaunchDesktopApp();
       const preservedMessage = localChangesBackup
         ? ` ${localChangesBackup.count} local project change${localChangesBackup.count === 1 ? ' was' : 's were'} preserved in an automatic Git backup.`
@@ -2229,6 +2257,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('emploai:fleet:stop-worker', async (_event, payload) => remoteControlServices().fleetStopWorker(payload || {}));
   ipcMain.handle('emploai:fleet:stop-all', async (_event, payload) => remoteControlServices().fleetStopAll(payload || {}));
   ipcMain.handle('emploai:fleet:request-worker-preview', async (_event, payload) => remoteControlServices().fleetRequestWorkerPreview(payload || {}));
+  ipcMain.handle('emploai:fleet:request-computer-preview', async (_event, payload) => remoteControlServices().fleetRequestComputerPreview(payload || {}));
   ipcMain.handle('emploai:fleet:create-group', async (_event, payload) => remoteControlServices().fleetCreateGroup(payload || {}));
   ipcMain.handle('emploai:fleet:update-group', async (_event, payload) => remoteControlServices().fleetUpdateGroup(payload || {}));
   ipcMain.handle('emploai:fleet:delete-group', async (_event, payload) => remoteControlServices().fleetDeleteGroup(payload || {}));

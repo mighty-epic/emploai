@@ -1303,6 +1303,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
         ? `Backing up ${updateStatus.dirtyCount || 'local'} project changes before updating…`
         : 'Preparing desktop update…'
     );
+    let relaunching = false;
     try {
       if (bootstrap?.apiBaseUrl && bootstrap?.accessToken) {
         setNotice('Stopping local agent work before updating…');
@@ -1326,7 +1327,10 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
           : 'Pulling the desktop update. EmploAI will close and reopen when the new commit is ready.'
       );
       const result = await installDesktopUpdate();
-      if (result && result.message && !result.launched) {
+      if (result?.launched) {
+        relaunching = true;
+        setNotice(result.message || 'Update complete. Restarting EmploAI now…');
+      } else if (result && result.message) {
         if (result.ok) {
           setNotice(result.message);
         } else {
@@ -1336,7 +1340,7 @@ export function createDesktopAppShellActions(context: DesktopAppShellActionsCont
     } catch (installError) {
       setError(userFacingError(installError, 'Desktop update did not start.'));
     } finally {
-      setInstallingUpdate(false);
+      if (!relaunching) setInstallingUpdate(false);
     }
   };
 

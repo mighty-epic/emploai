@@ -943,6 +943,53 @@ def register_fleet_routes(app):
 
         return payload
 
+    @app.post("/api/fleet/desktops/{desktop_id}/preview")
+
+    async def fleet_request_desktop_preview(desktop_id: str, authorization: Optional[str] = Header(default=None)) -> dict:
+
+        auth = _require_fleet_manager_auth(authorization)
+
+        store = _get_remote_control_store()
+
+        owned_desktop = next(
+            (
+                item
+                for item in store.list_desktops(user_id=int(auth["user_id"]))
+                if str(item.get("desktop_id") or "") == str(desktop_id or "")
+            ),
+            None,
+        )
+
+        if not owned_desktop:
+
+            raise HTTPException(status_code=404, detail="Unknown desktop")
+
+        payload = await request_fleet_desktop_preview(
+
+            store=store,
+
+            remote_desktop_manager=get_remote_desktop_manager(),
+
+            user_id=int(auth["user_id"]),
+
+            desktop=owned_desktop,
+
+            manager_desktop_id=str(auth.get("desktop_id") or ""),
+
+            is_remote_session_active=_remote_desktop_connection_session_is_active,
+
+            is_desktop_unavailable_error=_command_error_implies_desktop_unavailable,
+
+            mark_desktop_offline=_mark_remote_desktop_offline_if_no_live_connection,
+
+            capture_local_preview=capture_local_desktop_preview,
+
+        )
+
+        # The screenshot is intentionally returned only to the requesting
+        # renderer. It is not published to Fleet deltas or written to storage.
+        return payload
+
     @app.post("/api/fleet/stop-all")
 
     async def fleet_stop_all(

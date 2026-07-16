@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import {
@@ -13,6 +14,8 @@ import {
 import { userFacingError } from '../../lib/diagnostics';
 import { remoteRuntimesFromFleetSnapshot } from './desktopRemoteRuntimes';
 import { DesktopFleetInfoButton } from './DesktopFleetInfoButton';
+import { DesktopFleetComputerActivity } from './DesktopFleetComputerActivity';
+import { DesktopFleetLivePreview } from './DesktopFleetLivePreview';
 import { fleetReportSummary } from './desktopFleetWorkerState';
 import { FLEET_TYPE as TYPE } from './desktopFleetUi';
 import { DESKTOP_UI as UI } from './desktopUiTokens';
@@ -44,15 +47,19 @@ export function DesktopFleetMachinesPanel({
   snapshot,
   onChanged,
   onConnectRequested,
+  localComputerContent,
+  showConnectAction = true,
   compact = false,
 }: {
   snapshot: DesktopFleetSnapshot | null | undefined;
   onChanged?: () => void;
   onConnectRequested?: () => void;
+  localComputerContent?: ReactNode;
+  showConnectAction?: boolean;
   compact?: boolean;
 }) {
   const managerDesktopId = String((snapshot?.manager as any)?.desktop_id || '');
-  const machines = remoteRuntimesFromFleetSnapshot(snapshot).filter((machine) => machine.id !== managerDesktopId);
+  const machines = remoteRuntimesFromFleetSnapshot(snapshot);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [targetByDesktop, setTargetByDesktop] = useState<Record<string, string>>({});
   const [prompts, setPrompts] = useState<Record<string, string>>({});
@@ -129,29 +136,35 @@ export function DesktopFleetMachinesPanel({
     <View style={[styles.section, compact ? styles.sectionCompact : null]}>
       <View style={styles.headingRow}>
         <View style={styles.headingCopy}>
-          <Text style={styles.eyebrow}>COMPUTERS BELOW</Text>
-          <Text style={styles.title}>Your direct connections</Text>
+          <Text style={styles.eyebrow}>FLEET COMPUTERS</Text>
+          <Text style={styles.title}>Computers and their workers</Text>
         </View>
         <View style={styles.headingActions}>
           <DesktopFleetInfoButton
-            label="Direct connections"
-            text="Computers in this Fleet appear by direct relationship. Each card is one computer directly below this one. No remote identities are copied; only labels that computer explicitly allows are shown."
+            label="Fleet computers"
+            text="Computers in this Fleet are organized by their direct relationship. Workers live inside the computer where they run. No remote identities are copied; only explicitly exposed labels and activity appear here."
           />
           <Text style={styles.count}>{machines.length}</Text>
-          <Pressable accessibilityRole="button" onPress={onConnectRequested} style={styles.connectButton}>
-            <Text style={styles.connectButtonText}>+ Connect computer</Text>
-          </Pressable>
+          {showConnectAction ? (
+            <Pressable accessibilityRole="button" onPress={onConnectRequested} style={styles.connectButton}>
+              <Text style={styles.connectButtonText}>+ Connect computer</Text>
+            </Pressable>
+          ) : null}
         </View>
       </View>
 
       <View style={styles.grid}>
         {machines.map((machine) => {
           const online = machine.status === 'connected';
+          const isLocal = machine.id === managerDesktopId;
           const permissionState = permissionForDesktop(snapshot, machine.id);
           const capabilities = permissionState?.capabilities;
           const pendingRequests = (requestsByDesktop.get(machine.id) || []).filter((request) => request.status === 'pending').length;
           const recentDelegation = (delegationsByDesktop.get(machine.id) || [])[0];
           const isIntermediary = Number(capabilities?.child_count || 0) > 0;
+          const visibleAgentCount = isLocal
+            ? Number(machine.workerCount || 0)
+            : Math.max(Number(machine.workerCount || 0), targetsForConnection(permissionState).length);
           return (
             <Pressable
               key={machine.id}
@@ -164,7 +177,7 @@ export function DesktopFleetMachinesPanel({
               <View style={styles.machineHeader}>
                 <View style={styles.machineIdentity}>
                   <Text style={styles.machineName} numberOfLines={1}>{machine.name}</Text>
-                  <Text style={styles.machineMeta}>{isIntermediary ? `Intermediary · ${capabilities?.child_count} below` : 'Leaf computer'}</Text>
+                  <Text style={styles.machineMeta}>{isLocal ? 'This computer · local manager' : isIntermediary ? `Intermediary · ${capabilities?.child_count} below` : 'Connected computer'}</Text>
                 </View>
                 <View style={[styles.statusBadge, online ? styles.statusBadgeOnline : styles.statusBadgeOffline]}>
                   <Text style={styles.statusBadgeText}>{online ? '● ONLINE' : '○ OFFLINE'}</Text>
@@ -172,16 +185,16 @@ export function DesktopFleetMachinesPanel({
               </View>
               <View style={styles.cardStats}>
                 <View style={styles.stat}>
-                  <Text style={styles.statValue}>{targetsForConnection(permissionState).length}</Text>
-                  <Text style={styles.statLabel}>targets</Text>
+                  <Text style={styles.statValue}>{visibleAgentCount}</Text>
+                  <Text style={styles.statLabel}>agents</Text>
                 </View>
                 <View style={styles.stat}>
-                  <Text style={[styles.statValue, pendingRequests ? styles.statAttention : null]}>{pendingRequests}</Text>
-                  <Text style={styles.statLabel}>requests</Text>
+                  <Text style={[styles.statValue, machine.activeCount ? styles.statAttention : null]}>{machine.activeCount}</Text>
+                  <Text style={styles.statLabel}>active</Text>
                 </View>
                 <View style={styles.statWide}>
-                  <Text style={styles.statLabel}>LATEST</Text>
-                  <Text style={styles.latestValue} numberOfLines={1}>{recentDelegation?.status || 'No work yet'}</Text>
+                  <Text style={styles.statLabel}>{machine.queuedCount ? 'QUEUE' : pendingRequests ? `${pendingRequests} REQUEST${pendingRequests === 1 ? '' : 'S'}` : 'LATEST'}</Text>
+                  <Text style={styles.latestValue} numberOfLines={1}>{machine.queuedCount ? `${machine.queuedCount} queued` : recentDelegation?.status || machine.latestReport || 'No work yet'}</Text>
                 </View>
               </View>
               <View style={[styles.openHintPill, selectedId === machine.id ? styles.openHintPillSelected : null]}>
@@ -202,6 +215,40 @@ export function DesktopFleetMachinesPanel({
       </View>
 
       {selectedMachine ? (() => {
+        const isLocal = selectedMachine.id === managerDesktopId;
+        if (isLocal) {
+          return (
+            <View style={[styles.drawer, styles.localDrawer]} accessibilityLiveRegion="polite">
+              <View style={styles.drawerHeader}>
+                <View style={styles.headingCopy}>
+                  <Text style={styles.drawerEyebrow}>THIS COMPUTER WORKSPACE</Text>
+                  <Text style={styles.drawerTitle}>{selectedMachine.name}</Text>
+                  <Text style={styles.drawerSubtitle}>Local workers, queues, reports, and screen preview all belong to this computer.</Text>
+                </View>
+                <View style={styles.drawerHeaderActions}>
+                  <DesktopFleetInfoButton
+                    label="This computer"
+                    text="These workers run on this computer. Opening another computer switches the same workspace to that computer's exposed workers and activity."
+                  />
+                  <Pressable accessibilityRole="button" accessibilityLabel="Close this computer workspace" onPress={() => setSelectedId(null)} style={styles.closeButton}>
+                    <Text style={styles.closeButtonText}>×</Text>
+                  </Pressable>
+                </View>
+              </View>
+              <DesktopFleetLivePreview
+                desktopId={selectedMachine.id}
+                desktopName={selectedMachine.name}
+                online
+              />
+              {localComputerContent || (
+                <View style={styles.localEmpty}>
+                  <Text style={styles.emptyTitle}>No local worker controls available</Text>
+                  <Text style={styles.emptyText}>Refresh Fleet to load the workers that run on this computer.</Text>
+                </View>
+              )}
+            </View>
+          );
+        }
         const permissionState = selectedPermissionState;
         const permissions = permissionState?.permissions || { delegate_manager: false, delegate_workers: false, create_workers: false };
         const protocolReady = permissionState?.source === 'paired_desktop';
@@ -235,6 +282,19 @@ export function DesktopFleetMachinesPanel({
                 <Text style={styles.warningText}>UPDATE REQUIRED · This computer has not published its current capability directory yet. It may be connected with an older Fleet protocol. Update and restart EmploAI there; no re-pairing is needed.</Text>
               </View>
             ) : null}
+
+            <View style={styles.drawerColumns}>
+              <DesktopFleetComputerActivity
+                snapshot={snapshot}
+                desktopId={selectedMachine.id}
+                targets={targets}
+              />
+              <DesktopFleetLivePreview
+                desktopId={selectedMachine.id}
+                desktopName={selectedMachine.name}
+                online={online}
+              />
+            </View>
 
             <View style={styles.drawerColumns}>
               <View style={styles.controlSection}>
@@ -507,10 +567,13 @@ const styles = StyleSheet.create({
   emptyTitle: { color: UI.color.text, fontSize: TYPE.sectionTitle, fontWeight: '800', textAlign: 'center' },
   emptyText: { color: UI.color.textSubtle, fontSize: TYPE.body, lineHeight: TYPE.bodyLine },
   drawer: { marginTop: 6, padding: 18, gap: 16, borderWidth: 2, borderColor: UI.color.accent, borderRadius: UI.radius.large, backgroundColor: UI.color.surfaceRaised, shadowColor: UI.color.shadow, shadowOpacity: 0.34, shadowRadius: 26, shadowOffset: { width: 0, height: 14 }, elevation: 8 },
+  localDrawer: { backgroundColor: UI.color.canvas },
+  localEmpty: { minHeight: 120, padding: 18, alignItems: 'center', justifyContent: 'center', gap: 6, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.panel },
   drawerHeader: { position: 'relative', zIndex: 20, flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   drawerHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   drawerEyebrow: { color: UI.color.accentInk, fontFamily: UI.type.mono, fontSize: TYPE.eyebrow, fontWeight: '900', letterSpacing: 1.1, alignSelf: 'flex-start', paddingHorizontal: 9, paddingVertical: 5, borderRadius: UI.radius.pill, backgroundColor: UI.color.accent },
   drawerTitle: { marginTop: 8, color: UI.color.text, fontSize: TYPE.heroTitle, fontWeight: '900' },
+  drawerSubtitle: { marginTop: 6, maxWidth: 720, color: UI.color.textMuted, fontSize: TYPE.body, lineHeight: TYPE.bodyLine },
   closeButton: { width: 44, height: 44, borderRadius: UI.radius.control, borderWidth: 1, borderColor: UI.color.border, alignItems: 'center', justifyContent: 'center' },
   closeButtonText: { color: UI.color.textMuted, fontSize: 20 },
   warning: { padding: 10, borderWidth: 1, borderColor: UI.color.warning, borderRadius: UI.radius.control, backgroundColor: UI.color.warningSoft },

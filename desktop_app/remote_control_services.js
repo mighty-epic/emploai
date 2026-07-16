@@ -423,6 +423,17 @@ function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, get
     });
   }
 
+  async function fleetRequestComputerPreview(payload = {}) {
+    const desktopId = String(payload.desktop_id || payload.desktopId || '').trim();
+    if (!desktopId) {
+      throw new Error('desktop_id is required');
+    }
+    return fleetApi(`/api/fleet/desktops/${encodeURIComponent(desktopId)}/preview`, {
+      method: 'POST',
+      body: {},
+    });
+  }
+
   async function fleetAssignTask(payload = {}) {
     const workerId = String(payload.worker_id || payload.workerId || '').trim();
     const prompt = String(payload.prompt || '').trim();
@@ -671,6 +682,7 @@ function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, get
     fleetStopWorker,
     fleetStopAll,
     fleetRequestWorkerPreview,
+    fleetRequestComputerPreview,
     fleetCreateGroup,
     fleetUpdateGroup,
     fleetDeleteGroup,
