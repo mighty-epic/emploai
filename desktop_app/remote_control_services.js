@@ -274,6 +274,18 @@ function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, get
     });
   }
 
+  async function fleetDecideUpstreamRequest(payload = {}) {
+    const desktopId = String(payload.desktop_id || payload.desktopId || '').trim();
+    const requestId = String(payload.request_id || payload.requestId || '').trim();
+    const decision = String(payload.decision || '').trim().toLowerCase();
+    if (!desktopId || !requestId) throw new Error('desktop_id and request_id are required');
+    if (!['approved', 'denied', 'replied'].includes(decision)) throw new Error('Unsupported request decision');
+    return fleetApi(`/api/fleet/desktops/${encodeURIComponent(desktopId)}/requests/${encodeURIComponent(requestId)}/decision`, {
+      method: 'POST',
+      body: { decision, response: payload.response || null },
+    });
+  }
+
   async function fleetSetActiveIdentity(payload = {}) {
     const identityId = String(payload.identity_id || payload.identityId || '').trim();
     if (!identityId) {
@@ -648,6 +660,7 @@ function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, get
     fleetDelegateToComputer,
     fleetCreateWorkerOnComputer,
     fleetRequestComputerPermissions,
+    fleetDecideUpstreamRequest,
     fleetSetActiveIdentity,
     fleetSetIdentityActiveChat,
     fleetCreateLocalWorker,

@@ -36,6 +36,8 @@ from shared.chat_modes import (
     start_goal,
 )
 from shared.runtime_paths import runtime_home
+from shared.fleet_connection import fleet_connection_configured
+from shared.fleet_upstream_activity import queue_upstream_request
 from telegram_bot.telegram_unified_agent import (
     build_unified_system_prompt,
     get_auto_mode_extra_tools,
@@ -123,6 +125,19 @@ FLEET_MANAGER_TOOL_NAMES = {
     for tool in FLEET_MANAGER_TOOLS
     if isinstance(tool.get("function"), dict)
 }
+
+FLEET_UPSTREAM_TOOLS = [
+    _fleet_tool(
+        "fleet_request_manager",
+        "Send a narrow question, approval request, or blocker from this local identity to the directly connected manager above.",
+        {
+            "request_kind": {"type": "string", "enum": ["question", "approval", "blocked"]},
+            "message": {"type": "string", "description": "What the manager needs to know or decide."},
+        },
+        ["request_kind", "message"],
+    )
+]
+FLEET_UPSTREAM_TOOL_NAMES = {"fleet_request_manager"}
 
 
 def _kickstart_prelude(enabled_tool_packs) -> list[dict[str, str]]:
@@ -326,6 +341,55 @@ def _invalidate_fleet_manager_tool_context(session: Any) -> None:
         setattr(session, "_fleet_manager_tool_context", None)
     except Exception:
         pass
+
+
+def _fleet_upstream_tool_enabled() -> bool:
+    try:
+        home = runtime_home()
+        return bool(home and fleet_connection_configured(home))
+    except Exception:
+        return False
+
+
+def _fleet_tool_request_manager(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    if not _fleet_upstream_tool_enabled():
+        return {
+            "error": "This computer is not connected to a Fleet manager above it.",
+            "error_type": "fleet_manager_not_connected",
+        }
+    request_kind = str(args.get("request_kind") or "").strip().lower()
+    message = str(args.get("message") or "").strip()
+    if request_kind not in {"question", "approval", "blocked"}:
+        return {"error": "request_kind must be question, approval, or blocked", "error_type": "invalid_request_kind"}
+    if not message:
+        return {"error": "message is required", "error_type": "missing_message"}
+    identity_id = (
+        str(getattr(session, "fleet_identity_id", "") or "").strip()
+        or str(getattr(session, "fleet_worker_id", "") or "").strip()
+        or None
+    )
+    identity_label = identity_id
+    snapshot = _fleet_snapshot_uncached()
+    for identity in list(snapshot.get("identities") or []):
+        if identity_id and identity_id in {
+            str(identity.get("identity_id") or "").strip(),
+            str(identity.get("worker_id") or "").strip(),
+        }:
+            identity_label = str(identity.get("display_name") or identity_id)
+            break
+    queued = queue_upstream_request(
+        runtime_home(),
+        request_kind=request_kind,
+        identity_id=identity_id,
+        identity_label=identity_label or "Local agent",
+        message=message,
+    )
+    return {
+        "ok": True,
+        "request_id": queued.get("activity_id"),
+        "status": queued.get("status"),
+        "detail": "The request is queued for the directly connected manager above.",
+    }
 
 
 def _fleet_compact_worker_view(snapshot: Dict[str, Any], worker: Dict[str, Any]) -> Dict[str, Any]:
@@ -1193,6 +1257,10 @@ def _fleet_manager_tool_handlers(session: Any) -> Dict[str, Callable[[Dict[str, 
     }
 
 
+def _fleet_upstream_tool_handlers(session: Any) -> Dict[str, Callable[[Dict[str, Any]], Any]]:
+    return {"fleet_request_manager": lambda args: _fleet_tool_request_manager(session, args)}
+
+
 def _truthy(value: object) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -1558,6 +1626,17 @@ async def run_app_chat_turn(
         system_messages.append(_visual_monitor_wake_contract(surface_mode))
     if _is_fleet_worker_session(session):
         system_messages.append(_fleet_worker_contract(session))
+    upstream_tool_enabled = _fleet_upstream_tool_enabled()
+    if upstream_tool_enabled:
+        system_messages.append({
+            "role": "system",
+            "content": (
+                "FLEET UPSTREAM CONNECTION:\n"
+                "- This computer has one directly connected manager above it.\n"
+                "- Use fleet_request_manager only when work needs a question answered, explicit approval, or a true blocker escalated.\n"
+                "- The request sends only its type, message, and this local identity label; it does not expose chats, files, providers, or settings."
+            ),
+        })
     if tool_evidence_turn:
         system_messages.append(_task_execution_contract(session, active_tool_packs))
     if not tool_evidence_turn or not task_like_turn:
@@ -1570,6 +1649,8 @@ async def run_app_chat_turn(
     goal_mode_active = bool(active_goal(session))
     if fleet_tool_context.get("enabled") and not plan_mode_active:
         session.current_turn_allowed_tool_names.update(FLEET_MANAGER_TOOL_NAMES)
+    if upstream_tool_enabled and not plan_mode_active:
+        session.current_turn_allowed_tool_names.update(FLEET_UPSTREAM_TOOL_NAMES)
     session.current_turn_allowed_tool_definitions = filter_tools_by_enabled_packs(CLI_AGENT_TOOLS, active_tool_packs)
     if plan_mode_active:
         session.current_turn_allowed_tool_definitions = filter_plan_tools(session.current_turn_allowed_tool_definitions)
@@ -1592,6 +1673,11 @@ async def run_app_chat_turn(
                     **(
                         _fleet_manager_tool_handlers(runtime_session)
                         if _fleet_manager_tool_context(runtime_session).get("enabled") and not active_plan_mode(runtime_session)
+                        else {}
+                    ),
+                    **(
+                        _fleet_upstream_tool_handlers(runtime_session)
+                        if _fleet_upstream_tool_enabled() and not active_plan_mode(runtime_session)
                         else {}
                     ),
                     **(
@@ -1632,6 +1718,7 @@ async def run_app_chat_turn(
                             if _fleet_manager_tool_context(runtime_session).get("enabled")
                             else []
                         ),
+                        FLEET_UPSTREAM_TOOLS if _fleet_upstream_tool_enabled() else [],
                         (
                             [_openai_function_tool(UPDATE_GOAL_STATUS_TOOL)]
                             if active_goal(runtime_session)

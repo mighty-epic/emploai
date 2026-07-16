@@ -76,7 +76,24 @@ function createFleetYggdrasilServices({ runBackendJson }) {
     ], { timeoutMs: 15_000 });
   };
 
-  return { status, bootstrap, createPairing, join, permissions, setPermissions, decidePermissionRequest };
+  const activity = () => runBackendJson(['fleet-yggdrasil-activity'], { timeoutMs: 15_000 });
+
+  const requestManager = (payload = {}) => {
+    const requestKind = String(payload.requestKind || payload.request_kind || '').trim().toLowerCase();
+    const message = String(payload.message || '').trim();
+    if (!['question', 'approval', 'blocked'].includes(requestKind)) {
+      throw new Error('requestKind must be question, approval, or blocked');
+    }
+    if (!message) throw new Error('message is required');
+    const args = ['fleet-yggdrasil-request', '--kind', requestKind, '--message', message];
+    const identityId = String(payload.identityId || payload.identity_id || '').trim();
+    const identityLabel = cleanLabel(payload.identityLabel || payload.identity_label, '');
+    if (identityId) args.push('--identity-id', identityId);
+    if (identityLabel) args.push('--identity-label', identityLabel);
+    return runBackendJson(args, { timeoutMs: 15_000 });
+  };
+
+  return { status, bootstrap, createPairing, join, permissions, setPermissions, decidePermissionRequest, activity, requestManager };
 }
 
 module.exports = {

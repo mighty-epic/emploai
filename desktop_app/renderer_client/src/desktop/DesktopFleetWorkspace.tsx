@@ -1,0 +1,214 @@
+import { useEffect, useMemo, useState } from 'react';
+import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+
+import {
+  loadDesktopFleetYggdrasilStatus,
+  type DesktopFleetSnapshot,
+  type DesktopFleetYggdrasilStatus,
+} from '@/lib/desktopBridge';
+import { userFacingError } from '../../lib/diagnostics';
+import { DESKTOP_UI as UI } from './desktopUiTokens';
+import { DesktopFleetActivityPanel } from './DesktopFleetActivityPanel';
+import { DesktopFleetChildConnectionPanel } from './DesktopFleetChildConnectionPanel';
+import { DesktopFleetConnectionPanel } from './DesktopFleetConnectionPanel';
+import { DesktopFleetMachinesPanel } from './DesktopFleetMachinesPanel';
+import { DesktopFleetUpstreamAccessPanel } from './DesktopFleetUpstreamAccessPanel';
+import { directFleetChildren, resolveDesktopFleetHierarchyRole } from './desktopFleetHierarchy';
+
+type IntermediaryLayout = 'side_by_side' | 'stacked';
+
+const LAYOUT_STORAGE_KEY = 'emploai.fleet.intermediary-layout';
+
+function roleCopy(role: ReturnType<typeof resolveDesktopFleetHierarchyRole>) {
+  if (role === 'root_manager') return ['MANAGER COMPUTER', 'Computers managed from here', 'This computer delegates directly to the computers below and receives their reports and requests.'];
+  if (role === 'leaf') return ['CONNECTED COMPUTER', 'Work and requests on this computer', 'This computer receives work from one manager above it and currently manages no computers below.'];
+  if (role === 'intermediary') return ['INTERMEDIARY COMPUTER', 'Managing below, reporting above', 'This computer is both a worker in the chain above and a direct manager for the computers below it.'];
+  return ['PRIVATE FLEET', 'Connect your computers', 'Create a private Yggdrasil hierarchy with no hosted account or cloud control plane.'];
+}
+
+export function DesktopFleetWorkspace({
+  snapshot,
+  onChanged,
+}: {
+  snapshot: DesktopFleetSnapshot | null | undefined;
+  onChanged?: () => void;
+}) {
+  const { width } = useWindowDimensions();
+  const [status, setStatus] = useState<DesktopFleetYggdrasilStatus | null | undefined>(undefined);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [connectOpen, setConnectOpen] = useState(false);
+  const [preferredLayout, setPreferredLayout] = useState<IntermediaryLayout>('side_by_side');
+
+  const refreshStatus = async (quiet = false) => {
+    try {
+      const next = await loadDesktopFleetYggdrasilStatus();
+      setStatus(next);
+      setStatusError(null);
+    } catch (error) {
+      if (!quiet) setStatusError(userFacingError(error, 'Fleet connection status could not be loaded.'));
+      setStatus((current) => current === undefined ? null : current);
+    }
+  };
+
+  useEffect(() => {
+    try {
+      const saved = globalThis.localStorage?.getItem(LAYOUT_STORAGE_KEY);
+      if (saved === 'stacked' || saved === 'side_by_side') setPreferredLayout(saved);
+    } catch {
+      // A blocked storage API should not prevent Fleet from rendering.
+    }
+    void refreshStatus();
+    const timer = globalThis.setInterval(() => void refreshStatus(true), 6000);
+    return () => globalThis.clearInterval(timer);
+  }, []);
+
+  const role = resolveDesktopFleetHierarchyRole(status, snapshot);
+  const children = useMemo(() => directFleetChildren(snapshot), [snapshot]);
+  const compactIntermediary = width < 1180;
+  const effectiveLayout: IntermediaryLayout = compactIntermediary ? 'stacked' : preferredLayout;
+  const [eyebrow, title, detail] = roleCopy(role);
+
+  const changed = () => {
+    void refreshStatus(true);
+    onChanged?.();
+  };
+
+  const changeLayout = (layout: IntermediaryLayout) => {
+    setPreferredLayout(layout);
+    try {
+      globalThis.localStorage?.setItem(LAYOUT_STORAGE_KEY, layout);
+    } catch {
+      // Persisting the preference is optional; the in-memory choice still applies.
+    }
+  };
+
+  if (role === 'loading') {
+    return (
+      <View style={styles.loading} accessibilityLiveRegion="polite">
+        <Text style={styles.loadingText}>Reading this computer’s Fleet role…</Text>
+      </View>
+    );
+  }
+
+  if (role === 'standalone') {
+    return (
+      <View style={styles.workspace}>
+        <View style={styles.hero}>
+          <Text style={styles.eyebrow}>{eyebrow}</Text>
+          <Text style={styles.title}>{title}</Text>
+          <Text style={styles.detail}>{detail}</Text>
+        </View>
+        <DesktopFleetConnectionPanel onFleetChanged={changed} />
+        {statusError ? <Text style={styles.errorText}>{statusError}</Text> : null}
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.workspace}>
+      <View style={styles.heroRow}>
+        <View style={styles.heroCopy}>
+          <Text style={styles.eyebrow}>{eyebrow}</Text>
+          <Text style={styles.title}>{title}</Text>
+          <Text style={styles.detail}>{detail}</Text>
+          <View style={styles.pathRow}>
+            {status?.connection?.configured ? <Text style={styles.pathChip}>↑ MANAGER ABOVE</Text> : <Text style={styles.pathChipMuted}>TOP OF CHAIN</Text>}
+            <Text style={styles.pathCenter}>THIS COMPUTER</Text>
+            {children.length ? <Text style={styles.pathChip}>↓ {children.length} DIRECTLY BELOW</Text> : <Text style={styles.pathChipMuted}>END OF CHAIN</Text>}
+          </View>
+        </View>
+        {role === 'leaf' || role === 'intermediary' ? (
+          <Pressable accessibilityRole="button" onPress={() => setConnectOpen((current) => !current)} style={styles.addButton}>
+            <Text style={styles.addButtonText}>{connectOpen ? 'Close setup' : '+ Add computer below'}</Text>
+          </Pressable>
+        ) : null}
+      </View>
+
+      {role === 'intermediary' ? (
+        <View style={styles.layoutBar}>
+          <View style={styles.layoutCopy}>
+            <Text style={styles.layoutTitle}>Intermediary layout</Text>
+            <Text style={styles.layoutDetail}>{compactIntermediary ? 'Stacked automatically at this window width.' : 'Choose how the above and below sides share the workspace.'}</Text>
+          </View>
+          <View style={styles.layoutChoices}>
+            {(['side_by_side', 'stacked'] as const).map((layout) => (
+              <Pressable
+                key={layout}
+                accessibilityRole="radio"
+                accessibilityState={{ checked: preferredLayout === layout, disabled: compactIntermediary && layout === 'side_by_side' }}
+                disabled={compactIntermediary && layout === 'side_by_side'}
+                onPress={() => changeLayout(layout)}
+                style={[styles.layoutButton, preferredLayout === layout ? styles.layoutButtonSelected : null, compactIntermediary && layout === 'side_by_side' ? styles.disabled : null]}
+              ><Text style={styles.layoutButtonText}>{layout === 'side_by_side' ? 'Side by side' : 'Stacked'}</Text></Pressable>
+            ))}
+          </View>
+        </View>
+      ) : null}
+
+      {connectOpen ? <DesktopFleetChildConnectionPanel onClose={() => setConnectOpen(false)} onChanged={changed} /> : null}
+
+      {role === 'root_manager' ? (
+        <DesktopFleetMachinesPanel snapshot={snapshot} onChanged={changed} onConnectRequested={() => setConnectOpen(true)} />
+      ) : null}
+
+      {role === 'leaf' ? (
+        <>
+          <DesktopFleetActivityPanel snapshot={snapshot} />
+          <DesktopFleetUpstreamAccessPanel status={status || null} onChanged={changed} />
+        </>
+      ) : null}
+
+      {role === 'intermediary' ? (
+        <>
+          <View style={[styles.intermediary, effectiveLayout === 'side_by_side' ? styles.intermediarySide : styles.intermediaryStack]}>
+            <View style={styles.intermediaryPane}>
+              <View style={styles.paneLabel}><Text style={styles.paneLabelText}>↑ REPORTING TO THE MANAGER ABOVE</Text></View>
+              <DesktopFleetActivityPanel snapshot={snapshot} compact />
+            </View>
+            <View style={styles.intermediaryPane}>
+              <View style={styles.paneLabel}><Text style={styles.paneLabelText}>↓ MANAGING COMPUTERS BELOW</Text></View>
+              <DesktopFleetMachinesPanel snapshot={snapshot} onChanged={changed} onConnectRequested={() => setConnectOpen(true)} compact />
+            </View>
+          </View>
+          <DesktopFleetUpstreamAccessPanel status={status || null} onChanged={changed} />
+        </>
+      ) : null}
+
+      {statusError ? <Text style={styles.errorText}>{statusError}</Text> : null}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  workspace: { gap: 12 },
+  loading: { minHeight: 120, padding: 18, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.large, backgroundColor: UI.color.surface, alignItems: 'center', justifyContent: 'center' },
+  loadingText: { color: UI.color.textMuted, fontSize: 10 },
+  hero: { paddingHorizontal: 2 },
+  heroRow: { padding: 16, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.large, backgroundColor: UI.color.canvas, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14 },
+  heroCopy: { flex: 1, minWidth: 280 },
+  eyebrow: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: 9, fontWeight: '900', letterSpacing: 1.2 },
+  title: { marginTop: 5, color: UI.color.text, fontSize: 19, fontWeight: '900' },
+  detail: { marginTop: 6, maxWidth: 760, color: UI.color.textMuted, fontSize: 10, lineHeight: 16 },
+  pathRow: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 7 },
+  pathChip: { paddingHorizontal: 8, paddingVertical: 5, borderWidth: 1, borderColor: UI.color.accentBorder, borderRadius: UI.radius.pill, backgroundColor: UI.color.accentSoft, color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: 7, fontWeight: '900' },
+  pathChipMuted: { paddingHorizontal: 8, paddingVertical: 5, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.pill, color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: 7, fontWeight: '900' },
+  pathCenter: { color: UI.color.text, fontFamily: UI.type.mono, fontSize: 8, fontWeight: '900' },
+  addButton: { minHeight: 44, paddingHorizontal: 14, borderWidth: 1, borderColor: UI.color.accentBorder, borderRadius: UI.radius.control, backgroundColor: UI.color.accentSoft, alignItems: 'center', justifyContent: 'center' },
+  addButtonText: { color: UI.color.accentStrong, fontSize: 10, fontWeight: '900' },
+  layoutBar: { padding: 10, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control, backgroundColor: UI.color.surface, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  layoutCopy: { flex: 1, minWidth: 220 },
+  layoutTitle: { color: UI.color.text, fontSize: 9, fontWeight: '900' },
+  layoutDetail: { marginTop: 2, color: UI.color.textSubtle, fontSize: 8 },
+  layoutChoices: { flexDirection: 'row', gap: 6 },
+  layoutButton: { minHeight: 40, paddingHorizontal: 11, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control, alignItems: 'center', justifyContent: 'center' },
+  layoutButtonSelected: { borderColor: UI.color.accentBorder, backgroundColor: UI.color.accentSoft },
+  layoutButtonText: { color: UI.color.textMuted, fontSize: 8, fontWeight: '800' },
+  disabled: { opacity: 0.4 },
+  intermediary: { gap: 10, alignItems: 'flex-start' },
+  intermediarySide: { flexDirection: 'row' },
+  intermediaryStack: { flexDirection: 'column' },
+  intermediaryPane: { flex: 1, minWidth: 0, gap: 6 },
+  paneLabel: { paddingHorizontal: 9, paddingVertical: 6, borderRadius: UI.radius.pill, alignSelf: 'flex-start', backgroundColor: UI.color.accentSoft },
+  paneLabelText: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: 7, fontWeight: '900', letterSpacing: 0.6 },
+  errorText: { color: UI.color.danger, fontSize: 9, fontWeight: '700' },
+});

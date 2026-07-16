@@ -25,6 +25,12 @@ from shared.fleet_connection_policy import (
     policy_signature,
     record_permission_request,
 )
+from shared.fleet_upstream_activity import (
+    mark_upstream_request_sent,
+    pending_upstream_requests,
+    record_incoming_delegation,
+    record_upstream_request_decision,
+)
 from shared.runtime_paths import runtime_home
 
 
@@ -36,6 +42,7 @@ REMOTE_CONTROL_STATUS_PATH_ENV = "EMPLOAI_REMOTE_CONTROL_STATUS_PATH"
 FLEET_ACTIVE_TASK_SESSIONS: Dict[str, str] = {}
 FLEET_STOP_REQUESTED_TASKS: set[str] = set()
 CONNECTION_STATE_INTERVAL_SECONDS = 1.2
+CAPABILITY_STATE_INTERVAL_SECONDS = 5.0
 HEARTBEAT_INTERVAL_SECONDS = 12.0
 POST_FINAL_RELAY_GRACE_SECONDS = 2.0
 REMOTE_CLIENT_ID = "remote-desktop-bridge"
@@ -315,6 +322,16 @@ async def _handle_command(
                 reason=str(payload.get("reason") or "").strip() or None,
             )
 
+        if command_name == "fleet_upstream_request_decision":
+            if not home:
+                raise RuntimeError("The local runtime home is unavailable")
+            return record_upstream_request_decision(
+                home,
+                request_id=str(payload.get("request_id") or "").strip(),
+                decision=str(payload.get("decision") or "").strip(),
+                response=str(payload.get("response") or "").strip() or None,
+            )
+
         if command_name == "fleet_create_local_worker":
             if not permissions.get("create_workers", False):
                 raise PermissionError("Creating workers from the paired manager is not allowed on this computer")
@@ -350,6 +367,18 @@ async def _handle_command(
             permission_key = "delegate_workers" if target_kind == "worker" else "delegate_manager"
             if not permissions.get(permission_key, False):
                 raise PermissionError(f"Delegating to the local {target_kind} agent is not allowed on this computer")
+
+            if home:
+                try:
+                    record_incoming_delegation(
+                        home,
+                        delegation_id=delegation_id,
+                        message=prompt,
+                        identity_label=target_selector or ("Main manager" if target_kind == "manager" else "Worker"),
+                        status="running",
+                    )
+                except Exception:
+                    logger.exception("Failed recording incoming Fleet delegation activity")
 
             await _send_json(
                 remote_ws,
@@ -387,6 +416,19 @@ async def _handle_command(
                 if not identity:
                     target_label = f"worker {target_selector!r}" if target_kind == "worker" else "manager"
                     raise LookupError(f"The local {target_label} agent was not found")
+
+                if home:
+                    try:
+                        record_incoming_delegation(
+                            home,
+                            delegation_id=delegation_id,
+                            message=prompt,
+                            identity_id=str(identity.get("identity_id") or "").strip() or None,
+                            identity_label=str(identity.get("display_name") or target_kind),
+                            status="running",
+                        )
+                    except Exception:
+                        logger.exception("Failed updating incoming Fleet delegation target")
 
                 response = await client.post(
                     f"{local_api_base_url}/api/app/sessions",
@@ -442,6 +484,19 @@ async def _handle_command(
                     for key in ("status", "summary", "evidence", "artifacts", "blockers", "confidence", "next_suggested_action"):
                         if parsed.get(key) is not None:
                             report[key] = parsed.get(key)
+                if home:
+                    try:
+                        record_incoming_delegation(
+                            home,
+                            delegation_id=delegation_id,
+                            message=prompt,
+                            identity_id=str(identity.get("identity_id") or "").strip() or None,
+                            identity_label=str(identity.get("display_name") or target_kind),
+                            status=str(report.get("status") or "completed"),
+                            report=report,
+                        )
+                    except Exception:
+                        logger.exception("Failed recording completed Fleet delegation activity")
                 await _send_json(remote_ws, send_lock, {"type": "fleet_delegation_report", "payload": report})
                 return report
             except Exception as exc:
@@ -456,6 +511,18 @@ async def _handle_command(
                     "next_suggested_action": "Check the target agent name and connection permissions, then retry.",
                     "target_kind": target_kind,
                 }
+                if home:
+                    try:
+                        record_incoming_delegation(
+                            home,
+                            delegation_id=delegation_id,
+                            message=prompt,
+                            identity_label=target_selector or target_kind,
+                            status="failed",
+                            report=report,
+                        )
+                    except Exception:
+                        logger.exception("Failed recording failed Fleet delegation activity")
                 await _send_json(remote_ws, send_lock, {"type": "fleet_delegation_report", "payload": report})
                 raise
             finally:
@@ -699,36 +766,133 @@ async def _handle_command(
         raise ValueError(f"Unsupported paired-computer command: {command_name or '<empty>'}")
 
 
+def _fleet_capability_view(snapshot: Dict[str, Any], permissions: Dict[str, bool]) -> Dict[str, Any]:
+    identities = [item for item in list(snapshot.get("identities") or []) if isinstance(item, dict)]
+    targets: list[Dict[str, Any]] = []
+    if permissions.get("delegate_manager", False):
+        manager = next((item for item in identities if str(item.get("role") or "") == "manager"), None)
+        if manager:
+            targets.append(
+                {
+                    "target_kind": "manager",
+                    "target_selector": None,
+                    "identity_id": str(manager.get("identity_id") or "").strip() or None,
+                    "display_name": str(manager.get("display_name") or "Main manager"),
+                    "role": "manager",
+                    "status": str(manager.get("status") or "ready"),
+                }
+            )
+    if permissions.get("delegate_workers", False):
+        for identity in identities:
+            if str(identity.get("role") or "") != "worker":
+                continue
+            selector = str(identity.get("identity_id") or identity.get("worker_id") or "").strip()
+            if not selector:
+                continue
+            targets.append(
+                {
+                    "target_kind": "worker",
+                    "target_selector": selector,
+                    "identity_id": str(identity.get("identity_id") or "").strip() or None,
+                    "display_name": str(identity.get("display_name") or "Worker"),
+                    "role": "worker",
+                    "status": str(identity.get("status") or "ready"),
+                }
+            )
+    manager_desktop_id = str((snapshot.get("manager") or {}).get("desktop_id") or "").strip()
+    child_count = sum(
+        1
+        for desktop in list(snapshot.get("desktops") or [])
+        if isinstance(desktop, dict)
+        and str(desktop.get("desktop_id") or "").strip()
+        and str(desktop.get("desktop_id") or "").strip() != manager_desktop_id
+    )
+    return {
+        "schema_version": 1,
+        "node_role": "intermediary" if child_count else "leaf",
+        "child_count": child_count,
+        "can_enroll_children": True,
+        "can_create_workers": bool(permissions.get("create_workers", False)),
+        "targets": targets,
+    }
+
+
 async def _connection_state_loop(
     ws: ClientConnection,
     *,
     send_lock: asyncio.Lock,
     desktop_id: str,
     desktop_name: str,
+    credentials: Optional[LocalRuntimeCredentials] = None,
 ) -> None:
     last_signature = ""
     last_heartbeat_at = 0.0
-    while True:
-        home = runtime_home()
-        policy = load_connection_policy(home) if home else connection_policy_view({})
-        envelope = {"desktop_id": desktop_id, "desktop_name": desktop_name, **policy}
-        signature = policy_signature(envelope)
-        if signature != last_signature:
-            last_signature = signature
-            await _send_json(ws, send_lock, {"type": "fleet_permission_state", "payload": envelope})
+    last_capability_refresh_at = 0.0
+    capabilities: Dict[str, Any] = {}
+    timeout = httpx.Timeout(20.0, connect=10.0, read=20.0, write=20.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        while True:
+            home = runtime_home()
+            policy = load_connection_policy(home) if home else connection_policy_view({})
+            permissions = normalize_connection_permissions(policy.get("permissions"))
+            now = asyncio.get_running_loop().time()
+            if credentials and now - last_capability_refresh_at >= CAPABILITY_STATE_INTERVAL_SECONDS:
+                last_capability_refresh_at = now
+                try:
+                    snapshot = await _with_local_runtime_credentials(
+                        credentials,
+                        lambda api_base_url, access_token: _request_json(
+                            client,
+                            method="GET",
+                            url=f"{api_base_url}/api/fleet/snapshot",
+                            token=access_token,
+                        ),
+                    )
+                    capabilities = _fleet_capability_view(dict(snapshot or {}), permissions)
+                except Exception:
+                    logger.debug("Fleet capability refresh is temporarily unavailable", exc_info=True)
 
-        now = asyncio.get_running_loop().time()
-        if now - last_heartbeat_at >= HEARTBEAT_INTERVAL_SECONDS:
-            last_heartbeat_at = now
-            await _send_json(
-                ws,
-                send_lock,
-                {
-                    "type": "heartbeat",
-                    "payload": {"detail": "desktop client alive"},
-                },
-            )
-        await asyncio.sleep(CONNECTION_STATE_INTERVAL_SECONDS)
+            envelope = {
+                "desktop_id": desktop_id,
+                "desktop_name": desktop_name,
+                **policy,
+                "capabilities": capabilities,
+            }
+            signature = policy_signature(envelope)
+            if signature != last_signature:
+                last_signature = signature
+                await _send_json(ws, send_lock, {"type": "fleet_permission_state", "payload": envelope})
+
+            if home:
+                for request in pending_upstream_requests(home):
+                    await _send_json(
+                        ws,
+                        send_lock,
+                        {
+                            "type": "fleet_upstream_request",
+                            "payload": {
+                                "request_id": request["activity_id"],
+                                "request_kind": request["request_kind"],
+                                "identity_id": request.get("identity_id"),
+                                "identity_label": request.get("identity_label"),
+                                "message": request["message"],
+                                "created_at": request.get("created_at"),
+                            },
+                        },
+                    )
+                    mark_upstream_request_sent(home, request["activity_id"])
+
+            if now - last_heartbeat_at >= HEARTBEAT_INTERVAL_SECONDS:
+                last_heartbeat_at = now
+                await _send_json(
+                    ws,
+                    send_lock,
+                    {
+                        "type": "heartbeat",
+                        "payload": {"detail": "desktop client alive"},
+                    },
+                )
+            await asyncio.sleep(CONNECTION_STATE_INTERVAL_SECONDS)
 
 
 async def _send_command_result(
@@ -808,6 +972,7 @@ async def run_remote_desktop_client() -> None:
                         send_lock=send_lock,
                         desktop_id=desktop_id,
                         desktop_name=config.desktop_name,
+                        credentials=credentials,
                     )
                 )
                 command_tasks: set[asyncio.Task[None]] = set()

@@ -164,6 +164,48 @@ async def _handle_remote_desktop_ws(websocket: WebSocket, auth: Dict[str, Any]) 
 
                 continue
 
+            if message.type == "fleet_upstream_request":
+
+                payload = dict(message.payload or {})
+
+                try:
+
+                    upstream_request = store.record_upstream_request(
+
+                        user_id=user_id,
+
+                        desktop_id=desktop_id,
+
+                        request_id=str(payload.get("request_id") or "").strip(),
+
+                        request_kind=str(payload.get("request_kind") or "").strip(),
+
+                        message=str(payload.get("message") or "").strip(),
+
+                        identity_id=str(payload.get("identity_id") or "").strip() or None,
+
+                        identity_label=str(payload.get("identity_label") or "").strip() or None,
+
+                    )
+
+                    _publish_fleet_delta(
+
+                        user_id=user_id,
+
+                        event_type="fleet_upstream_request",
+
+                        payload={"request": upstream_request},
+
+                        origin_channel="worker",
+
+                    )
+
+                except Exception:
+
+                    logger.exception("[fleet] failed applying upstream request")
+
+                continue
+
             if message.type == "fleet_delegation_status":
 
                 payload = dict(message.payload or {})

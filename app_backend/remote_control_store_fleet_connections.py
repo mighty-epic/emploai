@@ -8,6 +8,7 @@ class RemoteControlStoreFleetConnectionMixin:
         return {
             "desktop_id": str(row["desktop_id"]),
             "permissions": normalize_connection_permissions(_json_loads(row["permissions"], {})),
+            "capabilities": _json_loads(row["capabilities"], {}),
             "pending_request": _json_loads(row["pending_request"], None),
             "last_decision": _json_loads(row["last_decision"], None),
             "source": row["source"],
@@ -35,23 +36,25 @@ class RemoteControlStoreFleetConnectionMixin:
             permissions = normalize_connection_permissions(
                 policy.get("permissions") if isinstance(policy.get("permissions"), dict) else None
             )
+            capabilities = policy.get("capabilities") if isinstance(policy.get("capabilities"), dict) else {}
             pending = policy.get("pendingRequest") if isinstance(policy.get("pendingRequest"), dict) else None
             decision = policy.get("lastDecision") if isinstance(policy.get("lastDecision"), dict) else None
             now = time.time()
             self._conn.execute(
                 """
                 INSERT INTO fleet_connection_permissions(
-                    user_id, desktop_id, permissions, pending_request, last_decision, source, updated_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                    user_id, desktop_id, permissions, capabilities, pending_request, last_decision, source, updated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id, desktop_id) DO UPDATE SET
                     permissions = excluded.permissions,
+                    capabilities = excluded.capabilities,
                     pending_request = excluded.pending_request,
                     last_decision = excluded.last_decision,
                     source = excluded.source,
                     updated_at = excluded.updated_at
                 """,
                 (
-                    int(user_id), clean_desktop_id, _json_dumps(permissions),
+                    int(user_id), clean_desktop_id, _json_dumps(permissions), _json_dumps(capabilities),
                     _json_dumps(pending) if pending else None,
                     _json_dumps(decision) if decision else None,
                     str(source or "paired_desktop")[:80], now,
@@ -83,6 +86,7 @@ class RemoteControlStoreFleetConnectionMixin:
             return {
                 "desktop_id": str(desktop_id or "").strip(),
                 "permissions": normalize_connection_permissions(None),
+                "capabilities": {},
                 "pending_request": None,
                 "last_decision": None,
                 "source": "pairing_default",
@@ -240,6 +244,135 @@ class RemoteControlStoreFleetConnectionMixin:
                 (int(user_id), max(1, min(500, int(limit or 100)))),
             ).fetchall()
             return [self._delegation_view(row) for row in rows]
+
+    def _upstream_request_view(self, row) -> Dict[str, Any]:
+        return {
+            "request_id": str(row["request_id"]),
+            "desktop_id": str(row["desktop_id"]),
+            "identity_id": row["identity_id"],
+            "identity_label": row["identity_label"],
+            "request_kind": str(row["request_kind"]),
+            "message": str(row["message"]),
+            "status": str(row["status"]),
+            "response": row["response"],
+            "created_at": _utc_iso(row["created_at"]),
+            "updated_at": _utc_iso(row["updated_at"]),
+            "decided_at": _utc_iso(row["decided_at"]),
+        }
+
+    def record_upstream_request(
+        self,
+        *,
+        user_id: int,
+        desktop_id: str,
+        request_id: str,
+        request_kind: str,
+        message: str,
+        identity_id: Optional[str] = None,
+        identity_label: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        clean_request_id = str(request_id or "").strip()
+        clean_desktop_id = str(desktop_id or "").strip()
+        clean_kind = str(request_kind or "").strip().lower()
+        clean_message = str(message or "").strip()
+        if not clean_request_id or not clean_desktop_id or not clean_message:
+            raise ValueError("request_id, desktop_id, and message are required")
+        if clean_kind not in {"question", "approval", "blocked"}:
+            raise ValueError("Unsupported upstream request kind")
+        now = time.time()
+        with self._lock:
+            desktop = self._conn.execute(
+                "SELECT desktop_id FROM desktops WHERE user_id = ? AND desktop_id = ?",
+                (int(user_id), clean_desktop_id),
+            ).fetchone()
+            if not desktop:
+                raise KeyError("Unknown paired desktop")
+            self._conn.execute(
+                """
+                INSERT INTO fleet_upstream_requests(
+                    request_id, user_id, desktop_id, identity_id, identity_label,
+                    request_kind, message, status, response, created_at, updated_at, decided_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?, NULL)
+                ON CONFLICT(request_id) DO UPDATE SET
+                    identity_id = excluded.identity_id,
+                    identity_label = excluded.identity_label,
+                    request_kind = excluded.request_kind,
+                    message = excluded.message,
+                    updated_at = excluded.updated_at
+                WHERE fleet_upstream_requests.user_id = excluded.user_id
+                  AND fleet_upstream_requests.desktop_id = excluded.desktop_id
+                """,
+                (
+                    clean_request_id,
+                    int(user_id),
+                    clean_desktop_id,
+                    str(identity_id or "").strip()[:128] or None,
+                    str(identity_label or "").strip()[:160] or None,
+                    clean_kind,
+                    clean_message[:8000],
+                    now,
+                    now,
+                ),
+            )
+            self._conn.commit()
+            row = self._conn.execute(
+                "SELECT * FROM fleet_upstream_requests WHERE user_id = ? AND desktop_id = ? AND request_id = ?",
+                (int(user_id), clean_desktop_id, clean_request_id),
+            ).fetchone()
+            if not row:
+                raise ValueError("request_id is already in use by another paired computer")
+            return self._upstream_request_view(row)
+
+    def decide_upstream_request(
+        self,
+        *,
+        user_id: int,
+        desktop_id: str,
+        request_id: str,
+        decision: str,
+        response: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        clean_decision = str(decision or "").strip().lower()
+        if clean_decision not in {"approved", "denied", "replied"}:
+            raise ValueError("decision must be approved, denied, or replied")
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM fleet_upstream_requests WHERE user_id = ? AND desktop_id = ? AND request_id = ?",
+                (int(user_id), str(desktop_id or "").strip(), str(request_id or "").strip()),
+            ).fetchone()
+            if not row:
+                raise KeyError("Unknown upstream request")
+            now = time.time()
+            self._conn.execute(
+                """
+                UPDATE fleet_upstream_requests
+                SET status = ?, response = ?, updated_at = ?, decided_at = ?
+                WHERE user_id = ? AND desktop_id = ? AND request_id = ?
+                """,
+                (
+                    clean_decision,
+                    str(response or "").strip()[:8000] or None,
+                    now,
+                    now,
+                    int(user_id),
+                    str(desktop_id or "").strip(),
+                    str(request_id or "").strip(),
+                ),
+            )
+            self._conn.commit()
+            updated = self._conn.execute(
+                "SELECT * FROM fleet_upstream_requests WHERE user_id = ? AND request_id = ?",
+                (int(user_id), str(request_id or "").strip()),
+            ).fetchone()
+            return self._upstream_request_view(updated)
+
+    def list_upstream_requests(self, *, user_id: int, limit: int = 200) -> List[Dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM fleet_upstream_requests WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+                (int(user_id), max(1, min(500, int(limit or 200)))),
+            ).fetchall()
+            return [self._upstream_request_view(row) for row in rows]
 
     @staticmethod
     def is_legacy_connection_worker(worker: Dict[str, Any]) -> bool:

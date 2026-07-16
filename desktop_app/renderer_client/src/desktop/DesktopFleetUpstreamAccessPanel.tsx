@@ -1,0 +1,158 @@
+import { useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+
+import {
+  decideDesktopFleetPermissionRequest,
+  setDesktopFleetConnectionPermissions,
+  type DesktopFleetYggdrasilStatus,
+} from '@/lib/desktopBridge';
+import { userFacingError } from '../../lib/diagnostics';
+import { DESKTOP_UI as UI } from './desktopUiTokens';
+
+type PermissionKey = 'delegate_manager' | 'delegate_workers' | 'create_workers';
+
+const permissionRows: Array<[PermissionKey, string, string]> = [
+  ['delegate_manager', 'Main identity', 'Allow the manager above to delegate to the main identity on this computer.'],
+  ['delegate_workers', 'Existing agents', 'Expose and allow delegation to existing local agents.'],
+  ['create_workers', 'Create agents', 'Allow the manager above to create a new local agent only when explicitly requested.'],
+];
+
+export function DesktopFleetUpstreamAccessPanel({
+  status,
+  onChanged,
+}: {
+  status: DesktopFleetYggdrasilStatus | null;
+  onChanged?: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const permissions = status?.connection?.permissions || {
+    delegate_manager: true,
+    delegate_workers: true,
+    create_workers: false,
+  };
+  const pendingRequest = status?.connection?.pendingRequest as Record<string, any> | null | undefined;
+
+  const updatePermission = async (key: PermissionKey) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await setDesktopFleetConnectionPermissions({ ...permissions, [key]: !permissions[key] });
+      setMessage('Access updated. The manager above will receive the new capability directory automatically.');
+      onChanged?.();
+    } catch (updateError) {
+      setError(userFacingError(updateError, 'Connection access could not be updated.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const decide = async (approve: boolean) => {
+    const requestId = String(pendingRequest?.requestId || '');
+    if (!requestId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await decideDesktopFleetPermissionRequest(requestId, approve);
+      setMessage(approve ? 'Permission request approved.' : 'Permission request denied.');
+      onChanged?.();
+    } catch (decisionError) {
+      setError(userFacingError(decisionError, 'The permission request could not be decided.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <View style={styles.panel}>
+      <View style={styles.header}>
+        <View style={styles.headerCopy}>
+          <Text style={styles.eyebrow}>MANAGER ABOVE</Text>
+          <Text style={styles.title}>Access to this computer</Text>
+          <Text style={styles.detail}>This computer owns these permissions. Turning one off removes that destination or action from the manager’s interface.</Text>
+        </View>
+        <View style={styles.connectionBadge}>
+          <Text style={styles.connectionBadgeText}>{status?.connection?.relayState === 'running' ? '● CONNECTED' : '○ RECONNECTING'}</Text>
+        </View>
+      </View>
+
+      <View style={styles.permissionGrid}>
+        {permissionRows.map(([key, label, detail]) => {
+          const enabled = Boolean(permissions[key]);
+          return (
+            <Pressable
+              key={key}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: enabled, disabled: busy }}
+              disabled={busy}
+              onPress={() => void updatePermission(key)}
+              style={[styles.permission, enabled ? styles.permissionEnabled : null]}
+            >
+              <View style={styles.permissionCopy}>
+                <Text style={styles.permissionLabel}>{label}</Text>
+                <Text style={styles.permissionDetail}>{detail}</Text>
+              </View>
+              <Text style={[styles.permissionValue, enabled ? styles.permissionValueEnabled : null]}>{enabled ? 'ALLOWED' : 'BLOCKED'}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {pendingRequest ? (
+        <View style={styles.pending} accessibilityLiveRegion="polite">
+          <View style={styles.pendingCopy}>
+            <Text style={styles.pendingTitle}>The manager above requested an access change</Text>
+            <Text style={styles.pendingDetail}>{String(pendingRequest.reason || 'Review the requested permissions before deciding.')}</Text>
+          </View>
+          <View style={styles.actions}>
+            <Pressable accessibilityRole="button" disabled={busy} onPress={() => void decide(false)} style={styles.denyButton}>
+              <Text style={styles.denyButtonText}>Deny</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" disabled={busy} onPress={() => void decide(true)} style={styles.approveButton}>
+              <Text style={styles.approveButtonText}>Approve</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
+      {error || message ? (
+        <View style={[styles.notice, error ? styles.noticeError : null]} accessibilityLiveRegion="polite">
+          <Text style={error ? styles.noticeErrorText : styles.noticeText}>{error || message}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  panel: { padding: 14, gap: 12, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.large, backgroundColor: UI.color.surface },
+  header: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 },
+  headerCopy: { flex: 1, minWidth: 240 },
+  eyebrow: { color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: 8, fontWeight: '900', letterSpacing: 0.9 },
+  title: { marginTop: 4, color: UI.color.text, fontSize: 13, fontWeight: '900' },
+  detail: { marginTop: 4, maxWidth: 680, color: UI.color.textMuted, fontSize: 9, lineHeight: 14 },
+  connectionBadge: { paddingHorizontal: 8, paddingVertical: 5, borderWidth: 1, borderColor: UI.color.accentBorder, borderRadius: UI.radius.pill, backgroundColor: UI.color.successSoft },
+  connectionBadgeText: { color: UI.color.success, fontFamily: UI.type.mono, fontSize: 7, fontWeight: '900' },
+  permissionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  permission: { flexGrow: 1, flexBasis: 230, minWidth: 210, minHeight: 72, padding: 10, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control, backgroundColor: UI.color.canvas, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  permissionEnabled: { borderColor: UI.color.accentBorder, backgroundColor: UI.color.accentSoft },
+  permissionCopy: { flex: 1, gap: 3 },
+  permissionLabel: { color: UI.color.text, fontSize: 9, fontWeight: '900' },
+  permissionDetail: { color: UI.color.textSubtle, fontSize: 8, lineHeight: 12 },
+  permissionValue: { color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: 7, fontWeight: '900' },
+  permissionValueEnabled: { color: UI.color.success },
+  pending: { padding: 10, borderWidth: 1, borderColor: UI.color.warning, borderRadius: UI.radius.control, backgroundColor: UI.color.warningSoft, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 10 },
+  pendingCopy: { flex: 1, minWidth: 220 },
+  pendingTitle: { color: UI.color.warning, fontSize: 9, fontWeight: '900' },
+  pendingDetail: { marginTop: 3, color: UI.color.textMuted, fontSize: 8, lineHeight: 12 },
+  actions: { flexDirection: 'row', gap: 6 },
+  denyButton: { minHeight: 40, paddingHorizontal: 11, borderWidth: 1, borderColor: UI.color.danger, borderRadius: UI.radius.control, backgroundColor: UI.color.dangerSoft, alignItems: 'center', justifyContent: 'center' },
+  denyButtonText: { color: UI.color.danger, fontSize: 8, fontWeight: '900' },
+  approveButton: { minHeight: 40, paddingHorizontal: 11, borderWidth: 1, borderColor: UI.color.accentBorder, borderRadius: UI.radius.control, backgroundColor: UI.color.successSoft, alignItems: 'center', justifyContent: 'center' },
+  approveButtonText: { color: UI.color.success, fontSize: 8, fontWeight: '900' },
+  notice: { padding: 9, borderWidth: 1, borderColor: UI.color.accentBorder, borderRadius: UI.radius.control, backgroundColor: UI.color.accentSoft },
+  noticeError: { borderColor: UI.color.danger, backgroundColor: UI.color.dangerSoft },
+  noticeText: { color: UI.color.textMuted, fontSize: 8 },
+  noticeErrorText: { color: UI.color.danger, fontSize: 8, fontWeight: '700' },
+});

@@ -387,6 +387,40 @@ def register_fleet_routes(app):
             raise
         return permission_request
 
+    @app.post("/api/fleet/desktops/{desktop_id}/requests/{request_id}/decision")
+    async def fleet_decide_upstream_request(
+        desktop_id: str,
+        request_id: str,
+        request: FleetUpstreamRequestDecision,
+        authorization: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        auth = _require_fleet_manager_auth(authorization)
+        _paired_computer_permissions_for_action(auth, desktop_id)
+        await _request_paired_computer_command(
+            auth,
+            desktop_id=desktop_id,
+            command_name="fleet_upstream_request_decision",
+            payload={
+                "request_id": request_id,
+                "decision": request.decision,
+                "response": request.response,
+            },
+        )
+        decided = _get_remote_control_store().decide_upstream_request(
+            user_id=int(auth["user_id"]),
+            desktop_id=desktop_id,
+            request_id=request_id,
+            decision=request.decision,
+            response=request.response,
+        )
+        _publish_fleet_delta(
+            user_id=int(auth["user_id"]),
+            event_type="fleet_upstream_request_decision",
+            payload={"request": decided},
+            origin_channel="manager",
+        )
+        return decided
+
     @app.put("/api/fleet/active-identity", response_model=FleetActiveIdentityResponse)
 
     async def fleet_set_active_identity(

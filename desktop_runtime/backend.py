@@ -1101,6 +1101,35 @@ def _fleet_yggdrasil_join_worker(
     }
 
 
+def _fleet_yggdrasil_activity() -> dict[str, Any]:
+    _, home, _, _ = _prepare_environment(apply_cloud_overlay=False)
+    from shared.fleet_upstream_activity import activity_snapshot
+
+    return activity_snapshot(home)
+
+
+def _fleet_yggdrasil_queue_request(
+    *,
+    request_kind: str,
+    identity_id: str | None,
+    identity_label: str | None,
+    message: str,
+) -> dict[str, Any]:
+    _, home, _, _ = _prepare_environment(apply_cloud_overlay=False)
+    from shared.fleet_connection import fleet_connection_configured
+    from shared.fleet_upstream_activity import queue_upstream_request
+
+    if not fleet_connection_configured(home):
+        raise RuntimeError("This computer is not connected to a Fleet manager above it.")
+    return queue_upstream_request(
+        home,
+        request_kind=request_kind,
+        identity_id=identity_id,
+        identity_label=identity_label,
+        message=message,
+    )
+
+
 def _run_daemon(host: str | None, port: int | None) -> int:
     root, home, env_file, existing = _prepare_environment()
     config = _load_desktop_runtime_config()
@@ -1284,6 +1313,19 @@ def _build_parser() -> argparse.ArgumentParser:
     ygg_permissions_parser.add_argument("--request-id", default=None)
     ygg_permissions_parser.add_argument("--decision", choices=["approve", "deny"], default=None)
 
+    subparsers.add_parser(
+        "fleet-yggdrasil-activity",
+        help="show this computer's incoming delegations and requests to its manager",
+    )
+    ygg_request_parser = subparsers.add_parser(
+        "fleet-yggdrasil-request",
+        help="queue a question, approval, or blocker request to the manager above",
+    )
+    ygg_request_parser.add_argument("--kind", choices=["question", "approval", "blocked"], required=True)
+    ygg_request_parser.add_argument("--identity-id", default=None)
+    ygg_request_parser.add_argument("--identity-label", default=None)
+    ygg_request_parser.add_argument("--message", required=True)
+
     run_parser = subparsers.add_parser("run-daemon", help="run the managed local runtime daemon")
     run_parser.add_argument("--host", default=None)
     run_parser.add_argument("--port", type=int, default=None)
@@ -1463,6 +1505,25 @@ def main(argv: list[str] | None = None) -> int:
                     permissions_json=args.set_json,
                     request_id=args.request_id,
                     decision=args.decision,
+                )
+            )
+        except Exception as exc:
+            return _json_error_print(exc)
+
+    if args.command == "fleet-yggdrasil-activity":
+        try:
+            return _json_print(_fleet_yggdrasil_activity())
+        except Exception as exc:
+            return _json_error_print(exc)
+
+    if args.command == "fleet-yggdrasil-request":
+        try:
+            return _json_print(
+                _fleet_yggdrasil_queue_request(
+                    request_kind=str(args.kind or ""),
+                    identity_id=args.identity_id,
+                    identity_label=args.identity_label,
+                    message=str(args.message or ""),
                 )
             )
         except Exception as exc:

@@ -140,6 +140,7 @@ class RemoteControlStoreFleetSnapshotMixin:
                     ).fetchall()
                 ],
                 "delegations": self.list_computer_delegations(user_id=int(user_id), limit=200),
+                "upstream_requests": self.list_upstream_requests(user_id=int(user_id), limit=200),
                 "workers": workers,
                 "groups": [
                     {

@@ -97,6 +97,7 @@ from app_backend.models import (
     FleetTaskReorderRequest,
     FleetTaskStatusRequest,
     FleetTaskView,
+    FleetUpstreamRequestDecision,
     FleetToolGrantDecisionRequest,
     FleetToolGrantRequest,
     FleetToolGrantView,

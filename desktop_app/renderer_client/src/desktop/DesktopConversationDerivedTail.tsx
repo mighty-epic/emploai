@@ -1,8 +1,7 @@
 import type { DesktopConversationScope } from './DesktopConversationScope';
 import { DesktopModelPickerMenu } from './DesktopModelPickerMenu';
 import { DesktopFleetPreviewPanel } from './DesktopFleetPreviewPanel';
-import { DesktopFleetConnectionPanel } from './DesktopFleetConnectionPanel';
-import { DesktopFleetMachinesPanel } from './DesktopFleetMachinesPanel';
+import { DesktopFleetWorkspace } from './DesktopFleetWorkspace';
 import { fleetWorkerStatusLabel } from './desktopFleetWorkerState';
 import { useEffect } from 'react'; type NativeSyntheticEvent<T = any> = any; type ActiveCommandPanel = any; type ActivityItem = any; type AgentOverview = any; type ArtifactDetail = any; type ArtifactSummary = any; type ComposerInputOrigin = any; type ConversationSurfaceMode = any; type DesktopFleetEnrollment = any; type DesktopFleetIdentity = any; type DesktopFleetSnapshot = any; type DesktopFleetTask = any; type DesktopFleetWorker = any; type DesktopGitRepoState = any; type DesktopMessage = any; type DesktopPathStatus = any; type DesktopRuntimeStatus = any; type DesktopSidebarProjectActivity = any; type DesktopSidebarState = any; type DesktopVoicePackState = any; type DesktopVoiceRuntimeStatus = any; type InterruptPolicy = any; type JarvisSttBackend = any; type JarvisTtsBackend = any; type LayoutChangeEvent = any; type MessageSourceFormat = any; type ModelProviderGroup = any; type NativeScrollEvent = any; type PendingSearchJump = any; type QueuedComposerMessage = any; type QueuedMessage = any; type RealtimeChannel = any; type RealtimeEvent = any; type ReferenceEntry = any; type RuntimeOrchestratorStatus = any; type ScheduledJob = any; type SearchResultTarget = any; type SecurityPermissionMode = any; type SessionDetail = any; type SessionMessage = any; type SessionSearchResult = any; type SessionSummary = any; type SessionTimelineEvent = any; type SidebarChatTooltipState = any; type SidebarDragState = any; type SidebarDraftChat = any; type SidebarProjectGroup = any; type StartupReadinessState = any; type TaskBoard = any; type TelegramBotConfig = any; type TextInputContentSizeChangeEventData = any; type ToolPackInfoPopupState = any; type VoiceCaptureMode = any; type VoiceGateState = any;
 import { useReducedMotion } from './useReducedMotion';
@@ -1402,8 +1401,7 @@ useEffect(() => {
       ) : (
         <>
 
-      <DesktopFleetConnectionPanel onFleetChanged={() => void scope.refreshFleetSnapshot?.({ quiet: true })} />
-      <DesktopFleetMachinesPanel snapshot={fleetSnapshot} onChanged={() => void scope.refreshFleetSnapshot?.({ quiet: true })} />
+      <DesktopFleetWorkspace snapshot={fleetSnapshot} onChanged={() => void scope.refreshFleetSnapshot?.({ quiet: true })} />
 
       <View style={styles.fleetCreateCard}>
         <Text style={styles.fleetSectionTitle}>Workers on this desktop</Text>

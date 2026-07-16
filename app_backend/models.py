@@ -1191,6 +1191,7 @@ class FleetSnapshotResponse(BaseModel):
     desktops: List[Dict[str, Any]] = Field(default_factory=list)
     connection_permissions: List[Dict[str, Any]] = Field(default_factory=list)
     delegations: List[Dict[str, Any]] = Field(default_factory=list)
+    upstream_requests: List[Dict[str, Any]] = Field(default_factory=list)
     workers: List[FleetWorkerView] = Field(default_factory=list)
     groups: List[Dict[str, Any]] = Field(default_factory=list)
     tasks: List[FleetTaskView] = Field(default_factory=list)
@@ -1296,6 +1297,11 @@ class FleetRemoteWorkerCreateRequest(BaseModel):
 class FleetConnectionPermissionRequest(BaseModel):
     permissions: Dict[str, bool] = Field(default_factory=dict)
     reason: Optional[str] = Field(default=None, max_length=1000)
+
+
+class FleetUpstreamRequestDecision(BaseModel):
+    decision: Literal["approved", "denied", "replied"]
+    response: Optional[str] = Field(default=None, max_length=8000)
 
 
 class ProviderAvailabilitySyncRequest(BaseModel):

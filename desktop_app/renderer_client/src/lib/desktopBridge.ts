@@ -240,6 +240,14 @@ export type DesktopFleetConnectionPermissions = {
     delegate_workers: boolean;
     create_workers: boolean;
   };
+  capabilities?: {
+    schema_version?: number;
+    node_role?: 'leaf' | 'intermediary' | string;
+    child_count?: number;
+    can_enroll_children?: boolean;
+    can_create_workers?: boolean;
+    targets?: DesktopFleetRemoteTarget[];
+  };
   pending_request?: Record<string, unknown> | null;
   pendingRequest?: Record<string, unknown> | null;
   last_decision?: Record<string, unknown> | null;
@@ -247,6 +255,44 @@ export type DesktopFleetConnectionPermissions = {
   source?: string | null;
   updated_at?: string | null;
   updatedAt?: number | string | null;
+};
+
+export type DesktopFleetRemoteTarget = {
+  target_kind: 'manager' | 'worker';
+  target_selector?: string | null;
+  identity_id?: string | null;
+  display_name: string;
+  role: 'manager' | 'worker' | string;
+  status?: string | null;
+};
+
+export type DesktopFleetUpstreamRequest = {
+  request_id: string;
+  desktop_id: string;
+  identity_id?: string | null;
+  identity_label?: string | null;
+  request_kind: 'question' | 'approval' | 'blocked' | string;
+  message: string;
+  status: string;
+  response?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  decided_at?: string | null;
+};
+
+export type DesktopFleetLocalActivity = {
+  activity_id: string;
+  activity_kind: 'delegation' | 'request' | string;
+  direction: 'down' | 'up' | string;
+  identity_id?: string | null;
+  identity_label?: string | null;
+  request_kind?: string | null;
+  message: string;
+  status: string;
+  response?: string | null;
+  report?: Record<string, unknown>;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 export type DesktopFleetDelegation = {
@@ -283,6 +329,7 @@ export type DesktopFleetSnapshot = {
   }>;
   connection_permissions?: DesktopFleetConnectionPermissions[];
   delegations?: DesktopFleetDelegation[];
+  upstream_requests?: DesktopFleetUpstreamRequest[];
   workers: DesktopFleetWorker[];
   groups?: Array<Record<string, unknown>>;
   tasks: DesktopFleetTask[];
@@ -662,6 +709,7 @@ type DesktopBridge = {
     delegateToComputer: (payload: { desktopId?: string; desktop_id?: string; prompt: string; targetKind?: string; target_kind?: string; targetSelector?: string | null; target_selector?: string | null; metadata?: Record<string, unknown> }) => Promise<DesktopFleetDelegation>;
     createWorkerOnComputer: (payload: { desktopId?: string; desktop_id?: string; displayName?: string; display_name?: string }) => Promise<Record<string, unknown>>;
     requestComputerPermissions: (payload: { desktopId?: string; desktop_id?: string; permissions: Record<string, boolean>; reason?: string | null }) => Promise<Record<string, unknown>>;
+    decideUpstreamRequest: (payload: { desktopId?: string; desktop_id?: string; requestId?: string; request_id?: string; decision: 'approved' | 'denied' | 'replied'; response?: string | null }) => Promise<DesktopFleetUpstreamRequest>;
     setActiveIdentity: (payload: { identityId?: string; identity_id?: string; selectedChatId?: string | null; selected_chat_id?: string | null; source?: string }) => Promise<Record<string, unknown>>;
     setIdentityActiveChat: (payload: { identityId?: string; identity_id?: string; chatId?: string | null; chat_id?: string | null; source?: string }) => Promise<Record<string, unknown>>;
     createLocalWorker: (payload?: { displayName?: string | null; display_name?: string | null; metadata?: Record<string, unknown> }) => Promise<DesktopFleetWorker>;
@@ -673,6 +721,8 @@ type DesktopBridge = {
     yggdrasilPermissions: () => Promise<DesktopFleetConnectionPermissions>;
     yggdrasilSetPermissions: (payload: { permissions: Record<string, boolean> }) => Promise<DesktopFleetConnectionPermissions>;
     yggdrasilDecidePermissionRequest: (payload: { requestId: string; approve: boolean }) => Promise<DesktopFleetConnectionPermissions>;
+    yggdrasilActivity: () => Promise<{ schema_version?: number; items: DesktopFleetLocalActivity[] }>;
+    yggdrasilRequestManager: (payload: { requestKind: 'question' | 'approval' | 'blocked'; identityId?: string | null; identityLabel?: string | null; message: string }) => Promise<DesktopFleetLocalActivity>;
     renameWorker: (payload: { workerId?: string; worker_id?: string; displayName?: string; display_name?: string; queuePolicy?: string; queue_policy?: string; metadata?: Record<string, unknown> }) => Promise<DesktopFleetWorker>;
     resetWorker: (payload: { workerId?: string; worker_id?: string; reason?: string | null; metadata?: Record<string, unknown>; confirmationId?: string | null; confirmation_id?: string | null }) => Promise<Record<string, unknown>>;
     deleteWorker: (payload: { workerId?: string; worker_id?: string; wipeState?: boolean; wipe_state?: boolean; confirmationId?: string | null; confirmation_id?: string | null }) => Promise<Record<string, unknown>>;
@@ -948,6 +998,17 @@ export async function requestDesktopFleetComputerPermissions(
   return bridge.fleet.requestComputerPermissions({ desktopId, permissions, reason: reason || null });
 }
 
+export async function decideDesktopFleetUpstreamRequest(
+  desktopId: string,
+  requestId: string,
+  decision: 'approved' | 'denied' | 'replied',
+  response?: string | null,
+) {
+  const bridge = getDesktopBridge();
+  if (!bridge?.fleet?.decideUpstreamRequest) return null;
+  return bridge.fleet.decideUpstreamRequest({ desktopId, requestId, decision, response: response || null });
+}
+
 export async function loadDesktopFleetConnectionPermissions() {
   const bridge = getDesktopBridge();
   if (!bridge?.fleet?.yggdrasilPermissions) return null;
@@ -964,6 +1025,23 @@ export async function decideDesktopFleetPermissionRequest(requestId: string, app
   const bridge = getDesktopBridge();
   if (!bridge?.fleet?.yggdrasilDecidePermissionRequest) return null;
   return bridge.fleet.yggdrasilDecidePermissionRequest({ requestId, approve });
+}
+
+export async function loadDesktopFleetLocalActivity() {
+  const bridge = getDesktopBridge();
+  if (!bridge?.fleet?.yggdrasilActivity) return null;
+  return bridge.fleet.yggdrasilActivity();
+}
+
+export async function requestDesktopFleetManager(payload: {
+  requestKind: 'question' | 'approval' | 'blocked';
+  identityId?: string | null;
+  identityLabel?: string | null;
+  message: string;
+}) {
+  const bridge = getDesktopBridge();
+  if (!bridge?.fleet?.yggdrasilRequestManager) return null;
+  return bridge.fleet.yggdrasilRequestManager(payload);
 }
 
 export async function setDesktopFleetActiveIdentity(identityId: string, selectedChatId?: string | null, source = 'desktop') {

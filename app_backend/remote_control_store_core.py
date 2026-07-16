@@ -293,6 +293,7 @@ class RemoteControlStoreCoreMixin:
                     user_id INTEGER NOT NULL,
                     desktop_id TEXT NOT NULL,
                     permissions TEXT NOT NULL DEFAULT '{}',
+                    capabilities TEXT NOT NULL DEFAULT '{}',
                     pending_request TEXT,
                     last_decision TEXT,
                     source TEXT,
@@ -324,6 +325,20 @@ class RemoteControlStoreCoreMixin:
                     started_at REAL,
                     completed_at REAL,
                     canceled_at REAL
+                );
+                CREATE TABLE IF NOT EXISTS fleet_upstream_requests (
+                    request_id TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    desktop_id TEXT NOT NULL,
+                    identity_id TEXT,
+                    identity_label TEXT,
+                    request_kind TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    response TEXT,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    decided_at REAL
                 );
                 CREATE TABLE IF NOT EXISTS fleet_tasks (
                     task_id TEXT PRIMARY KEY,
@@ -573,6 +588,7 @@ class RemoteControlStoreCoreMixin:
                 CREATE INDEX IF NOT EXISTS idx_fleet_reports_worker ON fleet_reports(user_id, worker_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_fleet_delegations_desktop ON fleet_delegations(user_id, desktop_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_fleet_permission_requests_desktop ON fleet_permission_requests(user_id, desktop_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_fleet_upstream_requests_desktop ON fleet_upstream_requests(user_id, desktop_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_fleet_audit_user ON fleet_audit_events(user_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_automations_user ON automations(user_id, enabled, next_run_at);
                 CREATE INDEX IF NOT EXISTS idx_automation_events_user ON automation_events(user_id, created_at);
@@ -609,6 +625,14 @@ class RemoteControlStoreCoreMixin:
             if "token_ttl_seconds" not in existing_oauth_request_columns:
                 self._conn.execute(
                     "ALTER TABLE oauth_login_requests ADD COLUMN token_ttl_seconds INTEGER NOT NULL DEFAULT 43200"
+                )
+            existing_fleet_permission_columns = {
+                str(row["name"])
+                for row in self._conn.execute("PRAGMA table_info(fleet_connection_permissions)").fetchall()
+            }
+            if "capabilities" not in existing_fleet_permission_columns:
+                self._conn.execute(
+                    "ALTER TABLE fleet_connection_permissions ADD COLUMN capabilities TEXT NOT NULL DEFAULT '{}'"
                 )
             self._conn.commit()
             if self._meta_get("schema_version") is None:
