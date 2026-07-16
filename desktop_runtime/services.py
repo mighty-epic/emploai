@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from shared.fleet_connection import fleet_connection_configured
+from shared.subprocess_utils import hidden_subprocess_kwargs
+
 
 def _telegram_service_status(
     home: Path,
@@ -666,6 +668,7 @@ def _process_ids_for_port(port: int) -> set[int]:
                 capture_output=True,
                 text=True,
                 check=False,
+                **hidden_subprocess_kwargs(),
             )
             pids: set[int] = set()
             for line in result.stdout.splitlines():

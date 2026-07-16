@@ -567,8 +567,47 @@ def test_windows_process_scan_is_created_without_a_console(monkeypatch):
         "subprocess",
         SimpleNamespace(run=fake_run, CREATE_NO_WINDOW=0x08000000),
     )
+    monkeypatch.setattr(runtime_services, "hidden_subprocess_kwargs", lambda: {"creationflags": 0x08000000})
 
     assert runtime_services._process_ids_for_command_markers("run-remote-control-worker") == set()
+    assert captured["creationflags"] == 0x08000000
+
+
+def test_windows_port_scan_is_created_without_a_console(monkeypatch):
+    import desktop_runtime.services as runtime_services
+
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured.update(kwargs)
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(runtime_services, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(runtime_services, "subprocess", SimpleNamespace(run=fake_run))
+    monkeypatch.setattr(runtime_services, "hidden_subprocess_kwargs", lambda: {"creationflags": 0x08000000})
+
+    assert runtime_services._process_ids_for_port(8787) == set()
+    assert captured["command"][0] == "netstat"
+    assert captured["creationflags"] == 0x08000000
+
+
+def test_windows_pid_check_is_created_without_a_console(monkeypatch):
+    import desktop_runtime.bootstrap as runtime_bootstrap
+
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured.update(kwargs)
+        return SimpleNamespace(stdout="python.exe 4242")
+
+    monkeypatch.setattr(runtime_bootstrap, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(runtime_bootstrap, "subprocess", SimpleNamespace(run=fake_run))
+    monkeypatch.setattr(runtime_bootstrap, "hidden_subprocess_kwargs", lambda: {"creationflags": 0x08000000})
+
+    assert runtime_bootstrap._process_exists(4242) is True
+    assert captured["command"][0] == "tasklist"
     assert captured["creationflags"] == 0x08000000
 
 

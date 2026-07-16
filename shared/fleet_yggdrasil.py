@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from shared.fleet_connection import write_fleet_connection
+from shared.subprocess_utils import hidden_subprocess_kwargs
 
 
 PAIRING_TOKEN_PREFIX = "emploai-yggdrasil-v1."
@@ -191,6 +192,7 @@ def query_yggdrasil_self(home: Path, *, timeout_seconds: float = 4.0) -> dict[st
                 capture_output=True,
                 text=True,
                 timeout=max(1.0, timeout_seconds),
+                **hidden_subprocess_kwargs(),
             )
         except (OSError, subprocess.SubprocessError):
             continue
@@ -298,6 +300,7 @@ def _run_command(command: list[str], *, timeout_seconds: float = 120.0) -> dict[
         capture_output=True,
         text=True,
         timeout=max(1.0, timeout_seconds),
+        **hidden_subprocess_kwargs(),
     )
     return {
         "command": command,

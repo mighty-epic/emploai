@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from shared.subprocess_utils import hidden_subprocess_kwargs
+
+
 def _bootstrap_payload(
     *,
     launch_if_needed: bool = False,
@@ -225,6 +228,7 @@ def _process_exists(pid: int) -> bool:
                 capture_output=True,
                 text=True,
                 check=False,
+                **hidden_subprocess_kwargs(),
             )
             return str(pid) in result.stdout
         os.kill(pid, 0)
@@ -242,6 +246,7 @@ def _terminate_pid(pid: int) -> None:
             check=False,
             capture_output=True,
             text=True,
+            **hidden_subprocess_kwargs(),
         )
         return
     try:

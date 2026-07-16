@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -51,6 +52,28 @@ def test_parse_yggdrasil_self_accepts_json_and_text_shapes():
 
     assert parsed_json == {"address": "200::1234", "public_key": "a" * 64}
     assert parsed_text == {"address": "200::5678", "public_key": "b" * 64}
+
+
+def test_yggdrasil_status_poll_hides_the_windows_console(tmp_path, monkeypatch):
+    ctl = tmp_path / "yggdrasilctl.exe"
+    ctl.write_bytes(b"test")
+    captured: list[dict[str, object]] = []
+
+    def fake_run(command, **kwargs):
+        captured.append({"command": command, **kwargs})
+        return SimpleNamespace(
+            stdout=json.dumps({"response": {"address": "0200::1234"}}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(fleet_yggdrasil, "resolve_yggdrasilctl_binary", lambda _home: ctl)
+    monkeypatch.setattr(fleet_yggdrasil, "hidden_subprocess_kwargs", lambda: {"creationflags": 0x08000000})
+    monkeypatch.setattr(fleet_yggdrasil.subprocess, "run", fake_run)
+
+    result = fleet_yggdrasil.query_yggdrasil_self(tmp_path)
+
+    assert result["address"] == "200::1234"
+    assert captured[0]["creationflags"] == 0x08000000
 
 
 def test_select_release_asset_matches_windows_x64_msi():
