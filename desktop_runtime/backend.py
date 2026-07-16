@@ -823,7 +823,7 @@ def _fleet_yggdrasil_status() -> dict[str, Any]:
     transport = connection.get("transport") if isinstance(connection.get("transport"), dict) else {}
     desktop = connection.get("desktop") if isinstance(connection.get("desktop"), dict) else {}
     worker = connection.get("worker") if isinstance(connection.get("worker"), dict) else {}
-    relay_status = _read_remote_control_status_record(home) if connection else {}
+    relay_status = (_read_remote_control_status_record(home) or {}) if connection else {}
     status["connection"] = {
         "configured": bool(connection),
         "role": "paired" if connection else "manager",

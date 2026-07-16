@@ -135,6 +135,31 @@ def test_yggdrasil_status_exposes_connection_without_session_token(tmp_path: Pat
     assert "sessionToken" not in serialized
 
 
+def test_yggdrasil_status_handles_missing_relay_status_record(tmp_path: Path, monkeypatch):
+    write_fleet_connection(
+        home=tmp_path,
+        payload={
+            "managerUrl": "http://[200::abcd]:8787",
+            "sessionToken": "secret-worker-session",
+            "desktop": {"desktop_id": "dsk_worker", "device_name": "Worker PC"},
+            "transport": {"kind": "yggdrasil", "managerYggdrasilIp": "200::abcd"},
+        },
+    )
+    monkeypatch.setattr(backend, "_runtime_paths", lambda: (ROOT, tmp_path, tmp_path / ".env"))
+    monkeypatch.setattr(
+        "shared.fleet_yggdrasil.yggdrasil_status",
+        lambda _home: {"available": True, "running": True, "address": "200::beef"},
+    )
+    monkeypatch.setattr(backend, "_read_remote_control_status_record", lambda _home: None)
+
+    status = backend._fleet_yggdrasil_status()
+
+    assert status["connection"]["configured"] is True
+    assert status["connection"]["desktopName"] == "Worker PC"
+    assert status["connection"]["relayState"] is None
+    assert status["connection"]["relayDetail"] is None
+
+
 def test_desktop_yggdrasil_bridge_accepts_only_complete_pairing_tokens(tmp_path: Path):
     service_path = ROOT / "desktop_app" / "fleet_yggdrasil_services.js"
     script = r"""
