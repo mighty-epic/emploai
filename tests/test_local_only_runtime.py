@@ -184,3 +184,59 @@ services.fleetSnapshot().then(
     )
 
     assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_desktop_fleet_snapshot_refreshes_stale_local_session_once(tmp_path: Path):
+    service_path = ROOT / "desktop_app" / "remote_control_services.js"
+    script = r"""
+const { createRemoteControlServices } = require(process.argv[1]);
+let currentToken = 'stale-token';
+let refreshCalls = 0;
+let fetchCalls = 0;
+const services = createRemoteControlServices({
+  net: {
+    async fetch(_url, options) {
+      fetchCalls += 1;
+      const authorization = options?.headers?.Authorization || '';
+      if (authorization === 'Bearer stale-token') {
+        return new Response(JSON.stringify({ detail: 'Local runtime session expired.' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ workers: [], tasks: [], reports: [], desktops: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    },
+  },
+  shell: {},
+  safeStorage: { isEncryptionAvailable: () => false },
+  resolveRuntimeHome: () => process.argv[2],
+  saveSetup: async () => ({}),
+  getBootstrapCache: () => ({ apiBaseUrl: 'http://[::1]:8787', accessToken: currentToken }),
+  refreshBootstrapCache: async () => {
+    refreshCalls += 1;
+    currentToken = 'fresh-token';
+  },
+});
+services.fleetSnapshot().then(
+  (snapshot) => {
+    if (!Array.isArray(snapshot.workers)) process.exit(2);
+    if (refreshCalls !== 1 || fetchCalls !== 2) process.exit(3);
+  },
+  (error) => {
+    console.error(error);
+    process.exit(4);
+  },
+);
+"""
+    result = subprocess.run(
+        ["node", "-e", script, str(service_path), str(tmp_path)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout

@@ -1,8 +1,9 @@
 import type { DesktopConversationScope } from './DesktopConversationScope'; type NativeSyntheticEvent<T = any> = any; type ActiveCommandPanel = any; type ActivityItem = any; type AgentOverview = any; type ArtifactDetail = any; type ArtifactSummary = any; type ComposerInputOrigin = any; type ConversationSurfaceMode = any; type DesktopFleetEnrollment = any; type DesktopFleetIdentity = any; type DesktopFleetSnapshot = any; type DesktopFleetTask = any; type DesktopFleetWorker = any; type DesktopGitRepoState = any; type DesktopMessage = any; type DesktopPathStatus = any; type DesktopRuntimeStatus = any; type DesktopSidebarProjectActivity = any; type DesktopSidebarState = any; type DesktopVoicePackState = any; type DesktopVoiceRuntimeStatus = any; type InterruptPolicy = any; type JarvisSttBackend = any; type JarvisTtsBackend = any; type LayoutChangeEvent = any; type MessageSourceFormat = any; type ModelProviderGroup = any; type NativeScrollEvent = any; type PendingSearchJump = any; type QueuedComposerMessage = any; type QueuedMessage = any; type RealtimeChannel = any; type RealtimeEvent = any; type ReferenceEntry = any; type RuntimeOrchestratorStatus = any; type ScheduledJob = any; type SearchResultTarget = any; type SecurityPermissionMode = any; type SessionDetail = any; type SessionMessage = any; type SessionSearchResult = any; type SessionSummary = any; type SessionTimelineEvent = any; type SidebarChatTooltipState = any; type SidebarDragState = any; type SidebarDraftChat = any; type SidebarProjectGroup = any; type StartupReadinessState = any; type TaskBoard = any; type TelegramBotConfig = any; type TextInputContentSizeChangeEventData = any; type ToolPackInfoPopupState = any; type VoiceCaptureMode = any; type VoiceGateState = any;
 import { updateDesktopFleetWorkerQueuePolicy } from '@/lib/desktopBridge';
+import { fleetTopologyStatus, normalizeFleetSnapshotForDesktop } from './desktopFleetSnapshot';
 
 export function useDesktopConversationFleetActions(scope: DesktopConversationScope) {
-  const { HEBREW_VOICE_GATE_MAX_MS, HEBREW_VOICE_GATE_PREROLL_MS, Platform, VOICE_GATE_MAX_MS, VOICE_GATE_PREROLL_MS, apiBaseUrl, assignDesktopFleetGroupTask, assignDesktopFleetTask, confirmAction, continueDesktopFleetWorkerQueue, copyDesktopText, createApprovedConfirmation, createDesktopFleetEnrollment, createDesktopFleetGroup, createDesktopFleetLocalWorker, deleteDesktopFleetGroup, deleteDesktopFleetWorker, describeError, fleetEnrollment, fleetGroupNameDraft, fleetGroupTaskDrafts, fleetRenameDrafts, fleetSnapshot, fleetTaskBatchStatusMessage, fleetTaskDrafts, fleetTaskStatusMessage, fleetWorkerNameDraft, fleetWorkers, floatingPanelRef, isBlockedFleetTask, loadDesktopFleetSnapshot, pinnedToolPackInfoId, projectMenuRefs, projectMenuTriggerRefs, remoteAuthStatus, renameDesktopFleetWorker, requestDesktopFleetWorkerPreview, resetDesktopFleetWorker, sessionBelongsToFleetIdentity, sessionId, sessionMenuRefs, sessionMenuTriggerRefs, sessionRowRefs, sessions, setDesktopFleetActiveIdentity, setFleetEnrollment, setFleetError, setFleetGroupNameDraft, setFleetGroupTaskDrafts, setFleetLoading, setFleetRenameDrafts, setFleetSnapshot, setFleetStatus, setFleetTaskDrafts, setFleetWorkerNameDraft, setHoveredToolPackInfoId, setPinnedToolPackInfoId, setSidebarChatTooltip, setToolPackInfoPopup, shellRef, sidebarChatTooltipTimerRef, status, stopAllDesktopFleetWorkers, stopDesktopFleetWorker, token, toolPackInfoButtonRefs, toolPackInfoHideTimerRef, userFacingError, usingHebrewVoiceEngine } = scope;
+  const { HEBREW_VOICE_GATE_MAX_MS, HEBREW_VOICE_GATE_PREROLL_MS, Platform, VOICE_GATE_MAX_MS, VOICE_GATE_PREROLL_MS, apiBaseUrl, assignDesktopFleetGroupTask, assignDesktopFleetTask, confirmAction, continueDesktopFleetWorkerQueue, copyDesktopText, createApprovedConfirmation, createDesktopFleetEnrollment, createDesktopFleetGroup, createDesktopFleetLocalWorker, deleteDesktopFleetGroup, deleteDesktopFleetWorker, describeError, fleetEnrollment, fleetGroupNameDraft, fleetGroupTaskDrafts, fleetRenameDrafts, fleetSnapshot, fleetTaskBatchStatusMessage, fleetTaskDrafts, fleetTaskStatusMessage, fleetWorkerNameDraft, fleetWorkers, floatingPanelRef, isBlockedFleetTask, loadDesktopFleetSnapshot, pinnedToolPackInfoId, projectMenuRefs, projectMenuTriggerRefs, renameDesktopFleetWorker, requestDesktopFleetWorkerPreview, resetDesktopFleetWorker, sessionBelongsToFleetIdentity, sessionId, sessionMenuRefs, sessionMenuTriggerRefs, sessionRowRefs, sessions, setDesktopFleetActiveIdentity, setFleetEnrollment, setFleetError, setFleetGroupNameDraft, setFleetGroupTaskDrafts, setFleetLoading, setFleetRenameDrafts, setFleetSnapshot, setFleetStatus, setFleetTaskDrafts, setFleetWorkerNameDraft, setHoveredToolPackInfoId, setPinnedToolPackInfoId, setSidebarChatTooltip, setToolPackInfoPopup, shellRef, sidebarChatTooltipTimerRef, status, stopAllDesktopFleetWorkers, stopDesktopFleetWorker, token, toolPackInfoButtonRefs, toolPackInfoHideTimerRef, userFacingError, usingHebrewVoiceEngine } = scope;
   const openSession = (...args: any[]) => scope.openSession?.(...args);
   const clearConversationSelection = (...args: any[]) => scope.clearConversationSelection?.(...args);
   const fleetSelectedChatIdForWorker = (...args: any[]) => scope.fleetSelectedChatIdForWorker?.(...args);
@@ -57,62 +58,6 @@ const setProjectMenuRef = (projectPath: string) => (node: any) => {
   };
   const activeVoiceGatePrerollMs = usingHebrewVoiceEngine ? HEBREW_VOICE_GATE_PREROLL_MS : VOICE_GATE_PREROLL_MS;
   const activeVoiceGateMaxMs = usingHebrewVoiceEngine ? HEBREW_VOICE_GATE_MAX_MS : VOICE_GATE_MAX_MS;
-
-  const normalizeFleetSnapshotManagers = (snapshot: DesktopFleetSnapshot | null | undefined): DesktopFleetSnapshot | null | undefined => {
-    if (!snapshot) {
-      return snapshot;
-    }
-    const currentDesktopId = String(
-      remoteAuthStatus?.desktop?.desktop_id
-      || snapshot.manager?.desktop_id
-      || '',
-    ).trim();
-    if (!currentDesktopId) {
-      return snapshot;
-    }
-    const managerFilter = (item: any) => (
-      String(item?.role || '').toLowerCase() !== 'manager'
-      || String(item?.desktop_id || '').trim() === currentDesktopId
-    );
-    const identities = Array.isArray(snapshot.identities)
-      ? snapshot.identities.filter(managerFilter)
-      : [];
-    const instances = Array.isArray(snapshot.instances)
-      ? snapshot.instances.filter(managerFilter)
-      : [];
-    const snapshotManagerDesktopId = String(snapshot.manager?.desktop_id || '').trim();
-    const snapshotManager = (!snapshotManagerDesktopId || snapshotManagerDesktopId === currentDesktopId)
-      ? snapshot.manager
-      : null;
-    const currentManager = (
-      instances.find((item: any) => String(item?.role || '').toLowerCase() === 'manager')
-      || identities.find((item: any) => String(item?.role || '').toLowerCase() === 'manager')
-      || snapshotManager
-      || null
-    );
-    const visibleIdentityIds = new Set(identities.map((item: any) => String(item?.identity_id || '').trim()).filter(Boolean));
-    const selectedChatByIdentity = Object.fromEntries(
-      Object.entries(snapshot.selected_chat_by_identity || {})
-        .filter(([identityId]) => visibleIdentityIds.has(String(identityId || '').trim())),
-    );
-    const activeIdentityVisible = snapshot.active_identity?.identity_id
-      && visibleIdentityIds.has(String(snapshot.active_identity.identity_id));
-    const activeIdentity = activeIdentityVisible
-      ? snapshot.active_identity
-      : identities.find((item: any) => String(item?.identity_id || '') === String(currentManager?.identity_id || currentManager?.instance_id || ''))
-        || currentManager
-        || identities[0]
-        || null;
-    return {
-      ...snapshot,
-      identities,
-      instances,
-      manager: currentManager,
-      active_identity: activeIdentity,
-      active_identity_id: activeIdentity?.identity_id || activeIdentity?.instance_id || null,
-      selected_chat_by_identity: selectedChatByIdentity,
-    };
-  };
 
   const clearSidebarChatTooltipTimer = () => {
     if (sidebarChatTooltipTimerRef.current) {
@@ -267,13 +212,13 @@ const setProjectMenuRef = (projectPath: string) => (node: any) => {
       setFleetStatus('Refreshing fleet');
     }
     try {
-      const snapshot = normalizeFleetSnapshotManagers(await loadDesktopFleetSnapshot());
+      const snapshot = normalizeFleetSnapshotForDesktop(await loadDesktopFleetSnapshot());
       if (!snapshot) {
         throw new Error('Desktop fleet bridge is not available.');
       }
       setFleetSnapshot(snapshot);
       setFleetError(null);
-      setFleetStatus(snapshot.workers.length ? `${snapshot.workers.length} worker${snapshot.workers.length === 1 ? '' : 's'} linked` : 'No workers yet');
+      setFleetStatus(fleetTopologyStatus(snapshot));
       return snapshot;
     } catch (error) {
       const detail = userFacingError(error, 'Fleet did not refresh.');

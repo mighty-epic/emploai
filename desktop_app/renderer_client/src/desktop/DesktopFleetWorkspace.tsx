@@ -32,10 +32,16 @@ function roleCopy(role: ReturnType<typeof resolveDesktopFleetHierarchyRole>) {
 
 export function DesktopFleetWorkspace({
   snapshot,
+  snapshotError,
+  snapshotRefreshing = false,
+  onSnapshotRetry,
   onChanged,
   localComputerContent,
 }: {
   snapshot: DesktopFleetSnapshot | null | undefined;
+  snapshotError?: string | null;
+  snapshotRefreshing?: boolean;
+  onSnapshotRetry?: () => void;
   onChanged?: () => void;
   localComputerContent?: ReactNode;
 }) {
@@ -87,6 +93,31 @@ export function DesktopFleetWorkspace({
       // Persisting the preference is optional; the in-memory choice still applies.
     }
   };
+
+  if (!snapshot) {
+    return (
+      <View style={styles.topologyState} accessibilityLiveRegion="polite">
+        <Text style={styles.topologyEyebrow}>FLEET TOPOLOGY</Text>
+        <Text style={styles.topologyTitle}>
+          {snapshotError ? 'Connected computers could not be read' : 'Reading connected computers…'}
+        </Text>
+        <Text style={snapshotError ? styles.topologyError : styles.topologyDetail}>
+          {snapshotError || 'Checking this computer’s local Fleet records and private Yggdrasil connections.'}
+        </Text>
+        {snapshotError ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: snapshotRefreshing }}
+            disabled={snapshotRefreshing}
+            onPress={onSnapshotRetry}
+            style={[styles.retryButton, snapshotRefreshing ? styles.disabled : null]}
+          >
+            <Text style={styles.retryButtonText}>{snapshotRefreshing ? 'Reconnecting…' : 'Reconnect Fleet'}</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    );
+  }
 
   if (role === 'loading') {
     return (
@@ -205,6 +236,13 @@ export function DesktopFleetWorkspace({
 
 const styles = StyleSheet.create({
   workspace: { gap: 12 },
+  topologyState: { minHeight: 180, padding: 22, gap: 9, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.large, backgroundColor: UI.color.canvas, alignItems: 'flex-start', justifyContent: 'center' },
+  topologyEyebrow: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: TYPE.eyebrow, fontWeight: '900', letterSpacing: 1.2 },
+  topologyTitle: { color: UI.color.text, fontSize: TYPE.heroTitle, fontWeight: '900' },
+  topologyDetail: { maxWidth: 680, color: UI.color.textMuted, fontSize: TYPE.body, lineHeight: TYPE.bodyLine },
+  topologyError: { maxWidth: 680, color: UI.color.danger, fontSize: TYPE.body, fontWeight: '700', lineHeight: TYPE.bodyLine },
+  retryButton: { minHeight: 44, marginTop: 4, paddingHorizontal: 14, borderWidth: 1, borderColor: UI.color.accentBorder, borderRadius: UI.radius.control, backgroundColor: UI.color.accentSoft, alignItems: 'center', justifyContent: 'center' },
+  retryButtonText: { color: UI.color.accentStrong, fontSize: TYPE.body, fontWeight: '900' },
   loading: { minHeight: 120, padding: 18, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.large, backgroundColor: UI.color.surface, alignItems: 'center', justifyContent: 'center' },
   loadingText: { color: UI.color.textMuted, fontSize: TYPE.body },
   hero: { padding: 14, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.large, backgroundColor: UI.color.canvas },

@@ -1,6 +1,7 @@
 import type { DesktopFleetSnapshot, DesktopFleetWorker } from '../lib/desktopBridge';
 import type { RemoteRuntimeSummary } from './models';
 import { fleetReportSummary } from './desktopFleetWorkerState';
+import { fleetDirectChildDesktopIds } from './desktopFleetSnapshot';
 
 function text(value: unknown) {
   return String(value || '').trim();
@@ -39,23 +40,21 @@ export function remoteRuntimesFromFleetSnapshot(
   const tasks = Array.isArray(fleet.tasks) ? fleet.tasks : [];
   const reports = Array.isArray(fleet.reports) ? fleet.reports : [];
   const desktops = Array.isArray(fleet.desktops) ? fleet.desktops : [];
-  const manager = fleet.manager && typeof fleet.manager === 'object' ? fleet.manager : null;
-  const managerDesktopId = text(manager?.desktop_id);
+  const childDesktopIds = fleetDirectChildDesktopIds(fleet);
   const grouped = new Map<string, DesktopFleetWorker[]>();
 
   for (const worker of workers) {
     const desktopId = text(worker.machine_desktop_id);
-    if (!desktopId) continue;
+    if (!desktopId || !childDesktopIds.includes(desktopId)) continue;
     const machineWorkers = grouped.get(desktopId) || [];
     machineWorkers.push(worker);
     grouped.set(desktopId, machineWorkers);
   }
-  for (const desktop of desktops) {
-    const desktopId = text(desktop.desktop_id);
-    if (desktopId && desktopId !== managerDesktopId && !grouped.has(desktopId)) grouped.set(desktopId, []);
+  for (const desktopId of childDesktopIds) {
+    if (!grouped.has(desktopId)) grouped.set(desktopId, []);
   }
 
-  return Array.from(grouped.entries()).filter(([desktopId]) => desktopId !== managerDesktopId).map(([desktopId, machineWorkers]) => {
+  return Array.from(grouped.entries()).map(([desktopId, machineWorkers]) => {
     const desktop = desktops.find((item) => text(item.desktop_id) === desktopId);
     const workerIds = new Set(machineWorkers.map((worker) => worker.worker_id));
     const activeCount = tasks.filter((task) => workerIds.has(task.worker_id) && task.status === 'running').length;

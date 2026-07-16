@@ -1408,6 +1408,9 @@ useEffect(() => {
 
       <DesktopFleetWorkspace
         snapshot={fleetSnapshot}
+        snapshotError={fleetError}
+        snapshotRefreshing={fleetLoading}
+        onSnapshotRetry={() => void scope.refreshFleetSnapshot?.()}
         onChanged={() => void scope.refreshFleetSnapshot?.({ quiet: true })}
         localComputerContent={(
           <>

@@ -1,6 +1,6 @@
 const { createLocalSecretStore } = require('./session_store');
 
-function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, getBootstrapCache }) {
+function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, getBootstrapCache, refreshBootstrapCache }) {
   if (!net || !safeStorage || typeof resolveRuntimeHome !== 'function' || typeof getBootstrapCache !== 'function') {
     throw new Error('Local control services require Electron networking, runtime path, and bootstrap cache access.');
   }
@@ -135,7 +135,9 @@ function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, get
       payload = { detail: text };
     }
     if (!response.ok) {
-      throw new Error(payload?.detail || `${response.status} ${response.statusText}`);
+      const error = new Error(payload?.detail || `${response.status} ${response.statusText}`);
+      error.statusCode = Number(response.status || 0) || null;
+      throw error;
     }
     return payload;
   }
@@ -214,19 +216,41 @@ function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, get
     const apiBaseUrl = String(bootstrap.apiBaseUrl || bootstrap.api_base_url || '').trim().replace(/\/+$/, '');
     const accessToken = String(bootstrap.accessToken || bootstrap.access_token || '').trim();
     if (!apiBaseUrl || !accessToken) {
-      throw new Error('Local desktop backend is not ready yet.');
+      const error = new Error('Local desktop backend is not ready yet.');
+      error.code = 'LOCAL_RUNTIME_SESSION_UNAVAILABLE';
+      throw error;
     }
     return { apiBaseUrl, accessToken };
   }
 
   async function localAppApi(pathname, options = {}) {
-    const local = localAppSessionOrThrow();
-    return remoteControlJson(local.apiBaseUrl, pathname, {
-      method: options.method || 'GET',
-      token: local.accessToken,
-      body: options.body,
-      headers: options.headers || {},
-    });
+    const request = async () => {
+      const local = localAppSessionOrThrow();
+      return remoteControlJson(local.apiBaseUrl, pathname, {
+        method: options.method || 'GET',
+        token: local.accessToken,
+        body: options.body,
+        headers: options.headers || {},
+      });
+    };
+
+    try {
+      return await request();
+    } catch (error) {
+      const statusCode = Number(error?.statusCode || 0);
+      const sessionUnavailable = error?.code === 'LOCAL_RUNTIME_SESSION_UNAVAILABLE';
+      const authRejected = statusCode === 401 || statusCode === 403;
+      const safeConnectivityRetry = options.refreshOnConnectivity === true && !statusCode;
+      if (
+        typeof refreshBootstrapCache !== 'function'
+        || options.retryBootstrap === false
+        || (!sessionUnavailable && !authRejected && !safeConnectivityRetry)
+      ) {
+        throw error;
+      }
+      await refreshBootstrapCache();
+      return request();
+    }
   }
 
   async function fleetApi(pathname, options = {}) {
@@ -234,7 +258,7 @@ function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, get
   }
 
   async function fleetSnapshot() {
-    return fleetApi('/api/fleet/snapshot');
+    return fleetApi('/api/fleet/snapshot', { refreshOnConnectivity: true });
   }
 
   async function fleetDelegateToComputer(payload = {}) {

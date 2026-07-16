@@ -9,6 +9,7 @@ import type {
 import type { DesktopFleetSnapshot } from '@/lib/desktopBridge';
 import { composeVoiceDraftInput } from '@/desktop/desktopVoicePolicy';
 import type { DesktopRealtimeEvent, RealtimeChannel } from './desktopRealtimeProtocol';
+import { fleetTopologyStatus, normalizeFleetSnapshotForDesktop } from './desktopFleetSnapshot';
 
 type DesktopConversationRealtimeContext = DesktopConversationScope;
 
@@ -29,7 +30,7 @@ export function handleDesktopConversationRealtimeEvent(
   event: DesktopRealtimeEvent,
   channel: RealtimeChannel,
 ) {
-    const { acceptJarvisBargeInTranscript, activeVoiceUtteranceIdRef, alwaysOnEnabledRef, appendLocalSystemMessage, appendTimelineEvent, appendVoiceTranscriptSegment, applySessionSync, artifacts, assistantDeltaBufferRef, assistantDeltaFlushTimerRef, clearAssistantDeltaFlushTimer, clearConversationSelection, clearJarvisBargeInCandidate, conversationModeRef, createLocalToolTimelineEvent, drainDeferredAlwaysOnFrames, flushAssistantDeltaBuffer, id, lastComposerInputOriginRef, normalizeCompletedTaskBoards, pauseJarvisMicrophone, playAssistantAudio, pushActivity, refreshOverviewState, refreshSidebarCollections, refreshSidebarState, remoteAuthStatus, resolveTaskBoardState, run_state, selectedArtifactId, sessionIdRef, setArtifacts, setAssistantDraft, setChatRunActive, setCompletedTaskBoards, setComposerInputValue, setFleetError, setFleetSnapshot, setFleetStatus, setInput, setJarvisLatestTranscript, setJarvisMuted, setLastAssistantOutputAt, setMessages, setOverview, setRuntimeRunState, setSelectedArtifactId, setSessionId, setSocketState, setStatus, setTaskBoard, setTaskBoardArmedNextTurnState, setThinking, setVoiceDraft, setVoiceError, setVoiceRecording, setVoiceRunning, setVoiceState, shouldAutoSendAlwaysOnVoice, status, summarizeToolPayload, toLiveDesktopMessage, voiceComposerBaseInputRef, voiceComposerDraftRef, voiceRecordingRef, voiceRunningRef } = context;
+    const { acceptJarvisBargeInTranscript, activeVoiceUtteranceIdRef, alwaysOnEnabledRef, appendLocalSystemMessage, appendTimelineEvent, appendVoiceTranscriptSegment, applySessionSync, artifacts, assistantDeltaBufferRef, assistantDeltaFlushTimerRef, clearAssistantDeltaFlushTimer, clearConversationSelection, clearJarvisBargeInCandidate, conversationModeRef, createLocalToolTimelineEvent, drainDeferredAlwaysOnFrames, flushAssistantDeltaBuffer, id, lastComposerInputOriginRef, normalizeCompletedTaskBoards, pauseJarvisMicrophone, playAssistantAudio, pushActivity, refreshOverviewState, refreshSidebarCollections, refreshSidebarState, resolveTaskBoardState, run_state, selectedArtifactId, sessionIdRef, setArtifacts, setAssistantDraft, setChatRunActive, setCompletedTaskBoards, setComposerInputValue, setFleetError, setFleetSnapshot, setFleetStatus, setInput, setJarvisLatestTranscript, setJarvisMuted, setLastAssistantOutputAt, setMessages, setOverview, setRuntimeRunState, setSelectedArtifactId, setSessionId, setSocketState, setStatus, setTaskBoard, setTaskBoardArmedNextTurnState, setThinking, setVoiceDraft, setVoiceError, setVoiceRecording, setVoiceRunning, setVoiceState, shouldAutoSendAlwaysOnVoice, status, summarizeToolPayload, toLiveDesktopMessage, voiceComposerBaseInputRef, voiceComposerDraftRef, voiceRecordingRef, voiceRunningRef } = context;
     const payload = (event.payload || {}) as Record<string, any>;
     const payloadTurnId = typeof payload.turn_id === 'string' ? payload.turn_id.trim() : '';
     const incomingSessionId = typeof event.session_id === 'string' ? event.session_id.trim() : '';
@@ -55,62 +56,13 @@ export function handleDesktopConversationRealtimeEvent(
         && (!payloadTurnId || payloadTurnId !== activeTurnId)
       );
     };
-    const normalizeFleetSnapshotManagers = (snapshot: DesktopFleetSnapshot): DesktopFleetSnapshot => {
-      const currentDesktopId = String(
-        remoteAuthStatus?.desktop?.desktop_id
-        || snapshot.manager?.desktop_id
-        || '',
-      ).trim();
-      if (!currentDesktopId) {
-        return snapshot;
-      }
-      const managerFilter = (item: any) => (
-        String(item?.role || '').toLowerCase() !== 'manager'
-        || String(item?.desktop_id || '').trim() === currentDesktopId
-      );
-      const identities = Array.isArray(snapshot.identities) ? snapshot.identities.filter(managerFilter) : [];
-      const instances = Array.isArray(snapshot.instances) ? snapshot.instances.filter(managerFilter) : [];
-      const snapshotManagerDesktopId = String(snapshot.manager?.desktop_id || '').trim();
-      const snapshotManager = (!snapshotManagerDesktopId || snapshotManagerDesktopId === currentDesktopId)
-        ? snapshot.manager
-        : null;
-      const currentManager: any = (
-        instances.find((item: any) => String(item?.role || '').toLowerCase() === 'manager')
-        || identities.find((item: any) => String(item?.role || '').toLowerCase() === 'manager')
-        || snapshotManager
-        || null
-      );
-      const visibleIdentityIds = new Set(identities.map((item: any) => String(item?.identity_id || '').trim()).filter(Boolean));
-      const selectedChatByIdentity = Object.fromEntries(
-        Object.entries(snapshot.selected_chat_by_identity || {})
-          .filter(([identityId]) => visibleIdentityIds.has(String(identityId || '').trim())),
-      );
-      const activeIdentityVisible = snapshot.active_identity?.identity_id
-        && visibleIdentityIds.has(String(snapshot.active_identity.identity_id));
-      const activeIdentity: any = activeIdentityVisible
-        ? snapshot.active_identity
-        : identities.find((item: any) => String(item?.identity_id || '') === String(currentManager?.identity_id || currentManager?.instance_id || ''))
-          || currentManager
-          || identities[0]
-          || null;
-      return {
-        ...snapshot,
-        identities,
-        instances,
-        manager: currentManager,
-        active_identity: activeIdentity,
-        active_identity_id: activeIdentity?.identity_id || activeIdentity?.instance_id || null,
-        selected_chat_by_identity: selectedChatByIdentity,
-      };
-    };
-
     if (event.type.startsWith('fleet_')) {
       const snapshot = payload.snapshot as DesktopFleetSnapshot | undefined;
       if (snapshot && Array.isArray(snapshot.workers)) {
-        const normalizedSnapshot = normalizeFleetSnapshotManagers(snapshot);
+        const normalizedSnapshot = normalizeFleetSnapshotForDesktop(snapshot) as DesktopFleetSnapshot;
         setFleetSnapshot(normalizedSnapshot);
         setFleetError(null);
-        setFleetStatus(normalizedSnapshot.workers.length ? `${normalizedSnapshot.workers.length} worker${normalizedSnapshot.workers.length === 1 ? '' : 's'} linked` : 'No workers yet');
+        setFleetStatus(fleetTopologyStatus(normalizedSnapshot));
       }
       if (
         event.type === 'fleet_identity_changed'

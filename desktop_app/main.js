@@ -116,6 +116,7 @@ function remoteControlServices() {
       resolveRuntimeHome,
       saveSetup,
       getBootstrapCache: () => bootstrapCache,
+      refreshBootstrapCache: () => bootstrapRuntime({ force: true, launchIfNeeded: true }),
     });
   }
   return remoteControlService;
