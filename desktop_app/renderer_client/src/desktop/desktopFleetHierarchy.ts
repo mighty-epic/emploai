@@ -4,8 +4,7 @@ import { remoteRuntimesFromFleetSnapshot } from './desktopRemoteRuntimes';
 export type DesktopFleetHierarchyRole = 'loading' | 'standalone' | 'root_manager' | 'leaf' | 'intermediary';
 
 export function directFleetChildren(snapshot: DesktopFleetSnapshot | null | undefined) {
-  const managerDesktopId = String((snapshot?.manager as any)?.desktop_id || '');
-  return remoteRuntimesFromFleetSnapshot(snapshot).filter((machine) => machine.id !== managerDesktopId);
+  return remoteRuntimesFromFleetSnapshot(snapshot);
 }
 
 export function resolveDesktopFleetHierarchyRole(

@@ -190,6 +190,7 @@ def test_role_aware_renderer_contains_all_four_surfaces_and_no_free_text_remote_
     hierarchy = (ROOT / "desktop_app/renderer_client/src/desktop/desktopFleetHierarchy.ts").read_text(encoding="utf-8")
     machines = (ROOT / "desktop_app/renderer_client/src/desktop/DesktopFleetMachinesPanel.tsx").read_text(encoding="utf-8")
     activity = (ROOT / "desktop_app/renderer_client/src/desktop/DesktopFleetActivityPanel.tsx").read_text(encoding="utf-8")
+    parent = (ROOT / "desktop_app/renderer_client/src/desktop/DesktopFleetParentPanel.tsx").read_text(encoding="utf-8")
 
     for role in ("standalone", "root_manager", "leaf", "intermediary"):
         assert role in hierarchy or role in workspace
@@ -197,6 +198,9 @@ def test_role_aware_renderer_contains_all_four_surfaces_and_no_free_text_remote_
     assert "Stacked" in workspace
     assert "Add computer below" in workspace
     assert "targetsForConnection" in machines
+    assert "This computer is the point of view" in machines
+    assert "Your direct manager" in parent
+    assert "DesktopFleetParentPanel" in workspace
     assert "Worker name on the other computer" not in machines
     assert "REQUEST THE MANAGER" in activity
     assert "INCOMING DELEGATIONS" in activity

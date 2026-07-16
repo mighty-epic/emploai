@@ -52,11 +52,10 @@ export function remoteRuntimesFromFleetSnapshot(
   }
   for (const desktop of desktops) {
     const desktopId = text(desktop.desktop_id);
-    if (desktopId && !grouped.has(desktopId)) grouped.set(desktopId, []);
+    if (desktopId && desktopId !== managerDesktopId && !grouped.has(desktopId)) grouped.set(desktopId, []);
   }
-  if (managerDesktopId && !grouped.has(managerDesktopId)) grouped.set(managerDesktopId, []);
 
-  return Array.from(grouped.entries()).map(([desktopId, machineWorkers]) => {
+  return Array.from(grouped.entries()).filter(([desktopId]) => desktopId !== managerDesktopId).map(([desktopId, machineWorkers]) => {
     const desktop = desktops.find((item) => text(item.desktop_id) === desktopId);
     const workerIds = new Set(machineWorkers.map((worker) => worker.worker_id));
     const activeCount = tasks.filter((task) => workerIds.has(task.worker_id) && task.status === 'running').length;
@@ -68,18 +67,14 @@ export function remoteRuntimesFromFleetSnapshot(
       .sort()
       .at(-1) || '';
     const lastSeenAt = text(desktop?.last_heartbeat_at || desktop?.last_seen_at) || workerLastSeenAt;
-    const isManager = desktopId === managerDesktopId;
-    const connected = isManager
-      || text(desktop?.status).toLowerCase() === 'connected'
+    const connected = text(desktop?.status).toLowerCase() === 'connected'
       || text(desktop?.status).toLowerCase() === 'online'
       || machineWorkers.some((worker) => !['offline', 'disconnected'].includes(text(worker.status).toLowerCase()));
 
     return {
       id: desktopId,
-      name: isManager
-        ? 'This computer'
-        : text(desktop?.display_name) || machineName(machineWorkers[0]),
-      hostLabel: lastSeenAt ? formatLastSeen(lastSeenAt) : isManager ? 'Local manager' : 'No heartbeat yet',
+      name: text(desktop?.display_name) || machineName(machineWorkers[0]),
+      hostLabel: lastSeenAt ? formatLastSeen(lastSeenAt) : 'No heartbeat yet',
       status: connected ? 'connected' : 'offline',
       detail: `${machineWorkers.length} local agents visible here · ${activeCount} active · ${queuedCount} queued`,
       workerCount: machineWorkers.length,

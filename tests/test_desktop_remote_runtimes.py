@@ -10,7 +10,8 @@ def test_remote_surface_is_derived_from_local_fleet_without_account_gate():
     helper = (ROOT / "desktop_app/renderer_client/src/desktop/desktopRemoteRuntimes.ts").read_text(encoding="utf-8")
 
     assert "remoteRuntimesFromFleetSnapshot(snapshot)" in machine_panel
-    assert "Computers in this Fleet" in machine_panel
+    assert "Only computers directly below this one appear here" in machine_panel
     assert "label: 'Remote'" not in shell_view
     assert "worker.machine_desktop_id" in helper
-    assert "desktopId === managerDesktopId" in helper
+    assert "desktopId !== managerDesktopId" in helper
+    assert "name: isManager" not in helper

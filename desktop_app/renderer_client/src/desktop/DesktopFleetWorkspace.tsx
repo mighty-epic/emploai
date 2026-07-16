@@ -14,6 +14,7 @@ import { DesktopFleetChildConnectionPanel } from './DesktopFleetChildConnectionP
 import { DesktopFleetConnectionPanel } from './DesktopFleetConnectionPanel';
 import { DesktopFleetInfoButton } from './DesktopFleetInfoButton';
 import { DesktopFleetMachinesPanel } from './DesktopFleetMachinesPanel';
+import { DesktopFleetParentPanel } from './DesktopFleetParentPanel';
 import { DesktopFleetUpstreamAccessPanel } from './DesktopFleetUpstreamAccessPanel';
 import { directFleetChildren, resolveDesktopFleetHierarchyRole } from './desktopFleetHierarchy';
 import { FLEET_TYPE as TYPE } from './desktopFleetUi';
@@ -174,7 +175,7 @@ export function DesktopFleetWorkspace({
 
       {role === 'leaf' ? (
         <>
-          <DesktopFleetMachinesPanel snapshot={snapshot} onChanged={changed} onConnectRequested={() => setConnectOpen(true)} localComputerContent={localComputerContent} />
+          <DesktopFleetParentPanel status={status || null} />
           <DesktopFleetActivityPanel snapshot={snapshot} />
           <DesktopFleetUpstreamAccessPanel status={status || null} onChanged={changed} />
         </>
@@ -185,6 +186,7 @@ export function DesktopFleetWorkspace({
           <View style={[styles.intermediary, effectiveLayout === 'side_by_side' ? styles.intermediarySide : styles.intermediaryStack]}>
             <View style={styles.intermediaryPane}>
               <View style={styles.paneLabel}><Text style={styles.paneLabelText}>↑ REPORTING TO THE MANAGER ABOVE</Text></View>
+              <DesktopFleetParentPanel status={status || null} />
               <DesktopFleetActivityPanel snapshot={snapshot} compact />
             </View>
             <View style={styles.intermediaryPane}>
