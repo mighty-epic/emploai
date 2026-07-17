@@ -245,6 +245,17 @@ def launch_detached_runtime(config: DesktopRuntimeConfig) -> None:
     ]
     env = os.environ.copy()
     env.setdefault("EMPLOAI_DESKTOP_RUNTIME", "1")
+    launch_cwd = workspace
+    if not getattr(sys, "frozen", False):
+        source_root = Path(__file__).resolve().parents[1]
+        source_root_text = str(source_root)
+        existing_pythonpath = str(env.get("PYTHONPATH") or "").strip()
+        env["PYTHONPATH"] = (
+            os.pathsep.join([source_root_text, existing_pythonpath])
+            if existing_pythonpath
+            else source_root_text
+        )
+        launch_cwd = source_root
 
     creationflags = 0
     if os.name == "nt":
@@ -257,7 +268,7 @@ def launch_detached_runtime(config: DesktopRuntimeConfig) -> None:
     with log_path.open("a", encoding="utf-8") as handle:
         subprocess.Popen(
             command,
-            cwd=str(workspace),
+            cwd=str(launch_cwd),
             env=env,
             stdin=subprocess.DEVNULL,
             stdout=handle,
