@@ -37,7 +37,7 @@ const appUserModelId = 'com.mightyepic.emploai';
 const gitUpdateCheckIntervalMs = 60 * 60 * 1000;
 const gitCommandTimeoutMs = 120000;
 const updateCommandTimeoutMs = 10 * 60 * 1000;
-const fleetHostStartupDelayMs = 5_000;
+const fleetHostStartupDelayMs = 750;
 const automaticProjectParentName = 'EmploAI Chats';
 
 let mainWindow = null;
@@ -131,7 +131,7 @@ function fleetYggdrasilServices() {
   return fleetYggdrasilService;
 }
 
-function schedulePairedFleetHostStart() {
+function schedulePairedFleetHostStart(delayMs = fleetHostStartupDelayMs) {
   if (fleetHostStartupTimer) {
     clearTimeout(fleetHostStartupTimer);
   }
@@ -141,7 +141,7 @@ function schedulePairedFleetHostStart() {
       // Manager computers are intentionally unpaired. Paired-host state is
       // surfaced by the Fleet UI and diagnostics when startup truly fails.
     });
-  }, fleetHostStartupDelayMs);
+  }, Math.max(0, Number(delayMs) || 0));
 }
 
 function stopPairedFleetHostStartupTimer() {
@@ -496,6 +496,9 @@ async function bootstrapRuntime(options = {}) {
   const payload = await runBackendJson(args, { timeoutMs: backendBootstrapTimeoutMs });
   logAuthDebug('bootstrap', payload);
   updateBootstrapCaches(payload);
+  if (payload?.runtimeStatus?.ok) {
+    schedulePairedFleetHostStart();
+  }
   emitRuntimeEvent({
     type: 'bootstrap_ready',
     payload,
@@ -536,6 +539,9 @@ async function startLocalRuntime(options = {}) {
   }
   const payload = await runBackendJson(args);
   updateBootstrapCaches(payload);
+  if (payload?.runtimeStatus?.ok) {
+    schedulePairedFleetHostStart();
+  }
   emitRuntimeEvent({
     type: 'runtime_started',
     payload,
@@ -2323,7 +2329,6 @@ app.whenReady().then(async () => {
 
   await createWindow();
   scheduleGitAutoUpdateChecks();
-  schedulePairedFleetHostStart();
 
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) {

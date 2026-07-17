@@ -269,6 +269,6 @@ def test_desktop_has_one_fleet_surface_and_redirects_legacy_remote_links():
     assert "It does not copy" in fleet_panel or "stay local" in fleet_panel
     assert "yggdrasilCreatePairing" in preload
     assert "yggdrasilJoin" in preload
-    assert "schedulePairedFleetHostStart();" in main
+    assert main.count("schedulePairedFleetHostStart();") >= 2
     assert "fleetYggdrasilServices().startHost()" in main
     assert "SETTINGS_TABS.filter((tab) => tab.key !== 'remote')" in settings
