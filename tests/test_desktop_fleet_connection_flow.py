@@ -119,8 +119,11 @@ def test_yggdrasil_status_exposes_connection_without_session_token(tmp_path: Pat
         "desktopName": "Worker PC",
         "workerId": "wrk_worker",
         "workerName": "Build worker",
-        "relayState": "connected",
-        "relayDetail": "Worker relay connected.",
+            "relayState": "connected",
+            "relayDetail": "Worker relay connected.",
+            "hostState": "not_registered",
+            "hostRegistered": False,
+            "hostDetail": "The paired-computer host is not registered for Windows sign-in.",
         "permissions": {
             "delegate_manager": True,
             "delegate_workers": True,

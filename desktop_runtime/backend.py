@@ -784,6 +784,17 @@ def _run_telegram_worker() -> int:
 
 def _run_remote_control_worker() -> int:
     root, home, _, existing = _prepare_environment()
+    from desktop_runtime.fleet_host import fleet_host_process_lock
+
+    with fleet_host_process_lock(home) as acquired:
+        if not acquired:
+            return 0
+        return _run_remote_control_worker_locked(root, home, existing)
+
+
+def _run_remote_control_worker_locked(root: Path, home: Path, existing: Mapping[str, str]) -> int:
+    os.environ["EMPLOAI_HOME"] = str(home)
+    os.environ[REMOTE_CONTROL_STATUS_PATH_ENV] = str(_remote_control_runtime_status_path(home))
     effective_existing, _ = _effective_release_env_values(root, home, existing, mark_rebind_required=False)
     config_fingerprint = _remote_control_config_fingerprint_from_values(effective_existing)
     _write_remote_control_pid_record(home, config_fingerprint=config_fingerprint or None)
@@ -817,6 +828,7 @@ def _fleet_yggdrasil_status() -> dict[str, Any]:
     from shared.fleet_yggdrasil import yggdrasil_status
     from shared.fleet_connection import load_fleet_connection
     from shared.fleet_connection_policy import connection_policy_view
+    from desktop_runtime.fleet_host import fleet_host_autostart_status
 
     status = yggdrasil_status(home)
     connection = load_fleet_connection(home)
@@ -824,6 +836,7 @@ def _fleet_yggdrasil_status() -> dict[str, Any]:
     desktop = connection.get("desktop") if isinstance(connection.get("desktop"), dict) else {}
     worker = connection.get("worker") if isinstance(connection.get("worker"), dict) else {}
     relay_status = (_read_remote_control_status_record(home) or {}) if connection else {}
+    fleet_host = fleet_host_autostart_status(home) if connection else {}
     status["connection"] = {
         "configured": bool(connection),
         "role": "paired" if connection else "manager",
@@ -836,6 +849,9 @@ def _fleet_yggdrasil_status() -> dict[str, Any]:
         "workerName": str(worker.get("display_name") or "").strip() or None,
         "relayState": str(relay_status.get("state") or "").strip() or None,
         "relayDetail": str(relay_status.get("detail") or "").strip() or None,
+        "hostState": str(fleet_host.get("state") or "").strip() or None,
+        "hostRegistered": bool(fleet_host.get("registered", False)),
+        "hostDetail": str(fleet_host.get("detail") or "").strip() or None,
         **connection_policy_view(connection),
     }
     return status
@@ -1079,6 +1095,9 @@ def _fleet_yggdrasil_join_worker(
         device_platform=DEFAULT_DEVICE_PLATFORM,
         device_key=identity["device_key"],
     )
+    from desktop_runtime.fleet_host import ensure_fleet_host_autostart
+
+    fleet_host = ensure_fleet_host_autostart(home)
     if start_worker:
         _stop_remote_control_worker(home)
         _write_remote_control_status_record(
@@ -1098,6 +1117,7 @@ def _fleet_yggdrasil_join_worker(
         "pairedComputerRelayStarted": bool(start_worker),
         "remoteWorkerStarted": bool(start_worker),
         "deviceName": identity["device_name"],
+        "fleetHost": fleet_host,
     }
 
 
@@ -1218,7 +1238,12 @@ def _build_parser() -> argparse.ArgumentParser:
     start_parser.add_argument("--attach-timeout-seconds", type=int, default=None)
     start_parser.add_argument("--restart-attach-timeout-seconds", type=int, default=None)
     start_parser.add_argument("--defer-services", action="store_true")
-    subparsers.add_parser("stop", help="stop the managed local runtime and print bootstrap JSON")
+    stop_parser = subparsers.add_parser("stop", help="stop the managed local runtime and print bootstrap JSON")
+    stop_parser.add_argument(
+        "--preserve-fleet-host",
+        action="store_true",
+        help="stop the app runtime while keeping the paired-computer host connected",
+    )
     subparsers.add_parser("status", help="print the current runtime status JSON")
     subparsers.add_parser("setup-state", help="print the current setup state JSON")
     subparsers.add_parser("codex-auth-status", help="print local ChatGPT/Codex auth status JSON")
@@ -1263,6 +1288,9 @@ def _build_parser() -> argparse.ArgumentParser:
     voice_bridge_parser.add_argument("voice_args", nargs=argparse.REMAINDER)
 
     subparsers.add_parser("yggdrasil-status", help="print local Yggdrasil transport status JSON")
+    subparsers.add_parser("fleet-host-status", help="print persistent paired-computer host status JSON")
+    subparsers.add_parser("fleet-host-install", help="register the paired-computer host for Windows sign-in")
+    subparsers.add_parser("fleet-host-uninstall", help="remove paired-computer host Windows sign-in registration")
 
     ygg_bootstrap_parser = subparsers.add_parser(
         "yggdrasil-bootstrap",
@@ -1331,7 +1359,8 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--port", type=int, default=None)
     telegram_worker_parser = subparsers.add_parser("run-telegram-worker", help="run the managed Telegram worker without starting the app server")
     telegram_worker_parser.add_argument("--home", default=None)
-    subparsers.add_parser("run-remote-control-worker", help="run the managed remote control worker")
+    remote_worker_parser = subparsers.add_parser("run-remote-control-worker", help="run the managed remote control worker")
+    remote_worker_parser.add_argument("--home", default=None)
     return parser
 
 
@@ -1363,7 +1392,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "stop":
         _prepare_environment(apply_cloud_overlay=False)
         _, home, _ = _runtime_paths()
-        _stop_runtime(home)
+        _stop_runtime(home, preserve_fleet_host=bool(args.preserve_fleet_host))
         return _json_print(_bootstrap_payload(launch_if_needed=False, resolve_current_session=False))
 
     if args.command == "status":
@@ -1462,6 +1491,27 @@ def main(argv: list[str] | None = None) -> int:
         _prepare_environment(apply_cloud_overlay=False)
         return _json_print(_fleet_yggdrasil_status())
 
+    if args.command in {"fleet-host-status", "fleet-host-install", "fleet-host-uninstall"}:
+        _prepare_environment(apply_cloud_overlay=False)
+        _, home, _ = _runtime_paths()
+        from desktop_runtime.fleet_host import (
+            ensure_fleet_host_autostart,
+            fleet_host_autostart_status,
+            remove_fleet_host_autostart,
+        )
+
+        if args.command == "fleet-host-install":
+            from shared.fleet_connection import fleet_connection_configured
+
+            if not fleet_connection_configured(home):
+                return _json_error_print(
+                    RuntimeError("Pair this computer to a Fleet manager before installing its background host.")
+                )
+            return _json_print(ensure_fleet_host_autostart(home))
+        if args.command == "fleet-host-uninstall":
+            return _json_print(remove_fleet_host_autostart(home))
+        return _json_print(fleet_host_autostart_status(home))
+
     if args.command == "yggdrasil-bootstrap":
         payload, code = _fleet_yggdrasil_bootstrap(
             install=bool(args.install),
@@ -1538,6 +1588,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_telegram_worker()
 
     if args.command == "run-remote-control-worker":
+        if args.home:
+            os.environ["EMPLOAI_HOME"] = str(Path(args.home).resolve())
         return _run_remote_control_worker()
 
     parser.error(f"Unsupported command: {args.command}")

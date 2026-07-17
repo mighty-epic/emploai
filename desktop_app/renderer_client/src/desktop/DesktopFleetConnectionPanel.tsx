@@ -25,7 +25,8 @@ function connectionSummary(status: DesktopFleetYggdrasilStatus | null) {
   if (!status.running) return 'Private network is installed but stopped';
   if (status.connection?.configured) {
     const relay = status.connection.relayState ? ` · relay ${status.connection.relayState}` : '';
-    return `Paired to a Fleet manager${relay}`;
+    const host = status.connection.hostRegistered ? ' · starts with Windows' : ' · background start needs repair';
+    return `Paired to a Fleet manager${relay}${host}`;
   }
   return 'Private network ready · this desktop can manage paired computers';
 }
@@ -328,6 +329,10 @@ export function DesktopFleetConnectionPanel({ onFleetChanged }: { onFleetChanged
               <View style={styles.connectedDetail}>
                 <Text style={styles.connectedTitle}>{status?.connection?.desktopName || 'Computer connected'}</Text>
                 <Text style={styles.roleHint}>{status?.connection?.relayDetail || `Manager ${status?.connection?.managerYggdrasilIp || status?.connection?.managerUrl || ''}`}</Text>
+                <Text style={status?.connection?.hostRegistered ? styles.hostReady : styles.hostWarning}>
+                  {status?.connection?.hostRegistered ? '● BACKGROUND HOST READY' : '◐ BACKGROUND HOST NEEDS REPAIR'}
+                </Text>
+                <Text style={styles.roleHint}>{status?.connection?.hostDetail || 'Fleet will repair background startup the next time this desktop starts.'}</Text>
               </View>
             ) : null}
           </View>
@@ -437,6 +442,8 @@ const styles = StyleSheet.create({
   roleHint: { color: UI.color.textSubtle, fontSize: TYPE.body, lineHeight: TYPE.bodyLine },
   connectedDetail: { padding: 11, borderRadius: UI.radius.control, borderWidth: 1, borderColor: UI.color.border, backgroundColor: UI.color.surface },
   connectedTitle: { color: UI.color.success, fontSize: TYPE.control, fontWeight: '800' },
+  hostReady: { marginTop: 8, color: UI.color.success, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900' },
+  hostWarning: { marginTop: 8, color: UI.color.warning, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900' },
   permissionSection: { padding: 18, gap: 12, borderTopWidth: 1, borderColor: UI.color.border, backgroundColor: UI.color.surface },
   permissionHeading: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 },
   permissionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },

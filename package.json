@@ -19,6 +19,9 @@
     "fleet:yggdrasil:status": "npm --prefix desktop_app run fleet:yggdrasil:status",
     "fleet:yggdrasil:bootstrap": "npm --prefix desktop_app run fleet:yggdrasil:bootstrap",
     "fleet:yggdrasil:pair": "npm --prefix desktop_app run fleet:yggdrasil:pair",
-    "fleet:yggdrasil:join": "npm --prefix desktop_app run fleet:yggdrasil:join --"
+    "fleet:yggdrasil:join": "npm --prefix desktop_app run fleet:yggdrasil:join --",
+    "fleet:host:status": "npm --prefix desktop_app run fleet:host:status",
+    "fleet:host:install": "npm --prefix desktop_app run fleet:host:install",
+    "fleet:host:uninstall": "npm --prefix desktop_app run fleet:host:uninstall"
   }
 }

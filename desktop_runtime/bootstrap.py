@@ -279,10 +279,19 @@ def _request_runtime_agent_stop(config: "DesktopRuntimeConfig") -> dict[str, Any
         return None
 
 
-def _stop_runtime(home: Path, config: "DesktopRuntimeConfig" | None = None) -> dict[str, Any]:
+def _stop_runtime(
+    home: Path,
+    config: "DesktopRuntimeConfig" | None = None,
+    *,
+    preserve_fleet_host: bool = False,
+) -> dict[str, Any]:
     config = config or _load_desktop_runtime_config()
     graceful_stop = _request_runtime_agent_stop(config)
-    managed_pids = _managed_service_pids(home, config)
+    managed_pids = set(_managed_runtime_pids(home, config))
+    managed_pids.update(_managed_telegram_worker_pids(home))
+    if not preserve_fleet_host:
+        managed_pids.update(_managed_remote_control_worker_pids(home))
+    managed_pids = sorted(managed_pids)
     remaining = set(managed_pids)
 
     for pid in managed_pids:
@@ -297,9 +306,11 @@ def _stop_runtime(home: Path, config: "DesktopRuntimeConfig" | None = None) -> d
 
     _runtime_pid_path(home).unlink(missing_ok=True)
     _telegram_runtime_pid_path(home).unlink(missing_ok=True)
-    _remote_control_runtime_pid_path(home).unlink(missing_ok=True)
+    if not preserve_fleet_host:
+        _remote_control_runtime_pid_path(home).unlink(missing_ok=True)
     _clear_telegram_status_record(home)
-    _clear_remote_control_status_record(home)
+    if not preserve_fleet_host:
+        _clear_remote_control_status_record(home)
     return {
         "ok": True,
         "stopped": not remaining,
@@ -307,6 +318,7 @@ def _stop_runtime(home: Path, config: "DesktopRuntimeConfig" | None = None) -> d
         "pids": managed_pids,
         "remainingPids": sorted(remaining),
         "gracefulAgentStop": graceful_stop,
+        "fleetHostPreserved": bool(preserve_fleet_host),
     }
 
 

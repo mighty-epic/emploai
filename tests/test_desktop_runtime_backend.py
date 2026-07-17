@@ -243,6 +243,41 @@ def test_stop_runtime_kills_detected_runtime_pids_without_pid_file(monkeypatch, 
     assert terminated == [222, 333]
 
 
+def test_stop_runtime_can_preserve_paired_computer_host(monkeypatch, tmp_path: Path):
+    config = DesktopRuntimeConfig(
+        enabled=True,
+        host="127.0.0.1",
+        port=8787,
+        auto_start=False,
+        attach_timeout_seconds=3,
+        restart_attach_timeout_seconds=3,
+        workspace=str(tmp_path),
+    )
+    live_pids = {101, 202, 303}
+    terminated: list[int] = []
+
+    monkeypatch.setattr(desktop_backend, "_request_runtime_agent_stop", lambda _config: None)
+    monkeypatch.setattr(desktop_backend, "_managed_runtime_pids", lambda _home, _config: [101])
+    monkeypatch.setattr(desktop_backend, "_managed_telegram_worker_pids", lambda _home: [202])
+    monkeypatch.setattr(desktop_backend, "_managed_remote_control_worker_pids", lambda _home: [303])
+    monkeypatch.setattr(desktop_backend, "_process_exists", lambda pid: pid in live_pids)
+    monkeypatch.setattr(desktop_backend.time, "sleep", lambda _seconds: None)
+
+    def terminate(pid: int) -> None:
+        terminated.append(pid)
+        live_pids.discard(pid)
+
+    monkeypatch.setattr(desktop_backend, "_terminate_pid", terminate)
+
+    result = desktop_backend._stop_runtime(tmp_path, config, preserve_fleet_host=True)
+
+    assert result["stopped"] is True
+    assert result["fleetHostPreserved"] is True
+    assert result["pids"] == [101, 202]
+    assert terminated == [101, 202]
+    assert 303 in live_pids
+
+
 def test_daemon_mode_defers_telegram_worker_until_bootstrap_when_configured(monkeypatch, tmp_path: Path):
     config = DesktopRuntimeConfig(
         enabled=True,

@@ -58,6 +58,36 @@ def test_local_runtime_credentials_do_not_retry_non_auth_failure(monkeypatch):
     assert refreshed == []
 
 
+def test_local_runtime_credentials_restart_after_background_runtime_disconnect(monkeypatch):
+    credentials = remote_desktop_client.LocalRuntimeCredentials(
+        api_base_url="http://127.0.0.1:8787",
+        access_token="old-token",
+    )
+    bootstraps = []
+    monkeypatch.setattr(
+        remote_desktop_client,
+        "start_runtime_context",
+        lambda: bootstraps.append(True) or {
+            "apiBaseUrl": "http://127.0.0.1:8787",
+            "accessToken": "new-token",
+        },
+    )
+    attempts = []
+
+    async def operation(_api_base_url, access_token):
+        attempts.append(access_token)
+        if len(attempts) == 1:
+            request = httpx.Request("GET", "http://127.0.0.1:8787/api/fleet/snapshot")
+            raise httpx.ConnectError("runtime stopped", request=request)
+        return "restarted"
+
+    result = asyncio.run(remote_desktop_client._with_local_runtime_credentials(credentials, operation))
+
+    assert result == "restarted"
+    assert bootstraps == [True]
+    assert attempts == ["old-token", "new-token"]
+
+
 def test_command_result_unwraps_http_json_detail():
     sent = []
 
@@ -294,6 +324,46 @@ def test_screen_preview_rejects_non_view_only_requests():
                 send_lock=asyncio.Lock(),
             )
         )
+
+
+def test_screen_preview_returns_structured_unavailable_state(monkeypatch):
+    from app_backend.windows_capture_session import DesktopCaptureUnavailableError
+
+    def unavailable(**_kwargs):
+        raise DesktopCaptureUnavailableError(
+            "Windows desktop is disconnected.",
+            code="display_disconnected",
+            state="disconnected",
+            recovery="Reconnect a display.",
+        )
+
+    monkeypatch.setattr("app_backend.capture_runtime.capture_screen_snapshot", unavailable)
+    result = asyncio.run(
+        remote_desktop_client._handle_command(
+            command_name="fleet_worker_preview",
+            payload={
+                "preview_id": "fpv_test",
+                "view_only": True,
+                "mode": "screen_summary_or_low_rate_preview",
+            },
+            local_api_base_url="http://127.0.0.1:8787",
+            local_token="local-token",
+            remote_ws=None,
+            send_lock=asyncio.Lock(),
+        )
+    )
+
+    assert result == {
+        "status": "unavailable",
+        "detail": "Windows desktop is disconnected.",
+        "capture_capability": {
+            "available": False,
+            "code": "display_disconnected",
+            "state": "disconnected",
+            "recovery": "Reconnect a display.",
+            "retryable": True,
+        },
+    }
 
 
 def test_fleet_run_task_honors_pending_stop_before_local_chat(monkeypatch):

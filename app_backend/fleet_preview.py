@@ -15,34 +15,61 @@ DesktopOfflineMarker = Callable[..., None]
 LocalPreviewCapture = Callable[..., Awaitable[Dict[str, Any]]]
 
 
-async def capture_local_worker_preview(*, worker: Dict[str, Any]) -> Dict[str, Any]:
+async def _capture_local_preview(*, detail: str, max_width: int, jpeg_quality: int) -> Dict[str, Any]:
     from app_backend.capture_runtime import capture_screen_snapshot
+    from app_backend.windows_capture_session import DesktopCaptureUnavailableError
 
     loop = asyncio.get_running_loop()
-    capture = await loop.run_in_executor(
-        None,
-        lambda: capture_screen_snapshot(max_width=1280, jpeg_quality=68),
-    )
+    try:
+        capture = await loop.run_in_executor(
+            None,
+            lambda: capture_screen_snapshot(max_width=max_width, jpeg_quality=jpeg_quality),
+        )
+    except DesktopCaptureUnavailableError as exc:
+        return {
+            "status": "unavailable",
+            "detail": str(exc),
+            "capture_capability": exc.capability(),
+        }
     return {
         "status": "captured",
-        "detail": f"Captured the current desktop used by {worker.get('display_name') or 'the local worker'}.",
+        "detail": detail,
+        "capture_capability": {
+            "available": True,
+            "code": "available",
+            "state": str((capture.get("display") or {}).get("state") or "active"),
+            "retryable": True,
+        },
         "capture": capture,
     }
+
+
+async def capture_local_worker_preview(*, worker: Dict[str, Any]) -> Dict[str, Any]:
+    return await _capture_local_preview(
+        detail=f"Captured the current desktop used by {worker.get('display_name') or 'the local worker'}.",
+        max_width=1280,
+        jpeg_quality=68,
+    )
 
 
 async def capture_local_desktop_preview(*, desktop: Dict[str, Any]) -> Dict[str, Any]:
-    from app_backend.capture_runtime import capture_screen_snapshot
-
-    loop = asyncio.get_running_loop()
-    capture = await loop.run_in_executor(
-        None,
-        lambda: capture_screen_snapshot(max_width=1280, jpeg_quality=62),
+    return await _capture_local_preview(
+        detail=f"Captured the current view on {desktop.get('display_name') or 'this computer'}.",
+        max_width=1280,
+        jpeg_quality=62,
     )
-    return {
-        "status": "captured",
-        "detail": f"Captured the current view on {desktop.get('display_name') or 'this computer'}.",
-        "capture": capture,
-    }
+
+
+def _copy_capture_capability(payload: Dict[str, Any], result: Dict[str, Any]) -> None:
+    capability = result.get("capture_capability")
+    if isinstance(capability, dict):
+        payload["capture_capability"] = {
+            "available": bool(capability.get("available", False)),
+            "code": str(capability.get("code") or "unknown").strip()[:80] or "unknown",
+            "state": str(capability.get("state") or "unknown").strip()[:80] or "unknown",
+            "recovery": str(capability.get("recovery") or "").strip()[:600] or None,
+            "retryable": bool(capability.get("retryable", True)),
+        }
 
 
 def _bounded_preview_capture(value: Any) -> Optional[Dict[str, Any]]:
@@ -94,6 +121,7 @@ async def request_fleet_desktop_preview(
             dispatch_status = str(result.get("status") or "captured").strip()[:80] or "captured"
             detail = str(result.get("detail") or "Local desktop preview captured.").strip()
             capture = _bounded_preview_capture(result.get("capture"))
+            _copy_capture_capability(payload, result)
             if capture:
                 payload["capture"] = capture
         except Exception as exc:
@@ -135,6 +163,7 @@ async def request_fleet_desktop_preview(
             dispatch_status = str(result.get("status") or "captured").strip()[:80] or "captured"
             detail = str(result.get("detail") or "View-only desktop preview captured.").strip()
             capture = _bounded_preview_capture(result.get("capture"))
+            _copy_capture_capability(payload, result)
             if capture:
                 payload["capture"] = capture
         except asyncio.TimeoutError:
@@ -193,6 +222,7 @@ async def request_fleet_worker_preview(
             detail = str(result.get("detail") or "Local worker preview captured.").strip()
             if isinstance(result.get("capture"), dict):
                 payload["capture"] = dict(result["capture"])
+            _copy_capture_capability(payload, result)
         except Exception as exc:
             dispatch_status = "failed"
             detail = f"Local worker preview failed: {type(exc).__name__}: {exc}"
@@ -236,6 +266,7 @@ async def request_fleet_worker_preview(
             detail = str(result.get("detail") or "Worker desktop preview captured.").strip()
             if isinstance(result.get("capture"), dict):
                 payload["capture"] = dict(result["capture"])
+            _copy_capture_capability(payload, result)
         except asyncio.TimeoutError:
             dispatch_status = "timeout"
             detail = "Worker desktop did not acknowledge the preview request in time."

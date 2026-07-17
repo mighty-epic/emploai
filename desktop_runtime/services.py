@@ -293,6 +293,15 @@ def _ensure_remote_control_worker(
         _stop_remote_control_worker(home, scan_processes=False)
         return _remote_control_service_status(home, configured=False)
 
+    try:
+        from desktop_runtime.fleet_host import ensure_fleet_host_autostart
+
+        ensure_fleet_host_autostart(home)
+    except Exception:
+        # A registry policy may block sign-in registration. The current relay
+        # can still run, and Fleet status exposes registration separately.
+        pass
+
     record = _read_remote_control_pid_record(home) or {}
     status_record = _read_remote_control_status_record(home) or {}
     record_fingerprint = str(

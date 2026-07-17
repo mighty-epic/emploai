@@ -72,9 +72,9 @@ class LocalRuntimeCredentials:
             raise RuntimeError("Local desktop runtime is not available for remote relay")
         return cls(api_base_url=api_base_url, access_token=access_token)
 
-    async def refresh_if_stale(self, stale_access_token: str) -> None:
+    async def refresh_if_stale(self, stale_access_token: str, *, force: bool = False) -> None:
         async with self._refresh_lock:
-            if self.access_token != stale_access_token:
+            if not force and self.access_token != stale_access_token:
                 return
             bootstrap = await asyncio.to_thread(start_runtime_context)
             refreshed = LocalRuntimeCredentials.from_bootstrap(bootstrap)
@@ -90,6 +90,10 @@ def _is_local_runtime_auth_error(exc: BaseException) -> bool:
     )
 
 
+def _is_local_runtime_connectivity_error(exc: BaseException) -> bool:
+    return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout))
+
+
 async def _with_local_runtime_credentials(
     credentials: LocalRuntimeCredentials,
     operation: Callable[[str, str], Awaitable[Any]],
@@ -99,9 +103,11 @@ async def _with_local_runtime_credentials(
     try:
         return await operation(api_base_url, access_token)
     except Exception as exc:
-        if not _is_local_runtime_auth_error(exc):
+        auth_error = _is_local_runtime_auth_error(exc)
+        connectivity_error = _is_local_runtime_connectivity_error(exc)
+        if not auth_error and not connectivity_error:
             raise
-    await credentials.refresh_if_stale(access_token)
+    await credentials.refresh_if_stale(access_token, force=connectivity_error)
     return await operation(credentials.api_base_url, credentials.access_token)
 
 
@@ -745,18 +751,32 @@ async def _handle_command(
             if payload.get("view_only") is not True or str(payload.get("mode") or "") != FLEET_PREVIEW_MODE:
                 raise PermissionError("Fleet previews must use the bounded view-only preview mode")
             from app_backend.capture_runtime import capture_screen_snapshot
+            from app_backend.windows_capture_session import DesktopCaptureUnavailableError
 
             loop = asyncio.get_running_loop()
-            capture = await loop.run_in_executor(
-                None,
-                lambda: capture_screen_snapshot(max_width=1280, jpeg_quality=62),
-            )
+            try:
+                capture = await loop.run_in_executor(
+                    None,
+                    lambda: capture_screen_snapshot(max_width=1280, jpeg_quality=62),
+                )
+            except DesktopCaptureUnavailableError as exc:
+                return {
+                    "status": "unavailable",
+                    "detail": str(exc),
+                    "capture_capability": exc.capability(),
+                }
             encoded = str(capture.get("image_base64") or "")
             if not encoded or len(encoded) > 2_000_000:
                 raise RuntimeError("Captured preview exceeded the safe image size limit")
             return {
                 "status": "captured",
                 "detail": "View-only desktop preview captured.",
+                "capture_capability": {
+                    "available": True,
+                    "code": "available",
+                    "state": str((capture.get("display") or {}).get("state") or "active"),
+                    "retryable": True,
+                },
                 "capture": capture,
             }
 
@@ -953,7 +973,13 @@ async def _send_command_result(
 
 
 async def run_remote_desktop_client() -> None:
-    logging.basicConfig(level=logging.INFO)
+    status_path = _remote_status_path()
+    log_path = status_path.parent / "desktop_remote_control.log" if status_path else None
+    logging.basicConfig(
+        level=logging.INFO,
+        filename=str(log_path) if log_path else None,
+        encoding="utf-8" if log_path else None,
+    )
     _write_remote_status(state="starting", detail="Connecting to the paired Yggdrasil Fleet manager...")
     config = load_remote_desktop_config()
     remote_token = config.session_token

@@ -18,7 +18,7 @@ On the other computer:
 3. Paste the complete code from the manager.
 4. Select **Connect This Computer** and approve the Windows prompt if shown.
 
-The code is single-use and expires after 30 minutes by default. A completed connection is saved locally and reconnects after restarts.
+The code is single-use and expires after 30 minutes by default. A completed connection is saved locally. On Windows, pairing also registers a hidden per-user Fleet host that starts at sign-in, reconnects through Yggdrasil, and runs independently of the Electron window.
 
 ## Connect Several Computers
 
@@ -33,6 +33,21 @@ Pairing creates a computer link only. It does not create a worker and does not c
 - settings or provider state
 - files, workspaces, sidebars, or automations
 - screenshots, mouse input, or keyboard input
+
+The manager can explicitly request a bounded, view-only screenshot. The paired computer captures it locally, compresses it, and returns it through the authenticated Yggdrasil command channel. Frames are not written to the Fleet store. The normal Windows lock screen remains protected.
+
+## Background Host and Screen Availability
+
+The paired-computer host is separate from Electron:
+
+- Closing the Electron window keeps the host connected.
+- If a delegation arrives after the local agent runtime was stopped, the host starts that runtime on demand.
+- **Stop Everything** stops the current host process. Its Windows sign-in registration remains so the connection returns after the next sign-in.
+- Signing out of Windows ends the interactive user session; the host starts again at the next sign-in.
+
+The connection and the display are separate states. A computer can be online in Fleet while its screen is unavailable. Windows does not expose the protected lock screen, and an RDP-only VPS may stop producing frames when its RDP session is minimized or disconnected. In that case Fleet reports **Screen unavailable** and stops an automatic preview rate instead of treating the whole computer as offline.
+
+For unattended VPS screenshots, attach a persistent interactive or virtual display supplied by the VPS/virtualization environment. EmploAI does not bypass Windows locking or silently transfer an unlocked RDP session to the console.
 
 The manager may send a delegation message to the other computer's local manager agent or to a specifically named local worker. The paired computer returns delegation status, reports, and permission decisions. Agent sessions used to perform a delegation remain private on that computer.
 
@@ -81,6 +96,19 @@ Start that relay later:
 
 ```powershell
 python -m desktop_runtime.backend run-remote-control-worker
+```
+
+Inspect or repair Windows sign-in persistence:
+
+```powershell
+npm run fleet:host:status
+npm run fleet:host:install
+```
+
+Remove sign-in persistence without deleting the Yggdrasil pairing:
+
+```powershell
+npm run fleet:host:uninstall
 ```
 
 The final command name is retained for compatibility; it runs the paired-computer relay and does not turn the computer itself into a worker.

@@ -527,9 +527,11 @@ async function startLocalRuntime(options = {}) {
   }
 }
 
-async function stopLocalRuntime() {
+async function stopLocalRuntime(options = {}) {
   emitRuntimeEvent({ type: 'runtime_stopping' });
-  const payload = await runBackendJson(['stop']);
+  const args = ['stop'];
+  if (options.preserveFleetHost) args.push('--preserve-fleet-host');
+  const payload = await runBackendJson(args);
   updateBootstrapCaches(payload, { preserveConnectedSession: false });
   emitRuntimeEvent({
     type: 'runtime_stopped',
@@ -1937,8 +1939,8 @@ async function shutdownManagedProcessesForQuit() {
     }
 
     try {
-      await stopLocalRuntime();
-      return { keptAlive: false, stopped: true };
+      await stopLocalRuntime({ preserveFleetHost: true });
+      return { keptAlive: false, stopped: true, fleetHostPreserved: true };
     } catch (error) {
       console.error('Failed to stop local runtime during desktop app shutdown:', error);
       return { keptAlive: false, stopped: false, error: String(error) };

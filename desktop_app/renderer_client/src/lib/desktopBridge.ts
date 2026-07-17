@@ -359,6 +359,9 @@ export type DesktopFleetYggdrasilConnection = {
   workerName?: string | null;
   relayState?: string | null;
   relayDetail?: string | null;
+  hostState?: string | null;
+  hostRegistered?: boolean;
+  hostDetail?: string | null;
   permissions?: DesktopFleetConnectionPermissions['permissions'];
   pendingRequest?: Record<string, unknown> | null;
   lastDecision?: Record<string, unknown> | null;
@@ -394,6 +397,13 @@ export type DesktopFleetYggdrasilJoinResult = {
   pairedComputerRelayStarted?: boolean;
   remoteWorkerStarted: boolean;
   deviceName: string;
+  fleetHost?: {
+    supported?: boolean;
+    registered?: boolean;
+    state?: string | null;
+    detail?: string | null;
+    processId?: number | null;
+  } | null;
 };
 
 export type DesktopSetupValues = {
@@ -579,6 +589,20 @@ export type DesktopFleetPreviewCapture = {
   height: number;
   backend: string;
   captured_at: number;
+  display?: {
+    available?: boolean;
+    state?: string | null;
+    protocol?: string | null;
+    sessionId?: number | null;
+  } | null;
+};
+
+export type DesktopFleetPreviewCapability = {
+  available: boolean;
+  code: string;
+  state: string;
+  recovery?: string | null;
+  retryable?: boolean;
 };
 
 export type DesktopFleetPreviewResult = {
@@ -590,6 +614,7 @@ export type DesktopFleetPreviewResult = {
   dispatch_status: string;
   command_id?: string | null;
   detail?: string | null;
+  capture_capability?: DesktopFleetPreviewCapability | null;
   capture?: DesktopFleetPreviewCapture | null;
 };
 

@@ -36,3 +36,31 @@ def test_local_on_demand_workers_render_as_ready_between_tasks():
     assert "status === 'offline' || status === 'stale'" in helper
     assert "fleetWorkerStatusLabel(worker, task)" in fleet
     assert "workers.filter(isFleetWorkerAvailable)" in jarvis
+
+
+def test_live_preview_stops_retries_when_windows_display_is_unavailable():
+    preview = (
+        ROOT
+        / "desktop_app"
+        / "renderer_client"
+        / "src"
+        / "desktop"
+        / "DesktopFleetLivePreview.tsx"
+    ).read_text(encoding="utf-8")
+    connection = (
+        ROOT
+        / "desktop_app"
+        / "renderer_client"
+        / "src"
+        / "desktop"
+        / "DesktopFleetConnectionPanel.tsx"
+    ).read_text(encoding="utf-8")
+    shell = (ROOT / "desktop_app" / "main.js").read_text(encoding="utf-8")
+
+    assert "result.capture_capability?.available === false" in preview
+    assert "setRate(0)" in preview
+    assert "Screen unavailable" in preview
+    assert "DISPLAY UNAVAILABLE" in preview
+    assert "BACKGROUND HOST READY" in connection
+    assert "stopLocalRuntime({ preserveFleetHost: true })" in shell
+    assert "stopLocalRuntime();" in shell

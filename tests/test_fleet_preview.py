@@ -267,6 +267,52 @@ def test_request_fleet_desktop_preview_captures_remote_computer_without_persisti
     )["metadata"]
 
 
+def test_request_fleet_desktop_preview_keeps_connection_online_when_only_display_is_unavailable(tmp_path):
+    store, user_id, manager_desktop_id = _store_with_manager(tmp_path)
+    worker = _remote_worker(store, user_id=user_id, manager_desktop_id=manager_desktop_id)
+    desktop_id = worker["machine_desktop_id"]
+    desktop = next(item for item in store.list_desktops(user_id=user_id) if item["desktop_id"] == desktop_id)
+    manager = _FakePreviewManager(
+        {
+            "status": "unavailable",
+            "detail": "The Windows display is disconnected.",
+            "capture_capability": {
+                "available": False,
+                "code": "display_disconnected",
+                "state": "disconnected",
+                "recovery": "Reconnect a display.",
+                "retryable": True,
+                "ignored": "must not cross the API boundary",
+            },
+        }
+    )
+    marked_offline = []
+
+    result = asyncio.run(
+        request_fleet_desktop_preview(
+            store=store,
+            remote_desktop_manager=manager,
+            user_id=user_id,
+            desktop=desktop,
+            manager_desktop_id=manager_desktop_id,
+            is_remote_session_active=lambda **_: True,
+            is_desktop_unavailable_error=lambda detail: "offline" in detail,
+            mark_desktop_offline=lambda **kwargs: marked_offline.append(kwargs),
+        )
+    )
+
+    assert result["dispatch_status"] == "unavailable"
+    assert result["capture_capability"] == {
+        "available": False,
+        "code": "display_disconnected",
+        "state": "disconnected",
+        "recovery": "Reconnect a display.",
+        "retryable": True,
+    }
+    assert "capture" not in result
+    assert marked_offline == []
+
+
 def test_request_fleet_desktop_preview_captures_manager_computer_locally(tmp_path):
     store, user_id, manager_desktop_id = _store_with_manager(tmp_path)
     desktop = next(item for item in store.list_desktops(user_id=user_id) if item["desktop_id"] == manager_desktop_id)

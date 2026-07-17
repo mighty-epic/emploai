@@ -18,6 +18,7 @@ python -m desktop_runtime.backend run-daemon
 | `backend.py` | Runtime command entry point and local backend process management. |
 | `bootstrap.py` | First-run checks, dependency bootstrap, voice pack install helpers, cleanup helpers. |
 | `config.py` | Local setup state, runtime-home paths, and persisted desktop configuration. |
+| `fleet_host.py` | Hidden Windows sign-in registration and single-instance ownership for the persistent paired-computer host. |
 | `launcher.py` | Small helpers for launching the packaged/local backend process. |
 | `records.py` | Local runtime records used by the desktop setup/status flow. |
 | `services.py` | Process/service discovery and duplicate-worker cleanup. |

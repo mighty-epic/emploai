@@ -79,9 +79,10 @@ export function DesktopFleetLivePreview({
         result.dispatch_status !== "captured" ||
         !result.capture?.image_base64
       ) {
-        throw new Error(
-          result.detail || "This computer did not return a preview.",
-        );
+        setPreview(result);
+        if (result.capture_capability?.available === false) setRate(0);
+        setError(result.detail || "This computer did not return a preview.");
+        return;
       }
       setPreview(result);
     } catch (captureError) {
@@ -110,6 +111,8 @@ export function DesktopFleetLivePreview({
   const captureUri = preview?.capture
     ? `data:${preview.capture.mime_type || "image/jpeg"};base64,${preview.capture.image_base64}`
     : null;
+  const captureUnavailable = preview?.capture_capability?.available === false;
+  const recovery = String(preview?.capture_capability?.recovery || "").trim();
 
   return (
     <View style={styles.section}>
@@ -184,12 +187,18 @@ export function DesktopFleetLivePreview({
           <View style={styles.emptyPreview}>
             <Text style={styles.emptyGlyph}>▣</Text>
             <Text style={styles.emptyTitle}>
-              {online ? "No screenshot yet" : "Computer offline"}
+              {!online
+                ? "Computer offline"
+                : captureUnavailable
+                  ? "Screen unavailable"
+                  : "No screenshot yet"}
             </Text>
             <Text style={styles.emptyText}>
-              {online
-                ? "Capture once or choose a screenshots-per-minute rate."
-                : "Preview resumes only after this computer reconnects."}
+              {!online
+                ? "Preview resumes only after this computer reconnects."
+                : captureUnavailable
+                  ? recovery || "The computer is connected, but Windows is not exposing a desktop frame."
+                  : "Capture once or choose a screenshots-per-minute rate."}
             </Text>
           </View>
         )}
@@ -203,7 +212,9 @@ export function DesktopFleetLivePreview({
             {preview.capture.backend}
           </Text>
         ) : null}
-        {rate > 0 ? (
+        {captureUnavailable ? (
+          <Text style={styles.unavailableBadge}>DISPLAY UNAVAILABLE</Text>
+        ) : rate > 0 ? (
           <Text style={styles.liveBadge}>● {rate}/MIN ACTIVE</Text>
         ) : (
           <Text style={styles.manualBadge}>MANUAL</Text>
@@ -338,6 +349,13 @@ const styles = StyleSheet.create({
   manualBadge: {
     marginLeft: "auto",
     color: UI.color.textSubtle,
+    fontFamily: UI.type.mono,
+    fontSize: TYPE.micro,
+    fontWeight: "900",
+  },
+  unavailableBadge: {
+    marginLeft: "auto",
+    color: UI.color.warning,
     fontFamily: UI.type.mono,
     fontSize: TYPE.micro,
     fontWeight: "900",

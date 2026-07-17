@@ -16,6 +16,7 @@ function parentState(status: DesktopFleetYggdrasilStatus | null): ParentState {
 export function DesktopFleetParentPanel({ status }: { status: DesktopFleetYggdrasilStatus | null }) {
   const state = parentState(status);
   const stateLabel = state === 'connected' ? '● CONNECTED' : state === 'reconnecting' ? '◐ RECONNECTING' : '○ OFFLINE';
+  const hostRegistered = Boolean(status?.connection?.hostRegistered);
 
   return (
     <View style={styles.section} accessibilityLiveRegion="polite">
@@ -37,6 +38,9 @@ export function DesktopFleetParentPanel({ status }: { status: DesktopFleetYggdra
         <View style={styles.parentCopy}>
           <Text style={styles.parentName}>Manager computer</Text>
           <Text style={styles.parentMeta}>Direct parent · private Yggdrasil link</Text>
+          <Text style={hostRegistered ? styles.hostReady : styles.hostWarning}>
+            {hostRegistered ? '● Background host starts with Windows' : '◐ Background startup needs repair'}
+          </Text>
         </View>
         <View style={[styles.statusBadge, state === 'connected' ? styles.statusConnected : state === 'reconnecting' ? styles.statusReconnecting : styles.statusOffline]}>
           <Text style={styles.statusText}>{stateLabel}</Text>
@@ -59,6 +63,8 @@ const styles = StyleSheet.create({
   parentCopy: { flex: 1, minWidth: 220, gap: 5 },
   parentName: { color: UI.color.text, fontSize: TYPE.sectionTitle, fontWeight: '900' },
   parentMeta: { color: UI.color.textMuted, fontSize: TYPE.body, lineHeight: TYPE.bodyLine },
+  hostReady: { color: UI.color.success, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900' },
+  hostWarning: { color: UI.color.warning, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900' },
   statusBadge: { minHeight: 32, paddingHorizontal: 11, borderWidth: 1, borderRadius: UI.radius.pill, alignItems: 'center', justifyContent: 'center' },
   statusConnected: { borderColor: UI.color.accentBorder, backgroundColor: UI.color.accentSoft },
   statusReconnecting: { borderColor: UI.color.warning, backgroundColor: UI.color.warningSoft },

@@ -9,6 +9,13 @@ import time
 from pathlib import Path
 from typing import Dict, Tuple
 
+from app_backend.windows_capture_session import (
+    DesktopCaptureUnavailableError,
+    assert_capture_session_available,
+    capture_backend_unavailable,
+    windows_capture_session_status,
+)
+
 try:
     from PIL import Image
 except ImportError:  # pragma: no cover
@@ -41,6 +48,7 @@ def get_capture_runtime_status() -> Dict[str, object]:
         "ok": not issues,
         "issues": issues,
         "backends": backends,
+        "session": windows_capture_session_status(),
     }
 
 
@@ -67,12 +75,9 @@ def _capture_with_scrot(path: Path):
 
 def _capture_backend_error(exc: BaseException, *, platform_name: str | None = None) -> RuntimeError:
     detail = str(exc or "").strip()
-    platform = str(platform_name or os.name).strip().lower()
-    if platform == "nt" and "bitblt" in detail.lower() and "access is denied" in detail.lower():
-        return RuntimeError(
-            "Windows desktop preview is unavailable because the interactive display cannot be captured. "
-            "Restore and unlock the RDP/desktop session, keep it visible rather than minimized, then retry."
-        )
+    unavailable = capture_backend_unavailable(exc, platform_name=platform_name)
+    if unavailable:
+        return unavailable
     return RuntimeError(detail or "Screenshot capture failed")
 
 
@@ -89,6 +94,7 @@ def _capture_with_mss():
 
 
 def capture_screen_image(*, max_width: int = 1280) -> Tuple[object, str]:
+    assert_capture_session_available()
     temp_path: Path | None = None
     backend = "mss"
 
@@ -128,6 +134,7 @@ def capture_screen_snapshot(*, max_width: int = 1280, jpeg_quality: int = 72) ->
             "height": image.height,
             "backend": backend,
             "captured_at": time.time(),
+            "display": windows_capture_session_status(),
         }
     finally:
         try:

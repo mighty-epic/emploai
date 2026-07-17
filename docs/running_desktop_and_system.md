@@ -407,7 +407,7 @@ Use the token printed by the manager:
 npm run fleet:yggdrasil:join -- <pairing-token>
 ```
 
-The join command saves the durable computer connection and starts its paired-computer relay. That computer keeps its own local manager and workers; the manager can send delegation messages only after the other computer reports and allows its connection permissions.
+The join command saves the durable computer connection, starts its paired-computer host, and registers that host to start invisibly at Windows sign-in. The host survives closing Electron. That computer keeps its own local manager and workers; the manager can send delegation messages only after the other computer reports and allows its connection permissions.
 
 To save the connection without starting the relay immediately:
 
@@ -420,6 +420,15 @@ Start the paired-computer relay manually:
 ```powershell
 python -m desktop_runtime.backend run-remote-control-worker
 ```
+
+Check or repair background-host persistence:
+
+```powershell
+npm run fleet:host:status
+npm run fleet:host:install
+```
+
+The manager-triggered preview command captures on the paired computer and returns one bounded JPEG through Yggdrasil. A connected computer can still report **Screen unavailable** when Windows is locked or an RDP-only VPS has no rendered display. For unattended screenshots, configure a persistent interactive or virtual display through the VPS/virtualization environment; EmploAI never captures the Windows lock screen.
 
 Recheck the overlay at any time:
 
@@ -609,6 +618,7 @@ npm run fleet:yggdrasil:bootstrap
 npm run fleet:yggdrasil:status
 npm run fleet:yggdrasil:pair
 npm run fleet:yggdrasil:join -- <pairing-token>
+npm run fleet:host:status
 
 # Checks
 python run_tests.py
