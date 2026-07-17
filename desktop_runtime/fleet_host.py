@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime
 from getpass import getuser
 from contextlib import contextmanager
 from pathlib import Path
@@ -167,10 +168,18 @@ def _scheduled_task_text(home: Path) -> str:
     arguments = subprocess.list2cmdline([str(item) for item in command[1:]])
     working_directory = str(_backend_working_directory().resolve())
     user_id = _windows_current_user_id()
+    start_boundary = datetime.now().replace(microsecond=0).isoformat()
     return f'''<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>Persistent authenticated EmploAI Fleet host over Yggdrasil.</Description></RegistrationInfo>
-  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{xml_escape(user_id)}</UserId></LogonTrigger></Triggers>
+  <Triggers>
+    <LogonTrigger><Enabled>true</Enabled><UserId>{xml_escape(user_id)}</UserId></LogonTrigger>
+    <TimeTrigger>
+      <Repetition><Interval>PT1M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
+      <StartBoundary>{start_boundary}</StartBoundary>
+      <Enabled>true</Enabled>
+    </TimeTrigger>
+  </Triggers>
   <Principals><Principal id="Author"><UserId>{xml_escape(user_id)}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>

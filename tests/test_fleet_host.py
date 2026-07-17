@@ -30,6 +30,9 @@ def test_fleet_host_scheduled_task_restarts_failures_without_a_time_limit(tmp_pa
     assert "<Count>999</Count>" in task
     assert "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>" in task
     assert "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>" in task
+    assert "<TimeTrigger>" in task
+    assert "<Interval>PT1M</Interval>" in task
+    assert "<StopAtDurationEnd>false</StopAtDurationEnd>" in task
     assert "sessionToken" not in task
 
 
