@@ -98,7 +98,8 @@ export function DesktopFleetHostControls({
   const updateCheck = updateStatus?.last_check || null;
   const updateJob = updateStatus?.job || null;
   const targetCommit = String(updateCheck?.target_commit || '');
-  const updateAvailable = Boolean(updateCheck?.update_available && updateCheck?.can_update && targetCommit);
+  const completedCommit = updateJob?.state === 'completed' ? String(updateJob.current_commit || updateJob.target_commit || '') : '';
+  const updateAvailable = Boolean(updateCheck?.update_available && updateCheck?.can_update && targetCommit && targetCommit !== completedCommit);
   const updateDisabled = Boolean(updateBusy) || Boolean(updateStatus?.active) || !online || !updateAllowed || !updateSupported;
 
   const checkUpdate = async () => {

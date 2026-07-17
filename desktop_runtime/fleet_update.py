@@ -285,6 +285,40 @@ def check_fleet_update(home: Path, root: Path) -> dict[str, Any]:
     return fleet_update_status(home, root)
 
 
+def _record_current_check(home: Path, root: Path, job_id: str, current_commit: str) -> None:
+    state = _read_state(home)
+    job = dict(state.get("job") or {})
+    if str(job.get("job_id") or "") != str(job_id or ""):
+        raise RuntimeError("The completed update job is no longer current")
+    upstream = str(job.get("upstream") or "").strip()
+    pull_target = _remote_branch(upstream)
+    current_version = _target_version(root, current_commit)
+    state["last_check"] = {
+        "supported": True,
+        "checked": True,
+        "state": "current",
+        "can_update": False,
+        "update_available": False,
+        "message": "This computer is already up to date.",
+        "branch": job.get("branch"),
+        "upstream": upstream or None,
+        "remote": pull_target[0] if pull_target else None,
+        "remote_branch": pull_target[1] if pull_target else None,
+        "current_commit": current_commit,
+        "target_commit": current_commit,
+        "current_short_commit": current_commit[:8],
+        "target_short_commit": current_commit[:8],
+        "target_version": current_version,
+        "ahead_count": 0,
+        "behind_count": 0,
+        "dirty": False,
+        "dirty_count": 0,
+        "local_changes_will_be_preserved": False,
+        "checked_at": _now(),
+    }
+    _write_state(home, state)
+
+
 def _updater_command(home: Path, job_id: str, expected_commit: str) -> list[str]:
     return [
         str(Path(sys.executable).resolve()),
@@ -618,6 +652,7 @@ def run_fleet_update(home: Path, root: Path, *, job_id: str, expected_commit: st
         if not app_restarted:
             raise RuntimeError("The updated backend or desktop app did not become ready")
 
+        current_version = _target_version(root, current_commit)
         _update_job(
             home,
             job_id,
@@ -625,12 +660,13 @@ def run_fleet_update(home: Path, root: Path, *, job_id: str, expected_commit: st
             phase="completed",
             message=f"Updated to {current_commit[:8]} and restarted EmploAI.",
             current_commit=current_commit,
-            current_version=_target_version(root, current_commit),
+            current_version=current_version,
             completed_at=_now(),
             app_restarted=True,
             host_restart_pending=True,
             updater_pid=updater_pid,
         )
+        _record_current_check(home, root, job_id, current_commit)
         host_restarted, new_host_pid = _restart_host(home, root, int(job.get("host_pid") or 0))
         _update_job(home, job_id, host_restart_pending=not host_restarted, host_restarted=host_restarted, new_host_pid=new_host_pid)
         return fleet_update_status(home, root)

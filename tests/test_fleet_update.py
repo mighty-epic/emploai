@@ -132,6 +132,10 @@ def test_remote_update_preserves_changes_updates_restarts_and_reloads_host(monke
     assert result["state"] == "completed"
     assert result["job"]["host_restarted"] is True
     assert result["job"]["new_host_pid"] == 9876
+    assert result["last_check"]["state"] == "current"
+    assert result["last_check"]["update_available"] is False
+    assert result["last_check"]["current_commit"] == target
+    assert result["last_check"]["target_commit"] == target
     assert _git(child, "rev-parse", "HEAD") == target
     assert not (child / "local-note.txt").exists()
     assert fleet_update.UPDATE_STASH_PREFIX in _git(child, "stash", "list")
