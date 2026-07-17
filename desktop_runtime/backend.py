@@ -1295,6 +1295,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("yggdrasil-status", help="print local Yggdrasil transport status JSON")
     subparsers.add_parser("fleet-host-status", help="print persistent paired-computer host status JSON")
+    subparsers.add_parser("fleet-host-start", help="start and register the persistent paired-computer host")
     subparsers.add_parser("fleet-host-install", help="register the paired-computer host for Windows sign-in")
     subparsers.add_parser("fleet-host-uninstall", help="remove paired-computer host Windows sign-in registration")
 
@@ -1497,7 +1498,7 @@ def main(argv: list[str] | None = None) -> int:
         _prepare_environment(apply_cloud_overlay=False)
         return _json_print(_fleet_yggdrasil_status())
 
-    if args.command in {"fleet-host-status", "fleet-host-install", "fleet-host-uninstall"}:
+    if args.command in {"fleet-host-status", "fleet-host-start", "fleet-host-install", "fleet-host-uninstall"}:
         _prepare_environment(apply_cloud_overlay=False)
         _, home, _ = _runtime_paths()
         from desktop_runtime.fleet_host import (
@@ -1506,14 +1507,27 @@ def main(argv: list[str] | None = None) -> int:
             remove_fleet_host_autostart,
         )
 
-        if args.command == "fleet-host-install":
+        if args.command in {"fleet-host-start", "fleet-host-install"}:
             from shared.fleet_connection import fleet_connection_configured
 
             if not fleet_connection_configured(home):
                 return _json_error_print(
                     RuntimeError("Pair this computer to a Fleet manager before installing its background host.")
                 )
-            return _json_print(ensure_fleet_host_autostart(home))
+            host_status = ensure_fleet_host_autostart(home)
+            if args.command == "fleet-host-install":
+                return _json_print(host_status)
+            relay_status = _ensure_remote_control_worker(
+                home,
+                configured=True,
+                config_fingerprint=_fleet_connection_config_fingerprint(home),
+            )
+            return _json_print(
+                {
+                    **fleet_host_autostart_status(home),
+                    "relay": asdict(relay_status),
+                }
+            )
         if args.command == "fleet-host-uninstall":
             return _json_print(remove_fleet_host_autostart(home))
         return _json_print(fleet_host_autostart_status(home))

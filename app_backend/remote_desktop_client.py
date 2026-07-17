@@ -972,7 +972,7 @@ async def _send_command_result(
     )
 
 
-async def run_remote_desktop_client() -> None:
+async def _run_remote_desktop_client_until_cancelled() -> None:
     status_path = _remote_status_path()
     log_path = status_path.parent / "desktop_remote_control.log" if status_path else None
     logging.basicConfig(
@@ -1077,6 +1077,21 @@ async def run_remote_desktop_client() -> None:
                 desktop_name=config.desktop_name,
             )
             logger.exception("Remote desktop client disconnected; retrying")
+            await asyncio.sleep(2.0)
+
+
+async def run_remote_desktop_client() -> None:
+    while True:
+        try:
+            await _run_remote_desktop_client_until_cancelled()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _write_remote_status(
+                state="degraded",
+                detail=f"{type(exc).__name__}: {exc}",
+            )
+            logger.exception("Paired-computer host startup failed; retrying")
             await asyncio.sleep(2.0)
 
 

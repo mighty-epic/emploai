@@ -227,13 +227,15 @@ const services = createFleetYggdrasilServices({
   try { await services.join({ pairingToken: 'fw_inner_token', deviceName: 'Worker' }); }
   catch (error) { rejected = String(error.message || error).includes('complete EmploAI Yggdrasil Fleet pairing code'); }
   if (!rejected || calls.length !== 0) process.exit(2);
+  await services.startHost();
   await services.createPairing({ displayName: 'Worker One', expiresInSeconds: 1800 });
   await services.join({ pairingToken: 'emploai-yggdrasil-v1.abc', deviceName: 'Worker One' });
-  if (calls[0].args[0] !== 'yggdrasil-bootstrap') process.exit(3);
-  if (calls[1].args[0] !== 'fleet-yggdrasil-pair') process.exit(4);
-  if (!calls[1].args.includes('--configure-manager-bind')) process.exit(5);
-  if (calls[2].args[0] !== 'yggdrasil-bootstrap') process.exit(6);
-  if (calls[3].args[0] !== 'fleet-yggdrasil-join') process.exit(7);
+  if (calls[0].args[0] !== 'fleet-host-start') process.exit(3);
+  if (calls[1].args[0] !== 'yggdrasil-bootstrap') process.exit(4);
+  if (calls[2].args[0] !== 'fleet-yggdrasil-pair') process.exit(5);
+  if (!calls[2].args.includes('--configure-manager-bind')) process.exit(6);
+  if (calls[3].args[0] !== 'yggdrasil-bootstrap') process.exit(7);
+  if (calls[4].args[0] !== 'fleet-yggdrasil-join') process.exit(8);
 })().catch(() => process.exit(8));
 """
     result = subprocess.run(
@@ -252,6 +254,7 @@ def test_desktop_has_one_fleet_surface_and_redirects_legacy_remote_links():
     fleet_panel = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopFleetConnectionPanel.tsx").read_text(encoding="utf-8")
     settings = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopSetupPanel.tsx").read_text(encoding="utf-8")
     preload = (ROOT / "desktop_app" / "preload.js").read_text(encoding="utf-8")
+    main = (ROOT / "desktop_app" / "main.js").read_text(encoding="utf-8")
 
     header_tabs = shell_view.split("const CONVERSATION_HEADER_TABS", 1)[1].split("] as const", 1)[0]
     assert "label: 'Fleet'" in header_tabs
@@ -266,4 +269,6 @@ def test_desktop_has_one_fleet_surface_and_redirects_legacy_remote_links():
     assert "It does not copy" in fleet_panel or "stay local" in fleet_panel
     assert "yggdrasilCreatePairing" in preload
     assert "yggdrasilJoin" in preload
+    assert "schedulePairedFleetHostStart();" in main
+    assert "fleetYggdrasilServices().startHost()" in main
     assert "SETTINGS_TABS.filter((tab) => tab.key !== 'remote')" in settings

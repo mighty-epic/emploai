@@ -102,8 +102,11 @@ Inspect or repair Windows sign-in persistence:
 
 ```powershell
 npm run fleet:host:status
+npm run fleet:host:start
 npm run fleet:host:install
 ```
+
+Use `fleet:host:start` to repair registration and start the paired host now. `fleet:host:install` repairs registration without forcing a currently stopped host to run.
 
 Remove sign-in persistence without deleting the Yggdrasil pairing:
 

@@ -580,6 +580,50 @@ def test_remote_control_status_rejects_stale_running_record(monkeypatch, tmp_pat
     assert status.detail == "The paired-computer status record is stale because its host process is not running."
 
 
+def test_fleet_host_start_registers_and_launches_paired_host(monkeypatch, tmp_path: Path, capsys):
+    import desktop_runtime.fleet_host as fleet_host
+    import shared.fleet_connection as fleet_connection
+
+    calls: list[str] = []
+    monkeypatch.setattr(desktop_backend, "_prepare_environment", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        desktop_backend,
+        "_runtime_paths",
+        lambda: (tmp_path, tmp_path / "home", tmp_path / ".env"),
+    )
+    monkeypatch.setattr(fleet_connection, "fleet_connection_configured", lambda _home: True)
+    monkeypatch.setattr(
+        fleet_host,
+        "ensure_fleet_host_autostart",
+        lambda _home: calls.append("registered") or {"state": "registered", "registered": True},
+    )
+    monkeypatch.setattr(
+        fleet_host,
+        "fleet_host_autostart_status",
+        lambda _home: {"state": "running", "registered": True, "processId": 4242},
+    )
+    monkeypatch.setattr(desktop_backend, "_fleet_connection_config_fingerprint", lambda _home: "fingerprint")
+    monkeypatch.setattr(
+        desktop_backend,
+        "_ensure_remote_control_worker",
+        lambda _home, configured, config_fingerprint: calls.append(
+            f"started:{configured}:{config_fingerprint}"
+        ) or desktop_backend.RemoteControlServiceStatus(
+            configured=True,
+            state="running",
+            process_id=4242,
+        ),
+    )
+
+    assert desktop_backend.main(["fleet-host-start"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert calls == ["registered", "started:True:fingerprint"]
+    assert payload["state"] == "running"
+    assert payload["relay"]["state"] == "running"
+    assert payload["relay"]["process_id"] == 4242
+
+
 def test_unpaired_remote_control_supervision_does_not_scan_all_processes(monkeypatch, tmp_path: Path):
     stop_calls: list[bool] = []
 

@@ -13,6 +13,38 @@ def _http_status_error(status_code: int) -> httpx.HTTPStatusError:
     return httpx.HTTPStatusError("local runtime request failed", request=request, response=response)
 
 
+def test_paired_host_retries_startup_failures_without_exiting(monkeypatch):
+    attempts: list[str] = []
+    statuses: list[dict] = []
+    sleeps: list[float] = []
+
+    async def run_once():
+        attempts.append("run")
+        if len(attempts) == 1:
+            raise RuntimeError("local runtime is still starting")
+        raise asyncio.CancelledError
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(remote_desktop_client, "_run_remote_desktop_client_until_cancelled", run_once)
+    monkeypatch.setattr(remote_desktop_client, "_write_remote_status", lambda **payload: statuses.append(payload))
+    monkeypatch.setattr(remote_desktop_client.logger, "exception", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(remote_desktop_client.asyncio, "sleep", fake_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(remote_desktop_client.run_remote_desktop_client())
+
+    assert attempts == ["run", "run"]
+    assert sleeps == [2.0]
+    assert statuses == [
+        {
+            "state": "degraded",
+            "detail": "RuntimeError: local runtime is still starting",
+        }
+    ]
+
+
 def test_local_runtime_credentials_refresh_once_after_unauthorized(monkeypatch):
     credentials = remote_desktop_client.LocalRuntimeCredentials(
         api_base_url="http://127.0.0.1:8787",

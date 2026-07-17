@@ -425,8 +425,11 @@ Check or repair background-host persistence:
 
 ```powershell
 npm run fleet:host:status
+npm run fleet:host:start
 npm run fleet:host:install
 ```
+
+`fleet:host:start` repairs sign-in registration and starts the host immediately. `fleet:host:install` only repairs the next-sign-in registration.
 
 The manager-triggered preview command captures on the paired computer and returns one bounded JPEG through Yggdrasil. A connected computer can still report **Screen unavailable** when Windows is locked or an RDP-only VPS has no rendered display. For unattended screenshots, configure a persistent interactive or virtual display through the VPS/virtualization environment; EmploAI never captures the Windows lock screen.
 
@@ -619,6 +622,7 @@ npm run fleet:yggdrasil:status
 npm run fleet:yggdrasil:pair
 npm run fleet:yggdrasil:join -- <pairing-token>
 npm run fleet:host:status
+npm run fleet:host:start
 
 # Checks
 python run_tests.py

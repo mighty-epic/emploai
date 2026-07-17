@@ -25,6 +25,8 @@ function createFleetYggdrasilServices({ runBackendJson }) {
 
   const status = () => runBackendJson(['yggdrasil-status'], { timeoutMs: 15_000 });
 
+  const startHost = () => runBackendJson(['fleet-host-start'], { timeoutMs: 30_000 });
+
   const bootstrap = () => runBackendJson(
     ['yggdrasil-bootstrap', '--install', '--start', '--configure-default-peers'],
     { timeoutMs: 5 * 60_000 },
@@ -93,7 +95,7 @@ function createFleetYggdrasilServices({ runBackendJson }) {
     return runBackendJson(args, { timeoutMs: 15_000 });
   };
 
-  return { status, bootstrap, createPairing, join, permissions, setPermissions, decidePermissionRequest, activity, requestManager };
+  return { status, startHost, bootstrap, createPairing, join, permissions, setPermissions, decidePermissionRequest, activity, requestManager };
 }
 
 module.exports = {
