@@ -433,6 +433,30 @@ npm run fleet:host:install
 
 The manager-triggered preview command captures on the paired computer and returns one bounded JPEG through Yggdrasil. On Windows Server/VPS installations, the default `EMPLOAI_WINDOWS_HEADLESS_CAPTURE=auto` keeps a signed-in session captureable without RDP or VNC: if a minimized or disconnected RDP adapter stops producing frames, EmploAI moves that same session to the server console and retries once. The handoff may close the RDP client, but it does not sign in, unlock Windows, or select another user's session. VNC normally mirrors the console and needs no special path. Set the variable to `off` to disable this behavior or `console` to opt an ordinary Windows client into it. Locked or signed-out desktops remain **Screen unavailable**, and EmploAI never captures the Windows lock screen.
 
+### Update and restart another computer
+
+Once both computers include the persistent Fleet host update support, the manager can update a paired source checkout without RDP or SSH:
+
+1. Open **Fleet** on the manager and open the paired computer.
+2. Under **Update and restart this computer**, select **Check for update**.
+3. Review the branch, current commit, exact target commit, and any local-change backup notice.
+4. Select the update action once, then select **Confirm update & restart**.
+5. Leave the computer online while the visible phase moves through backup, shutdown, pull, dependencies, build, validation, and restart. A short Fleet disconnect while the host reloads is normal.
+
+The paired computer owns the **Update EmploAI** permission and can turn it off at any time. The manager can also ask its agent to check or perform the update, but installing still requires an explicit confirmation.
+
+The remote updater is intentionally narrow:
+
+- It works only for a Git checkout with Git and npm available on that computer.
+- It fetches the checkout's configured upstream branch and accepts only a fast-forward update.
+- The manager must confirm the full 40-character commit returned by the immediately preceding check. A branch that changes between check and confirmation is rejected.
+- Local tracked and untracked project changes are saved in an automatic Git stash before shutdown. A successful update leaves that backup in the stash for manual review; an update failure restores it after rolling back.
+- Dependency installation runs only when the related lock or requirements files changed. The renderer is rebuilt and the Python runtime is compiled before restart.
+- If validation or restart fails after the checkout changes, EmploAI restores the previous commit, rebuilds it, restores the saved local changes, and reopens the previous version when possible.
+- The Fleet command exposes no remote shell or arbitrary command field. It can only check the configured branch or install the exact checked commit.
+
+An older paired computer that says **Update required** or does not show this panel needs one local update first. After that bootstrap, future compatible source updates can be installed from its parent computer. Packaged/non-Git installations currently report remote source updating as unsupported.
+
 Recheck the overlay at any time:
 
 ```powershell

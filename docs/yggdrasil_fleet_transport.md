@@ -51,17 +51,21 @@ The default `EMPLOAI_WINDOWS_HEADLESS_CAPTURE=auto` enables this behavior on Win
 
 The manager may send a delegation message to the other computer's local manager agent or to a specifically named local worker. The paired computer returns delegation status, reports, and permission decisions. Agent sessions used to perform a delegation remain private on that computer.
 
-## Permissions and Workers
+## Permissions, Updates, and Workers
 
-The paired computer owns three connection permissions in Fleet:
+The paired computer owns five connection permissions in Fleet:
 
 - delegate to its local manager agent
 - delegate to its existing local workers
 - create a new local worker there
+- start its EmploAI backend or desktop app
+- update and restart its EmploAI source checkout
 
 The manager may request a change, but the paired computer must approve it. Creating a worker is explicit and creates that worker only on the paired computer. Its name can then be used as a delegation target; its identity is not cloned back to the manager.
 
-If a computer is online but shows **Update required**, update and restart EmploAI on that computer. Controls unlock automatically after it reports the current permission handshake; the Yggdrasil connection does not need to be recreated.
+For a supported Git checkout, open the paired computer and use **Check for update**, review the exact target commit, then use the two-step **Update and restart** confirmation. The persistent host backs up dirty project files, accepts only a fast-forward to that exact commit, rebuilds and validates the app, and restarts the backend, desktop, and host. A failed update rolls back to the prior commit and restores the backup when possible. It never accepts an arbitrary shell command. The child can revoke **Update EmploAI** permission independently of its other Fleet permissions.
+
+If a computer is online but shows **Update required**, update and restart EmploAI on that computer locally once. Controls unlock automatically after it reports the current permission handshake; the Yggdrasil connection does not need to be recreated. Once the remote updater is present on both sides, later compatible updates can be performed entirely through Fleet.
 
 ## Command-Line Alternative
 
