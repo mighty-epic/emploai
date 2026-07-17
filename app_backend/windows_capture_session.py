@@ -131,10 +131,10 @@ def capture_session_unavailable(
     state = str(current.get("state") or "unavailable")
     if state == "disconnected":
         return DesktopCaptureUnavailableError(
-            "The computer is connected to Fleet, but its Windows desktop session is disconnected and is not producing a capturable frame.",
+            "The computer is connected to Fleet, but its Windows desktop session is disconnected and could not be made capture-ready.",
             code="display_disconnected",
             state=state,
-            recovery="Reconnect or attach a persistent interactive/virtual display, then retry. The Windows lock screen remains protected.",
+            recovery="Unlock or sign in to the Windows desktop, then retry. Windows Server headless capture never bypasses the lock screen.",
         )
     return DesktopCaptureUnavailableError(
         "The computer is connected to Fleet, but its Windows desktop is not currently capturable.",
@@ -161,17 +161,17 @@ def capture_backend_unavailable(
         return DesktopCaptureUnavailableError(
             "Windows desktop preview is unavailable because the interactive display cannot be captured. "
             "The computer remains connected to Fleet, but Windows is not exposing a desktop frame. "
-            "Restore and unlock the RDP/desktop session; if it is minimized, keep an interactive or virtual display attached, then retry.",
+            "Unlock the desktop and retry; Windows Server will automatically move an unavailable RDP session to its console when permitted.",
             code="framebuffer_unavailable",
             state="interactive_display_unavailable",
-            recovery="Restore and unlock the desktop. On a VPS, keep an interactive or virtual display attached before enabling screenshots-per-minute.",
+            recovery="Unlock or sign in to the desktop and retry. The Windows lock screen remains protected.",
         )
     return None
 
 
-def assert_capture_session_available() -> dict[str, Any]:
-    status = windows_capture_session_status()
-    error = capture_session_unavailable(status=status)
+def assert_capture_session_available(*, status: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    current = dict(status or windows_capture_session_status())
+    error = capture_session_unavailable(status=current)
     if error:
         raise error
-    return status
+    return current

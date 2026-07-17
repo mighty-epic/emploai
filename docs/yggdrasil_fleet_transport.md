@@ -45,9 +45,9 @@ The paired-computer host is separate from Electron:
 - **Stop Everything** stops the current host process. Its Windows sign-in registration remains so the connection returns after the next sign-in.
 - Signing out of Windows ends the interactive user session; the host starts again at the next sign-in.
 
-The connection and the display are separate states. A computer can be online in Fleet while its screen is unavailable. Windows does not expose the protected lock screen, and an RDP-only VPS may stop producing frames when its RDP session is minimized or disconnected. In that case Fleet reports **Screen unavailable** and stops an automatic preview rate instead of treating the whole computer as offline.
+The connection and the display are separate states. Windows does not expose the protected lock screen, but a signed-in Windows Server/VPS session can remain previewable without an attached viewer. When an RDP display is minimized or disconnected and stops producing frames, EmploAI automatically transfers that same signed-in session to the server console and retries once. This can end the RDP client connection; it does not sign in, unlock Windows, or switch to another user's session.
 
-For unattended VPS screenshots, attach a persistent interactive or virtual display supplied by the VPS/virtualization environment. EmploAI does not bypass Windows locking or silently transfer an unlocked RDP session to the console.
+The default `EMPLOAI_WINDOWS_HEADLESS_CAPTURE=auto` enables this behavior on Windows Server and leaves ordinary Windows client computers alone. Set it to `console` to opt a Windows client into console handoff or `off` to disable handoff. VNC normally mirrors the console session, so it continues to use the same capture path whether or not a viewer is attached. Signed-out, locked, non-interactive, and permission-denied sessions remain **Screen unavailable**, and an automatic preview rate stops safely.
 
 The manager may send a delegation message to the other computer's local manager agent or to a specifically named local worker. The paired computer returns delegation status, reports, and permission decisions. Agent sessions used to perform a delegation remain private on that computer.
 

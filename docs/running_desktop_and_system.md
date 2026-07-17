@@ -431,7 +431,7 @@ npm run fleet:host:install
 
 `fleet:host:start` repairs sign-in registration and starts the host immediately. `fleet:host:install` only repairs the next-sign-in registration.
 
-The manager-triggered preview command captures on the paired computer and returns one bounded JPEG through Yggdrasil. A connected computer can still report **Screen unavailable** when Windows is locked or an RDP-only VPS has no rendered display. For unattended screenshots, configure a persistent interactive or virtual display through the VPS/virtualization environment; EmploAI never captures the Windows lock screen.
+The manager-triggered preview command captures on the paired computer and returns one bounded JPEG through Yggdrasil. On Windows Server/VPS installations, the default `EMPLOAI_WINDOWS_HEADLESS_CAPTURE=auto` keeps a signed-in session captureable without RDP or VNC: if a minimized or disconnected RDP adapter stops producing frames, EmploAI moves that same session to the server console and retries once. The handoff may close the RDP client, but it does not sign in, unlock Windows, or select another user's session. VNC normally mirrors the console and needs no special path. Set the variable to `off` to disable this behavior or `console` to opt an ordinary Windows client into it. Locked or signed-out desktops remain **Screen unavailable**, and EmploAI never captures the Windows lock screen.
 
 Recheck the overlay at any time:
 
