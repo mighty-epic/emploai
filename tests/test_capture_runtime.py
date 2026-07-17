@@ -10,7 +10,11 @@ from app_backend.windows_capture_session import (
 )
 
 
-def test_windows_bitblt_access_error_explains_rdp_recovery():
+def test_windows_bitblt_access_error_explains_rdp_recovery(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        "app_backend.windows_capture_session.windows_capture_session_status",
+        lambda: {"available": True, "state": "active", "protocol": "rdp", "sessionId": 2},
+    )
     error = _capture_backend_error(
         RuntimeError("Windows graphics function failed: BitBlt: Access is denied."),
         platform_name="nt",
