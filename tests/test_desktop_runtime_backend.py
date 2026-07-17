@@ -563,6 +563,23 @@ def test_ensure_remote_control_worker_cleans_duplicate_local_workers(monkeypatch
     assert launched == [tmp_path]
 
 
+def test_remote_control_status_rejects_stale_running_record(monkeypatch, tmp_path: Path):
+    import desktop_runtime.services as runtime_services
+
+    monkeypatch.setattr(runtime_services, "_read_remote_control_pid_record", lambda _home: None)
+    monkeypatch.setattr(
+        runtime_services,
+        "_read_remote_control_status_record",
+        lambda _home: {"state": "running", "detail": "Stale connected detail."},
+    )
+
+    status = runtime_services._remote_control_service_status(tmp_path, configured=True)
+
+    assert status.state == "offline"
+    assert status.process_id is None
+    assert status.detail == "The paired-computer status record is stale because its host process is not running."
+
+
 def test_unpaired_remote_control_supervision_does_not_scan_all_processes(monkeypatch, tmp_path: Path):
     stop_calls: list[bool] = []
 

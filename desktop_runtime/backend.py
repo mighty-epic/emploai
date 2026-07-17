@@ -837,6 +837,12 @@ def _fleet_yggdrasil_status() -> dict[str, Any]:
     worker = connection.get("worker") if isinstance(connection.get("worker"), dict) else {}
     relay_status = (_read_remote_control_status_record(home) or {}) if connection else {}
     fleet_host = fleet_host_autostart_status(home) if connection else {}
+    host_running = str(fleet_host.get("state") or "").strip().lower() == "running"
+    relay_state = str(relay_status.get("state") or "").strip() or None
+    relay_detail = str(relay_status.get("detail") or "").strip() or None
+    if connection and not host_running:
+        relay_state = "offline"
+        relay_detail = str(fleet_host.get("detail") or "").strip() or "The paired-computer host is not running."
     status["connection"] = {
         "configured": bool(connection),
         "role": "paired" if connection else "manager",
@@ -847,8 +853,8 @@ def _fleet_yggdrasil_status() -> dict[str, Any]:
         "desktopName": str(desktop.get("device_name") or relay_status.get("desktopName") or "").strip() or None,
         "workerId": str(worker.get("worker_id") or "").strip() or None,
         "workerName": str(worker.get("display_name") or "").strip() or None,
-        "relayState": str(relay_status.get("state") or "").strip() or None,
-        "relayDetail": str(relay_status.get("detail") or "").strip() or None,
+        "relayState": relay_state,
+        "relayDetail": relay_detail,
         "hostState": str(fleet_host.get("state") or "").strip() or None,
         "hostRegistered": bool(fleet_host.get("registered", False)),
         "hostDetail": str(fleet_host.get("detail") or "").strip() or None,

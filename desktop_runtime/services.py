@@ -268,6 +268,9 @@ def _remote_control_service_status(
             ready_at=ready_at,
         )
 
+    if status_state == "running":
+        status_detail = "The paired-computer status record is stale because its host process is not running."
+
     return RemoteControlServiceStatus(
         configured=True,
         state="offline",

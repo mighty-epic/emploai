@@ -106,6 +106,14 @@ def test_yggdrasil_status_exposes_connection_without_session_token(tmp_path: Pat
         "_read_remote_control_status_record",
         lambda _home: {"state": "connected", "detail": "Worker relay connected."},
     )
+    monkeypatch.setattr(
+        "desktop_runtime.fleet_host.fleet_host_autostart_status",
+        lambda _home: {
+            "state": "running",
+            "registered": True,
+            "detail": "The paired-computer host is running independently of Electron.",
+        },
+    )
 
     status = backend._fleet_yggdrasil_status()
 
@@ -121,9 +129,9 @@ def test_yggdrasil_status_exposes_connection_without_session_token(tmp_path: Pat
         "workerName": "Build worker",
             "relayState": "connected",
             "relayDetail": "Worker relay connected.",
-            "hostState": "not_registered",
-            "hostRegistered": False,
-            "hostDetail": "The paired-computer host is not registered for Windows sign-in.",
+            "hostState": "running",
+            "hostRegistered": True,
+            "hostDetail": "The paired-computer host is running independently of Electron.",
         "permissions": {
             "delegate_manager": True,
             "delegate_workers": True,
@@ -136,6 +144,41 @@ def test_yggdrasil_status_exposes_connection_without_session_token(tmp_path: Pat
     serialized = json.dumps(status)
     assert "secret-worker-session" not in serialized
     assert "sessionToken" not in serialized
+
+
+def test_yggdrasil_status_does_not_trust_stale_running_relay_record(tmp_path: Path, monkeypatch):
+    write_fleet_connection(
+        home=tmp_path,
+        payload={
+            "managerUrl": "http://[200::abcd]:8787",
+            "sessionToken": "secret-worker-session",
+            "desktop": {"desktop_id": "dsk_worker", "device_name": "Worker PC"},
+            "transport": {"kind": "yggdrasil", "managerYggdrasilIp": "200::abcd"},
+        },
+    )
+    monkeypatch.setattr(backend, "_runtime_paths", lambda: (ROOT, tmp_path, tmp_path / ".env"))
+    monkeypatch.setattr(
+        "shared.fleet_yggdrasil.yggdrasil_status",
+        lambda _home: {"available": True, "running": True, "address": "200::beef"},
+    )
+    monkeypatch.setattr(
+        backend,
+        "_read_remote_control_status_record",
+        lambda _home: {"state": "running", "detail": "Stale connected detail."},
+    )
+    monkeypatch.setattr(
+        "desktop_runtime.fleet_host.fleet_host_autostart_status",
+        lambda _home: {
+            "state": "registered",
+            "registered": True,
+            "detail": "The paired-computer host will start at Windows sign-in.",
+        },
+    )
+
+    status = backend._fleet_yggdrasil_status()
+
+    assert status["connection"]["relayState"] == "offline"
+    assert status["connection"]["relayDetail"] == "The paired-computer host will start at Windows sign-in."
 
 
 def test_yggdrasil_status_handles_missing_relay_status_record(tmp_path: Path, monkeypatch):
@@ -154,6 +197,14 @@ def test_yggdrasil_status_handles_missing_relay_status_record(tmp_path: Path, mo
         lambda _home: {"available": True, "running": True, "address": "200::beef"},
     )
     monkeypatch.setattr(backend, "_read_remote_control_status_record", lambda _home: None)
+    monkeypatch.setattr(
+        "desktop_runtime.fleet_host.fleet_host_autostart_status",
+        lambda _home: {
+            "state": "running",
+            "registered": True,
+            "detail": "The paired-computer host is running independently of Electron.",
+        },
+    )
 
     status = backend._fleet_yggdrasil_status()
 
