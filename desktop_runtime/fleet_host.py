@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Iterator, Sequence
 from xml.sax.saxutils import escape as xml_escape
 
-from shared.atomic_io import atomic_write_text
+from shared.atomic_io import atomic_write_bytes, atomic_write_text
 from shared.subprocess_utils import hidden_subprocess_kwargs
 
 
@@ -141,7 +141,7 @@ def _scheduled_task_text(home: Path) -> str:
     domain = str(os.environ.get("USERDOMAIN") or "").strip()
     username = str(os.environ.get("USERNAME") or getuser() or "").strip()
     user_id = f"{domain}\\{username}" if domain and username else username
-    return f'''<?xml version="1.0" encoding="UTF-8"?>
+    return f'''<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>Persistent authenticated EmploAI Fleet host over Yggdrasil.</Description></RegistrationInfo>
   <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{xml_escape(user_id)}</UserId></LogonTrigger></Triggers>
@@ -188,7 +188,7 @@ def _scheduled_task_registered() -> bool:
 
 def _register_scheduled_task(home: Path) -> str | None:
     task_path = fleet_host_task_path(home)
-    atomic_write_text(task_path, _scheduled_task_text(home))
+    atomic_write_bytes(task_path, _scheduled_task_text(home).encode("utf-16"))
     try:
         result = _run_schtasks("/Create", "/TN", FLEET_HOST_TASK_NAME, "/XML", str(task_path), "/F")
     except (OSError, subprocess.SubprocessError) as exc:

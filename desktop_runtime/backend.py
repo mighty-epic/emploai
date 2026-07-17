@@ -1522,9 +1522,12 @@ def main(argv: list[str] | None = None) -> int:
                 configured=True,
                 config_fingerprint=_fleet_connection_config_fingerprint(home),
             )
+            refreshed_host_status = fleet_host_autostart_status(home)
+            if host_status.get("taskRegistrationError"):
+                refreshed_host_status["taskRegistrationError"] = host_status["taskRegistrationError"]
             return _json_print(
                 {
-                    **fleet_host_autostart_status(home),
+                    **refreshed_host_status,
                     "relay": asdict(relay_status),
                 }
             )

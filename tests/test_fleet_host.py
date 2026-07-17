@@ -33,6 +33,17 @@ def test_fleet_host_scheduled_task_restarts_failures_without_a_time_limit(tmp_pa
     assert "sessionToken" not in task
 
 
+def test_fleet_host_task_file_is_written_as_utf16_for_windows_scheduler(monkeypatch, tmp_path: Path):
+    import desktop_runtime.fleet_host as fleet_host
+
+    monkeypatch.setattr(fleet_host, "_run_schtasks", lambda *_args: type("Result", (), {"returncode": 0})())
+
+    assert fleet_host._register_scheduled_task(tmp_path) is None
+    payload = fleet_host.fleet_host_task_path(tmp_path).read_bytes()
+    assert payload.startswith((b"\xff\xfe", b"\xfe\xff"))
+    assert "RestartOnFailure" in payload.decode("utf-16")
+
+
 def test_fleet_host_process_lock_allows_only_one_owner(tmp_path: Path):
     with fleet_host_process_lock(tmp_path) as first:
         with fleet_host_process_lock(tmp_path) as second:
