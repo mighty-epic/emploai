@@ -133,14 +133,40 @@ def _registry_command(home: Path) -> str:
     )
 
 
+def _windows_current_user_id() -> str:
+    """Return the account name Windows Task Scheduler can resolve.
+
+    USERDOMAIN is sometimes the workgroup name in non-interactive sessions (for
+    example, ``WORKGROUP\\Administrator`` over SSH), which is not a valid local
+    account. ``whoami`` resolves the actual SAM-compatible account name.
+    """
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                ["whoami.exe"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                **hidden_subprocess_kwargs(),
+            )
+            user_id = str(result.stdout or "").strip()
+            if result.returncode == 0 and user_id:
+                return user_id
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    domain = str(os.environ.get("USERDOMAIN") or os.environ.get("COMPUTERNAME") or "").strip()
+    username = str(os.environ.get("USERNAME") or getuser() or "").strip()
+    return f"{domain}\\{username}" if domain and username else username
+
+
 def _scheduled_task_text(home: Path) -> str:
     command = _backend_command(home)
     executable = str(Path(command[0]).resolve())
     arguments = subprocess.list2cmdline([str(item) for item in command[1:]])
     working_directory = str(_backend_working_directory().resolve())
-    domain = str(os.environ.get("USERDOMAIN") or "").strip()
-    username = str(os.environ.get("USERNAME") or getuser() or "").strip()
-    user_id = f"{domain}\\{username}" if domain and username else username
+    user_id = _windows_current_user_id()
     return f'''<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>Persistent authenticated EmploAI Fleet host over Yggdrasil.</Description></RegistrationInfo>
