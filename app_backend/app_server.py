@@ -83,6 +83,7 @@ from app_backend.models import (
     DeleteSessionResponse,
     FleetAssignTaskRequest,
     FleetComputerDelegationRequest,
+    FleetComputerUpdateRequest,
     FleetConnectionPermissionRequest,
     FleetCreateLocalWorkerRequest,
     FleetContinueWorkerQueueRequest,

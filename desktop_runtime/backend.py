@@ -1298,6 +1298,13 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("fleet-host-start", help="start and register the persistent paired-computer host")
     subparsers.add_parser("fleet-host-install", help="register the paired-computer host for Windows sign-in")
     subparsers.add_parser("fleet-host-uninstall", help="remove paired-computer host Windows sign-in registration")
+    fleet_update_run_parser = subparsers.add_parser(
+        "fleet-update-run",
+        help="run one accepted remote Fleet update in a detached helper process",
+    )
+    fleet_update_run_parser.add_argument("--home", required=True)
+    fleet_update_run_parser.add_argument("--job-id", required=True)
+    fleet_update_run_parser.add_argument("--expected-commit", required=True)
 
     ygg_bootstrap_parser = subparsers.add_parser(
         "yggdrasil-bootstrap",
@@ -1497,6 +1504,24 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "yggdrasil-status":
         _prepare_environment(apply_cloud_overlay=False)
         return _json_print(_fleet_yggdrasil_status())
+
+    if args.command == "fleet-update-run":
+        os.environ["EMPLOAI_HOME"] = str(Path(args.home).expanduser().resolve())
+        _prepare_environment(apply_cloud_overlay=False)
+        root, home, _ = _runtime_paths()
+        from desktop_runtime.fleet_update import run_fleet_update
+
+        try:
+            return _json_print(
+                run_fleet_update(
+                    home,
+                    root,
+                    job_id=str(args.job_id or ""),
+                    expected_commit=str(args.expected_commit or ""),
+                )
+            )
+        except Exception as exc:
+            return _json_error_print(exc)
 
     if args.command in {"fleet-host-status", "fleet-host-start", "fleet-host-install", "fleet-host-uninstall"}:
         _prepare_environment(apply_cloud_overlay=False)

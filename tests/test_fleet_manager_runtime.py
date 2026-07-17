@@ -124,3 +124,49 @@ def test_agent_fleet_confirmation_rejects_model_confirmation_without_affirmative
 
     assert result["error_type"] == "confirmation_required"
     assert calls == []
+
+
+def test_agent_remote_update_requires_confirmation_and_forwards_exact_commit(monkeypatch):
+    target = "b" * 40
+    session = SimpleNamespace(
+        session=SimpleNamespace(id="manager-chat"),
+        fleet_identity_id="manager-identity",
+        last_user_message="Yes, update and restart the Windows VPS.",
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_fleet_snapshot_uncached",
+        lambda: {"desktops": [{"desktop_id": "desktop-vps", "display_name": "Windows VPS"}]},
+    )
+    calls = []
+
+    def fake_request(method, path, payload=None, **kwargs):
+        calls.append((method, path, payload, kwargs))
+        if path == "/api/app/confirmations":
+            return {"confirmation_id": "confirmation-update", "status": "pending"}
+        if path.endswith("/approve"):
+            return {"confirmation_id": "confirmation-update", "status": "approved"}
+        return {"state": "queued", "active": True}
+
+    monkeypatch.setattr(runtime, "_fleet_api_request", fake_request)
+
+    pending = runtime._fleet_tool_update_computer(
+        session,
+        {"computer": "Windows VPS", "expected_commit": target},
+    )
+    started = runtime._fleet_tool_update_computer(
+        session,
+        {
+            "computer": "Windows VPS",
+            "expected_commit": target,
+            "confirmed": True,
+            "confirmation_id": pending["confirmation_id"],
+        },
+    )
+
+    assert pending["confirmation_required"] is True
+    assert calls[0][2]["action_kind"] == "fleet_computer_update"
+    assert calls[2][1] == "/api/fleet/desktops/desktop-vps/update/start"
+    assert calls[2][2] == {"expected_commit": target}
+    assert calls[2][3]["confirmation_id"] == "confirmation-update"
+    assert started["active"] is True

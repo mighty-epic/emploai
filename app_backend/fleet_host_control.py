@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-FLEET_HOST_PROTOCOL_VERSION = 1
+FLEET_HOST_PROTOCOL_VERSION = 2
 _HOST_STARTED_AT = time.time()
 
 
@@ -84,6 +84,16 @@ def _desktop_view() -> dict[str, Any]:
     }
 
 
+def _update_view() -> dict[str, Any]:
+    from desktop_runtime.fleet_update import fleet_update_status
+    from shared.runtime_paths import runtime_home
+
+    home = runtime_home()
+    if not home:
+        return {"supported": False, "state": "unavailable", "active": False}
+    return fleet_update_status(home, _source_root())
+
+
 def fleet_host_status() -> dict[str, Any]:
     return {
         "protocol_version": FLEET_HOST_PROTOCOL_VERSION,
@@ -96,6 +106,7 @@ def fleet_host_status() -> dict[str, Any]:
         },
         "runtime": _runtime_view(),
         "desktop": _desktop_view(),
+        "update": _update_view(),
     }
 
 
@@ -109,10 +120,39 @@ def fleet_host_capabilities() -> dict[str, Any]:
             "runtime_status": True,
             "start_runtime": True,
             "start_desktop": bool(status["desktop"]["start_supported"]),
+            "update_status": True,
+            "check_update": bool(status["update"]["supported"]),
+            "start_update": bool(status["update"]["supported"]),
             "runtime_state": status["runtime"]["state"],
             "desktop_state": status["desktop"]["state"],
+            "update_state": status["update"]["state"],
         },
     }
+
+
+def check_update_from_fleet_host() -> dict[str, Any]:
+    from desktop_runtime.fleet_update import check_fleet_update
+    from shared.runtime_paths import runtime_home
+
+    home = runtime_home()
+    if not home:
+        raise RuntimeError("The EmploAI runtime home is unavailable")
+    return check_fleet_update(home, _source_root())
+
+
+def start_update_from_fleet_host(*, expected_commit: str) -> dict[str, Any]:
+    from desktop_runtime.fleet_update import start_fleet_update
+    from shared.runtime_paths import runtime_home
+
+    home = runtime_home()
+    if not home:
+        raise RuntimeError("The EmploAI runtime home is unavailable")
+    return start_fleet_update(
+        home,
+        _source_root(),
+        expected_commit=expected_commit,
+        host_pid=os.getpid(),
+    )
 
 
 def start_runtime_from_fleet_host() -> dict[str, Any]:

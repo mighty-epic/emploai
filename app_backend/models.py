@@ -1294,6 +1294,10 @@ class FleetRemoteWorkerCreateRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=160)
 
 
+class FleetComputerUpdateRequest(BaseModel):
+    expected_commit: str = Field(min_length=40, max_length=40, pattern=r"^[0-9a-fA-F]{40}$")
+
+
 class FleetConnectionPermissionRequest(BaseModel):
     permissions: Dict[str, bool] = Field(default_factory=dict)
     reason: Optional[str] = Field(default=None, max_length=1000)

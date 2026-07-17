@@ -98,6 +98,8 @@ FLEET_MANAGER_TOOLS = [
     _fleet_tool("fleet_computer_host_status", "Check whether a paired computer's persistent host, backend, and desktop app are running.", {"computer": _COMPUTER_ARG}, ["computer"]),
     _fleet_tool("fleet_start_computer_runtime", "Start the EmploAI backend on a paired computer through its persistent Yggdrasil host.", {"computer": _COMPUTER_ARG}, ["computer"]),
     _fleet_tool("fleet_start_computer_desktop", "Open the EmploAI desktop app and backend on a paired computer through its persistent Yggdrasil host.", {"computer": _COMPUTER_ARG}, ["computer"]),
+    _fleet_tool("fleet_check_computer_update", "Check a paired computer's configured Git branch for a safe fast-forward EmploAI update.", {"computer": _COMPUTER_ARG}, ["computer"]),
+    _fleet_tool("fleet_update_computer", "Install an exact checked EmploAI commit on a paired computer and restart its backend, desktop app, and persistent host after confirmation.", {"computer": _COMPUTER_ARG, "expected_commit": {"type": "string", "description": "Full 40-character target commit returned by fleet_check_computer_update."}, "confirmed": _CONFIRMED_ARG, "confirmation_id": _CONFIRMATION_ID_ARG}, ["computer", "expected_commit"]),
     _fleet_tool("fleet_rename_worker", "Rename a worker.", {"worker": _WORKER_ARG, "display_name": {"type": "string"}}, ["worker", "display_name"]),
     _fleet_tool("fleet_reset_worker", "Reset a worker identity after confirmation. Stops active work first and preserves terminal reports.", {"worker": _WORKER_ARG, "reason": {"type": "string"}, "confirmed": _CONFIRMED_ARG, "confirmation_id": _CONFIRMATION_ID_ARG}, ["worker"]),
     _fleet_tool("fleet_delete_worker", "Delete a worker from the live fleet after confirmation. Stops active work first and preserves terminal reports.", {"worker": _WORKER_ARG, "reason": {"type": "string"}, "confirmed": _CONFIRMED_ARG, "confirmation_id": _CONFIRMATION_ID_ARG}, ["worker"]),
@@ -275,12 +277,14 @@ def _fleet_api_request(
     payload: Optional[Dict[str, Any]] = None,
     *,
     confirmation_id: Optional[str] = None,
+    timeout_seconds: float = 10.0,
 ) -> Dict[str, Any]:
     config = _local_fleet_api_config()
     if not config["token"]:
         return {"error": "The local desktop token is unavailable.", "error_type": "local_auth_unavailable"}
     try:
-        timeout = httpx.Timeout(10.0, connect=3.0, read=10.0, write=10.0)
+        bounded_timeout = max(1.0, float(timeout_seconds or 10.0))
+        timeout = httpx.Timeout(bounded_timeout, connect=min(10.0, bounded_timeout), read=bounded_timeout, write=bounded_timeout)
         headers = {"Authorization": f"Bearer {config['token']}"}
         clean_confirmation_id = str(confirmation_id or "").strip()
         if clean_confirmation_id:
@@ -720,11 +724,45 @@ def _fleet_tool_computer_host_action(
         "status": "host",
         "runtime": "host/runtime/start",
         "desktop": "host/desktop/start",
+        "update_status": "update",
+        "update_check": "update/check",
     }[action]
     result = _fleet_api_request(
         method,
         f"/api/fleet/desktops/{desktop_id}/{suffix}",
         {} if method == "POST" else None,
+        timeout_seconds=4 * 60.0 if action == "update_check" else 10.0,
+    )
+    _invalidate_fleet_manager_tool_context(session)
+    return result
+
+
+def _fleet_tool_update_computer(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot = _fleet_snapshot_uncached()
+    computer = _fleet_find_computer(snapshot, str(args.get("computer") or ""))
+    if not computer:
+        return {"error": "Paired computer not found or name is ambiguous.", "error_type": "computer_not_found"}
+    expected_commit = str(args.get("expected_commit") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{40}", expected_commit):
+        return {"error": "Use the full target commit returned by fleet_check_computer_update.", "error_type": "invalid_expected_commit"}
+    action = "fleet_computer_update"
+    if not bool(args.get("confirmed")):
+        return _fleet_confirmation_required(
+            session,
+            action,
+            f"Update and restart EmploAI on {computer.get('display_name') or computer.get('desktop_id')} to commit {expected_commit[:8]}.",
+            {"desktop_id": computer.get("desktop_id"), "expected_commit": expected_commit},
+        )
+    confirmation_id, confirmation_error = _fleet_confirmation_id_for_execution(session, args, action_kind=action)
+    if confirmation_error:
+        return confirmation_error
+    desktop_id = quote(str(computer.get("desktop_id") or ""), safe="")
+    result = _fleet_api_request(
+        "POST",
+        f"/api/fleet/desktops/{desktop_id}/update/start",
+        {"expected_commit": expected_commit},
+        confirmation_id=confirmation_id,
+        timeout_seconds=4 * 60.0,
     )
     _invalidate_fleet_manager_tool_context(session)
     return result
@@ -1284,6 +1322,8 @@ def _fleet_manager_tool_handlers(session: Any) -> Dict[str, Callable[[Dict[str, 
         "fleet_computer_host_status": lambda args: _fleet_tool_computer_host_action(session, args, action="status"),
         "fleet_start_computer_runtime": lambda args: _fleet_tool_computer_host_action(session, args, action="runtime"),
         "fleet_start_computer_desktop": lambda args: _fleet_tool_computer_host_action(session, args, action="desktop"),
+        "fleet_check_computer_update": lambda args: _fleet_tool_computer_host_action(session, args, action="update_check"),
+        "fleet_update_computer": lambda args: _fleet_tool_update_computer(session, args),
         "fleet_rename_worker": lambda args: _fleet_tool_rename_worker(session, args),
         "fleet_reset_worker": lambda args: _fleet_tool_reset_or_delete_worker(session, args, reset=True),
         "fleet_delete_worker": lambda args: _fleet_tool_reset_or_delete_worker(session, args, reset=False),

@@ -380,6 +380,56 @@ def test_host_runtime_start_works_without_existing_backend_credentials(monkeypat
     assert result["runtime"]["ready"] is True
 
 
+def test_host_update_requires_child_owned_permission(monkeypatch, tmp_path):
+    monkeypatch.setattr(remote_desktop_client, "runtime_home", lambda: tmp_path)
+    monkeypatch.setattr(
+        remote_desktop_client,
+        "load_connection_policy",
+        lambda _home: {"permissions": {"manage_updates": False}},
+    )
+
+    with pytest.raises(PermissionError, match="not allowed"):
+        asyncio.run(
+            remote_desktop_client._handle_command(
+                command_name="fleet_update_check",
+                payload={},
+                local_api_base_url="",
+                local_token="",
+                remote_ws=None,
+                send_lock=asyncio.Lock(),
+            )
+        )
+
+
+def test_host_update_start_passes_only_the_confirmed_commit(monkeypatch, tmp_path):
+    target = "a" * 40
+    monkeypatch.setattr(remote_desktop_client, "runtime_home", lambda: tmp_path)
+    monkeypatch.setattr(
+        remote_desktop_client,
+        "load_connection_policy",
+        lambda _home: {"permissions": {"manage_updates": True}},
+    )
+    received = []
+    monkeypatch.setattr(
+        "app_backend.fleet_host_control.start_update_from_fleet_host",
+        lambda *, expected_commit: received.append(expected_commit) or {"state": "queued", "active": True},
+    )
+
+    result = asyncio.run(
+        remote_desktop_client._handle_command(
+            command_name="fleet_update_start",
+            payload={"expected_commit": target, "command": "ignored"},
+            local_api_base_url="",
+            local_token="",
+            remote_ws=None,
+            send_lock=asyncio.Lock(),
+        )
+    )
+
+    assert result == {"state": "queued", "active": True}
+    assert received == [target]
+
+
 def test_screen_preview_is_bounded_and_view_only(monkeypatch):
     monkeypatch.setattr(
         "app_backend.capture_runtime.capture_screen_snapshot",

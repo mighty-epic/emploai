@@ -231,6 +231,7 @@ function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, get
         token: local.accessToken,
         body: options.body,
         headers: options.headers || {},
+        timeoutMs: options.timeoutMs,
       });
     };
 
@@ -309,6 +310,37 @@ function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, get
     return fleetApi(`/api/fleet/desktops/${encodeURIComponent(desktopId)}/host/desktop/start`, {
       method: 'POST',
       body: {},
+    });
+  }
+
+  async function fleetComputerUpdateStatus(payload = {}) {
+    const desktopId = String(payload.desktop_id || payload.desktopId || '').trim();
+    if (!desktopId) throw new Error('desktop_id is required');
+    return fleetApi(`/api/fleet/desktops/${encodeURIComponent(desktopId)}/update`, {
+      refreshOnConnectivity: true,
+    });
+  }
+
+  async function fleetCheckComputerUpdate(payload = {}) {
+    const desktopId = String(payload.desktop_id || payload.desktopId || '').trim();
+    if (!desktopId) throw new Error('desktop_id is required');
+    return fleetApi(`/api/fleet/desktops/${encodeURIComponent(desktopId)}/update/check`, {
+      method: 'POST',
+      body: {},
+      timeoutMs: 4 * 60 * 1000,
+    });
+  }
+
+  async function fleetStartComputerUpdate(payload = {}) {
+    const desktopId = String(payload.desktop_id || payload.desktopId || '').trim();
+    const expectedCommit = String(payload.expected_commit || payload.expectedCommit || '').trim();
+    if (!desktopId || !/^[0-9a-f]{40}$/i.test(expectedCommit)) {
+      throw new Error('desktop_id and a full expected_commit are required');
+    }
+    return fleetApi(`/api/fleet/desktops/${encodeURIComponent(desktopId)}/update/start`, {
+      method: 'POST',
+      body: { expected_commit: expectedCommit },
+      timeoutMs: 4 * 60 * 1000,
     });
   }
 
@@ -725,6 +757,9 @@ function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, get
     fleetComputerHostStatus,
     fleetStartComputerRuntime,
     fleetStartComputerDesktop,
+    fleetComputerUpdateStatus,
+    fleetCheckComputerUpdate,
+    fleetStartComputerUpdate,
     fleetRequestComputerPermissions,
     fleetDecideUpstreamRequest,
     fleetSetActiveIdentity,

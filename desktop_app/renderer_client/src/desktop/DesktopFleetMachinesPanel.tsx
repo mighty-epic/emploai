@@ -21,13 +21,14 @@ import { fleetReportSummary } from './desktopFleetWorkerState';
 import { FLEET_TYPE as TYPE } from './desktopFleetUi';
 import { DESKTOP_UI as UI } from './desktopUiTokens';
 
-type PermissionKey = 'delegate_manager' | 'delegate_workers' | 'create_workers' | 'manage_runtime';
+type PermissionKey = 'delegate_manager' | 'delegate_workers' | 'create_workers' | 'manage_runtime' | 'manage_updates';
 
 const permissionRows: Array<[PermissionKey, string]> = [
   ['delegate_manager', 'Main identity'],
   ['delegate_workers', 'Existing agents'],
   ['create_workers', 'Create agents'],
   ['manage_runtime', 'Start EmploAI'],
+  ['manage_updates', 'Update EmploAI'],
 ];
 
 function permissionForDesktop(snapshot: DesktopFleetSnapshot | null | undefined, desktopId: string) {
@@ -213,7 +214,7 @@ export function DesktopFleetMachinesPanel({
 
       {selectedMachine ? (() => {
         const permissionState = selectedPermissionState;
-        const permissions = permissionState?.permissions || { delegate_manager: false, delegate_workers: false, create_workers: false, manage_runtime: false };
+        const permissions = permissionState?.permissions || { delegate_manager: false, delegate_workers: false, create_workers: false, manage_runtime: false, manage_updates: false };
         const protocolReady = permissionState?.source === 'paired_desktop';
         const online = selectedMachine.status === 'connected';
         const targets = selectedTargets;
@@ -251,7 +252,9 @@ export function DesktopFleetMachinesPanel({
               desktopName={selectedMachine.name}
               online={online}
               allowed={Boolean(permissions.manage_runtime)}
+              updateAllowed={Boolean(permissions.manage_updates)}
               supported={Boolean(permissionState?.capabilities?.host_control?.protocol_version)}
+              updateSupported={Boolean(permissionState?.capabilities?.host_control?.start_update)}
             />
 
             <View style={styles.drawerColumns}>

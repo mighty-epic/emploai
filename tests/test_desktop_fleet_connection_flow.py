@@ -137,6 +137,7 @@ def test_yggdrasil_status_exposes_connection_without_session_token(tmp_path: Pat
             "delegate_workers": True,
             "create_workers": False,
             "manage_runtime": True,
+            "manage_updates": True,
         },
         "pendingRequest": None,
         "lastDecision": None,
@@ -254,6 +255,7 @@ def test_desktop_has_one_fleet_surface_and_redirects_legacy_remote_links():
     shell_view = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopAppShellView.tsx").read_text(encoding="utf-8")
     fleet_panel = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopFleetConnectionPanel.tsx").read_text(encoding="utf-8")
     settings = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopSetupPanel.tsx").read_text(encoding="utf-8")
+    host_controls = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopFleetHostControls.tsx").read_text(encoding="utf-8")
     preload = (ROOT / "desktop_app" / "preload.js").read_text(encoding="utf-8")
     main = (ROOT / "desktop_app" / "main.js").read_text(encoding="utf-8")
 
@@ -272,4 +274,8 @@ def test_desktop_has_one_fleet_surface_and_redirects_legacy_remote_links():
     assert "yggdrasilJoin" in preload
     assert main.count("schedulePairedFleetHostStart();") >= 2
     assert "fleetYggdrasilServices().startHost()" in main
+    assert "checkComputerUpdate" in preload
+    assert "startComputerUpdate" in preload
+    assert "Confirm update & restart" in host_controls
+    assert "local project change" in host_controls
     assert "SETTINGS_TABS.filter((tab) => tab.key !== 'remote')" in settings

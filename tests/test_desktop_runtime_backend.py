@@ -91,6 +91,34 @@ def test_install_update_cli_accepts_restart_executable(monkeypatch, tmp_path: Pa
     assert payload["restartExecutable"] == str(restart_exe.resolve())
 
 
+def test_fleet_update_runner_cli_uses_explicit_home_and_commit(monkeypatch, tmp_path: Path, capsys):
+    import desktop_runtime.fleet_update as fleet_update
+
+    root = tmp_path / "checkout"
+    home = tmp_path / "runtime"
+    expected = "a" * 40
+    captured = {}
+    monkeypatch.setattr(desktop_backend, "_prepare_environment", lambda **_kwargs: None)
+    monkeypatch.setattr(desktop_backend, "_runtime_paths", lambda: (root, home, home / ".env"))
+    monkeypatch.setattr(
+        fleet_update,
+        "run_fleet_update",
+        lambda home_arg, root_arg, *, job_id, expected_commit: captured.update(
+            home=home_arg,
+            root=root_arg,
+            job_id=job_id,
+            expected_commit=expected_commit,
+        ) or {"state": "completed"},
+    )
+
+    assert desktop_backend.main(
+        ["fleet-update-run", "--home", str(home), "--job-id", "fup_test", "--expected-commit", expected]
+    ) == 0
+
+    assert json.loads(capsys.readouterr().out)["state"] == "completed"
+    assert captured == {"home": home, "root": root, "job_id": "fup_test", "expected_commit": expected}
+
+
 def test_ensure_runtime_manual_start_ignores_auto_start(monkeypatch, tmp_path: Path):
     config = DesktopRuntimeConfig(
         enabled=True,

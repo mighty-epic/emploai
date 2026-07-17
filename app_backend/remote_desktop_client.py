@@ -53,6 +53,9 @@ HOST_NATIVE_COMMANDS = frozenset(
         "fleet_host_status",
         "fleet_start_runtime",
         "fleet_start_desktop",
+        "fleet_update_status",
+        "fleet_update_check",
+        "fleet_update_start",
         "fleet_permission_request",
         "fleet_upstream_request_decision",
         "fleet_worker_preview",
@@ -349,6 +352,24 @@ async def _handle_command(
         from app_backend.fleet_host_control import start_desktop_from_fleet_host
 
         return await asyncio.to_thread(start_desktop_from_fleet_host)
+
+    if command_name == "fleet_update_status":
+        from app_backend.fleet_host_control import fleet_host_status
+
+        status = await asyncio.to_thread(fleet_host_status)
+        return dict(status.get("update") or {})
+
+    if command_name in {"fleet_update_check", "fleet_update_start"}:
+        if not permissions.get("manage_updates", False):
+            raise PermissionError("Updating EmploAI from the paired manager is not allowed on this computer")
+        if command_name == "fleet_update_check":
+            from app_backend.fleet_host_control import check_update_from_fleet_host
+
+            return await asyncio.to_thread(check_update_from_fleet_host)
+        from app_backend.fleet_host_control import start_update_from_fleet_host
+
+        expected_commit = str(payload.get("expected_commit") or "").strip()
+        return await asyncio.to_thread(start_update_from_fleet_host, expected_commit=expected_commit)
 
     timeout = httpx.Timeout(120.0, connect=30.0, read=120.0, write=120.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -888,6 +909,7 @@ def _fleet_capability_view(snapshot: Dict[str, Any], permissions: Dict[str, bool
         "can_enroll_children": True,
         "can_create_workers": bool(permissions.get("create_workers", False)),
         "can_manage_runtime": bool(permissions.get("manage_runtime", False)),
+        "can_manage_updates": bool(permissions.get("manage_updates", False)),
         "targets": targets,
     }
 

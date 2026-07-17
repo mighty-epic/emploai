@@ -240,6 +240,7 @@ export type DesktopFleetConnectionPermissions = {
     delegate_workers: boolean;
     create_workers: boolean;
     manage_runtime: boolean;
+    manage_updates: boolean;
   };
   capabilities?: {
     schema_version?: number;
@@ -248,6 +249,7 @@ export type DesktopFleetConnectionPermissions = {
     can_enroll_children?: boolean;
     can_create_workers?: boolean;
     can_manage_runtime?: boolean;
+    can_manage_updates?: boolean;
     fleet_protocol_version?: number;
     app_version?: string;
     host_control?: {
@@ -255,8 +257,12 @@ export type DesktopFleetConnectionPermissions = {
       runtime_status?: boolean;
       start_runtime?: boolean;
       start_desktop?: boolean;
+      update_status?: boolean;
+      check_update?: boolean;
+      start_update?: boolean;
       runtime_state?: string;
       desktop_state?: string;
+      update_state?: string;
     };
     targets?: DesktopFleetRemoteTarget[];
   };
@@ -284,6 +290,60 @@ export type DesktopFleetHostStatus = {
   host: { state: string; process_id?: number | null; uptime_seconds?: number; detail?: string | null };
   runtime: { state: string; ready: boolean; process_id?: number | null; detail?: string | null };
   desktop: { state: string; running: boolean; process_ids?: number[]; start_supported?: boolean; detail?: string | null };
+  update?: DesktopFleetUpdateStatus;
+};
+
+export type DesktopFleetUpdateCheck = {
+  supported: boolean;
+  checked?: boolean;
+  state: string;
+  can_update?: boolean;
+  update_available?: boolean;
+  message?: string | null;
+  branch?: string | null;
+  upstream?: string | null;
+  current_commit?: string | null;
+  target_commit?: string | null;
+  current_short_commit?: string | null;
+  target_short_commit?: string | null;
+  target_version?: string | null;
+  ahead_count?: number;
+  behind_count?: number;
+  dirty?: boolean;
+  dirty_count?: number;
+  local_changes_will_be_preserved?: boolean;
+  checked_at?: string | null;
+};
+
+export type DesktopFleetUpdateJob = {
+  job_id: string;
+  state: string;
+  phase?: string | null;
+  message?: string | null;
+  previous_commit?: string | null;
+  target_commit?: string | null;
+  target_version?: string | null;
+  current_commit?: string | null;
+  current_version?: string | null;
+  dirty_count?: number;
+  backup?: { count?: number; label?: string; stash_commit?: string } | null;
+  app_restarted?: boolean;
+  host_restarted?: boolean;
+  host_restart_pending?: boolean;
+  rollback_succeeded?: boolean;
+  restored_local_changes?: boolean;
+  created_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+};
+
+export type DesktopFleetUpdateStatus = {
+  supported: boolean;
+  state: string;
+  active: boolean;
+  last_check?: DesktopFleetUpdateCheck | null;
+  job?: DesktopFleetUpdateJob | null;
+  log_path?: string | null;
 };
 
 export type DesktopFleetUpstreamRequest = {
@@ -756,6 +816,9 @@ type DesktopBridge = {
     computerHostStatus: (payload: { desktopId?: string; desktop_id?: string }) => Promise<DesktopFleetHostStatus>;
     startComputerRuntime: (payload: { desktopId?: string; desktop_id?: string }) => Promise<DesktopFleetHostStatus>;
     startComputerDesktop: (payload: { desktopId?: string; desktop_id?: string }) => Promise<DesktopFleetHostStatus>;
+    computerUpdateStatus: (payload: { desktopId?: string; desktop_id?: string }) => Promise<DesktopFleetUpdateStatus>;
+    checkComputerUpdate: (payload: { desktopId?: string; desktop_id?: string }) => Promise<DesktopFleetUpdateStatus>;
+    startComputerUpdate: (payload: { desktopId?: string; desktop_id?: string; expectedCommit?: string; expected_commit?: string }) => Promise<DesktopFleetUpdateStatus>;
     requestComputerPermissions: (payload: { desktopId?: string; desktop_id?: string; permissions: Record<string, boolean>; reason?: string | null }) => Promise<Record<string, unknown>>;
     decideUpstreamRequest: (payload: { desktopId?: string; desktop_id?: string; requestId?: string; request_id?: string; decision: 'approved' | 'denied' | 'replied'; response?: string | null }) => Promise<DesktopFleetUpstreamRequest>;
     setActiveIdentity: (payload: { identityId?: string; identity_id?: string; selectedChatId?: string | null; selected_chat_id?: string | null; source?: string }) => Promise<Record<string, unknown>>;
@@ -1053,6 +1116,24 @@ export async function startDesktopFleetComputerDesktop(desktopId: string) {
   const bridge = getDesktopBridge();
   if (!bridge?.fleet?.startComputerDesktop) return null;
   return bridge.fleet.startComputerDesktop({ desktopId });
+}
+
+export async function getDesktopFleetComputerUpdateStatus(desktopId: string) {
+  const bridge = getDesktopBridge();
+  if (!bridge?.fleet?.computerUpdateStatus) return null;
+  return bridge.fleet.computerUpdateStatus({ desktopId });
+}
+
+export async function checkDesktopFleetComputerUpdate(desktopId: string) {
+  const bridge = getDesktopBridge();
+  if (!bridge?.fleet?.checkComputerUpdate) return null;
+  return bridge.fleet.checkComputerUpdate({ desktopId });
+}
+
+export async function startDesktopFleetComputerUpdate(desktopId: string, expectedCommit: string) {
+  const bridge = getDesktopBridge();
+  if (!bridge?.fleet?.startComputerUpdate) return null;
+  return bridge.fleet.startComputerUpdate({ desktopId, expectedCommit });
 }
 
 export async function requestDesktopFleetComputerPermissions(

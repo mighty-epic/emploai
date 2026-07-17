@@ -42,18 +42,19 @@ def test_paired_computer_owns_permissions_and_manager_request_needs_decision(tmp
         "delegate_workers": True,
         "create_workers": False,
         "manage_runtime": True,
+        "manage_updates": True,
     }
 
     local = set_connection_permissions(
         tmp_path,
-        {"delegate_manager": True, "delegate_workers": False, "create_workers": False, "manage_runtime": True},
+        {"delegate_manager": True, "delegate_workers": False, "create_workers": False, "manage_runtime": True, "manage_updates": True},
     )
     assert local["permissions"]["delegate_workers"] is False
 
     pending = record_permission_request(
         tmp_path,
         request_id="request-1",
-        requested={"delegate_manager": True, "delegate_workers": True, "create_workers": True, "manage_runtime": True},
+        requested={"delegate_manager": True, "delegate_workers": True, "create_workers": True, "manage_runtime": True, "manage_updates": True},
         reason="Need a build worker",
     )
     assert pending["pendingRequest"]["status"] == "pending"

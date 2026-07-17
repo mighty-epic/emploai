@@ -415,6 +415,60 @@ def register_fleet_routes(app):
             command_name="fleet_start_desktop",
         )
 
+    def _require_connected_computer_update_permission(auth: Dict[str, Any], desktop_id: str) -> None:
+        permission_state = _paired_computer_permissions_for_action(auth, desktop_id)
+        if not bool((permission_state.get("permissions") or {}).get("manage_updates", False)):
+            raise HTTPException(
+                status_code=403,
+                detail="That computer has not allowed its manager to update EmploAI",
+            )
+
+    @app.get("/api/fleet/desktops/{desktop_id}/update")
+    async def fleet_connected_computer_update_status(
+        desktop_id: str,
+        authorization: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        auth = _require_fleet_manager_auth(authorization)
+        _paired_computer_permissions_for_action(auth, desktop_id)
+        return await _request_paired_computer_command(
+            auth,
+            desktop_id=desktop_id,
+            command_name="fleet_update_status",
+            payload={},
+            timeout_seconds=20.0,
+        )
+
+    @app.post("/api/fleet/desktops/{desktop_id}/update/check")
+    async def fleet_check_connected_computer_update(
+        desktop_id: str,
+        authorization: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        auth = _require_fleet_manager_auth(authorization)
+        _require_connected_computer_update_permission(auth, desktop_id)
+        return await _request_paired_computer_command(
+            auth,
+            desktop_id=desktop_id,
+            command_name="fleet_update_check",
+            payload={},
+            timeout_seconds=4 * 60.0,
+        )
+
+    @app.post("/api/fleet/desktops/{desktop_id}/update/start")
+    async def fleet_start_connected_computer_update(
+        desktop_id: str,
+        request: FleetComputerUpdateRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        auth = _require_fleet_manager_auth(authorization)
+        _require_connected_computer_update_permission(auth, desktop_id)
+        return await _request_paired_computer_command(
+            auth,
+            desktop_id=desktop_id,
+            command_name="fleet_update_start",
+            payload={"expected_commit": request.expected_commit.lower()},
+            timeout_seconds=4 * 60.0,
+        )
+
     @app.post("/api/fleet/desktops/{desktop_id}/permissions/request")
     async def fleet_request_computer_permissions(
         desktop_id: str,

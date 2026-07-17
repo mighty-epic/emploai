@@ -21,6 +21,7 @@ PERMISSION_KEYS = (
     "delegate_workers",
     "create_workers",
     "manage_runtime",
+    "manage_updates",
 )
 
 DEFAULT_CONNECTION_PERMISSIONS: dict[str, bool] = {
@@ -28,6 +29,7 @@ DEFAULT_CONNECTION_PERMISSIONS: dict[str, bool] = {
     "delegate_workers": True,
     "create_workers": False,
     "manage_runtime": True,
+    "manage_updates": True,
 }
 
 
