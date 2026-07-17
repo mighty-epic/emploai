@@ -233,10 +233,16 @@ const setProjectMenuRef = (projectPath: string) => (node: any) => {
   };
 
   const createFleetLocalWorker = async () => {
+    const displayName = fleetWorkerNameDraft.trim();
+    if (!displayName) {
+      setFleetError('Enter a name for the new local agent.');
+      setFleetStatus('Enter a name for the new local agent.');
+      return;
+    }
     setFleetLoading(true);
     setFleetStatus('Creating local worker');
     try {
-      const worker = await createDesktopFleetLocalWorker(fleetWorkerNameDraft.trim() || null);
+      const worker = await createDesktopFleetLocalWorker(displayName);
       if (!worker) {
         throw new Error('Desktop fleet bridge is not available.');
       }

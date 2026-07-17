@@ -20,11 +20,6 @@ class RemoteControlStoreFleetSnapshotMixin:
                 ).fetchone()
                 if desktop:
                     scoped_desktop_id = clean_desktop_id
-                    self._ensure_manager_instance_locked(
-                        user_id=int(user_id),
-                        desktop_id=clean_desktop_id,
-                        display_name=desktop["display_name"],
-                    )
             state = self._ensure_shared_state_locked(int(user_id))
             if not scoped_desktop_id:
                 current_desktop_id = str(state.get("current_desktop_id") or "").strip()
@@ -35,10 +30,6 @@ class RemoteControlStoreFleetSnapshotMixin:
                     ).fetchone()
                     if desktop:
                         scoped_desktop_id = current_desktop_id
-            pruned_count = self._prune_stale_manager_instances_locked(
-                user_id=int(user_id),
-                desktop_id=scoped_desktop_id,
-            )
             all_workers = [
                 self._worker_view(row)
                 for row in self._conn.execute(
@@ -84,8 +75,6 @@ class RemoteControlStoreFleetSnapshotMixin:
                 fleet_state["active_identity_id"] = active_identity_id
                 fleet_state["selected_chat_by_identity"] = selected_by_identity
                 state["fleet"] = fleet_state
-                self._bump_fleet_selection_locked(int(user_id), state)
-            elif pruned_count:
                 self._bump_fleet_selection_locked(int(user_id), state)
             state = self._bump_shared_state_locked(int(user_id), state)
             fleet_state = _normalize_fleet_state(state.get("fleet"))

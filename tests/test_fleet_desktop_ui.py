@@ -38,7 +38,7 @@ def test_local_on_demand_workers_render_as_ready_between_tasks():
     assert "workers.filter(isFleetWorkerAvailable)" in jarvis
 
 
-def test_live_preview_stops_retries_when_windows_display_is_unavailable():
+def test_live_preview_stops_automatic_retries_when_windows_display_is_unavailable():
     preview = (
         ROOT
         / "desktop_app"
@@ -46,6 +46,14 @@ def test_live_preview_stops_retries_when_windows_display_is_unavailable():
         / "src"
         / "desktop"
         / "DesktopFleetLivePreview.tsx"
+    ).read_text(encoding="utf-8")
+    scheduler = (
+        ROOT
+        / "desktop_app"
+        / "renderer_client"
+        / "src"
+        / "desktop"
+        / "desktopFleetPreviewScheduler.ts"
     ).read_text(encoding="utf-8")
     connection = (
         ROOT
@@ -57,8 +65,9 @@ def test_live_preview_stops_retries_when_windows_display_is_unavailable():
     ).read_text(encoding="utf-8")
     shell = (ROOT / "desktop_app" / "main.js").read_text(encoding="utf-8")
 
-    assert "result.capture_capability?.available === false" in preview
-    assert "setRate(0)" in preview
+    assert "result.capture_capability?.available === false" in scheduler
+    assert "automaticCaptureBlocked.add(desktopId)" in scheduler
+    assert "options.automatic && automaticCaptureBlocked.has(desktopId)" in scheduler
     assert "Screen unavailable" in preview
     assert "DISPLAY UNAVAILABLE" in preview
     assert "BACKGROUND HOST READY" in connection

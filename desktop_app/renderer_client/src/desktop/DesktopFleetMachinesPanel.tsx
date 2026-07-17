@@ -16,16 +16,18 @@ import { remoteRuntimesFromFleetSnapshot } from './desktopRemoteRuntimes';
 import { DesktopFleetInfoButton } from './DesktopFleetInfoButton';
 import { DesktopFleetComputerActivity } from './DesktopFleetComputerActivity';
 import { DesktopFleetLivePreview } from './DesktopFleetLivePreview';
+import { DesktopFleetHostControls } from './DesktopFleetHostControls';
 import { fleetReportSummary } from './desktopFleetWorkerState';
 import { FLEET_TYPE as TYPE } from './desktopFleetUi';
 import { DESKTOP_UI as UI } from './desktopUiTokens';
 
-type PermissionKey = 'delegate_manager' | 'delegate_workers' | 'create_workers';
+type PermissionKey = 'delegate_manager' | 'delegate_workers' | 'create_workers' | 'manage_runtime';
 
 const permissionRows: Array<[PermissionKey, string]> = [
   ['delegate_manager', 'Main identity'],
   ['delegate_workers', 'Existing agents'],
   ['create_workers', 'Create agents'],
+  ['manage_runtime', 'Start EmploAI'],
 ];
 
 function permissionForDesktop(snapshot: DesktopFleetSnapshot | null | undefined, desktopId: string) {
@@ -211,7 +213,7 @@ export function DesktopFleetMachinesPanel({
 
       {selectedMachine ? (() => {
         const permissionState = selectedPermissionState;
-        const permissions = permissionState?.permissions || { delegate_manager: false, delegate_workers: false, create_workers: false };
+        const permissions = permissionState?.permissions || { delegate_manager: false, delegate_workers: false, create_workers: false, manage_runtime: false };
         const protocolReady = permissionState?.source === 'paired_desktop';
         const online = selectedMachine.status === 'connected';
         const targets = selectedTargets;
@@ -244,6 +246,14 @@ export function DesktopFleetMachinesPanel({
               </View>
             ) : null}
 
+            <DesktopFleetHostControls
+              desktopId={selectedMachine.id}
+              desktopName={selectedMachine.name}
+              online={online}
+              allowed={Boolean(permissions.manage_runtime)}
+              supported={Boolean(permissionState?.capabilities?.host_control?.protocol_version)}
+            />
+
             <View style={styles.drawerColumns}>
               <DesktopFleetComputerActivity
                 snapshot={snapshot}
@@ -254,6 +264,7 @@ export function DesktopFleetMachinesPanel({
                 desktopId={selectedMachine.id}
                 desktopName={selectedMachine.name}
                 online={online}
+                automatic={protocolReady}
               />
             </View>
 

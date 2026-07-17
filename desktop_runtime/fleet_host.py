@@ -4,17 +4,22 @@ import json
 import os
 import subprocess
 import sys
+from getpass import getuser
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Sequence
+from xml.sax.saxutils import escape as xml_escape
 
 from shared.atomic_io import atomic_write_text
+from shared.subprocess_utils import hidden_subprocess_kwargs
 
 
 FLEET_HOST_AUTOSTART_VALUE = "EmploAIFleetHost"
 FLEET_HOST_REGISTRY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 FLEET_HOST_DIRNAME = "fleet-host"
 FLEET_HOST_LAUNCHER_FILENAME = "launch-fleet-host.vbs"
+FLEET_HOST_TASK_FILENAME = "fleet-host-task.xml"
+FLEET_HOST_TASK_NAME = "EmploAI Fleet Host"
 REMOTE_CONTROL_PID_FILENAME = "desktop_remote_control.pid.json"
 FLEET_HOST_LOCK_FILENAME = "host.lock"
 
@@ -25,6 +30,10 @@ def _fleet_host_dir(home: Path) -> Path:
 
 def fleet_host_launcher_path(home: Path) -> Path:
     return _fleet_host_dir(home) / FLEET_HOST_LAUNCHER_FILENAME
+
+
+def fleet_host_task_path(home: Path) -> Path:
+    return _fleet_host_dir(home) / FLEET_HOST_TASK_FILENAME
 
 
 @contextmanager
@@ -124,6 +133,80 @@ def _registry_command(home: Path) -> str:
     )
 
 
+def _scheduled_task_text(home: Path) -> str:
+    command = _backend_command(home)
+    executable = str(Path(command[0]).resolve())
+    arguments = subprocess.list2cmdline([str(item) for item in command[1:]])
+    working_directory = str(_backend_working_directory().resolve())
+    domain = str(os.environ.get("USERDOMAIN") or "").strip()
+    username = str(os.environ.get("USERNAME") or getuser() or "").strip()
+    user_id = f"{domain}\\{username}" if domain and username else username
+    return f'''<?xml version="1.0" encoding="UTF-8"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>Persistent authenticated EmploAI Fleet host over Yggdrasil.</Description></RegistrationInfo>
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{xml_escape(user_id)}</UserId></LogonTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>{xml_escape(user_id)}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>true</Hidden>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+    <RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>{xml_escape(executable)}</Command><Arguments>{xml_escape(arguments)}</Arguments><WorkingDirectory>{xml_escape(working_directory)}</WorkingDirectory></Exec></Actions>
+</Task>
+'''
+
+
+def _run_schtasks(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["schtasks.exe", *args],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        **hidden_subprocess_kwargs(),
+    )
+
+
+def _scheduled_task_registered() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        return _run_schtasks("/Query", "/TN", FLEET_HOST_TASK_NAME).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _register_scheduled_task(home: Path) -> str | None:
+    task_path = fleet_host_task_path(home)
+    atomic_write_text(task_path, _scheduled_task_text(home))
+    try:
+        result = _run_schtasks("/Create", "/TN", FLEET_HOST_TASK_NAME, "/XML", str(task_path), "/F")
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"{type(exc).__name__}: {exc}"
+    if result.returncode == 0:
+        return None
+    return str(result.stderr or result.stdout or "Windows Task Scheduler rejected the Fleet host task").strip()
+
+
+def _remove_scheduled_task() -> None:
+    if os.name != "nt":
+        return
+    try:
+        _run_schtasks("/Delete", "/TN", FLEET_HOST_TASK_NAME, "/F")
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def _read_autostart_value() -> str:
     if os.name != "nt":
         return ""
@@ -176,12 +259,14 @@ def fleet_host_autostart_status(home: Path) -> dict[str, Any]:
     launcher = fleet_host_launcher_path(home)
     desired = _registry_command(home) if supported else ""
     registered_value = _read_autostart_value() if supported else ""
-    registered = bool(
+    registry_registered = bool(
         supported
         and launcher.exists()
         and registered_value
         and os.path.normcase(registered_value) == os.path.normcase(desired)
     )
+    task_registered = _scheduled_task_registered() if supported else False
+    registered = registry_registered or task_registered
     pid = _host_pid(home)
     if pid:
         state = "running"
@@ -198,6 +283,8 @@ def fleet_host_autostart_status(home: Path) -> dict[str, Any]:
     return {
         "supported": supported,
         "registered": registered,
+        "taskRegistered": task_registered,
+        "registryFallbackRegistered": registry_registered,
         "state": state,
         "detail": detail,
         "processId": pid or None,
@@ -233,11 +320,20 @@ def ensure_fleet_host_autostart(home: Path) -> dict[str, Any]:
             winreg.REG_SZ,
             _registry_command(home),
         )
-    return fleet_host_autostart_status(home)
+    task_error = _register_scheduled_task(home)
+    status = fleet_host_autostart_status(home)
+    if task_error:
+        status["taskRegistrationError"] = task_error
+        status["detail"] = (
+            "The Fleet host is registered through the Windows sign-in fallback, but Task Scheduler "
+            f"could not add crash recovery: {task_error}"
+        )
+    return status
 
 
 def remove_fleet_host_autostart(home: Path) -> dict[str, Any]:
     home = Path(home).resolve()
+    _remove_scheduled_task()
     if os.name == "nt":
         try:
             import winreg
@@ -253,6 +349,10 @@ def remove_fleet_host_autostart(home: Path) -> dict[str, Any]:
             pass
     try:
         fleet_host_launcher_path(home).unlink(missing_ok=True)
+    except OSError:
+        pass
+    try:
+        fleet_host_task_path(home).unlink(missing_ok=True)
     except OSError:
         pass
     return fleet_host_autostart_status(home)

@@ -90,7 +90,7 @@ export async function setFleetIdentityActiveChat(
 export async function createFleetLocalWorker(
   apiBaseUrl: string,
   token: string,
-  displayName?: string | null,
+  displayName: string,
   metadata?: Record<string, unknown>,
 ) {
   return requestJson<FleetWorker>({
@@ -99,7 +99,10 @@ export async function createFleetLocalWorker(
     init: {
       method: 'POST',
       headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ display_name: displayName || null, metadata: metadata || {} }),
+      body: JSON.stringify({
+        display_name: displayName.trim(),
+        metadata: { ...(metadata || {}), created_by: 'desktop_user_request' },
+      }),
     },
   });
 }

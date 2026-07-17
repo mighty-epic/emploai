@@ -1425,18 +1425,19 @@ useEffect(() => {
         </View>
         <TextInput
           style={styles.fleetInput}
-          placeholder="Optional worker name"
+          placeholder="Name the new local agent"
           placeholderTextColor="#667a9c"
+          accessibilityLabel="New local agent name"
           value={fleetWorkerNameDraft}
           onChangeText={setFleetWorkerNameDraft}
         />
         <View style={styles.fleetActionRow}>
           <Pressable
-            style={[styles.fleetPrimaryAction, fleetLoading ? styles.fleetActionDisabled : null]}
-            disabled={fleetLoading}
+            style={[styles.fleetPrimaryAction, fleetLoading || !fleetWorkerNameDraft.trim() ? styles.fleetActionDisabled : null]}
+            disabled={fleetLoading || !fleetWorkerNameDraft.trim()}
             onPress={() => void createFleetLocalWorker()}
           >
-            <Text style={styles.fleetPrimaryActionText}>Local Worker</Text>
+            <Text style={styles.fleetPrimaryActionText}>Create local agent</Text>
           </Pressable>
         </View>
       </View>

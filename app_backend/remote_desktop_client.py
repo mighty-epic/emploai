@@ -14,7 +14,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 import httpx
 from websockets.asyncio.client import ClientConnection, connect as websocket_connect
 
-from app_backend.local_runtime_server import start_runtime_context
+from app_backend.local_runtime_server import bootstrap_context, start_runtime_context
 from app_backend.fleet_policy import FLEET_PREVIEW_MODE
 from app_backend.fleet_worker_report import extract_worker_report
 from shared.atomic_io import atomic_write_json
@@ -42,12 +42,22 @@ REMOTE_CONTROL_DESKTOP_KEY_ENV = "EMPLOAI_REMOTE_DESKTOP_KEY"
 REMOTE_CONTROL_STATUS_PATH_ENV = "EMPLOAI_REMOTE_CONTROL_STATUS_PATH"
 FLEET_ACTIVE_TASK_SESSIONS: Dict[str, str] = {}
 FLEET_STOP_REQUESTED_TASKS: set[str] = set()
-CONNECTION_STATE_INTERVAL_SECONDS = 1.2
-CAPABILITY_STATE_INTERVAL_SECONDS = 5.0
-HEARTBEAT_INTERVAL_SECONDS = 12.0
+CONNECTION_STATE_INTERVAL_SECONDS = 2.0
+CAPABILITY_STATE_INTERVAL_SECONDS = 15.0
+HEARTBEAT_INTERVAL_SECONDS = 30.0
 POST_FINAL_RELAY_GRACE_SECONDS = 2.0
 REMOTE_CLIENT_ID = "remote-desktop-bridge"
 REMOTE_WS_MAX_SIZE_BYTES = 96 * 1024 * 1024
+HOST_NATIVE_COMMANDS = frozenset(
+    {
+        "fleet_host_status",
+        "fleet_start_runtime",
+        "fleet_start_desktop",
+        "fleet_permission_request",
+        "fleet_upstream_request_decision",
+        "fleet_worker_preview",
+    }
+)
 
 @dataclass
 class RemoteDesktopConfig:
@@ -80,6 +90,13 @@ class LocalRuntimeCredentials:
             refreshed = LocalRuntimeCredentials.from_bootstrap(bootstrap)
             self.api_base_url = refreshed.api_base_url
             self.access_token = refreshed.access_token
+
+
+def _local_runtime_credentials_if_running() -> Optional[LocalRuntimeCredentials]:
+    try:
+        return LocalRuntimeCredentials.from_bootstrap(bootstrap_context(launch_if_needed=False))
+    except Exception:
+        return None
 
 
 def _is_local_runtime_auth_error(exc: BaseException) -> bool:
@@ -313,11 +330,28 @@ async def _handle_command(
     remote_ws: ClientConnection,
     send_lock: asyncio.Lock,
 ) -> Optional[Dict[str, Any]]:
+    home = runtime_home()
+    policy = load_connection_policy(home) if home else connection_policy_view({})
+    permissions = normalize_connection_permissions(policy.get("permissions"))
+
+    if command_name == "fleet_host_status":
+        from app_backend.fleet_host_control import fleet_host_status
+
+        return await asyncio.to_thread(fleet_host_status)
+
+    if command_name in {"fleet_start_runtime", "fleet_start_desktop"}:
+        if not permissions.get("manage_runtime", False):
+            raise PermissionError("Starting EmploAI from the paired manager is not allowed on this computer")
+        if command_name == "fleet_start_runtime":
+            from app_backend.fleet_host_control import start_runtime_from_fleet_host
+
+            return await asyncio.to_thread(start_runtime_from_fleet_host)
+        from app_backend.fleet_host_control import start_desktop_from_fleet_host
+
+        return await asyncio.to_thread(start_desktop_from_fleet_host)
+
     timeout = httpx.Timeout(120.0, connect=30.0, read=120.0, write=120.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        home = runtime_home()
-        policy = load_connection_policy(home) if home else connection_policy_view({})
-        permissions = normalize_connection_permissions(policy.get("permissions"))
 
         if command_name == "fleet_permission_request":
             if not home:
@@ -804,6 +838,8 @@ async def _handle_command(
 
 
 def _fleet_capability_view(snapshot: Dict[str, Any], permissions: Dict[str, bool]) -> Dict[str, Any]:
+    from app_backend.fleet_host_control import fleet_host_capabilities
+
     identities = [item for item in list(snapshot.get("identities") or []) if isinstance(item, dict)]
     targets: list[Dict[str, Any]] = []
     if permissions.get("delegate_manager", False):
@@ -845,11 +881,13 @@ def _fleet_capability_view(snapshot: Dict[str, Any], permissions: Dict[str, bool
         and str(desktop.get("desktop_id") or "").strip() != manager_desktop_id
     )
     return {
-        "schema_version": 1,
+        **fleet_host_capabilities(),
+        "schema_version": 2,
         "node_role": "intermediary" if child_count else "leaf",
         "child_count": child_count,
         "can_enroll_children": True,
         "can_create_workers": bool(permissions.get("create_workers", False)),
+        "can_manage_runtime": bool(permissions.get("manage_runtime", False)),
         "targets": targets,
     }
 
@@ -865,7 +903,9 @@ async def _connection_state_loop(
     last_signature = ""
     last_heartbeat_at = 0.0
     last_capability_refresh_at = 0.0
-    capabilities: Dict[str, Any] = {}
+    from app_backend.fleet_host_control import fleet_host_capabilities
+
+    capabilities: Dict[str, Any] = fleet_host_capabilities()
     timeout = httpx.Timeout(20.0, connect=10.0, read=20.0, write=20.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         while True:
@@ -873,20 +913,23 @@ async def _connection_state_loop(
             policy = load_connection_policy(home) if home else connection_policy_view({})
             permissions = normalize_connection_permissions(policy.get("permissions"))
             now = asyncio.get_running_loop().time()
-            if credentials and now - last_capability_refresh_at >= CAPABILITY_STATE_INTERVAL_SECONDS:
+            if now - last_capability_refresh_at >= CAPABILITY_STATE_INTERVAL_SECONDS:
                 last_capability_refresh_at = now
+                host_capabilities = await asyncio.to_thread(fleet_host_capabilities)
                 try:
-                    snapshot = await _with_local_runtime_credentials(
-                        credentials,
-                        lambda api_base_url, access_token: _request_json(
+                    current_credentials = await asyncio.to_thread(_local_runtime_credentials_if_running)
+                    if current_credentials:
+                        snapshot = await _request_json(
                             client,
                             method="GET",
-                            url=f"{api_base_url}/api/fleet/snapshot",
-                            token=access_token,
-                        ),
-                    )
-                    capabilities = _fleet_capability_view(dict(snapshot or {}), permissions)
+                            url=f"{current_credentials.api_base_url}/api/fleet/snapshot",
+                            token=current_credentials.access_token,
+                        )
+                        capabilities = _fleet_capability_view(dict(snapshot or {}), permissions)
+                    else:
+                        capabilities = host_capabilities
                 except Exception:
+                    capabilities = {**capabilities, **host_capabilities}
                     logger.debug("Fleet capability refresh is temporarily unavailable", exc_info=True)
 
             envelope = {
@@ -926,7 +969,7 @@ async def _connection_state_loop(
                     send_lock,
                     {
                         "type": "heartbeat",
-                        "payload": {"detail": "desktop client alive"},
+                        "payload": {"detail": "persistent Yggdrasil host alive"},
                     },
                 )
             await asyncio.sleep(CONNECTION_STATE_INTERVAL_SECONDS)
@@ -985,7 +1028,7 @@ async def _run_remote_desktop_client_until_cancelled() -> None:
     remote_token = config.session_token
     desktop_id = config.desktop_id
 
-    credentials = LocalRuntimeCredentials.from_bootstrap(start_runtime_context())
+    credentials = _local_runtime_credentials_if_running()
     _write_remote_status(
         state="starting",
         detail="Computer paired. Connecting directly to its manager...",
@@ -1021,23 +1064,38 @@ async def _run_remote_desktop_client_until_cancelled() -> None:
                 command_tasks: set[asyncio.Task[None]] = set()
 
                 async def run_command(message: Dict[str, Any]) -> None:
+                    nonlocal credentials
                     command_id = str(message.get("command_id") or "").strip() or None
                     payload = dict(message.get("payload") or {})
                     command_name = str(payload.pop("name", "") or "")
                     if not command_name:
                         return
                     try:
-                        result = await _with_local_runtime_credentials(
-                            credentials,
-                            lambda api_base_url, access_token: _handle_command(
+                        if command_name in HOST_NATIVE_COMMANDS:
+                            result = await _handle_command(
                                 command_name=command_name,
                                 payload=payload,
-                                local_api_base_url=api_base_url,
-                                local_token=access_token,
+                                local_api_base_url=credentials.api_base_url if credentials else "",
+                                local_token=credentials.access_token if credentials else "",
                                 remote_ws=ws,
                                 send_lock=send_lock,
-                            ),
-                        )
+                            )
+                        else:
+                            if credentials is None:
+                                credentials = LocalRuntimeCredentials.from_bootstrap(
+                                    await asyncio.to_thread(start_runtime_context)
+                                )
+                            result = await _with_local_runtime_credentials(
+                                credentials,
+                                lambda api_base_url, access_token: _handle_command(
+                                    command_name=command_name,
+                                    payload=payload,
+                                    local_api_base_url=api_base_url,
+                                    local_token=access_token,
+                                    remote_ws=ws,
+                                    send_lock=send_lock,
+                                ),
+                            )
                         await _send_command_result(
                             ws,
                             send_lock,

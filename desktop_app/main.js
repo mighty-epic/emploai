@@ -57,6 +57,31 @@ let gitUpdateInstallPromise = null;
 let gitUpdateService = null;
 let fleetHostStartupTimer = null;
 
+function desktopShellPidPath() {
+  return path.join(resolveRuntimeHome(), 'desktop_shell.pid.json');
+}
+
+function writeDesktopShellPidRecord() {
+  const target = desktopShellPidPath();
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }, null, 2)}\n`, 'utf8');
+}
+
+function clearDesktopShellPidRecord() {
+  const target = desktopShellPidPath();
+  try {
+    const payload = JSON.parse(fs.readFileSync(target, 'utf8'));
+    if (Number(payload?.pid || 0) !== process.pid) return;
+  } catch (_error) {
+    return;
+  }
+  try {
+    fs.unlinkSync(target);
+  } catch (_error) {
+    // The record is advisory; process exit must not be blocked by cleanup.
+  }
+}
+
 function desktopDebugShortcutsEnabled() {
   return (
     String(process.env.EMPLOAI_DESKTOP_DEBUG_SHORTCUTS || '').trim() === '1' ||
@@ -2242,6 +2267,7 @@ function installRendererSecurityHandlers(window) {
 }
 
 app.whenReady().then(async () => {
+  writeDesktopShellPidRecord();
   Menu.setApplicationMenu(null);
 
   protocol.handle('emploai', (request) => {
@@ -2267,6 +2293,9 @@ app.whenReady().then(async () => {
   ipcMain.handle('emploai:fleet:snapshot', async () => remoteControlServices().fleetSnapshot());
   ipcMain.handle('emploai:fleet:delegate-to-computer', async (_event, payload) => remoteControlServices().fleetDelegateToComputer(payload || {}));
   ipcMain.handle('emploai:fleet:create-worker-on-computer', async (_event, payload) => remoteControlServices().fleetCreateWorkerOnComputer(payload || {}));
+  ipcMain.handle('emploai:fleet:computer-host-status', async (_event, payload) => remoteControlServices().fleetComputerHostStatus(payload || {}));
+  ipcMain.handle('emploai:fleet:start-computer-runtime', async (_event, payload) => remoteControlServices().fleetStartComputerRuntime(payload || {}));
+  ipcMain.handle('emploai:fleet:start-computer-desktop', async (_event, payload) => remoteControlServices().fleetStartComputerDesktop(payload || {}));
   ipcMain.handle('emploai:fleet:request-computer-permissions', async (_event, payload) => remoteControlServices().fleetRequestComputerPermissions(payload || {}));
   ipcMain.handle('emploai:fleet:decide-upstream-request', async (_event, payload) => remoteControlServices().fleetDecideUpstreamRequest(payload || {}));
   ipcMain.handle('emploai:fleet:set-active-identity', async (_event, payload) => remoteControlServices().fleetSetActiveIdentity(payload || {}));
@@ -2356,4 +2385,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('will-quit', () => {
+  clearDesktopShellPidRecord();
 });

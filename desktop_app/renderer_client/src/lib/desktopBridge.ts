@@ -239,6 +239,7 @@ export type DesktopFleetConnectionPermissions = {
     delegate_manager: boolean;
     delegate_workers: boolean;
     create_workers: boolean;
+    manage_runtime: boolean;
   };
   capabilities?: {
     schema_version?: number;
@@ -246,6 +247,17 @@ export type DesktopFleetConnectionPermissions = {
     child_count?: number;
     can_enroll_children?: boolean;
     can_create_workers?: boolean;
+    can_manage_runtime?: boolean;
+    fleet_protocol_version?: number;
+    app_version?: string;
+    host_control?: {
+      protocol_version?: number;
+      runtime_status?: boolean;
+      start_runtime?: boolean;
+      start_desktop?: boolean;
+      runtime_state?: string;
+      desktop_state?: string;
+    };
     targets?: DesktopFleetRemoteTarget[];
   };
   pending_request?: Record<string, unknown> | null;
@@ -264,6 +276,14 @@ export type DesktopFleetRemoteTarget = {
   display_name: string;
   role: 'manager' | 'worker' | string;
   status?: string | null;
+};
+
+export type DesktopFleetHostStatus = {
+  protocol_version: number;
+  app_version?: string | null;
+  host: { state: string; process_id?: number | null; uptime_seconds?: number; detail?: string | null };
+  runtime: { state: string; ready: boolean; process_id?: number | null; detail?: string | null };
+  desktop: { state: string; running: boolean; process_ids?: number[]; start_supported?: boolean; detail?: string | null };
 };
 
 export type DesktopFleetUpstreamRequest = {
@@ -733,6 +753,9 @@ type DesktopBridge = {
     snapshot: () => Promise<DesktopFleetSnapshot>;
     delegateToComputer: (payload: { desktopId?: string; desktop_id?: string; prompt: string; targetKind?: string; target_kind?: string; targetSelector?: string | null; target_selector?: string | null; metadata?: Record<string, unknown> }) => Promise<DesktopFleetDelegation>;
     createWorkerOnComputer: (payload: { desktopId?: string; desktop_id?: string; displayName?: string; display_name?: string }) => Promise<Record<string, unknown>>;
+    computerHostStatus: (payload: { desktopId?: string; desktop_id?: string }) => Promise<DesktopFleetHostStatus>;
+    startComputerRuntime: (payload: { desktopId?: string; desktop_id?: string }) => Promise<DesktopFleetHostStatus>;
+    startComputerDesktop: (payload: { desktopId?: string; desktop_id?: string }) => Promise<DesktopFleetHostStatus>;
     requestComputerPermissions: (payload: { desktopId?: string; desktop_id?: string; permissions: Record<string, boolean>; reason?: string | null }) => Promise<Record<string, unknown>>;
     decideUpstreamRequest: (payload: { desktopId?: string; desktop_id?: string; requestId?: string; request_id?: string; decision: 'approved' | 'denied' | 'replied'; response?: string | null }) => Promise<DesktopFleetUpstreamRequest>;
     setActiveIdentity: (payload: { identityId?: string; identity_id?: string; selectedChatId?: string | null; selected_chat_id?: string | null; source?: string }) => Promise<Record<string, unknown>>;
@@ -1014,6 +1037,24 @@ export async function createDesktopFleetWorkerOnComputer(desktopId: string, disp
   return bridge.fleet.createWorkerOnComputer({ desktopId, displayName });
 }
 
+export async function getDesktopFleetComputerHostStatus(desktopId: string) {
+  const bridge = getDesktopBridge();
+  if (!bridge?.fleet?.computerHostStatus) return null;
+  return bridge.fleet.computerHostStatus({ desktopId });
+}
+
+export async function startDesktopFleetComputerRuntime(desktopId: string) {
+  const bridge = getDesktopBridge();
+  if (!bridge?.fleet?.startComputerRuntime) return null;
+  return bridge.fleet.startComputerRuntime({ desktopId });
+}
+
+export async function startDesktopFleetComputerDesktop(desktopId: string) {
+  const bridge = getDesktopBridge();
+  if (!bridge?.fleet?.startComputerDesktop) return null;
+  return bridge.fleet.startComputerDesktop({ desktopId });
+}
+
 export async function requestDesktopFleetComputerPermissions(
   desktopId: string,
   permissions: Record<string, boolean>,
@@ -1086,12 +1127,14 @@ export async function setDesktopFleetIdentityActiveChat(identityId: string, chat
   return bridge.fleet.setIdentityActiveChat({ identityId, chatId: chatId || null, source });
 }
 
-export async function createDesktopFleetLocalWorker(displayName?: string | null) {
+export async function createDesktopFleetLocalWorker(displayName: string) {
   const bridge = getDesktopBridge();
   if (!bridge?.fleet?.createLocalWorker) {
     return null;
   }
-  return bridge.fleet.createLocalWorker({ displayName: displayName || null });
+  const name = String(displayName || '').trim();
+  if (!name) throw new Error('Enter a worker name before creating it.');
+  return bridge.fleet.createLocalWorker({ displayName: name });
 }
 
 export async function createDesktopFleetEnrollment(displayName?: string | null, expiresInSeconds?: number | null) {

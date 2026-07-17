@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 # Split from app_server.py; dependencies are injected by the app_server facade.
+from app_backend.fleet_identity_creation import validate_local_worker_creation
 from app_backend.fleet_queue_policy import resolve_manual_queue_review_report_id
 
 def register_fleet_routes(app):
@@ -356,6 +357,63 @@ def register_fleet_routes(app):
             "result": result,
             "note": "The worker exists only on the paired computer and was not copied into this Fleet database.",
         }
+
+    @app.get("/api/fleet/desktops/{desktop_id}/host")
+    async def fleet_connected_computer_host_status(
+        desktop_id: str,
+        authorization: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        auth = _require_fleet_manager_auth(authorization)
+        _paired_computer_permissions_for_action(auth, desktop_id)
+        return await _request_paired_computer_command(
+            auth,
+            desktop_id=desktop_id,
+            command_name="fleet_host_status",
+            payload={},
+            timeout_seconds=20.0,
+        )
+
+    async def _start_connected_computer_surface(
+        auth: Dict[str, Any],
+        *,
+        desktop_id: str,
+        command_name: str,
+    ) -> Dict[str, Any]:
+        permission_state = _paired_computer_permissions_for_action(auth, desktop_id)
+        if not bool((permission_state.get("permissions") or {}).get("manage_runtime", False)):
+            raise HTTPException(
+                status_code=403,
+                detail="That computer has not allowed its manager to start EmploAI",
+            )
+        return await _request_paired_computer_command(
+            auth,
+            desktop_id=desktop_id,
+            command_name=command_name,
+            payload={},
+            timeout_seconds=45.0,
+        )
+
+    @app.post("/api/fleet/desktops/{desktop_id}/host/runtime/start")
+    async def fleet_start_connected_computer_runtime(
+        desktop_id: str,
+        authorization: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        return await _start_connected_computer_surface(
+            _require_fleet_manager_auth(authorization),
+            desktop_id=desktop_id,
+            command_name="fleet_start_runtime",
+        )
+
+    @app.post("/api/fleet/desktops/{desktop_id}/host/desktop/start")
+    async def fleet_start_connected_computer_desktop(
+        desktop_id: str,
+        authorization: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        return await _start_connected_computer_surface(
+            _require_fleet_manager_auth(authorization),
+            desktop_id=desktop_id,
+            command_name="fleet_start_desktop",
+        )
 
     @app.post("/api/fleet/desktops/{desktop_id}/permissions/request")
     async def fleet_request_computer_permissions(
@@ -727,15 +785,33 @@ def register_fleet_routes(app):
 
         try:
 
+            display_name, metadata = validate_local_worker_creation(
+
+                display_name=request.display_name,
+
+                metadata=request.metadata,
+
+            )
+
+        except ValueError as exc:
+
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        except PermissionError as exc:
+
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+        try:
+
             worker = _get_remote_control_store().create_local_worker(
 
                 user_id=int(auth["user_id"]),
 
                 desktop_id=str(auth["desktop_id"]),
 
-                display_name=request.display_name,
+                display_name=display_name,
 
-                metadata=request.metadata,
+                metadata=metadata,
 
             )
 

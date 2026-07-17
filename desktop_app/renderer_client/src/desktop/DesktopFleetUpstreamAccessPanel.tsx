@@ -11,12 +11,13 @@ import { DesktopFleetInfoButton } from './DesktopFleetInfoButton';
 import { FLEET_TYPE as TYPE } from './desktopFleetUi';
 import { DESKTOP_UI as UI } from './desktopUiTokens';
 
-type PermissionKey = 'delegate_manager' | 'delegate_workers' | 'create_workers';
+type PermissionKey = 'delegate_manager' | 'delegate_workers' | 'create_workers' | 'manage_runtime';
 
 const permissionRows: Array<[PermissionKey, string, string]> = [
   ['delegate_manager', 'Main identity', 'Allow the manager above to delegate to the main identity on this computer.'],
   ['delegate_workers', 'Existing agents', 'Expose and allow delegation to existing local agents.'],
   ['create_workers', 'Create agents', 'Allow the manager above to create a new local agent only when explicitly requested.'],
+  ['manage_runtime', 'Start EmploAI', 'Allow the manager above to start this backend or desktop window while the persistent host remains connected.'],
 ];
 
 export function DesktopFleetUpstreamAccessPanel({
@@ -33,6 +34,7 @@ export function DesktopFleetUpstreamAccessPanel({
     delegate_manager: true,
     delegate_workers: true,
     create_workers: false,
+    manage_runtime: true,
   };
   const pendingRequest = status?.connection?.pendingRequest as Record<string, any> | null | undefined;
 

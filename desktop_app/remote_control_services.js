@@ -286,6 +286,32 @@ function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, get
     });
   }
 
+  async function fleetComputerHostStatus(payload = {}) {
+    const desktopId = String(payload.desktop_id || payload.desktopId || '').trim();
+    if (!desktopId) throw new Error('desktop_id is required');
+    return fleetApi(`/api/fleet/desktops/${encodeURIComponent(desktopId)}/host`, {
+      refreshOnConnectivity: true,
+    });
+  }
+
+  async function fleetStartComputerRuntime(payload = {}) {
+    const desktopId = String(payload.desktop_id || payload.desktopId || '').trim();
+    if (!desktopId) throw new Error('desktop_id is required');
+    return fleetApi(`/api/fleet/desktops/${encodeURIComponent(desktopId)}/host/runtime/start`, {
+      method: 'POST',
+      body: {},
+    });
+  }
+
+  async function fleetStartComputerDesktop(payload = {}) {
+    const desktopId = String(payload.desktop_id || payload.desktopId || '').trim();
+    if (!desktopId) throw new Error('desktop_id is required');
+    return fleetApi(`/api/fleet/desktops/${encodeURIComponent(desktopId)}/host/desktop/start`, {
+      method: 'POST',
+      body: {},
+    });
+  }
+
   async function fleetRequestComputerPermissions(payload = {}) {
     const desktopId = String(payload.desktop_id || payload.desktopId || '').trim();
     if (!desktopId) throw new Error('desktop_id is required');
@@ -340,11 +366,13 @@ function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, get
   }
 
   async function fleetCreateLocalWorker(payload = {}) {
+    const displayName = String(payload.display_name || payload.displayName || '').trim();
+    if (!displayName) throw new Error('Enter a worker name before creating it.');
     return fleetApi('/api/fleet/workers/local', {
       method: 'POST',
       body: {
-        display_name: payload.display_name || payload.displayName || null,
-        metadata: payload.metadata || {},
+        display_name: displayName,
+        metadata: { ...(payload.metadata || {}), created_by: 'desktop_user_request' },
       },
     });
   }
@@ -694,6 +722,9 @@ function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, get
     fleetSnapshot,
     fleetDelegateToComputer,
     fleetCreateWorkerOnComputer,
+    fleetComputerHostStatus,
+    fleetStartComputerRuntime,
+    fleetStartComputerDesktop,
     fleetRequestComputerPermissions,
     fleetDecideUpstreamRequest,
     fleetSetActiveIdentity,

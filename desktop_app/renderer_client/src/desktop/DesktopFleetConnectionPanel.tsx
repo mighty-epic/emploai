@@ -84,6 +84,7 @@ export function DesktopFleetConnectionPanel({ onFleetChanged }: { onFleetChanged
     delegate_manager: true,
     delegate_workers: true,
     create_workers: false,
+    manage_runtime: true,
   };
   const pendingPermissionRequest = status?.connection?.pendingRequest as Record<string, any> | null | undefined;
 
@@ -364,6 +365,7 @@ export function DesktopFleetConnectionPanel({ onFleetChanged }: { onFleetChanged
               ['delegate_manager', 'Delegate to this computer’s manager agent', 'Task messages in; reports and requests out.'],
               ['delegate_workers', 'Delegate to existing local workers', 'The manager supplies a local worker name; identities are not copied.'],
               ['create_workers', 'Create new workers on this computer', 'Creates the worker here only when explicitly requested.'],
+              ['manage_runtime', 'Start EmploAI from the manager above', 'Keeps the small Yggdrasil host available and allows it to start this backend or desktop app when closed.'],
             ] as const).map(([key, label, detail]) => {
               const enabled = Boolean(connectionPermissions[key]);
               return (

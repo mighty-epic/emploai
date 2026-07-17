@@ -332,10 +332,15 @@ export default function FleetScreen() {
 
   const addLocalWorker = async () => {
     if (!requireFleetConnection()) return;
+    const displayName = workerNameDraft.trim();
+    if (!displayName) {
+      setStatus('enter a name for the new local agent');
+      return;
+    }
     setLoading(true);
     setStatus('creating local worker');
     try {
-      const worker = await createFleetLocalWorker(apiBaseUrl, token, workerNameDraft.trim() || null, { created_from: 'mobile_fleet' });
+      const worker = await createFleetLocalWorker(apiBaseUrl, token, displayName, { created_by: 'mobile_user_request' });
       setWorkerNameDraft('');
       setSelectedWorkerId(worker.worker_id);
       await refresh(true);
@@ -751,13 +756,13 @@ export default function FleetScreen() {
             style={styles.input}
             value={workerNameDraft}
             onChangeText={setWorkerNameDraft}
-            placeholder="Optional worker name"
+            placeholder="Name the new local agent"
             placeholderTextColor="#7285a6"
-            accessibilityLabel="Optional worker name"
+            accessibilityLabel="New local agent name"
           />
           <View style={styles.row}>
-            <Pressable accessibilityRole="button" accessibilityLabel="Create local worker" disabled={actionDisabled} style={[styles.primaryButton, actionDisabled ? styles.disabled : null]} onPress={() => void addLocalWorker()}>
-              <Text style={styles.primaryText}>Local Worker</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="Create local agent" disabled={actionDisabled || !workerNameDraft.trim()} style={[styles.primaryButton, actionDisabled || !workerNameDraft.trim() ? styles.disabled : null]} onPress={() => void addLocalWorker()}>
+              <Text style={styles.primaryText}>Create local agent</Text>
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="Create remote enrollment code" disabled={actionDisabled} style={[styles.secondaryButton, actionDisabled ? styles.disabled : null]} onPress={() => void createEnrollmentCode()}>
               <Text style={styles.secondaryText}>Enrollment Code</Text>

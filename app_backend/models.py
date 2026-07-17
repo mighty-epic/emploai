@@ -1234,7 +1234,7 @@ class FleetGroupMembershipRequest(BaseModel):
 
 
 class FleetCreateLocalWorkerRequest(BaseModel):
-    display_name: Optional[str] = Field(default=None, max_length=160)
+    display_name: str = Field(min_length=1, max_length=160)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 

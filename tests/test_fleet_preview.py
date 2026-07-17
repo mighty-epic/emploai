@@ -102,7 +102,12 @@ def test_request_fleet_worker_preview_dispatches_connected_remote_worker(tmp_pat
 
 def test_request_fleet_worker_preview_captures_local_worker_without_remote_dispatch(tmp_path):
     store, user_id, manager_desktop_id = _store_with_manager(tmp_path)
-    worker = store.create_local_worker(user_id=user_id, desktop_id=manager_desktop_id)
+    worker = store.create_local_worker(
+        user_id=user_id,
+        desktop_id=manager_desktop_id,
+        display_name="Preview agent",
+        metadata={"created_by": "desktop_user_request"},
+    )
     manager = _FakePreviewManager()
 
     result = asyncio.run(

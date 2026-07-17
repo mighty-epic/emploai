@@ -136,6 +136,7 @@ def test_yggdrasil_status_exposes_connection_without_session_token(tmp_path: Pat
             "delegate_manager": True,
             "delegate_workers": True,
             "create_workers": False,
+            "manage_runtime": True,
         },
         "pendingRequest": None,
         "lastDecision": None,

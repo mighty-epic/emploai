@@ -68,6 +68,7 @@ def _local_worker_task(tmp_path):
         user_id=user_id,
         desktop_id=desktop["desktop_id"],
         display_name="Local Worker",
+        metadata={"created_by": "desktop_user_request"},
     )
     task = store.assign_worker_task(
         user_id=user_id,

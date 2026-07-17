@@ -1,11 +1,15 @@
 import type { DesktopConversationScope } from './DesktopConversationScope';
 import { useEffect } from 'react'; type NativeSyntheticEvent<T = any> = any; type ActiveCommandPanel = any; type ActivityItem = any; type AgentOverview = any; type ArtifactDetail = any; type ArtifactSummary = any; type ComposerInputOrigin = any; type ConversationSurfaceMode = any; type DesktopFleetEnrollment = any; type DesktopFleetIdentity = any; type DesktopFleetSnapshot = any; type DesktopFleetTask = any; type DesktopFleetWorker = any; type DesktopGitRepoState = any; type DesktopMessage = any; type DesktopPathStatus = any; type DesktopRuntimeStatus = any; type DesktopSidebarProjectActivity = any; type DesktopSidebarState = any; type DesktopVoicePackState = any; type DesktopVoiceRuntimeStatus = any; type InterruptPolicy = any; type JarvisSttBackend = any; type JarvisTtsBackend = any; type LayoutChangeEvent = any; type MessageSourceFormat = any; type ModelProviderGroup = any; type NativeScrollEvent = any; type PendingSearchJump = any; type QueuedComposerMessage = any; type QueuedMessage = any; type RealtimeChannel = any; type RealtimeEvent = any; type ReferenceEntry = any; type RuntimeOrchestratorStatus = any; type ScheduledJob = any; type SearchResultTarget = any; type SecurityPermissionMode = any; type SessionDetail = any; type SessionMessage = any; type SessionSearchResult = any; type SessionSummary = any; type SessionTimelineEvent = any; type SidebarChatTooltipState = any; type SidebarDragState = any; type SidebarDraftChat = any; type SidebarProjectGroup = any; type StartupReadinessState = any; type TaskBoard = any; type TelegramBotConfig = any; type TextInputContentSizeChangeEventData = any; type ToolPackInfoPopupState = any; type VoiceCaptureMode = any; type VoiceGateState = any;
+import {
+  configureDesktopFleetPreviewScheduler,
+  stopDesktopFleetPreviewScheduler,
+} from './desktopFleetPreviewScheduler';
 
 const FLEET_ACTIVE_REFRESH_MS = 5000;
 const FLEET_BACKGROUND_REFRESH_MS = 120000;
 
 export function useDesktopConversationFleetEffects(scope: DesktopConversationScope) {
-  const { activeCommandPanel, clearSidebarChatTooltipTimer, clearToolPackInfoHideTimer, conversationMode, defaultInterruptPolicy, draftChat, hideSidebarChatTooltip, hideToolPackInfoPopup, normalizeInterruptPolicyValue, refreshFleetSnapshot, setActiveCommandPanel, setActivePermissionInfoId, setDraftBranchSearch, setDraftProjectSearch, setInterruptPolicy, sidebarExpanded, useEffect } = scope;
+  const { activeCommandPanel, clearSidebarChatTooltipTimer, clearToolPackInfoHideTimer, conversationMode, defaultInterruptPolicy, draftChat, fleetSnapshot, hideSidebarChatTooltip, hideToolPackInfoPopup, normalizeInterruptPolicyValue, refreshFleetSnapshot, setActiveCommandPanel, setActivePermissionInfoId, setDraftBranchSearch, setDraftProjectSearch, setInterruptPolicy, sidebarExpanded, useEffect } = scope;
 useEffect(() => {
     setInterruptPolicy(normalizeInterruptPolicyValue(defaultInterruptPolicy));
   }, [defaultInterruptPolicy]);
@@ -36,6 +40,12 @@ useEffect(() => {
       clearInterval(intervalId);
     };
   }, [conversationMode]);
+
+  useEffect(() => {
+    configureDesktopFleetPreviewScheduler(fleetSnapshot, conversationMode === 'fleet');
+  }, [conversationMode, fleetSnapshot]);
+
+  useEffect(() => () => stopDesktopFleetPreviewScheduler(), []);
 
   useEffect(() => (
     () => {

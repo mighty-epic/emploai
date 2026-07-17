@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app_backend.fleet_identity_creation import validate_local_worker_creation
 from app_backend.fleet_policy import FLEET_PREVIEW_MODE, FLEET_WORKER_SESSION_TTL_SECONDS, normalize_fleet_enrollment_ttl
 
 REMOTE_SHORT_SESSION_TTL_SECONDS = 60 * 60 * 12
@@ -231,6 +232,10 @@ class RemoteControlStoreFleetWorkerMixin:
         display_name: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        display_name, metadata = validate_local_worker_creation(
+            display_name=display_name,
+            metadata=metadata,
+        )
         with self._lock:
             desktop = self._conn.execute(
                 "SELECT * FROM desktops WHERE user_id = ? AND desktop_id = ?",
@@ -242,7 +247,7 @@ class RemoteControlStoreFleetWorkerMixin:
             now = time.time()
             worker_id = f"wrk_{secrets.token_hex(8)}"
             instance_id = f"win_{secrets.token_hex(8)}"
-            name = (display_name or "").strip()[:MAX_DISPLAY_NAME_CHARS] or self._next_worker_name_locked(int(user_id))
+            name = display_name[:MAX_DISPLAY_NAME_CHARS]
             self._conn.execute(
                 """
                 INSERT INTO fleet_workers(
@@ -267,7 +272,10 @@ class RemoteControlStoreFleetWorkerMixin:
                 actor_id=desktop["desktop_id"],
                 target_kind="worker",
                 target_id=worker_id,
-                metadata={"kind": "local"},
+                metadata={
+                    "kind": "local",
+                    "created_by": str((metadata or {}).get("created_by") or "").strip() or None,
+                },
             )
             self._conn.commit()
             self._secure_db_files()
@@ -510,7 +518,7 @@ class RemoteControlStoreFleetWorkerMixin:
                 self._conn.execute("DELETE FROM fleet_tool_grants WHERE target_kind = 'worker' AND target_id = ?", (worker["worker_id"],))
             self._conn.execute("DELETE FROM fleet_workers WHERE worker_id = ?", (worker["worker_id"],))
             connection_revoked = False
-            if machine_desktop_id:
+            if machine_desktop_id and str(worker["kind"] or "").strip().lower() == "remote":
                 remaining_remote_workers = self._conn.execute(
                     "SELECT COUNT(*) AS count FROM fleet_workers WHERE user_id = ? AND kind = 'remote' AND machine_desktop_id = ?",
                     (int(user_id), machine_desktop_id),

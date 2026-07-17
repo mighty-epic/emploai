@@ -82,13 +82,22 @@ def _fleet_tool(
 
 _WORKER_ARG = {"type": "string", "description": "Worker id or display name, for example Worker-001."}
 _GROUP_ARG = {"type": "string", "description": "Group id or display name."}
+_COMPUTER_ARG = {"type": "string", "description": "Paired computer id or display name, for example Windows VPS."}
 _CONFIRMED_ARG = {"type": "boolean", "description": "Set true only after the same surface has confirmed this action."}
 _CONFIRMATION_ID_ARG = {"type": "string", "description": "Confirmation id returned by the previous call for this action."}
 
 FLEET_MANAGER_TOOLS = [
     _fleet_tool("fleet_list_workers", "List workers, their task state, queue depth, latest report, groups, and pending grants."),
-    _fleet_tool("fleet_create_local_worker", "Create the first or next local logical worker on this manager machine.", {"display_name": {"type": "string"}}),
+    _fleet_tool(
+        "fleet_create_local_worker",
+        "Create a named local logical worker only when the user explicitly asks for one.",
+        {"display_name": {"type": "string"}},
+        ["display_name"],
+    ),
     _fleet_tool("fleet_create_enrollment", "Create a short-lived enrollment token for a remote worker computer or VPS.", {"display_name": {"type": "string"}, "expires_in_seconds": {"type": "integer", "default": 1800}}),
+    _fleet_tool("fleet_computer_host_status", "Check whether a paired computer's persistent host, backend, and desktop app are running.", {"computer": _COMPUTER_ARG}, ["computer"]),
+    _fleet_tool("fleet_start_computer_runtime", "Start the EmploAI backend on a paired computer through its persistent Yggdrasil host.", {"computer": _COMPUTER_ARG}, ["computer"]),
+    _fleet_tool("fleet_start_computer_desktop", "Open the EmploAI desktop app and backend on a paired computer through its persistent Yggdrasil host.", {"computer": _COMPUTER_ARG}, ["computer"]),
     _fleet_tool("fleet_rename_worker", "Rename a worker.", {"worker": _WORKER_ARG, "display_name": {"type": "string"}}, ["worker", "display_name"]),
     _fleet_tool("fleet_reset_worker", "Reset a worker identity after confirmation. Stops active work first and preserves terminal reports.", {"worker": _WORKER_ARG, "reason": {"type": "string"}, "confirmed": _CONFIRMED_ARG, "confirmation_id": _CONFIRMATION_ID_ARG}, ["worker"]),
     _fleet_tool("fleet_delete_worker", "Delete a worker from the live fleet after confirmation. Stops active work first and preserves terminal reports.", {"worker": _WORKER_ARG, "reason": {"type": "string"}, "confirmed": _CONFIRMED_ARG, "confirmation_id": _CONFIRMATION_ID_ARG}, ["worker"]),
@@ -604,6 +613,7 @@ def _fleet_manager_contract(snapshot: Dict[str, Any]) -> dict[str, str]:
             "- This desktop is the primary manager for an EmploAI worker fleet.\n"
             "- Use Fleet tools to control workers: create workers, group workers, send or queue work, redirect active work, stop workers, inspect reports/evidence, and continue queues.\n"
             "- Setup/list tools are available even when there are zero workers. Create or enroll workers when the user asks for fleet setup.\n"
+            "- Paired-computer host tools can check or start a remote backend or desktop even when its normal EmploAI runtime is closed.\n"
             "- Do not use fleet tools for ordinary chat, simple questions, or tasks the manager should answer directly.\n"
             "- For broad delegation, inspect status first, assign clear task prompts, monitor milestones, read reports, then synthesize results for the user.\n"
             "- Sending a message to a busy worker queues by default. Redirecting the active task requires fleet_redirect_worker_task or fleet_steer_queued_message.\n"
@@ -654,7 +664,10 @@ def _fleet_tool_create_local_worker(session: Any, args: Dict[str, Any]) -> Dict[
     result = _fleet_api_request(
         "POST",
         "/api/fleet/workers/local",
-        {"display_name": str(args.get("display_name") or "").strip() or None, "metadata": {"created_by": "manager_agent"}},
+        {
+            "display_name": str(args.get("display_name") or "").strip(),
+            "metadata": {"created_by": "manager_chat_user_request"},
+        },
     )
     _invalidate_fleet_manager_tool_context(session)
     return result
@@ -669,6 +682,49 @@ def _fleet_tool_create_enrollment(session: Any, args: Dict[str, Any]) -> Dict[st
             "expires_in_seconds": args.get("expires_in_seconds") or 1800,
             "metadata": {"created_by": "manager_agent"},
         },
+    )
+    _invalidate_fleet_manager_tool_context(session)
+    return result
+
+
+def _fleet_find_computer(snapshot: Dict[str, Any], selector: str) -> Optional[Dict[str, Any]]:
+    clean = str(selector or "").strip().casefold()
+    if not clean:
+        return None
+    matches = [
+        computer
+        for computer in list(snapshot.get("desktops") or [])
+        if clean
+        in {
+            str(computer.get("desktop_id") or "").strip().casefold(),
+            str(computer.get("display_name") or "").strip().casefold(),
+            str(computer.get("name") or "").strip().casefold(),
+        }
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _fleet_tool_computer_host_action(
+    session: Any,
+    args: Dict[str, Any],
+    *,
+    action: str,
+) -> Dict[str, Any]:
+    snapshot = _fleet_snapshot_uncached()
+    computer = _fleet_find_computer(snapshot, str(args.get("computer") or ""))
+    if not computer:
+        return {"error": "Paired computer not found or name is ambiguous.", "error_type": "computer_not_found"}
+    desktop_id = quote(str(computer.get("desktop_id") or ""), safe="")
+    method = "GET" if action == "status" else "POST"
+    suffix = {
+        "status": "host",
+        "runtime": "host/runtime/start",
+        "desktop": "host/desktop/start",
+    }[action]
+    result = _fleet_api_request(
+        method,
+        f"/api/fleet/desktops/{desktop_id}/{suffix}",
+        {} if method == "POST" else None,
     )
     _invalidate_fleet_manager_tool_context(session)
     return result
@@ -1225,6 +1281,9 @@ def _fleet_manager_tool_handlers(session: Any) -> Dict[str, Callable[[Dict[str, 
         "fleet_list_workers": lambda args: _fleet_tool_list_workers(session, args),
         "fleet_create_local_worker": lambda args: _fleet_tool_create_local_worker(session, args),
         "fleet_create_enrollment": lambda args: _fleet_tool_create_enrollment(session, args),
+        "fleet_computer_host_status": lambda args: _fleet_tool_computer_host_action(session, args, action="status"),
+        "fleet_start_computer_runtime": lambda args: _fleet_tool_computer_host_action(session, args, action="runtime"),
+        "fleet_start_computer_desktop": lambda args: _fleet_tool_computer_host_action(session, args, action="desktop"),
         "fleet_rename_worker": lambda args: _fleet_tool_rename_worker(session, args),
         "fleet_reset_worker": lambda args: _fleet_tool_reset_or_delete_worker(session, args, reset=True),
         "fleet_delete_worker": lambda args: _fleet_tool_reset_or_delete_worker(session, args, reset=False),

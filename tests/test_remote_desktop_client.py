@@ -311,6 +311,75 @@ def test_unknown_paired_computer_command_is_rejected_explicitly():
         )
 
 
+def test_host_status_does_not_require_the_local_backend(monkeypatch, tmp_path):
+    monkeypatch.setattr(remote_desktop_client, "runtime_home", lambda: tmp_path)
+    monkeypatch.setattr(
+        "app_backend.fleet_host_control.fleet_host_status",
+        lambda: {"host": {"state": "running"}, "runtime": {"ready": False}},
+    )
+
+    result = asyncio.run(
+        remote_desktop_client._handle_command(
+            command_name="fleet_host_status",
+            payload={},
+            local_api_base_url="",
+            local_token="",
+            remote_ws=None,
+            send_lock=asyncio.Lock(),
+        )
+    )
+
+    assert result["host"]["state"] == "running"
+    assert result["runtime"]["ready"] is False
+
+
+def test_host_runtime_start_requires_child_owned_permission(monkeypatch, tmp_path):
+    monkeypatch.setattr(remote_desktop_client, "runtime_home", lambda: tmp_path)
+    monkeypatch.setattr(
+        remote_desktop_client,
+        "load_connection_policy",
+        lambda _home: {"permissions": {"manage_runtime": False}},
+    )
+
+    with pytest.raises(PermissionError, match="not allowed"):
+        asyncio.run(
+            remote_desktop_client._handle_command(
+                command_name="fleet_start_runtime",
+                payload={},
+                local_api_base_url="",
+                local_token="",
+                remote_ws=None,
+                send_lock=asyncio.Lock(),
+            )
+        )
+
+
+def test_host_runtime_start_works_without_existing_backend_credentials(monkeypatch, tmp_path):
+    monkeypatch.setattr(remote_desktop_client, "runtime_home", lambda: tmp_path)
+    monkeypatch.setattr(
+        remote_desktop_client,
+        "load_connection_policy",
+        lambda _home: {"permissions": {"manage_runtime": True}},
+    )
+    monkeypatch.setattr(
+        "app_backend.fleet_host_control.start_runtime_from_fleet_host",
+        lambda: {"host": {"state": "running"}, "runtime": {"ready": True}},
+    )
+
+    result = asyncio.run(
+        remote_desktop_client._handle_command(
+            command_name="fleet_start_runtime",
+            payload={},
+            local_api_base_url="",
+            local_token="",
+            remote_ws=None,
+            send_lock=asyncio.Lock(),
+        )
+    )
+
+    assert result["runtime"]["ready"] is True
+
+
 def test_screen_preview_is_bounded_and_view_only(monkeypatch):
     monkeypatch.setattr(
         "app_backend.capture_runtime.capture_screen_snapshot",
