@@ -38,7 +38,7 @@ export function DesktopSetupLocalIntelligenceSection({ apiBaseUrl, token, sessio
   const helperStyle = embedded ? styles.settingCardDescription : styles.helperText;
   const titleText = embedded ? 'Local skills' : 'Local intelligence';
   const helperText = embedded
-    ? 'Skills live beside MEMORY.md on this computer and load only when needed.'
+    ? 'Loaded on demand from this computer.'
     : 'Local skills live on this computer and load only when needed.';
 
   const refresh = async () => {
@@ -132,8 +132,7 @@ export function DesktopSetupLocalIntelligenceSection({ apiBaseUrl, token, sessio
       {message ? <Text style={styles.localStatusText}>{message}</Text> : null}
 
       <View style={styles.settingCard}>
-        <Text style={styles.settingCardTitle}>Local skills</Text>
-        <Text style={styles.settingCardDescription}>Skill bodies load on demand, keeping normal prompts lighter.</Text>
+        {!embedded ? <Text style={styles.settingCardTitle}>Local skills</Text> : null}
         <View style={styles.localList}>
           {skills.length ? skills.slice(0, 8).map((skill) => (
             <View key={skill.name} style={styles.localRow}>

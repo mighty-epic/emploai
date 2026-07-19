@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app_backend.fleet_identity_profiles import identity_public_metadata, manager_identity_metadata
+
 from app_backend.fleet_policy import FLEET_PREVIEW_MODE
 
 REMOTE_SHORT_SESSION_TTL_SECONDS = 60 * 60 * 12
@@ -164,6 +166,7 @@ class RemoteControlStoreViewMixin:
         display_name = str(row["display_name"] or "").strip()
         if not display_name:
             display_name = "Manager" if role == "manager" else str(row["worker_id"] or "Worker")
+        metadata = _json_loads(row["metadata"], {})
         return {
             "identity_id": row["instance_id"],
             "role": role,
@@ -172,7 +175,8 @@ class RemoteControlStoreViewMixin:
             "desktop_id": row["desktop_id"],
             "worker_id": row["worker_id"],
             "status": row["status"] or "active",
-            "metadata": _json_loads(row["metadata"], {}),
+            "metadata": metadata,
+            **identity_public_metadata(metadata),
             "created_at": _utc_iso(row["created_at"]),
             "updated_at": _utc_iso(row["updated_at"]),
         }
@@ -181,14 +185,15 @@ class RemoteControlStoreViewMixin:
         from app_backend.fleet_queue_policy import normalize_queue_policy
 
         status = str(row["status"] or "idle")
+        metadata = _json_loads(row["metadata"], {})
         last_seen_at = row["last_seen_at"]
-        if status not in {"working", "blocked", "needs_review"} and last_seen_at:
+        protected_idle_default = bool(metadata.get("is_default")) and status == "idle"
+        if not protected_idle_default and status not in {"working", "blocked", "needs_review"} and last_seen_at:
             age_seconds = max(0.0, time.time() - float(last_seen_at))
             if age_seconds >= FLEET_OFFLINE_SECONDS:
                 status = "offline"
             elif age_seconds >= FLEET_STALE_SECONDS:
                 status = "stale"
-        metadata = _json_loads(row["metadata"], {})
         return {
             "worker_id": row["worker_id"],
             "user_id": int(row["user_id"]),
@@ -201,6 +206,7 @@ class RemoteControlStoreViewMixin:
             "group_id": row["group_id"],
             "active_task_id": row["active_task_id"],
             "metadata": metadata,
+            **identity_public_metadata(metadata),
             "queue_policy": normalize_queue_policy(metadata.get("queue_policy")),
             "created_at": _utc_iso(row["created_at"]),
             "updated_at": _utc_iso(row["updated_at"]),
@@ -448,16 +454,23 @@ class RemoteControlStoreViewMixin:
         desktop_id: str,
         display_name: Optional[str] = None,
     ) -> Dict[str, Any]:
-        existing = self._conn.execute(
-            "SELECT * FROM fleet_instances WHERE user_id = ? AND role = 'manager' AND desktop_id = ? AND reset_at IS NULL",
+        existing_rows = self._conn.execute(
+            "SELECT * FROM fleet_instances WHERE user_id = ? AND role = 'manager' AND desktop_id = ? AND reset_at IS NULL ORDER BY created_at ASC",
             (int(user_id), desktop_id),
-        ).fetchone()
+        ).fetchall()
+        existing = existing_rows[0] if existing_rows else None
         now = time.time()
         if existing:
+            metadata = manager_identity_metadata(_json_loads(existing["metadata"], {}))
             self._conn.execute(
-                "UPDATE fleet_instances SET display_name = COALESCE(?, display_name), status = 'active', updated_at = ? WHERE instance_id = ?",
-                ((display_name or "").strip()[:MAX_DISPLAY_NAME_CHARS] or None, now, existing["instance_id"]),
+                "UPDATE fleet_instances SET display_name = COALESCE(?, display_name), status = 'active', metadata = ?, updated_at = ? WHERE instance_id = ?",
+                ((display_name or "").strip()[:MAX_DISPLAY_NAME_CHARS] or None, _json_dumps(metadata), now, existing["instance_id"]),
             )
+            for duplicate in existing_rows[1:]:
+                self._conn.execute(
+                    "UPDATE fleet_instances SET status = 'reset', reset_at = ?, updated_at = ? WHERE instance_id = ?",
+                    (now, now, duplicate["instance_id"]),
+                )
             refreshed = self._conn.execute("SELECT * FROM fleet_instances WHERE instance_id = ?", (existing["instance_id"],)).fetchone()
             return self._instance_view(refreshed)
 
@@ -466,9 +479,17 @@ class RemoteControlStoreViewMixin:
             """
             INSERT INTO fleet_instances(
                 instance_id, user_id, role, desktop_id, worker_id, display_name, status, metadata, created_at, updated_at, reset_at
-            ) VALUES(?, ?, 'manager', ?, NULL, ?, 'active', '{}', ?, ?, NULL)
+            ) VALUES(?, ?, 'manager', ?, NULL, ?, 'active', ?, ?, ?, NULL)
             """,
-            (instance_id, int(user_id), desktop_id, (display_name or "Manager")[:MAX_DISPLAY_NAME_CHARS], now, now),
+            (
+                instance_id,
+                int(user_id),
+                desktop_id,
+                (display_name or "Manager")[:MAX_DISPLAY_NAME_CHARS],
+                _json_dumps(manager_identity_metadata()),
+                now,
+                now,
+            ),
         )
         self._audit_locked(
             user_id=user_id,

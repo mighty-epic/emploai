@@ -764,7 +764,7 @@ def register_voice_ws_routes(app):
 
                 tts_seconds = 0.0
 
-                if assistant_text:
+                if assistant_text and is_jarvis_turn:
 
                     await send_voice_event(
 

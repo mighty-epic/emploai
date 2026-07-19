@@ -376,16 +376,11 @@ export function DesktopSetupOnboardingSection({
 
   return (
     <View style={styles.section}>
-      <Text style={styles.sectionTitle}>Project onboarding</Text>
-      <Text style={styles.helperText}>
-        Save a per-project job profile that becomes a managed system prompt section whenever a chat runs in that workspace.
-      </Text>
-
       <View style={styles.settingStack}>
         <View style={styles.settingCard}>
           <Text style={styles.settingCardTitle}>Project</Text>
           <Text style={styles.settingCardDescription}>
-            Pick an existing project or enter a path. Onboarding is matched by workspace path.
+            Select a project or enter its workspace path.
           </Text>
           {projectOptions.length ? (
             <View style={styles.voiceModeRow}>
@@ -441,7 +436,7 @@ export function DesktopSetupOnboardingSection({
             <View style={styles.settingRowCopy}>
               <Text style={styles.settingRowTitle}>Use this onboarding profile</Text>
               <Text style={styles.settingRowDescription}>
-                When enabled, the saved profile is appended after the core runtime prompt for chats in this project.
+                Add the saved profile to chats in this project.
               </Text>
             </View>
             <Pressable
@@ -477,7 +472,7 @@ export function DesktopSetupOnboardingSection({
           <View style={styles.settingCard}>
             <Text style={styles.settingCardTitle}>Guided onboarding</Text>
             <Text style={styles.settingCardDescription}>
-              Answer the questions, then build a structured profile you can review before saving.
+              Answer the questions, build a draft, then review it.
             </Text>
             {GUIDED_QUESTIONS.map((item) => (
               <View key={item.key} style={styles.fieldBlock}>
@@ -508,7 +503,7 @@ export function DesktopSetupOnboardingSection({
           <View style={styles.settingCard}>
             <Text style={styles.settingCardTitle}>Structured profile</Text>
             <Text style={styles.settingCardDescription}>
-              This is the exact project identity and workflow context that will be saved locally.
+              Saved locally for this project.
             </Text>
             <View style={styles.fieldBlock}>
               <Text style={styles.fieldLabel}>Agent identity</Text>

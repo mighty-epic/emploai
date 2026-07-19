@@ -191,6 +191,12 @@ export type DesktopFleetWorker = {
   updated_at?: string | null;
   last_seen_at?: string | null;
   queue_policy?: 'review_required' | 'auto_continue_success' | string;
+  is_default?: boolean;
+  protected?: boolean;
+  tool_profile?: string | null;
+  enabled_tool_packs?: string[];
+  capability_tags?: string[];
+  published_upstream?: boolean;
 };
 
 export type DesktopFleetIdentity = {
@@ -201,6 +207,12 @@ export type DesktopFleetIdentity = {
   desktop_id?: string | null;
   worker_id?: string | null;
   status?: string;
+  is_default?: boolean;
+  protected?: boolean;
+  tool_profile?: string | null;
+  enabled_tool_packs?: string[];
+  capability_tags?: string[];
+  published_upstream?: boolean;
   metadata?: Record<string, unknown>;
   created_at?: string | null;
   updated_at?: string | null;
@@ -217,6 +229,9 @@ export type DesktopFleetTask = {
   metadata?: Record<string, unknown>;
   created_at?: string | null;
   updated_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  canceled_at?: string | null;
 };
 
 export type DesktopFleetReport = {
@@ -230,6 +245,7 @@ export type DesktopFleetReport = {
   blockers?: unknown[];
   confidence?: string | null;
   next_suggested_action?: string | null;
+  raw?: Record<string, unknown>;
   created_at?: string | null;
 };
 
@@ -282,6 +298,10 @@ export type DesktopFleetRemoteTarget = {
   display_name: string;
   role: 'manager' | 'worker' | string;
   status?: string | null;
+  is_default?: boolean;
+  protected?: boolean;
+  tool_profile?: string | null;
+  capability_tags?: string[];
 };
 
 export type DesktopFleetHostStatus = {
@@ -351,6 +371,7 @@ export type DesktopFleetUpstreamRequest = {
   desktop_id: string;
   identity_id?: string | null;
   identity_label?: string | null;
+  task_id?: string | null;
   request_kind: 'question' | 'approval' | 'blocked' | string;
   message: string;
   status: string;
@@ -373,6 +394,9 @@ export type DesktopFleetLocalActivity = {
   report?: Record<string, unknown>;
   created_at?: string | null;
   updated_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  canceled_at?: string | null;
 };
 
 export type DesktopFleetDelegation = {
@@ -386,6 +410,9 @@ export type DesktopFleetDelegation = {
   metadata?: Record<string, unknown>;
   created_at?: string | null;
   updated_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  canceled_at?: string | null;
 };
 
 export type DesktopFleetSnapshot = {

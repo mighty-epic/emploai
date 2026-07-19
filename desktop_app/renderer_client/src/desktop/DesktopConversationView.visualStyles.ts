@@ -28,7 +28,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   sidebarCollapsedHandle: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   sidebarCollapsedHandleHovered: {
     backgroundColor: UI.color.surfaceHover,
@@ -58,7 +58,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   },
   utilityRailButtonActive: {
     backgroundColor: UI.color.accentSoft,
-    borderColor: UI.color.accentBorder,
+    borderColor: 'transparent',
   },
   utilityRailIcon: {
     color: UI.color.textMuted,
@@ -80,7 +80,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   },
   utilityRailTabActive: {
     backgroundColor: UI.color.accentSoft,
-    borderColor: UI.color.accentBorder,
+    borderColor: 'transparent',
   },
   utilityRailTabLabel: {
     color: UI.color.textMuted,
@@ -122,7 +122,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   secondaryRailButton: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   secondaryRailButtonText: {
     color: UI.color.textMuted,
@@ -131,7 +131,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   railMetaCard: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   metaLabel: {
     color: UI.color.textSubtle,
@@ -156,7 +156,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   },
   sidebarAccountButtonActive: {
     backgroundColor: UI.color.accentSoft,
-    borderColor: UI.color.accentBorder,
+    borderColor: 'transparent',
   },
   sidebarAccountAvatar: {
     backgroundColor: UI.color.surfaceRaised,
@@ -198,7 +198,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   sidebarSearchShell: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   sidebarSearchGlyph: {
     color: UI.color.textSubtle,
@@ -212,7 +212,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   },
   sidebarComputerTabActive: {
     backgroundColor: UI.color.accentSoft,
-    borderColor: UI.color.accentBorder,
+    borderColor: 'transparent',
   },
   sidebarComputerTabText: {
     color: UI.color.textMuted,
@@ -227,7 +227,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   },
   projectCardSelected: {
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    borderColor: 'transparent',
   },
   projectHeaderRowHovered: {
     backgroundColor: UI.color.surfaceHover,
@@ -248,7 +248,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   },
   projectChatRowActive: {
     backgroundColor: UI.color.accentSoft,
-    borderColor: UI.color.accentBorder,
+    borderColor: 'transparent',
   },
   projectChatTitle: {
     color: UI.color.textMuted,
@@ -272,7 +272,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   },
   sidebarSimpleRowActive: {
     backgroundColor: UI.color.accentSoft,
-    borderColor: UI.color.accentBorder,
+    borderColor: 'transparent',
   },
   sidebarSimpleRowTitle: {
     color: UI.color.text,
@@ -298,7 +298,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   sidebarSearchCard: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   sidebarSearchInput: {
     color: UI.color.text,
@@ -345,13 +345,13 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   },
   jarvisStage: {
     backgroundColor: UI.color.canvas,
-    borderColor: UI.color.border,
-    borderRadius: UI.radius.panel,
+    borderWidth: 0,
+    borderRadius: 0,
   },
   surfaceModeTabsBar: {
     borderRadius: UI.radius.control,
-    backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    backgroundColor: 'transparent',
+    borderWidth: 0,
   },
   surfaceModeTab: {
     borderRadius: UI.radius.small,
@@ -360,8 +360,8 @@ export const desktopConversationVisualStyles = StyleSheet.create({
     backgroundColor: UI.color.surfaceHover,
   },
   surfaceModeTabActive: {
-    backgroundColor: UI.color.accentSoft,
-    borderColor: UI.color.accentBorder,
+    backgroundColor: UI.color.surfaceRaised,
+    borderColor: 'transparent',
   },
   surfaceModeTabText: {
     color: UI.color.textMuted,
@@ -385,12 +385,12 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   agentStatusBar: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   taskBoardCard: {
     borderRadius: UI.radius.panel,
-    backgroundColor: UI.color.surface,
-    borderColor: UI.color.border,
+    backgroundColor: UI.color.surfaceMuted,
+    borderWidth: 0,
   },
   taskBoardGoal: {
     color: UI.color.text,
@@ -401,8 +401,8 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   },
   taskBoardInfoChip: {
     borderRadius: UI.radius.small,
-    backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    backgroundColor: UI.color.surfaceRaised,
+    borderWidth: 0,
   },
   transcriptScroll: {
     borderRadius: 0,
@@ -421,8 +421,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   messageBubbleUser: {
     backgroundColor: '#15313a',
     borderRadius: UI.radius.panel,
-    borderWidth: 1,
-    borderColor: UI.color.accentBorder,
+    borderWidth: 0,
   },
   messageBubbleAssistant: {
     backgroundColor: 'transparent',
@@ -432,7 +431,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   },
   messageBubbleSystem: {
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
     borderRadius: UI.radius.control,
   },
   messageLabel: {
@@ -460,12 +459,12 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   planQuestionCard: {
     borderRadius: UI.radius.panel,
     backgroundColor: UI.color.surface,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   proposedPlanCard: {
     borderRadius: UI.radius.panel,
     backgroundColor: UI.color.surface,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   planCardEyebrow: {
     color: UI.color.textSubtle,
@@ -480,8 +479,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   planQuestionOption: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderWidth: 1,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   planQuestionOptionHovered: {
     backgroundColor: UI.color.surfaceHover,
@@ -509,8 +507,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   planCardSecondaryAction: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceRaised,
-    borderWidth: 1,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
   },
   panelToggleButtonActive: {
     backgroundColor: UI.color.accentSoft,
@@ -553,8 +550,8 @@ export const desktopConversationVisualStyles = StyleSheet.create({
     borderRadius: UI.radius.large,
     backgroundColor: UI.color.surface,
     borderWidth: 1,
-    borderColor: UI.color.borderStrong,
-    ...UI.elevation.high,
+    borderColor: UI.color.border,
+    ...UI.elevation.low,
   },
   composerModeChip: {
     borderRadius: UI.radius.control,
@@ -632,8 +629,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   },
   sendButtonIdle: {
     backgroundColor: UI.color.surfaceHover,
-    borderWidth: 1,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
   },
   sendButtonStop: {
     backgroundColor: UI.color.danger,
@@ -765,23 +761,23 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   },
   timelineRunDisclosure: {
     borderRadius: UI.radius.panel,
-    backgroundColor: UI.color.surface,
-    borderColor: UI.color.border,
+    backgroundColor: UI.color.surfaceMuted,
+    borderWidth: 0,
   },
   timelineTranscriptCard: {
     borderRadius: UI.radius.panel,
-    backgroundColor: UI.color.surface,
-    borderColor: UI.color.border,
+    backgroundColor: UI.color.surfaceMuted,
+    borderWidth: 0,
   },
   editSummaryCard: {
     borderRadius: UI.radius.panel,
-    backgroundColor: UI.color.surface,
-    borderColor: UI.color.border,
+    backgroundColor: UI.color.surfaceMuted,
+    borderWidth: 0,
   },
   emptyCard: {
     borderRadius: UI.radius.panel,
-    backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    backgroundColor: 'transparent',
+    borderWidth: 0,
   },
   emptyConversationCard: {
     borderRadius: UI.radius.panel,
@@ -801,6 +797,9 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   fleetManagerChatPanel: {
     backgroundColor: UI.color.canvas,
     borderRightColor: UI.color.border,
+    borderWidth: 0,
+    borderRightWidth: 1,
+    borderRadius: 0,
   },
   fleetManagerChatHeader: {
     backgroundColor: UI.color.sidebar,
@@ -813,11 +812,33 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   fleetManagerChatActionButton: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   fleetManagerChatActionButtonHovered: {
     backgroundColor: UI.color.surfaceHover,
-    borderColor: UI.color.borderStrong,
+    borderColor: 'transparent',
+  },
+  fleetManagerChatModelButton: {
+    backgroundColor: UI.color.surfaceMuted,
+    borderWidth: 0,
+  },
+  fleetManagerChatActionButtonActive: {
+    backgroundColor: UI.color.surfaceRaised,
+    borderColor: 'transparent',
+  },
+  fleetManagerChatActionText: {
+    color: UI.color.text,
+    fontWeight: '600',
+  },
+  fleetManagerChatActionMeta: {
+    color: UI.color.textSubtle,
+    fontWeight: '500',
+  },
+  fleetManagerChatMeta: {
+    color: UI.color.textSubtle,
+    backgroundColor: UI.color.surfaceMuted,
+    borderWidth: 0,
+    fontWeight: '600',
   },
   fleetManagerTranscript: {
     backgroundColor: UI.color.canvas,
@@ -828,32 +849,63 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   },
   fleetManagerMessageAssistant: {
     backgroundColor: 'transparent',
+    borderWidth: 0,
   },
   fleetManagerComposer: {
     backgroundColor: UI.color.surface,
-    borderColor: UI.color.borderStrong,
+    borderColor: UI.color.border,
     borderRadius: UI.radius.large,
   },
+  fleetManagerEmptyChat: {
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    paddingHorizontal: 0,
+  },
+  fleetManagerEmptyTitle: {
+    color: UI.color.text,
+    fontWeight: '600',
+  },
+  fleetManagerEmptyText: {
+    color: UI.color.textSubtle,
+  },
+  fleetManagerThinkingRow: {
+    backgroundColor: UI.color.accentSoft,
+    borderWidth: 0,
+  },
+  fleetManagerQueueRow: {
+    backgroundColor: UI.color.warningSoft,
+    borderWidth: 0,
+  },
+  fleetManagerComposerInput: {
+    backgroundColor: UI.color.canvas,
+    borderColor: UI.color.border,
+  },
   fleetSidebarPanel: {
-    backgroundColor: UI.color.sidebar,
-    borderLeftColor: UI.color.border,
+    backgroundColor: UI.color.canvas,
+    borderWidth: 0,
+    borderRadius: 0,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
   },
   fleetPanelTitle: {
     color: UI.color.text,
     fontWeight: '700',
+  },
+  fleetPanelHeader: {
+    justifyContent: 'flex-end',
   },
   fleetPanelText: {
     color: UI.color.textMuted,
   },
   fleetStatusCard: {
     borderRadius: UI.radius.control,
-    backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    backgroundColor: UI.color.dangerSoft,
+    borderWidth: 0,
   },
   fleetCreateCard: {
-    borderRadius: UI.radius.panel,
+    borderRadius: 0,
     backgroundColor: 'transparent',
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   fleetInput: {
     borderRadius: UI.radius.control,
@@ -872,7 +924,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   fleetSecondaryAction: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
   },
   fleetSecondaryActionText: {
     color: UI.color.textMuted,
@@ -881,7 +933,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   fleetEnrollmentCard: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.accentSoft,
-    borderColor: UI.color.accentBorder,
+    borderWidth: 0,
   },
   fleetEnrollmentToken: {
     color: UI.color.accentStrong,
@@ -901,8 +953,8 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   },
   fleetWorkerCard: {
     borderRadius: UI.radius.panel,
-    backgroundColor: UI.color.surface,
-    borderColor: UI.color.border,
+    backgroundColor: UI.color.surfaceMuted,
+    borderWidth: 0,
     paddingHorizontal: 14,
     paddingVertical: 12,
   },
@@ -918,7 +970,7 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   fleetWorkerMenuButton: {
     borderRadius: UI.radius.control,
     backgroundColor: 'transparent',
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   fleetWorkerMenuButtonActive: {
     backgroundColor: UI.color.accentSoft,
@@ -953,5 +1005,209 @@ export const desktopConversationVisualStyles = StyleSheet.create({
   },
   fleetInfoMeta: {
     color: UI.color.accentStrong,
+  },
+  fleetCollapsedRail: {
+    backgroundColor: UI.color.sidebar,
+    borderWidth: 0,
+  },
+  fleetCollapsedNotice: {
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+  },
+  fleetIconAction: {
+    backgroundColor: UI.color.surfaceMuted,
+    borderWidth: 0,
+  },
+  panelCollapseButton: {
+    backgroundColor: UI.color.surfaceMuted,
+    borderWidth: 0,
+  },
+  fleetIdentityChip: {
+    backgroundColor: UI.color.surfaceMuted,
+    borderWidth: 0,
+  },
+  fleetIdentityChipActive: {
+    backgroundColor: UI.color.accentSoft,
+    borderColor: 'transparent',
+  },
+  fleetIdentityName: {
+    color: UI.color.text,
+    fontWeight: '600',
+  },
+  fleetIdentityMeta: {
+    color: UI.color.textSubtle,
+    fontWeight: '500',
+    textTransform: 'none',
+  },
+  utilityRailExpanded: {
+    borderWidth: 0,
+    backgroundColor: UI.color.sidebar,
+  },
+  fleetChatIdentityChip: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  fleetChatIdentityChipActive: {
+    backgroundColor: UI.color.accentSoft,
+    borderColor: 'transparent',
+  },
+  fleetSmallDangerAction: {
+    borderWidth: 0,
+    backgroundColor: UI.color.dangerSoft,
+  },
+  folderChoiceAction: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  folderChoiceActionPrimary: {
+    borderWidth: 0,
+    backgroundColor: UI.color.accentSoft,
+  },
+  pinnedShortcutCard: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  sidebarLoadingCard: {
+    borderWidth: 0,
+    backgroundColor: 'transparent',
+  },
+  sessionCard: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  surfaceModeTabs: {
+    borderWidth: 0,
+    backgroundColor: 'transparent',
+  },
+  identityStopButton: {
+    borderWidth: 0,
+    backgroundColor: UI.color.dangerSoft,
+  },
+  taskBoardToggleButton: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceRaised,
+  },
+  taskBoardAlert: {
+    borderWidth: 0,
+    backgroundColor: UI.color.warningSoft,
+  },
+  completedTaskCard: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  completedTaskCardBody: {
+    borderTopColor: UI.color.border,
+  },
+  panelToggleButton: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  voiceModeChip: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  voiceCollapsedCard: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  voiceBanner: {
+    borderWidth: 0,
+    backgroundColor: UI.color.accentSoft,
+  },
+  pendingSwitchCard: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  editSummaryIconBox: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceRaised,
+  },
+  editSummaryFileList: {
+    borderWidth: 0,
+    backgroundColor: UI.color.canvas,
+  },
+  editSummaryToggle: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceRaised,
+  },
+  timelineRunEventResult: {
+    borderWidth: 0,
+    backgroundColor: UI.color.canvas,
+  },
+  timelineTranscriptResultBlock: {
+    borderWidth: 0,
+    backgroundColor: UI.color.canvas,
+  },
+  commandPanelSecondaryAction: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  interruptOptionCard: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  sessionCommandCard: {
+    borderWidth: 0,
+    borderBottomWidth: 1,
+    borderBottomColor: UI.color.border,
+    borderRadius: 0,
+    backgroundColor: 'transparent',
+  },
+  composerStatusPill: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  contextMeterOrb: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  interruptChooserButton: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  referenceMovedCard: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  foldSection: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  referenceCard: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  activityItemAccent: {
+    borderWidth: 0,
+    borderLeftWidth: 2,
+    borderLeftColor: UI.color.accent,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  activityItemWarn: {
+    borderWidth: 0,
+    borderLeftWidth: 2,
+    borderLeftColor: UI.color.warning,
+    backgroundColor: UI.color.warningSoft,
+  },
+  activityItemError: {
+    borderWidth: 0,
+    borderLeftWidth: 2,
+    borderLeftColor: UI.color.danger,
+    backgroundColor: UI.color.dangerSoft,
+  },
+  artifactRow: {
+    borderWidth: 0,
+    backgroundColor: 'transparent',
+  },
+  artifactPreviewCard: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  emptyDraftFolderRow: {
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
+  },
+  emptyFolderActionButton: {
+    borderWidth: 0,
   },
 });

@@ -107,6 +107,7 @@ def queue_upstream_request(
     identity_id: Optional[str],
     identity_label: Optional[str],
     message: str,
+    task_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     clean_kind = str(request_kind or "").strip().lower()
     clean_message = str(message or "").strip()
@@ -122,7 +123,7 @@ def queue_upstream_request(
             INSERT INTO fleet_upstream_activity(
                 activity_id, activity_kind, direction, identity_id, identity_label,
                 request_kind, message, status, response, report, created_at, updated_at
-            ) VALUES(?, 'request', 'up', ?, ?, ?, ?, 'queued', NULL, '{}', ?, ?)
+            ) VALUES(?, 'request', 'up', ?, ?, ?, ?, 'queued', NULL, ?, ?, ?)
             """,
             (
                 request_id,
@@ -130,6 +131,7 @@ def queue_upstream_request(
                 str(identity_label or "").strip()[:160] or None,
                 clean_kind,
                 clean_message[:8000],
+                _json_dumps({"task_id": str(task_id or "").strip()[:128] or None}),
                 now,
                 now,
             ),
@@ -259,3 +261,14 @@ def record_incoming_delegation(
             (clean_id,),
         ).fetchone()
     return _activity_view(row)
+
+
+def incoming_delegation_private_session_id(home: Path, delegation_id: str) -> Optional[str]:
+    """Resolve a continuation locally without publishing the child session id upstream."""
+    with _connect(home) as connection:
+        row = connection.execute(
+            "SELECT report FROM fleet_upstream_activity WHERE activity_id = ? AND activity_kind = 'delegation'",
+            (str(delegation_id or "").strip(),),
+        ).fetchone()
+    report = _json_loads(row["report"], {}) if row else {}
+    return str(report.get("private_session_id") or "").strip() or None

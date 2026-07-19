@@ -3,6 +3,8 @@ from __future__ import annotations
 # Split from app_server.py; dependencies are injected by the app_server facade.
 from app_backend.fleet_identity_creation import validate_local_worker_creation
 from app_backend.fleet_queue_policy import resolve_manual_queue_review_report_id
+from app_backend.fleet_route_resolution import FleetRouteResolutionError, resolve_manager_delegation_route
+from app_backend.fleet_session_routing import reconcile_local_identity_session_profiles, reconcile_local_manager_chat_selection
 
 def register_fleet_routes(app):
 
@@ -245,17 +247,43 @@ def register_fleet_routes(app):
 
         auth = _resolve_token(authorization)
 
-        if not _is_remote_session_auth(auth):
+        is_remote_session = _is_remote_session_auth(auth)
+
+        if not is_remote_session:
 
             auth = _standalone_manager_auth(auth)
 
-        snapshot = _get_remote_control_store().get_fleet_snapshot(
+        store = _get_remote_control_store()
+
+        desktop_id = _fleet_snapshot_desktop_id(auth)
+
+        snapshot = store.get_fleet_snapshot(
 
             user_id=int(auth["user_id"]),
 
-            desktop_id=_fleet_snapshot_desktop_id(auth),
+            desktop_id=desktop_id,
 
         )
+
+        if not is_remote_session and desktop_id:
+
+            bridge = _bridge_for_user(int(auth["user_id"]))
+
+            reconcile_local_identity_session_profiles(bridge=bridge, snapshot=snapshot)
+
+            snapshot = reconcile_local_manager_chat_selection(
+
+                store=store,
+
+                user_id=int(auth["user_id"]),
+
+                desktop_id=desktop_id,
+
+                snapshot=snapshot,
+
+                sessions=bridge.list_session_summaries(),
+
+            )
 
         return FleetSnapshotResponse.model_validate(snapshot)
 
@@ -278,6 +306,238 @@ def register_fleet_routes(app):
         )
 
         return [FleetIdentityView.model_validate(item) for item in list(snapshot.get("identities") or [])]
+
+    @app.get("/api/fleet/context-inspection")
+    async def fleet_context_inspection_setting(
+        authorization: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        from app_backend.context_inspection import context_inspection_setting
+
+        auth = _require_fleet_manager_auth(authorization)
+        return context_inspection_setting(int(auth["user_id"]))
+
+    @app.put("/api/fleet/context-inspection")
+    async def fleet_set_context_inspection(
+        request: FleetContextInspectionSettingRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        from app_backend.context_inspection import set_context_inspection_enabled
+
+        auth = _require_fleet_manager_auth(authorization)
+        store = _get_remote_control_store()
+        snapshot = store.get_fleet_snapshot(
+            user_id=int(auth["user_id"]), desktop_id=str(auth.get("desktop_id") or "")
+        )
+        manager = dict(snapshot.get("manager") or {})
+        setting = set_context_inspection_enabled(
+            int(auth["user_id"]),
+            request.enabled,
+            computer_id=str(manager.get("desktop_id") or auth.get("desktop_id") or "") or None,
+            computer_name=str(manager.get("display_name") or auth.get("desktop_name") or "") or None,
+        )
+        child_results = []
+        for child in list(snapshot.get("connection_permissions") or []):
+            if str(child.get("source") or "") != "paired_desktop":
+                continue
+            desktop_id = str(child.get("desktop_id") or "").strip()
+            if not desktop_id:
+                continue
+            try:
+                result = await _request_paired_computer_command(
+                    auth,
+                    desktop_id=desktop_id,
+                    command_name="fleet_set_context_inspection",
+                    payload={"enabled": request.enabled, "propagate": True},
+                    timeout_seconds=30.0,
+                )
+                child_results.append({"desktop_id": desktop_id, "ok": True, "result": result})
+            except Exception as exc:
+                child_results.append({"desktop_id": desktop_id, "ok": False, "error": str(exc)})
+        return {**setting, "children": child_results}
+
+    @app.post("/api/fleet/context/search")
+    async def fleet_context_search(
+        request: FleetContextSearchRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        from app_backend.context_inspection import search_context_index
+
+        auth = _require_fleet_manager_auth(authorization)
+        snapshot = _get_remote_control_store().get_fleet_snapshot(
+            user_id=int(auth["user_id"]), desktop_id=str(auth.get("desktop_id") or "")
+        )
+        results: list[Dict[str, Any]] = []
+        failures: list[Dict[str, Any]] = []
+        if not request.computer:
+            try:
+                local = search_context_index(int(auth["user_id"]), request.query, limit=request.limit)
+                results.extend(list(local.get("results") or []))
+            except PermissionError as exc:
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
+        child_states = [
+            item for item in list(snapshot.get("connection_permissions") or [])
+            if str(item.get("source") or "") == "paired_desktop"
+        ]
+        desktop_names = {
+            str(item.get("desktop_id") or ""): str(item.get("display_name") or "")
+            for item in list(snapshot.get("desktops") or [])
+        }
+        if request.computer:
+            needle = request.computer.strip().casefold()
+            child_states = [
+                item for item in child_states
+                if needle in {
+                    str(item.get("desktop_id") or "").casefold(),
+                    desktop_names.get(str(item.get("desktop_id") or ""), "").casefold(),
+                }
+            ]
+            if len(child_states) != 1:
+                raise HTTPException(status_code=404, detail="Child computer was not found or is ambiguous")
+        elif not request.include_descendants:
+            child_states = []
+        for child in child_states:
+            desktop_id = str(child.get("desktop_id") or "").strip()
+            try:
+                result = await _request_paired_computer_command(
+                    auth,
+                    desktop_id=desktop_id,
+                    command_name="fleet_context_search",
+                    payload={"query": request.query, "limit": request.limit, "include_descendants": True},
+                    timeout_seconds=45.0,
+                )
+                results.extend(
+                    {
+                        **dict(item),
+                        "route_computer_id": desktop_id,
+                    }
+                    for item in list(result.get("results") or [])
+                    if isinstance(item, dict)
+                )
+                failures.extend(list(result.get("failures") or []))
+            except Exception as exc:
+                failures.append({"computer_id": desktop_id, "error": str(exc)})
+        results.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
+        return {
+            "query": request.query,
+            "results": results[: request.limit],
+            "count": min(len(results), request.limit),
+            "failures": failures,
+            "lexical_fallback": not any(bool(item.get("semantic_score")) for item in results),
+        }
+
+    @app.post("/api/fleet/context/window")
+    async def fleet_context_window(
+        request: FleetContextWindowRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        from app_backend.context_inspection import context_window
+
+        auth = _require_fleet_manager_auth(authorization)
+        if not request.computer:
+            try:
+                return context_window(
+                    int(auth["user_id"]),
+                    request.message_id,
+                    direction=request.direction,
+                    cursor=request.cursor,
+                )
+            except PermissionError as exc:
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
+            except KeyError:
+                # The source index stays on the descendant computer. Walk only
+                # direct children and let each child repeat the lookup through
+                # its own hierarchy rather than copying context to this node.
+                snapshot = _get_remote_control_store().get_fleet_snapshot(
+                    user_id=int(auth["user_id"]), desktop_id=str(auth.get("desktop_id") or "")
+                )
+                for child in list(snapshot.get("connection_permissions") or []):
+                    if str(child.get("source") or "") != "paired_desktop":
+                        continue
+                    desktop_id = str(child.get("desktop_id") or "").strip()
+                    if not desktop_id:
+                        continue
+                    try:
+                        return await _request_paired_computer_command(
+                            auth,
+                            desktop_id=desktop_id,
+                            command_name="fleet_context_window",
+                            payload={
+                                "message_id": request.message_id,
+                                "direction": request.direction,
+                                "cursor": request.cursor,
+                            },
+                            timeout_seconds=30.0,
+                        )
+                    except Exception:
+                        continue
+                raise HTTPException(status_code=404, detail="Indexed message was not found on this computer or its descendants")
+        snapshot = _get_remote_control_store().get_fleet_snapshot(
+            user_id=int(auth["user_id"]), desktop_id=str(auth.get("desktop_id") or "")
+        )
+        needle = request.computer.strip().casefold()
+        names = {
+            str(item.get("desktop_id") or ""): str(item.get("display_name") or "")
+            for item in list(snapshot.get("desktops") or [])
+        }
+        matches = [
+            item for item in list(snapshot.get("connection_permissions") or [])
+            if str(item.get("source") or "") == "paired_desktop"
+            and needle in {
+                str(item.get("desktop_id") or "").casefold(),
+                names.get(str(item.get("desktop_id") or ""), "").casefold(),
+            }
+        ]
+        if len(matches) != 1:
+            raise HTTPException(status_code=404, detail="Child computer was not found or is ambiguous")
+        return await _request_paired_computer_command(
+            auth,
+            desktop_id=str(matches[0].get("desktop_id") or ""),
+            command_name="fleet_context_window",
+            payload=request.model_dump(),
+            timeout_seconds=30.0,
+        )
+
+    @app.get("/api/runtime-packs")
+    async def runtime_packs_summary(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+        from app_backend.runtime_pack_registry import runtime_pack_summary
+
+        _require_fleet_manager_auth(authorization)
+        return await asyncio.to_thread(runtime_pack_summary)
+
+    @app.get("/api/runtime-packs/{pack_id}/progress")
+    async def runtime_pack_install_progress(
+        pack_id: str, authorization: Optional[str] = Header(default=None)
+    ) -> Dict[str, Any]:
+        from app_backend.runtime_pack_registry import runtime_pack_progress
+
+        _require_fleet_manager_auth(authorization)
+        return runtime_pack_progress(pack_id)
+
+    @app.post("/api/runtime-packs/{pack_id}/install")
+    async def runtime_pack_install(
+        pack_id: str,
+        request: RuntimePackMutationRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        from app_backend.runtime_pack_registry import install_runtime_pack
+
+        _require_fleet_manager_auth(authorization)
+        try:
+            return await asyncio.to_thread(install_runtime_pack, pack_id, force=request.force)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/api/runtime-packs/{pack_id}")
+    async def runtime_pack_remove(
+        pack_id: str, authorization: Optional[str] = Header(default=None)
+    ) -> Dict[str, Any]:
+        from app_backend.runtime_pack_registry import remove_runtime_pack
+
+        _require_fleet_manager_auth(authorization)
+        try:
+            return await asyncio.to_thread(remove_runtime_pack, pack_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/api/fleet/desktops/{desktop_id}/delegations")
     async def fleet_delegate_to_computer(
@@ -329,6 +589,234 @@ def register_fleet_routes(app):
             user_id=int(auth["user_id"]),
             event_type="fleet_delegation_status",
             payload={"delegation": delegation},
+            origin_channel="manager",
+        )
+        return delegation
+
+    @app.post("/api/fleet/delegations/route", response_model=FleetRoutedTaskResponse)
+    async def fleet_route_delegated_task(
+        request: FleetRoutedTaskRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> FleetRoutedTaskResponse:
+        auth = _require_fleet_manager_auth(authorization)
+        store = _get_remote_control_store()
+        snapshot = store.get_fleet_snapshot(
+            user_id=int(auth["user_id"]),
+            desktop_id=str(auth.get("desktop_id") or ""),
+        )
+        try:
+            route = resolve_manager_delegation_route(
+                snapshot,
+                scope=request.scope,
+                computer=request.computer,
+                identity=request.identity,
+                target_role=request.target_role,
+            )
+        except FleetRouteResolutionError as exc:
+            status_code = 409 if exc.code in {"child_update_required", "default_worker_missing"} else 400
+            raise HTTPException(status_code=status_code, detail={"code": exc.code, "message": str(exc)}) from exc
+
+        origin = {
+            "manager_session_id": request.origin_manager_session_id,
+            "manager_message_id": request.origin_manager_message_id,
+            "run_id": request.origin_run_id,
+        }
+        route_payload = route.to_dict()
+        base_metadata = {
+            **dict(request.metadata or {}),
+            "routed_task": True,
+            "route": route_payload,
+            "origin_manager_session_id": request.origin_manager_session_id,
+            "origin_manager_message_id": request.origin_manager_message_id,
+            "origin_run_id": request.origin_run_id,
+            "continuation_task_id": request.continuation_task_id,
+            "workspace": request.workspace,
+            "workspace_id": request.workspace_id,
+            "security_permission_mode": request.security_permission_mode,
+        }
+        if route.route_kind == "local_worker":
+            worker = store.get_worker(user_id=int(auth["user_id"]), worker_id=str(route.worker_id or ""))
+            target_session_id = None
+            if request.continuation_task_id:
+                previous_task = store.get_worker_task(
+                    user_id=int(auth["user_id"]), task_id=request.continuation_task_id
+                )
+                if str(previous_task.get("worker_id") or "") != str(worker.get("worker_id") or ""):
+                    raise HTTPException(status_code=409, detail="A continuation must stay with its owning worker")
+                target_session_id = str((previous_task.get("metadata") or {}).get("target_session_id") or "").strip() or None
+            task = store.assign_worker_task(
+                user_id=int(auth["user_id"]),
+                worker_id=str(worker.get("worker_id") or ""),
+                prompt=request.prompt,
+                source="manager_routed",
+                target_session_id=target_session_id,
+                target_mode="continuation" if target_session_id else "isolated",
+                metadata={
+                    **base_metadata,
+                    "enabled_tool_packs": list(worker.get("enabled_tool_packs") or []),
+                },
+            )
+            try:
+                task = await _try_dispatch_fleet_worker_task(
+                    user_id=int(auth["user_id"]), worker=worker, task=task
+                )
+            except RuntimeError:
+                logger.exception("[fleet] routed local task remains queued")
+            _publish_fleet_delta(
+                user_id=int(auth["user_id"]),
+                event_type="fleet_task_assigned",
+                payload={"task": task, "worker_id": worker.get("worker_id"), "route": route_payload},
+                origin_channel="manager",
+            )
+            return FleetRoutedTaskResponse(
+                route=route_payload,
+                state=str(task.get("status") or "queued"),
+                task_id=str(task.get("task_id") or "") or None,
+                origin=origin,
+                report_id=task.get("report_id"),
+                report_linkage={"kind": "fleet_task", "task_id": task.get("task_id")},
+            )
+
+        desktop_id = str(route.computer_id or "")
+        permission_state = _paired_computer_permissions_for_action(auth, desktop_id)
+        permission_key = "delegate_workers" if route.identity_role == "worker" else "delegate_manager"
+        if not bool((permission_state.get("permissions") or {}).get(permission_key, False)):
+            raise HTTPException(status_code=403, detail="That computer has not allowed this delegation target")
+        target_session_id = None
+        if request.continuation_task_id:
+            previous = next(
+                (
+                    item for item in list(snapshot.get("delegations") or [])
+                    if str(item.get("delegation_id") or "") == str(request.continuation_task_id)
+                ),
+                None,
+            )
+            if not previous:
+                raise HTTPException(status_code=404, detail="The continuation delegation was not found")
+        delegation = store.create_computer_delegation(
+            user_id=int(auth["user_id"]),
+            desktop_id=desktop_id,
+            prompt=request.prompt,
+            target_kind=route.identity_role,
+            target_selector=route.target_selector,
+            metadata={**base_metadata, "target_session_id": target_session_id},
+        )
+        try:
+            await _send_paired_computer_command(
+                auth,
+                desktop_id=desktop_id,
+                command_name="fleet_delegate",
+                payload={
+                    "delegation_id": delegation["delegation_id"],
+                    "prompt": request.prompt,
+                    "target_kind": route.identity_role,
+                    "target_selector": route.target_selector,
+                    "target_session_id": target_session_id,
+                    "metadata": {**base_metadata, "target_session_id": target_session_id},
+                },
+            )
+            delegation = store.update_computer_delegation(
+                user_id=int(auth["user_id"]),
+                delegation_id=delegation["delegation_id"],
+                status="running",
+            )
+        except Exception as exc:
+            store.update_computer_delegation(
+                user_id=int(auth["user_id"]),
+                delegation_id=delegation["delegation_id"],
+                status="failed",
+                report={"summary": str(exc), "blockers": ["The paired computer was unavailable."]},
+            )
+            raise
+        _publish_fleet_delta(
+            user_id=int(auth["user_id"]),
+            event_type="fleet_delegation_status",
+            payload={"delegation": delegation, "route": route_payload},
+            origin_channel="manager",
+        )
+        return FleetRoutedTaskResponse(
+            route=route_payload,
+            state=str(delegation.get("status") or "running"),
+            delegation_id=str(delegation.get("delegation_id") or "") or None,
+            origin=origin,
+            report_linkage={"kind": "computer_delegation", "delegation_id": delegation.get("delegation_id")},
+        )
+
+    @app.post("/api/fleet/delegations/{delegation_id}/stop")
+    async def fleet_stop_computer_delegation(
+        delegation_id: str,
+        request: FleetStopWorkerRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        auth = _require_fleet_manager_auth(authorization)
+        store = _get_remote_control_store()
+        try:
+            delegation = store.get_computer_delegation(
+                user_id=int(auth["user_id"]), delegation_id=delegation_id
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if str(delegation.get("status") or "") in {"completed", "failed", "stopped", "canceled"}:
+            return delegation
+        await _request_paired_computer_command(
+            auth,
+            desktop_id=str(delegation.get("desktop_id") or ""),
+            command_name="fleet_stop_task",
+            payload={"task_id": delegation_id, "reason": request.reason, "metadata": request.metadata},
+            timeout_seconds=15.0,
+        )
+        delegation = store.update_computer_delegation(
+            user_id=int(auth["user_id"]),
+            delegation_id=delegation_id,
+            status="stopped",
+            report={
+                **dict(delegation.get("report") or {}),
+                "status": "stopped",
+                "summary": str(request.reason or "Delegation stopped by manager."),
+            },
+        )
+        _publish_fleet_delta(
+            user_id=int(auth["user_id"]),
+            event_type="fleet_delegation_status",
+            payload={"delegation": delegation},
+            origin_channel="manager",
+        )
+        return delegation
+
+    @app.post("/api/fleet/delegations/{delegation_id}/redirect")
+    async def fleet_redirect_computer_delegation(
+        delegation_id: str,
+        request: FleetTaskRedirectRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        auth = _require_fleet_manager_auth(authorization)
+        store = _get_remote_control_store()
+        try:
+            delegation = store.get_computer_delegation(
+                user_id=int(auth["user_id"]), delegation_id=delegation_id
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        await _request_paired_computer_command(
+            auth,
+            desktop_id=str(delegation.get("desktop_id") or ""),
+            command_name="fleet_redirect_task",
+            payload={"task_id": delegation_id, "direction": request.direction},
+            timeout_seconds=30.0,
+        )
+        try:
+            delegation = store.redirect_computer_delegation(
+                user_id=int(auth["user_id"]),
+                delegation_id=delegation_id,
+                direction=request.direction,
+                source=request.source,
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        _publish_fleet_delta(
+            user_id=int(auth["user_id"]),
+            event_type="fleet_delegation_status",
+            payload={"delegation": delegation, "direction": request.direction},
             origin_channel="manager",
         )
         return delegation
@@ -634,6 +1122,50 @@ def register_fleet_routes(app):
         )
 
         return FleetActiveIdentityResponse.model_validate(result)
+
+    @app.put("/api/fleet/identities/{identity_id}/upstream-visibility", response_model=FleetIdentityView)
+
+    async def fleet_set_identity_upstream_visibility(
+
+        identity_id: str,
+
+        request: FleetIdentityVisibilityRequest,
+
+        authorization: Optional[str] = Header(default=None),
+
+    ) -> FleetIdentityView:
+
+        auth = _require_fleet_manager_auth(authorization)
+
+        try:
+
+            identity = _get_remote_control_store().set_identity_upstream_visibility(
+
+                user_id=int(auth["user_id"]),
+
+                identity_id=identity_id,
+
+                published_upstream=request.published_upstream,
+
+            )
+
+        except KeyError as exc:
+
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        _publish_fleet_delta(
+
+            user_id=int(auth["user_id"]),
+
+            event_type="fleet_identity_visibility_changed",
+
+            payload={"identity": identity},
+
+            origin_channel=str(auth.get("actor_kind") or "app"),
+
+        )
+
+        return FleetIdentityView.model_validate(identity)
 
     @app.post("/api/fleet/groups")
 

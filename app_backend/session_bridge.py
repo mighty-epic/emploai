@@ -18,6 +18,7 @@ from shared.session_timeline import append_timeline_event, create_timeline_event
 from shared.runtime_paths import user_state_root
 from shared.security_policy import normalize_permission_mode
 from shared.tool_packs import default_enabled_tool_packs, normalize_enabled_tool_packs
+from app_backend.fleet_identity_profiles import role_locked_tool_packs
 
 if TYPE_CHECKING:
     from telegram_bot.telegram_session_state import TelegramSession
@@ -457,6 +458,9 @@ class AppSessionBridge:
         fleet_identity_id: Optional[str] = None,
         fleet_identity_role: Optional[str] = None,
         fleet_worker_id: Optional[str] = None,
+        fleet_task_mode: Optional[str] = None,
+        fleet_task_id: Optional[str] = None,
+        fleet_identity_metadata: Optional[Dict[str, Any]] = None,
         activate: bool = True,
     ) -> Session:
         runtime = self._runtime()
@@ -471,6 +475,18 @@ class AppSessionBridge:
             if security_permission_mode is not None
             else self._permission_mode_for_workspace(target_workspace) or normalize_permission_mode(defaults["security_permission_mode"])
         )
+        requested_tool_packs = normalize_enabled_tool_packs(
+            enabled_tool_packs if enabled_tool_packs is not None else defaults["enabled_tool_packs"]
+        )
+        clean_identity_role = str(fleet_identity_role or "").strip().lower() or None
+        if clean_identity_role in {"manager", "worker"}:
+            resolved_tool_packs = role_locked_tool_packs(
+                role=clean_identity_role,
+                requested=requested_tool_packs,
+                identity_metadata=fleet_identity_metadata,
+            )
+        else:
+            resolved_tool_packs = requested_tool_packs or default_enabled_tool_packs()
         create_kwargs = {
             "name": name,
             "workspace": target_workspace,
@@ -478,7 +494,7 @@ class AppSessionBridge:
             "variant": defaults["variant"],
             "agent_mode": defaults["agent_mode"],
             "planner_model": defaults["planner_model"],
-            "enabled_tool_packs": normalize_enabled_tool_packs(enabled_tool_packs or defaults["enabled_tool_packs"]) or default_enabled_tool_packs(),
+            "enabled_tool_packs": resolved_tool_packs,
             "security_permission_mode": inherited_permission_mode,
             "telegram_bot_config_id": telegram_bot_config_id if telegram_bot_config_id is not None else defaults["telegram_bot_config_id"],
             "headless_eligible": bool(headless_eligible if headless_eligible is not None else defaults["headless_eligible"]),
@@ -493,9 +509,11 @@ class AppSessionBridge:
         except Exception:
             session.account_user_id = None
         session.fleet_identity_id = str(fleet_identity_id or "").strip() or None
-        session.fleet_identity_role = str(fleet_identity_role or "").strip() or None
+        session.fleet_identity_role = clean_identity_role
         session.fleet_worker_id = str(fleet_worker_id or "").strip() or None
-        if session.account_user_id is not None or session.fleet_identity_id or session.fleet_identity_role or session.fleet_worker_id:
+        session.fleet_task_mode = str(fleet_task_mode or "").strip().lower() or ("direct" if clean_identity_role == "worker" else None)
+        session.fleet_task_id = str(fleet_task_id or "").strip() or None
+        if session.account_user_id is not None or session.fleet_identity_id or session.fleet_identity_role or session.fleet_worker_id or session.fleet_task_mode or session.fleet_task_id:
             self.session_manager.save_session(session)
 
         if activate:
@@ -634,6 +652,7 @@ class AppSessionBridge:
                 display_label = "Telegram"
 
         return {
+            "message_id": str(message.get("stable_message_id") or message.get("message_id") or "").strip() or None,
             "role": message.get("role", "user"),
             "content": message.get("content", ""),
             "timestamp": message.get("timestamp"),
@@ -686,6 +705,8 @@ class AppSessionBridge:
             "fleet_identity_id": getattr(session, "fleet_identity_id", None),
             "fleet_identity_role": getattr(session, "fleet_identity_role", None),
             "fleet_worker_id": getattr(session, "fleet_worker_id", None),
+            "fleet_task_mode": getattr(session, "fleet_task_mode", None),
+            "fleet_task_id": getattr(session, "fleet_task_id", None),
             "account_user_id": getattr(session, "account_user_id", None),
             "account_email": getattr(session, "account_email", None),
             "plan_mode": getattr(session, "plan_mode", None),
@@ -712,6 +733,8 @@ class AppSessionBridge:
             "fleet_identity_id": getattr(session, "fleet_identity_id", None),
             "fleet_identity_role": getattr(session, "fleet_identity_role", None),
             "fleet_worker_id": getattr(session, "fleet_worker_id", None),
+            "fleet_task_mode": getattr(session, "fleet_task_mode", None),
+            "fleet_task_id": getattr(session, "fleet_task_id", None),
             "account_user_id": getattr(session, "account_user_id", None),
             "account_email": getattr(session, "account_email", None),
             "plan_mode": getattr(session, "plan_mode", None),
@@ -754,6 +777,8 @@ class AppSessionBridge:
             "fleet_identity_id": getattr(session, "fleet_identity_id", None),
             "fleet_identity_role": getattr(session, "fleet_identity_role", None),
             "fleet_worker_id": getattr(session, "fleet_worker_id", None),
+            "fleet_task_mode": getattr(session, "fleet_task_mode", None),
+            "fleet_task_id": getattr(session, "fleet_task_id", None),
             "account_user_id": getattr(session, "account_user_id", None),
             "account_email": getattr(session, "account_email", None),
             "plan_mode": getattr(session, "plan_mode", None),
@@ -927,7 +952,10 @@ class AppSessionBridge:
         return {"ok": True, "id": bot_config_id}
 
     def update_session_tool_packs(self, session_id: str, enabled_tool_packs: List[str]) -> Session:
-        session = self.orchestrator.update_session_tool_packs(session_id, enabled_tool_packs)
+        existing = self._load_session(session_id, set_current=False)
+        role = str(getattr(existing, "fleet_identity_role", "") or "").strip().lower()
+        locked = role_locked_tool_packs(role=role, requested=enabled_tool_packs) if role in {"manager", "worker"} else enabled_tool_packs
+        session = self.orchestrator.update_session_tool_packs(session_id, locked)
         self._reload_current_runtime_session_if_idle(session_id)
         return session
 

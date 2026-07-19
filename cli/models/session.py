@@ -1,6 +1,7 @@
 """Session data models for chat session persistence."""
 
 import hashlib
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -50,6 +51,12 @@ def _sanitize_context_compaction(value: Optional[Dict[str, Any]]) -> Optional[Di
     return cleaned
 
 
+def _ensure_stable_persisted_ids(items: List[Dict[str, Any]], *, key: str) -> None:
+    for item in items:
+        if isinstance(item, dict) and not str(item.get(key) or "").strip():
+            item[key] = str(uuid.uuid4())
+
+
 def normalize_agent_mode(value: Optional[str], *, default: str = "manual") -> str:
     normalized = str(value or "").strip().lower()
     if normalized in _LEGACY_AGENT_MODE_MAP:
@@ -81,6 +88,8 @@ class SessionSummary:
     fleet_identity_id: Optional[str] = None
     fleet_identity_role: Optional[str] = None
     fleet_worker_id: Optional[str] = None
+    fleet_task_mode: Optional[str] = None
+    fleet_task_id: Optional[str] = None
     account_user_id: Optional[int] = None
     account_email: Optional[str] = None
     plan_mode: Optional[Dict[str, Any]] = None
@@ -108,6 +117,8 @@ class SessionSummary:
             "fleet_identity_id": self.fleet_identity_id,
             "fleet_identity_role": self.fleet_identity_role,
             "fleet_worker_id": self.fleet_worker_id,
+            "fleet_task_mode": self.fleet_task_mode,
+            "fleet_task_id": self.fleet_task_id,
             "account_user_id": self.account_user_id,
             "account_email": self.account_email,
             "plan_mode": self.plan_mode,
@@ -137,6 +148,8 @@ class SessionSummary:
             fleet_identity_id=data.get("fleet_identity_id"),
             fleet_identity_role=data.get("fleet_identity_role"),
             fleet_worker_id=data.get("fleet_worker_id"),
+            fleet_task_mode=data.get("fleet_task_mode"),
+            fleet_task_id=data.get("fleet_task_id"),
             account_user_id=data.get("account_user_id"),
             account_email=data.get("account_email"),
             plan_mode=data.get("plan_mode") if isinstance(data.get("plan_mode"), dict) else None,
@@ -165,6 +178,8 @@ class Session:
     fleet_identity_id: Optional[str] = None
     fleet_identity_role: Optional[str] = None
     fleet_worker_id: Optional[str] = None
+    fleet_task_mode: Optional[str] = None
+    fleet_task_id: Optional[str] = None
     account_user_id: Optional[int] = None
     account_email: Optional[str] = None
     plan_mode: Optional[Dict[str, Any]] = None
@@ -190,6 +205,8 @@ class Session:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
+        _ensure_stable_persisted_ids(self.chat_history, key="stable_message_id")
+        _ensure_stable_persisted_ids(self.event_timeline, key="id")
         return {
             "id": self.id,
             "name": self.name,
@@ -209,6 +226,8 @@ class Session:
             "fleet_identity_id": self.fleet_identity_id,
             "fleet_identity_role": self.fleet_identity_role,
             "fleet_worker_id": self.fleet_worker_id,
+            "fleet_task_mode": self.fleet_task_mode,
+            "fleet_task_id": self.fleet_task_id,
             "account_user_id": self.account_user_id,
             "account_email": self.account_email,
             "plan_mode": self.plan_mode,
@@ -245,6 +264,8 @@ class Session:
             fleet_identity_id=data.get("fleet_identity_id"),
             fleet_identity_role=data.get("fleet_identity_role"),
             fleet_worker_id=data.get("fleet_worker_id"),
+            fleet_task_mode=data.get("fleet_task_mode"),
+            fleet_task_id=data.get("fleet_task_id"),
             account_user_id=data.get("account_user_id"),
             account_email=data.get("account_email"),
             plan_mode=data.get("plan_mode") if isinstance(data.get("plan_mode"), dict) else None,
@@ -289,6 +310,8 @@ class Session:
             fleet_identity_id=self.fleet_identity_id,
             fleet_identity_role=self.fleet_identity_role,
             fleet_worker_id=self.fleet_worker_id,
+            fleet_task_mode=self.fleet_task_mode,
+            fleet_task_id=self.fleet_task_id,
             account_user_id=self.account_user_id,
             account_email=self.account_email,
             plan_mode=self.plan_mode,

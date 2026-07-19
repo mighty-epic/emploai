@@ -55,6 +55,11 @@ def test_account_and_mobile_routes_are_not_mounted():
     assert "/ws/remote/desktop" in paths
     assert "/api/fleet/enrollments" in paths
     assert "/api/fleet/enrollments/complete" in paths
+    assert "/api/fleet/delegations/route" in paths
+    assert "/api/fleet/context-inspection" in paths
+    assert "/api/fleet/context/search" in paths
+    assert "/api/runtime-packs" in paths
+    assert "/api/runtime-packs/{pack_id}/install" in paths
 
 
 def test_fleet_store_exposes_no_account_login_or_mobile_pairing(tmp_path: Path):

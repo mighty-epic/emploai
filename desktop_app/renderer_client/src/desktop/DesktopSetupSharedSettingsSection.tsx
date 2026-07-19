@@ -55,11 +55,7 @@ export function DesktopSetupSharedSettingsSection({ draft, saving = false, statu
   return (
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>{standaloneMode ? 'Local Runtime Settings' : 'Shared Account Settings'}</Text>
-      <Text style={styles.helperText}>
-        {standaloneMode
-          ? 'These controls are saved on this computer and apply to the local desktop runtime.'
-          : 'These account-backed controls apply from desktop, mobile, and Telegram.'}
-      </Text>
+      {!standaloneMode ? <Text style={styles.helperText}>Applies across desktop, mobile, and Telegram.</Text> : null}
 
       <View style={styles.settingStack}>
         <View style={styles.settingCard}>

@@ -252,6 +252,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
   const [pendingSurfaceMode, setPendingSurfaceMode] = useState(requestedSurfaceMode);
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
   const [exitBusy, setExitBusy] = useState(false);
+  const [setupTarget, setSetupTarget] = useState<{ tab: 'general' | 'packs'; packId?: string | null }>({ tab: 'general' });
   const [exitError, setExitError] = useState<string | null>(null);
   const [startupSkeletonExpired, setStartupSkeletonExpired] = useState(false);
   const remoteAuthPasswordRequirements = passwordRequirementStatus(String(remoteAuthPassword || ''));
@@ -673,6 +674,8 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
         {showSetup && bootstrap?.setupState ? (
           <View style={styles.startupSetupShell}>
             <DesktopSetupPanel
+              initialTab={setupTarget.tab}
+              focusPackId={setupTarget.packId}
               setupState={bootstrap.setupState}
               saving={savingSetup}
               voicePackBusyId={voicePackBusyId}
@@ -766,6 +769,8 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
         {showSetup && bootstrap?.setupState ? (
           <View style={styles.startupSetupShell}>
             <DesktopSetupPanel
+              initialTab={setupTarget.tab}
+              focusPackId={setupTarget.packId}
               setupState={bootstrap.setupState}
               saving={savingSetup}
               voicePackBusyId={voicePackBusyId}
@@ -1063,7 +1068,10 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
                 voiceStatus={bootstrap.setupState?.voiceStatus || null}
                 onSelectVoiceEngine={(engine) => selectVoiceEngine(engine)}
                 onStartupStateChange={handleConversationStartupState}
-                onOpenSetup={() => setShowSetup(true)}
+                onOpenSetup={(target) => {
+                  setSetupTarget({ tab: target?.tab === 'packs' ? 'packs' : 'general', packId: target?.packId || null });
+                  setShowSetup(true);
+                }}
                 accountEmail={accountEmail}
                 updateAvailable={updateAvailable}
                 remoteAuthBusy={remoteAuthBusy}
@@ -1123,6 +1131,8 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
           <View style={styles.setupOverlayFrame} pointerEvents="box-none">
             <View style={styles.setupOverlaySurface}>
               <DesktopSetupPanel
+                initialTab={setupTarget.tab}
+                focusPackId={setupTarget.packId}
                 setupState={bootstrap.setupState}
                 saving={savingSetup}
                 voicePackBusyId={voicePackBusyId}

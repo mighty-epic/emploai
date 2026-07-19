@@ -186,6 +186,8 @@ async def _handle_remote_desktop_ws(websocket: WebSocket, auth: Dict[str, Any]) 
 
                         identity_label=str(payload.get("identity_label") or "").strip() or None,
 
+                        task_id=str(payload.get("task_id") or "").strip() or None,
+
                     )
 
                     _publish_fleet_delta(
@@ -223,6 +225,8 @@ async def _handle_remote_desktop_ws(websocket: WebSocket, auth: Dict[str, Any]) 
                             delegation_id=delegation_id,
 
                             status=str(payload.get("status") or "running"),
+
+                            desktop_id=desktop_id,
 
                         )
 
@@ -264,6 +268,8 @@ async def _handle_remote_desktop_ws(websocket: WebSocket, auth: Dict[str, Any]) 
 
                             report=payload,
 
+                            desktop_id=desktop_id,
+
                         )
 
                         _publish_fleet_delta(
@@ -277,6 +283,40 @@ async def _handle_remote_desktop_ws(websocket: WebSocket, auth: Dict[str, Any]) 
                             origin_channel="worker",
 
                         )
+
+                        try:
+
+                            from shared.proactive_runtime import append_fleet_report_event
+
+                            delegation_metadata = dict(delegation.get("metadata") or {})
+
+                            append_fleet_report_event(
+
+                                user_id=user_id,
+
+                                report={
+
+                                    **payload,
+
+                                    "delegation_id": delegation_id,
+
+                                    "origin": {
+
+                                        key: delegation_metadata.get(key)
+
+                                        for key in ("origin_manager_session_id", "origin_manager_message_id", "origin_run_id")
+
+                                        if delegation_metadata.get(key)
+
+                                    },
+
+                                },
+
+                            )
+
+                        except Exception:
+
+                            logger.exception("[fleet] failed appending delegation report event")
 
                     except Exception:
 
@@ -382,6 +422,10 @@ async def _handle_remote_desktop_ws(websocket: WebSocket, auth: Dict[str, Any]) 
 
                     try:
 
+                        current_task = store.get_worker_task(user_id=user_id, task_id=task_id)
+
+                        task_metadata = dict(current_task.get("metadata") or {})
+
                         report = store.complete_worker_task_report(
 
                             user_id=user_id,
@@ -402,7 +446,21 @@ async def _handle_remote_desktop_ws(websocket: WebSocket, auth: Dict[str, Any]) 
 
                             next_suggested_action=payload.get("next_suggested_action"),
 
-                            raw=dict(payload.get("raw") or {}),
+                            raw={
+
+                                **dict(payload.get("raw") or {}),
+
+                                "origin": {
+
+                                    key: task_metadata.get(key)
+
+                                    for key in ("origin_manager_session_id", "origin_manager_message_id", "origin_run_id")
+
+                                    if task_metadata.get(key)
+
+                                },
+
+                            },
 
                         )
 

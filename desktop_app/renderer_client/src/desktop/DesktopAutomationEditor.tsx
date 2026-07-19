@@ -159,14 +159,11 @@ export function DesktopAutomationEditor({ mode, initialDraft, identities, groups
   return (
     <View style={styles.editor}>
       <View style={styles.editorHeader}>
-        <Text style={styles.eyebrow}>{mode === 'edit' ? 'Edit Automation' : 'New Automation'}</Text>
-        <Text style={styles.detailTitle}>{mode === 'edit' ? `Update ${initialDraft.name}` : 'Schedule work with a clear safety boundary'}</Text>
-        <Text style={styles.detailSubtitle}>Define the task first. Routing and tool controls stay optional until you need them.</Text>
+        <Text style={styles.detailTitle}>{mode === 'edit' ? `Update ${initialDraft.name}` : 'New automation'}</Text>
       </View>
       <ScrollView style={styles.detailScroll} contentContainerStyle={styles.editorBody} keyboardShouldPersistTaps="handled">
         <View style={styles.editorSection}>
-          <Text style={styles.editorSectionTitle}>1. What Should Happen?</Text>
-          <Text style={styles.editorSectionCopy}>Use a short name and give the agent enough detail to know when the work is complete.</Text>
+          <Text style={styles.editorSectionTitle}>Task</Text>
           <View style={styles.field}>
             <Text style={styles.fieldLabel}>Name <Text style={styles.required}>*</Text></Text>
             <TextInput
@@ -199,7 +196,7 @@ export function DesktopAutomationEditor({ mode, initialDraft, identities, groups
         </View>
 
         <View style={styles.editorSection}>
-          <Text style={styles.editorSectionTitle}>2. When Should It Run?</Text>
+          <Text style={styles.editorSectionTitle}>Schedule</Text>
           <Text style={styles.editorSectionCopy}>Daily schedules use this computer’s timezone: {timezone}.</Text>
           <View accessibilityRole="radiogroup" accessibilityLabel="Schedule type" style={styles.optionStack}>
             {SCHEDULE_OPTIONS.map((option) => (
@@ -279,8 +276,7 @@ export function DesktopAutomationEditor({ mode, initialDraft, identities, groups
         </View>
 
         <View style={styles.editorSection}>
-          <Text style={styles.editorSectionTitle}>3. Where Should It Work?</Text>
-          <Text style={styles.editorSectionCopy}>Most automations can follow the current identity. Choose a fixed destination only when routing must never change.</Text>
+          <Text style={styles.editorSectionTitle}>Destination</Text>
           <View accessibilityRole="radiogroup" accessibilityLabel="Automation target" style={styles.optionStack}>
             {TARGET_OPTIONS.map((option) => (
               <OptionCard key={option.key} label={option.label} description={option.description} selected={draft.targetKind === option.key} onPress={() => update('targetKind', option.key)} />
@@ -311,8 +307,7 @@ export function DesktopAutomationEditor({ mode, initialDraft, identities, groups
         </View>
 
         <View style={styles.editorSection}>
-          <Text style={styles.editorSectionTitle}>4. Safety</Text>
-          <Text style={styles.editorSectionCopy}>Choose how the automation should behave when tools could change files, processes, or external systems.</Text>
+          <Text style={styles.editorSectionTitle}>Safety</Text>
           <View accessibilityRole="radiogroup" accessibilityLabel="Automation permission level" style={styles.optionStack}>
             {PERMISSION_OPTIONS.map((option) => (
               <OptionCard key={option.key} label={option.label} description={option.description} selected={draft.permissionMode === option.key} onPress={() => update('permissionMode', option.key)} />

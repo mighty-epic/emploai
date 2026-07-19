@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { InfoHint } from './InfoHint';
+import { DESKTOP_UI as UI } from '../desktop/desktopUiTokens';
 
 export type ConfirmationTone = 'normal' | 'danger' | 'access';
 
@@ -86,9 +87,11 @@ export function ConfirmationDialog({
           accessibilityLabel={title}
           style={[styles.card, tone === 'danger' ? styles.cardDanger : tone === 'access' ? styles.cardAccess : null]}
         >
-          <Text style={styles.kicker}>
-            {tone === 'danger' ? 'Needs confirmation' : tone === 'access' ? 'Access change' : 'Confirm action'}
-          </Text>
+          {tone !== 'normal' ? (
+            <Text style={[styles.kicker, tone === 'danger' ? styles.kickerDanger : styles.kickerAccess]}>
+              {tone === 'danger' ? 'Needs confirmation' : 'Access change'}
+            </Text>
+          ) : null}
           <Text style={styles.title}>{title}</Text>
           <Text style={styles.message}>{message}</Text>
           {details?.length ? (
@@ -112,7 +115,7 @@ export function ConfirmationDialog({
               style={[styles.confirmButton, tone === 'danger' ? styles.confirmDanger : tone === 'access' ? styles.confirmAccess : null]}
               onPress={onConfirm}
             >
-              <Text style={[styles.confirmText, tone === 'access' ? styles.confirmAccessText : null]}>{confirmLabel}</Text>
+              <Text style={[styles.confirmText, tone === 'danger' ? styles.confirmDangerText : tone === 'access' ? styles.confirmAccessText : null]}>{confirmLabel}</Text>
             </Pressable>
           </View>
         </View>
@@ -126,7 +129,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(3, 7, 18, 0.62)',
+    backgroundColor: UI.color.overlay,
     padding: 20,
   },
   backdrop: {
@@ -135,32 +138,36 @@ const styles = StyleSheet.create({
   card: {
     width: '100%',
     maxWidth: 460,
-    borderRadius: 12,
+    borderRadius: UI.radius.large,
     borderWidth: 1,
-    borderColor: '#2d4467',
-    backgroundColor: '#0d1728',
-    padding: 18,
+    borderColor: UI.color.borderStrong,
+    backgroundColor: UI.color.surfaceRaised,
+    padding: 20,
     gap: 10,
+    ...UI.elevation.high,
   },
   cardDanger: {
-    borderColor: '#8b2f49',
+    borderLeftWidth: 2,
+    borderLeftColor: UI.color.danger,
   },
   cardAccess: {
-    borderColor: '#8a641d',
+    borderLeftWidth: 2,
+    borderLeftColor: UI.color.warning,
   },
   kicker: {
-    color: '#7cc7ff',
     fontSize: 11,
-    fontWeight: '900',
+    fontWeight: '700',
     textTransform: 'uppercase',
   },
+  kickerDanger: { color: UI.color.danger },
+  kickerAccess: { color: UI.color.warning },
   title: {
-    color: '#ffffff',
+    color: UI.color.text,
     fontSize: 20,
-    fontWeight: '900',
+    fontWeight: '700',
   },
   message: {
-    color: '#cfddf5',
+    color: UI.color.textMuted,
     fontSize: 14,
     lineHeight: 21,
   },
@@ -169,13 +176,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     borderRadius: 8,
-    backgroundColor: '#101f35',
+    backgroundColor: UI.color.surfaceMuted,
     paddingHorizontal: 10,
     paddingVertical: 8,
     gap: 10,
   },
   detailLabel: {
-    color: '#aebfdb',
+    color: UI.color.textMuted,
     fontSize: 12,
     fontWeight: '800',
   },
@@ -188,32 +195,32 @@ const styles = StyleSheet.create({
   cancelButton: {
     minHeight: 42,
     borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#2c3c5b',
+    backgroundColor: UI.color.surfaceMuted,
     justifyContent: 'center',
     paddingHorizontal: 14,
   },
   cancelText: {
-    color: '#d8e6ff',
-    fontWeight: '900',
+    color: UI.color.text,
+    fontWeight: '600',
   },
   confirmButton: {
     minHeight: 42,
     borderRadius: 8,
     justifyContent: 'center',
-    backgroundColor: '#2d77d5',
+    backgroundColor: UI.color.accent,
     paddingHorizontal: 14,
   },
   confirmDanger: {
-    backgroundColor: '#8b2343',
+    backgroundColor: UI.color.danger,
   },
   confirmAccess: {
-    backgroundColor: '#f5b841',
+    backgroundColor: UI.color.warning,
   },
   confirmText: {
-    color: '#ffffff',
-    fontWeight: '900',
+    color: UI.color.accentInk,
+    fontWeight: '700',
   },
+  confirmDangerText: { color: UI.color.text },
   confirmAccessText: {
     color: '#1a1204',
   },

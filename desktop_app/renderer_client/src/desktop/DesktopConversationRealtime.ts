@@ -30,7 +30,7 @@ export function handleDesktopConversationRealtimeEvent(
   event: DesktopRealtimeEvent,
   channel: RealtimeChannel,
 ) {
-    const { acceptJarvisBargeInTranscript, activeVoiceUtteranceIdRef, alwaysOnEnabledRef, appendLocalSystemMessage, appendTimelineEvent, appendVoiceTranscriptSegment, applySessionSync, artifacts, assistantDeltaBufferRef, assistantDeltaFlushTimerRef, clearAssistantDeltaFlushTimer, clearConversationSelection, clearJarvisBargeInCandidate, conversationModeRef, createLocalToolTimelineEvent, drainDeferredAlwaysOnFrames, flushAssistantDeltaBuffer, id, lastComposerInputOriginRef, normalizeCompletedTaskBoards, pauseJarvisMicrophone, playAssistantAudio, pushActivity, refreshOverviewState, refreshSidebarCollections, refreshSidebarState, resolveTaskBoardState, run_state, selectedArtifactId, sessionIdRef, setArtifacts, setAssistantDraft, setChatRunActive, setCompletedTaskBoards, setComposerInputValue, setFleetError, setFleetSnapshot, setFleetStatus, setInput, setJarvisLatestTranscript, setJarvisMuted, setLastAssistantOutputAt, setMessages, setOverview, setRuntimeRunState, setSelectedArtifactId, setSessionId, setSocketState, setStatus, setTaskBoard, setTaskBoardArmedNextTurnState, setThinking, setVoiceDraft, setVoiceError, setVoiceRecording, setVoiceRunning, setVoiceState, shouldAutoSendAlwaysOnVoice, status, summarizeToolPayload, toLiveDesktopMessage, voiceComposerBaseInputRef, voiceComposerDraftRef, voiceRecordingRef, voiceRunningRef } = context;
+    const { acceptJarvisBargeInTranscript, activeVoiceUtteranceIdRef, alwaysOnEnabledRef, appendLocalSystemMessage, appendTimelineEvent, appendVoiceTranscriptSegment, applySessionSync, artifacts, assistantDeltaBufferRef, assistantDeltaFlushTimerRef, chatRunActiveRef, clearAssistantDeltaFlushTimer, clearConversationSelection, clearJarvisBargeInCandidate, conversationModeRef, createLocalToolTimelineEvent, drainDeferredAlwaysOnFrames, flushAssistantDeltaBuffer, id, lastComposerInputOriginRef, normalizeCompletedTaskBoards, pauseJarvisMicrophone, playAssistantAudio, pushActivity, refreshOverviewState, refreshSidebarCollections, refreshSidebarState, resolveTaskBoardState, run_state, selectedArtifactId, sessionIdRef, setArtifacts, setAssistantDraft, setChatRunActive, setCompletedTaskBoards, setComposerInputValue, setFleetError, setFleetSnapshot, setFleetStatus, setInput, setJarvisLatestTranscript, setJarvisMuted, setLastAssistantOutputAt, setMessages, setOverview, setRuntimeRunState, setSelectedArtifactId, setSessionId, setSocketState, setStatus, setTaskBoard, setTaskBoardArmedNextTurnState, setThinking, setVoiceDraft, setVoiceError, setVoiceRecording, setVoiceRunning, setVoiceState, shouldAutoSendAlwaysOnVoice, status, summarizeToolPayload, toLiveDesktopMessage, voiceComposerBaseInputRef, voiceComposerDraftRef, voiceRecordingRef, voiceRunningRef } = context;
     const payload = (event.payload || {}) as Record<string, any>;
     const payloadTurnId = typeof payload.turn_id === 'string' ? payload.turn_id.trim() : '';
     const incomingSessionId = typeof event.session_id === 'string' ? event.session_id.trim() : '';
@@ -55,6 +55,10 @@ export function handleDesktopConversationRealtimeEvent(
         && Boolean(activeTurnId)
         && (!payloadTurnId || payloadTurnId !== activeTurnId)
       );
+    };
+    const setLiveChatRunActive = (active: boolean) => {
+      chatRunActiveRef.current = active;
+      setChatRunActive(active);
     };
     if (event.type.startsWith('fleet_')) {
       const snapshot = payload.snapshot as DesktopFleetSnapshot | undefined;
@@ -85,9 +89,6 @@ export function handleDesktopConversationRealtimeEvent(
       if (incomingSessionId && !selectedSessionId) {
         setSessionId(incomingSessionId);
       }
-      setChatRunActive(false);
-      setLastAssistantOutputAt(null);
-      setStatus('ready');
       return;
     }
 
@@ -98,8 +99,12 @@ export function handleDesktopConversationRealtimeEvent(
         refreshNonSelectedSession();
         return;
       }
-      applySessionSync(payload);
-      setStatus('ready');
+      const preserveActiveRun = channel === 'chat' && Boolean(chatRunActiveRef.current);
+      const syncedRunActive = syncDetail?.run_state === 'running' || Boolean(syncDetail?.is_running);
+      applySessionSync(payload, { preserveActiveRun });
+      if (!preserveActiveRun) {
+        setStatus(syncedRunActive ? 'running' : 'ready');
+      }
       return;
     }
 
@@ -143,7 +148,7 @@ export function handleDesktopConversationRealtimeEvent(
 
     if (event.type === 'assistant_delta') {
       if (ignoreIfNotSelectedSession()) return;
-      setChatRunActive(true);
+      setLiveChatRunActive(true);
       setRuntimeRunState('running');
       setLastAssistantOutputAt(Date.now());
       assistantDeltaBufferRef.current += String(payload.delta || '');
@@ -203,7 +208,7 @@ export function handleDesktopConversationRealtimeEvent(
           },
         ]);
       }
-      setChatRunActive(false);
+      setLiveChatRunActive(false);
       setRuntimeRunState('idle');
       setOverview((previous: any) => (
         previous
@@ -225,7 +230,7 @@ export function handleDesktopConversationRealtimeEvent(
       const message = String(payload.user_message || 'The selected provider could not complete this turn.');
       setAssistantDraft('');
       setThinking('');
-      setChatRunActive(false);
+      setLiveChatRunActive(false);
       setRuntimeRunState('idle');
       setStatus(`Provider blocked · ${message}`);
       if (conversationModeRef.current === 'jarvis') {
@@ -261,7 +266,7 @@ export function handleDesktopConversationRealtimeEvent(
 
     if (event.type === 'thinking') {
       if (ignoreIfNotSelectedSession()) return;
-      setChatRunActive(true);
+      setLiveChatRunActive(true);
       setRuntimeRunState('running');
       setThinking(String(payload.formatted || payload.text || ''));
       setOverview((previous: any) => (
@@ -277,7 +282,7 @@ export function handleDesktopConversationRealtimeEvent(
 
     if (event.type === 'tool_event') {
       if (ignoreIfNotSelectedSession()) return;
-      setChatRunActive(true);
+      setLiveChatRunActive(true);
       setRuntimeRunState('running');
       setOverview((previous: any) => (
         previous
@@ -388,7 +393,7 @@ export function handleDesktopConversationRealtimeEvent(
               : null;
       if (runState) {
         setRuntimeRunState(runState);
-        setChatRunActive(runState === 'running');
+        setLiveChatRunActive(runState === 'running');
         if (runState === 'idle') {
           setAssistantDraft('');
           setThinking('');
@@ -405,7 +410,7 @@ export function handleDesktopConversationRealtimeEvent(
       }
       if (message) {
         if (message === 'ready') {
-          setChatRunActive(false);
+          setLiveChatRunActive(false);
         }
         setStatus(message);
         pushActivity(message, 'neutral');
@@ -435,7 +440,7 @@ export function handleDesktopConversationRealtimeEvent(
           setVoiceRecording(false);
         }
       }
-      setChatRunActive(false);
+      setLiveChatRunActive(false);
       setRuntimeRunState('idle');
       setLastAssistantOutputAt(null);
       setOverview((previous: any) => (
@@ -496,7 +501,7 @@ export function handleDesktopConversationRealtimeEvent(
           setVoiceRecording(false);
         }
       }
-      setChatRunActive(false);
+      setLiveChatRunActive(false);
       setRuntimeRunState('idle');
       setLastAssistantOutputAt(null);
       setOverview((previous: any) => (

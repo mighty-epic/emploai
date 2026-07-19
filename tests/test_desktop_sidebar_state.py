@@ -93,13 +93,47 @@ def test_desktop_sidebar_state_helpers_execute_with_typescript_transpile():
         const managerIdentity = { identity_id: 'manager-1', role: 'manager' };
         const workerIdentity = { identity_id: 'worker-identity', role: 'worker', worker_id: 'worker-1' };
         assert.strictEqual(sidebar.sessionBelongsToFleetIdentity({ id: 's1', fleet_identity_id: 'manager-1' }, managerIdentity), true);
+        assert.strictEqual(sidebar.sessionBelongsToFleetIdentity({
+          id: 'old-manager-chat',
+          fleet_identity_id: 'retired-manager',
+          fleet_identity_role: 'manager',
+        }, managerIdentity), true);
+        assert.strictEqual(sidebar.sessionBelongsToFleetIdentity({
+          id: 'worker-chat',
+          fleet_identity_id: 'worker-identity',
+          fleet_identity_role: 'worker',
+          fleet_worker_id: 'worker-1',
+        }, managerIdentity), false);
         assert.strictEqual(sidebar.sessionBelongsToFleetIdentity({ id: 's2', fleet_worker_id: 'worker-1' }, workerIdentity), true);
         assert.strictEqual(sidebar.sessionBelongsToFleetIdentity({ id: 's3', fleet_worker_id: 'worker-2' }, workerIdentity), false);
+        assert.strictEqual(sidebar.sessionBelongsToFleetIdentity({
+          id: 'old-worker-chat',
+          fleet_identity_id: 'retired-worker-identity',
+          fleet_identity_role: 'worker',
+          fleet_worker_id: 'worker-1',
+        }, workerIdentity), false);
         assert.strictEqual(JSON.stringify(sidebar.fleetSessionCreateFields(workerIdentity)), JSON.stringify({
           fleet_identity_id: 'worker-identity',
           fleet_identity_role: 'worker',
           fleet_worker_id: 'worker-1',
         }));
+
+        const identitySessions = [
+          { id: 'worker-chat', fleet_identity_role: 'worker', fleet_worker_id: 'worker-1' },
+          { id: 'manager-chat', fleet_identity_id: 'retired-manager', fleet_identity_role: 'manager' },
+        ];
+        assert.strictEqual(
+          sidebar.sessionIdForFleetIdentity(identitySessions, managerIdentity, 'worker-chat'),
+          'manager-chat',
+        );
+        assert.strictEqual(
+          sidebar.sessionIdForFleetIdentity(identitySessions, workerIdentity, 'worker-chat'),
+          'worker-chat',
+        );
+        assert.strictEqual(
+          sidebar.sessionIdForFleetIdentity([identitySessions[0]], managerIdentity, 'worker-chat'),
+          '',
+        );
 
         const sessions = [
           { id: 'later', name: 'Later', created_at: '2026-06-02T00:00:00.000Z' },

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app_backend.fleet_identity_profiles import DEFAULT_WORKER_DISPLAY_NAME
 from app_backend.fleet_policy import FLEET_PREVIEW_MODE
 
 REMOTE_SHORT_SESSION_TTL_SECONDS = 60 * 60 * 12
@@ -58,6 +59,11 @@ class RemoteControlStoreIdentityMixin:
                 (manager_name, platform, "local standalone manager", now, now, desktop_id),
             )
             self._ensure_manager_instance_locked(user_id=int(user_id), desktop_id=desktop_id, display_name=manager_name)
+            self._ensure_default_worker_locked(
+                user_id=int(user_id),
+                desktop_id=desktop_id,
+                display_name=DEFAULT_WORKER_DISPLAY_NAME,
+            )
             state = self._ensure_shared_state_locked(int(user_id))
             state["current_desktop_id"] = desktop_id
             state["desktop_connection"] = {

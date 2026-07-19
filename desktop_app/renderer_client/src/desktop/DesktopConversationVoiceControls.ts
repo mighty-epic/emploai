@@ -38,6 +38,10 @@ export function useDesktopConversationVoiceControls(scope: DesktopConversationSc
   const chatSocketReconnectTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const chatSocketReconnectAttemptsRef = useRef<Record<string, number>>({});
   const chatSocketRunActiveBySessionRef = useRef<Record<string, boolean>>({});
+  const setLiveChatRunActive = (active: boolean) => {
+    chatRunActiveRef.current = active;
+    setChatRunActive(active);
+  };
   const missingProviderApiKeyMessage = 'You have not set an API key yet. Add an API key in Setup before sending a message.';
   const hasConfiguredModelProvider = () => {
     const groups = Array.isArray(configuredModelGroups) ? configuredModelGroups : [];
@@ -51,7 +55,7 @@ export function useDesktopConversationVoiceControls(scope: DesktopConversationSc
     setAssistantDraft('');
     setThinking('');
     setVoiceDraft('');
-    setChatRunActive(false);
+    setLiveChatRunActive(false);
     setRuntimeRunState('idle');
     setLastAssistantOutputAt(null);
     pushActivity(missingProviderApiKeyMessage, 'warn');
@@ -477,7 +481,7 @@ export function useDesktopConversationVoiceControls(scope: DesktopConversationSc
     });
     chatSocketRunActiveBySessionRef.current[activeSessionId] = true;
     if (isSelectedSessionMessage) {
-      setChatRunActive(true);
+      setLiveChatRunActive(true);
       setRuntimeRunState('running');
       setLastAssistantOutputAt(null);
     }
@@ -1793,7 +1797,7 @@ export function useDesktopConversationVoiceControls(scope: DesktopConversationSc
     setThinking('Thinking');
     setLastAssistantOutputAt(null);
     setVoiceDraft('');
-    setChatRunActive(true);
+    setLiveChatRunActive(true);
     setRuntimeRunState('running');
     setStatus(draftChatRef.current || !sessionIdRef.current ? 'preparing chat' : 'sending message');
 
@@ -1815,7 +1819,7 @@ export function useDesktopConversationVoiceControls(scope: DesktopConversationSc
       targetSessionId = await ensureSessionForOutgoingMessage();
     } catch (error) {
       setComposerInputValue(rawInput, { syncVoiceBase: false, origin: 'manual' });
-      setChatRunActive(false);
+      setLiveChatRunActive(false);
       setRuntimeRunState('idle');
       setThinking('');
       setStatus(userFacingError(error, 'Chat was not prepared.'));
@@ -1823,7 +1827,7 @@ export function useDesktopConversationVoiceControls(scope: DesktopConversationSc
     }
     if (!targetSessionId) {
       setComposerInputValue(rawInput, { syncVoiceBase: false, origin: 'manual' });
-      setChatRunActive(false);
+      setLiveChatRunActive(false);
       setRuntimeRunState('idle');
       setThinking('');
       setStatus('choose or create a folder to start a new chat');
@@ -2601,7 +2605,7 @@ export function useDesktopConversationVoiceControls(scope: DesktopConversationSc
       }));
       chatSocketRunActiveBySessionRef.current[targetSessionId] = true;
       scope.setProviderFailure?.(null);
-      setChatRunActive(true);
+      setLiveChatRunActive(true);
       setRuntimeRunState('running');
       setThinking('Retrying');
       setStatus(`Retrying with ${modelId}`);

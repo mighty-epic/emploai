@@ -23,7 +23,7 @@ export function DesktopExitDialog({
         <Text style={styles.title}>{error ? 'EmploAI could not exit safely' : hasActiveWork ? 'Work is still running' : 'Exit EmploAI?'}</Text>
         <Text style={styles.body}>
           {error || (hasActiveWork
-            ? 'Choose whether the local runtime should keep working, or stop all active Chat, Jarvis, Fleet, monitor, and command activity before the app closes.'
+            ? 'Keep the local runtime working, or stop active work before closing.'
             : 'The local runtime will follow your current close preference.')}
         </Text>
         <View style={styles.actions}>
@@ -63,7 +63,7 @@ const styles = StyleSheet.create({
   actions: { flexDirection: 'row', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 9, marginTop: 6 },
   primary: { minHeight: 44, justifyContent: 'center', borderRadius: UI.radius.control, backgroundColor: UI.color.accent, paddingHorizontal: 16 },
   primaryText: { color: UI.color.accentInk, fontWeight: '700' },
-  secondary: { minHeight: 44, justifyContent: 'center', borderRadius: UI.radius.control, borderWidth: 1, borderColor: UI.color.borderStrong, backgroundColor: UI.color.surfaceMuted, paddingHorizontal: 16 },
+  secondary: { minHeight: 44, justifyContent: 'center', borderRadius: UI.radius.control, backgroundColor: UI.color.surfaceMuted, paddingHorizontal: 16 },
   secondaryText: { color: UI.color.text, fontWeight: '600' },
   danger: { minHeight: 44, justifyContent: 'center', borderRadius: UI.radius.control, backgroundColor: UI.color.danger, paddingHorizontal: 16 },
   dangerText: { color: UI.color.text, fontWeight: '700' },

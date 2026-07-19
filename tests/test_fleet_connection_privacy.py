@@ -120,6 +120,51 @@ def test_manager_store_tracks_computers_delegations_and_permission_state_without
     assert snapshot["delegations"][0]["delegation_id"] == delegation["delegation_id"]
 
 
+def test_connected_computer_cannot_update_another_computers_delegation(tmp_path: Path):
+    store = RemoteControlPlaneStore(root_path=tmp_path)
+    manager = store.ensure_standalone_manager_desktop(
+        user_id=0,
+        display_name="Manager",
+        device_platform="desktop",
+        device_key="manager-key",
+    )
+
+    def pair(device_key: str):
+        enrollment = store.create_worker_enrollment(
+            user_id=0,
+            desktop_id=manager["desktop_id"],
+            display_name=device_key,
+            metadata={"transport": "yggdrasil", "source": "standalone_yggdrasil_pairing"},
+        )
+        return store.complete_worker_enrollment(
+            enrollment_token=enrollment["enrollment_token"],
+            device_name=device_key,
+            device_platform="windows",
+            device_key=device_key,
+        )["desktop"]["desktop_id"]
+
+    first_desktop_id = pair("First PC")
+    second_desktop_id = pair("Second PC")
+    delegation = store.create_computer_delegation(
+        user_id=0,
+        desktop_id=first_desktop_id,
+        prompt="Inspect the first computer.",
+    )
+
+    with pytest.raises(KeyError, match="Unknown computer delegation"):
+        store.update_computer_delegation(
+            user_id=0,
+            desktop_id=second_desktop_id,
+            delegation_id=delegation["delegation_id"],
+            status="completed",
+            report={"summary": "forged"},
+        )
+
+    unchanged = store.get_computer_delegation(user_id=0, delegation_id=delegation["delegation_id"])
+    assert unchanged["status"] == "queued"
+    assert unchanged["report"] == {}
+
+
 def test_legacy_yggdrasil_auto_worker_is_hidden_but_paired_computer_remains_visible(tmp_path: Path):
     store = RemoteControlPlaneStore(root_path=tmp_path)
     manager = store.ensure_standalone_manager_desktop(

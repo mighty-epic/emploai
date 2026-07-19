@@ -52,10 +52,9 @@ const styles = StyleSheet.create({
   container: {
     marginTop: 12,
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: UI.color.border,
+    borderWidth: 0,
     borderRadius: UI.radius.panel,
-    backgroundColor: UI.color.surface,
+    backgroundColor: UI.color.surfaceMuted,
   },
   header: {
     minHeight: 44,
@@ -84,8 +83,7 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderWidth: 1,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   closeText: {
     color: UI.color.textMuted,

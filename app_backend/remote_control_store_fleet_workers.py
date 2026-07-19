@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from app_backend.fleet_identity_profiles import (
+    DEFAULT_WORKER_DISPLAY_NAME,
+    additional_worker_metadata,
+    default_worker_metadata,
+)
 from app_backend.fleet_identity_creation import validate_local_worker_creation
 from app_backend.fleet_policy import FLEET_PREVIEW_MODE, FLEET_WORKER_SESSION_TTL_SECONDS, normalize_fleet_enrollment_ttl
 
@@ -10,6 +15,143 @@ REMOTE_PAIRING_TTL_SECONDS = 60 * 10
 FLEET_ENROLLMENT_TTL_SECONDS = 60 * 30
 
 class RemoteControlStoreFleetWorkerMixin:
+    def set_identity_upstream_visibility(
+        self,
+        *,
+        user_id: int,
+        identity_id: str,
+        published_upstream: bool,
+    ) -> Dict[str, Any]:
+        with self._lock:
+            identity = self._conn.execute(
+                "SELECT * FROM fleet_instances WHERE user_id = ? AND instance_id = ? AND reset_at IS NULL",
+                (int(user_id), str(identity_id or "").strip()),
+            ).fetchone()
+            if not identity:
+                raise KeyError("Unknown identity")
+            metadata = _json_loads(identity["metadata"], {})
+            metadata["published_upstream"] = bool(published_upstream)
+            now = time.time()
+            self._conn.execute(
+                "UPDATE fleet_instances SET metadata = ?, updated_at = ? WHERE instance_id = ?",
+                (_json_dumps(metadata), now, identity["instance_id"]),
+            )
+            worker_id = str(identity["worker_id"] or "").strip()
+            if worker_id:
+                worker = self._conn.execute(
+                    "SELECT metadata FROM fleet_workers WHERE user_id = ? AND worker_id = ?",
+                    (int(user_id), worker_id),
+                ).fetchone()
+                worker_metadata = _json_loads(worker["metadata"], {}) if worker else {}
+                worker_metadata["published_upstream"] = bool(published_upstream)
+                self._conn.execute(
+                    "UPDATE fleet_workers SET metadata = ?, updated_at = ? WHERE user_id = ? AND worker_id = ?",
+                    (_json_dumps(worker_metadata), now, int(user_id), worker_id),
+                )
+            self._audit_locked(
+                user_id=int(user_id),
+                event_type="identity_upstream_visibility_changed",
+                actor_kind="manager",
+                target_kind=str(identity["role"] or "identity"),
+                target_id=str(identity["instance_id"]),
+                metadata={"published_upstream": bool(published_upstream)},
+            )
+            self._conn.commit()
+            refreshed = self._conn.execute(
+                "SELECT * FROM fleet_instances WHERE instance_id = ?", (identity["instance_id"],)
+            ).fetchone()
+            return self._identity_view(refreshed)
+
+    def _ensure_default_worker_locked(
+        self,
+        *,
+        user_id: int,
+        desktop_id: str,
+        display_name: str = DEFAULT_WORKER_DISPLAY_NAME,
+    ) -> Dict[str, Any]:
+        """Reconcile the protected execution identity owned by one computer.
+
+        This internal migration path intentionally does not use the user-request
+        worker creation validator. Public worker creation remains explicit-only.
+        """
+
+        rows = self._conn.execute(
+            "SELECT * FROM fleet_workers WHERE user_id = ? AND kind = 'local' AND machine_desktop_id = ? ORDER BY created_at ASC",
+            (int(user_id), str(desktop_id or "").strip()),
+        ).fetchall()
+        defaults = [row for row in rows if bool(_json_loads(row["metadata"], {}).get("is_default"))]
+        now = time.time()
+        for row in rows:
+            row_metadata = _json_loads(row["metadata"], {})
+            if bool(row_metadata.get("is_default")):
+                continue
+            # Older worker creation stored the profile only on fleet_workers.
+            # Copy an existing configured profile to its identity without
+            # inventing a replacement for legacy custom session profiles.
+            if any(key in row_metadata for key in ("tool_profile", "enabled_tool_packs", "capability_tags")):
+                self._conn.execute(
+                    "UPDATE fleet_instances SET metadata = ?, updated_at = ? WHERE instance_id = ?",
+                    (_json_dumps(row_metadata), now, row["instance_id"]),
+                )
+        if defaults:
+            worker = defaults[0]
+            metadata = default_worker_metadata(_json_loads(worker["metadata"], {}))
+            self._conn.execute(
+                "UPDATE fleet_workers SET metadata = ?, updated_at = ? WHERE worker_id = ?",
+                (_json_dumps(metadata), now, worker["worker_id"]),
+            )
+            self._conn.execute(
+                "UPDATE fleet_instances SET status = 'active', reset_at = NULL, metadata = ?, updated_at = ? WHERE instance_id = ?",
+                (_json_dumps(metadata), now, worker["instance_id"]),
+            )
+            for duplicate in defaults[1:]:
+                duplicate_metadata = additional_worker_metadata(_json_loads(duplicate["metadata"], {}))
+                self._conn.execute(
+                    "UPDATE fleet_workers SET metadata = ?, updated_at = ? WHERE worker_id = ?",
+                    (_json_dumps(duplicate_metadata), now, duplicate["worker_id"]),
+                )
+                self._conn.execute(
+                    "UPDATE fleet_instances SET metadata = ?, updated_at = ? WHERE instance_id = ?",
+                    (_json_dumps(duplicate_metadata), now, duplicate["instance_id"]),
+                )
+            return self._worker_view(
+                self._conn.execute("SELECT * FROM fleet_workers WHERE worker_id = ?", (worker["worker_id"],)).fetchone()
+            )
+
+        worker_id = f"wrk_{secrets.token_hex(8)}"
+        instance_id = f"win_{secrets.token_hex(8)}"
+        name = str(display_name or DEFAULT_WORKER_DISPLAY_NAME).strip()[:MAX_DISPLAY_NAME_CHARS] or DEFAULT_WORKER_DISPLAY_NAME
+        metadata = default_worker_metadata()
+        self._conn.execute(
+            """
+            INSERT INTO fleet_workers(
+                worker_id, user_id, kind, machine_desktop_id, instance_id, display_name, status, detail,
+                group_id, active_task_id, metadata, created_at, updated_at, last_seen_at
+            ) VALUES(?, ?, 'local', ?, ?, ?, 'idle', NULL, NULL, NULL, ?, ?, ?, ?)
+            """,
+            (worker_id, int(user_id), desktop_id, instance_id, name, _json_dumps(metadata), now, now, now),
+        )
+        self._conn.execute(
+            """
+            INSERT INTO fleet_instances(
+                instance_id, user_id, role, desktop_id, worker_id, display_name, status, metadata, created_at, updated_at, reset_at
+            ) VALUES(?, ?, 'worker', ?, ?, ?, 'active', ?, ?, ?, NULL)
+            """,
+            (instance_id, int(user_id), desktop_id, worker_id, name, _json_dumps(metadata), now, now),
+        )
+        self._audit_locked(
+            user_id=int(user_id),
+            event_type="default_worker_reconciled",
+            actor_kind="desktop",
+            actor_id=desktop_id,
+            target_kind="worker",
+            target_id=worker_id,
+            metadata={"is_default": True, "protected": True},
+        )
+        return self._worker_view(
+            self._conn.execute("SELECT * FROM fleet_workers WHERE worker_id = ?", (worker_id,)).fetchone()
+        )
+
     def set_worker_queue_policy(self, *, user_id: int, worker_id: str, queue_policy: str) -> Dict[str, Any]:
         from app_backend.fleet_queue_policy import normalize_queue_policy
 
@@ -236,6 +378,7 @@ class RemoteControlStoreFleetWorkerMixin:
             display_name=display_name,
             metadata=metadata,
         )
+        metadata = additional_worker_metadata(metadata)
         with self._lock:
             desktop = self._conn.execute(
                 "SELECT * FROM desktops WHERE user_id = ? AND desktop_id = ?",
@@ -263,7 +406,7 @@ class RemoteControlStoreFleetWorkerMixin:
                     instance_id, user_id, role, desktop_id, worker_id, display_name, status, metadata, created_at, updated_at, reset_at
                 ) VALUES(?, ?, 'worker', ?, ?, ?, 'active', ?, ?, ?, NULL)
                 """,
-                (instance_id, int(user_id), desktop["desktop_id"], worker_id, name, _json_dumps({"kind": "local"}), now, now),
+                (instance_id, int(user_id), desktop["desktop_id"], worker_id, name, _json_dumps({"kind": "local", **metadata}), now, now),
             )
             self._audit_locked(
                 user_id=int(user_id),
@@ -461,6 +604,34 @@ class RemoteControlStoreFleetWorkerMixin:
                 "worker": created_worker,
             }
 
+    def _remove_worker_from_fleet_selection_locked(self, *, user_id: int, worker_id: str) -> None:
+        identity_ids = {
+            str(row["instance_id"] or "").strip()
+            for row in self._conn.execute(
+                "SELECT instance_id FROM fleet_instances WHERE user_id = ? AND worker_id = ?",
+                (int(user_id), str(worker_id or "").strip()),
+            ).fetchall()
+            if str(row["instance_id"] or "").strip()
+        }
+        if not identity_ids:
+            return
+
+        state = self._ensure_shared_state_locked(int(user_id))
+        fleet = _normalize_fleet_state(state.get("fleet"))
+        selected_by_identity = {
+            key: value
+            for key, value in dict(fleet.get("selected_chat_by_identity") or {}).items()
+            if key not in identity_ids
+        }
+        active_identity_id = str(fleet.get("active_identity_id") or "").strip()
+        fleet["selected_chat_by_identity"] = selected_by_identity
+        if active_identity_id in identity_ids:
+            fleet["active_identity_id"] = None
+            state["current_session_id"] = None
+        state["fleet"] = fleet
+        self._bump_fleet_selection_locked(int(user_id), state)
+        self._bump_shared_state_locked(int(user_id), state)
+
     def delete_worker(self, *, user_id: int, worker_id: str, wipe_state: bool = True) -> Dict[str, Any]:
         with self._lock:
             worker = self._conn.execute(
@@ -469,6 +640,8 @@ class RemoteControlStoreFleetWorkerMixin:
             ).fetchone()
             if not worker:
                 raise KeyError("Unknown worker")
+            if bool(_json_loads(worker["metadata"], {}).get("protected")):
+                raise PermissionError("The protected default worker cannot be deleted")
             now = time.time()
             machine_desktop_id = str(worker["machine_desktop_id"] or "").strip()
             related_tasks = [
@@ -505,6 +678,7 @@ class RemoteControlStoreFleetWorkerMixin:
                 },
                 metadata={"wipe_state": bool(wipe_state), "archive_reason": "worker_delete"},
             )
+            self._remove_worker_from_fleet_selection_locked(user_id=int(user_id), worker_id=worker["worker_id"])
             self._conn.execute("UPDATE fleet_instances SET reset_at = ?, status = 'reset' WHERE worker_id = ?", (now, worker["worker_id"]))
             if wipe_state:
                 self._conn.execute(

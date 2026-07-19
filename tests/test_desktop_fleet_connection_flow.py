@@ -12,7 +12,7 @@ from shared.fleet_connection import write_fleet_connection
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_yggdrasil_enrollment_adds_computer_without_creating_worker_or_identity(tmp_path: Path):
+def test_yggdrasil_enrollment_adds_computer_without_creating_a_child_worker_or_identity(tmp_path: Path):
     store = RemoteControlPlaneStore(root_path=tmp_path)
     manager = store.ensure_standalone_manager_desktop(
         user_id=0,
@@ -38,7 +38,11 @@ def test_yggdrasil_enrollment_adds_computer_without_creating_worker_or_identity(
 
     assert completed["worker"] is None
     assert completed["desktop"]["desktop_id"] in desktop_ids
-    assert snapshot["workers"] == []
+    assert len(snapshot["workers"]) == 1
+    assert snapshot["workers"][0]["is_default"] is True
+    assert snapshot["workers"][0]["protected"] is True
+    assert snapshot["workers"][0]["machine_desktop_id"] == manager["desktop_id"]
+    assert all(item.get("machine_desktop_id") != completed["desktop"]["desktop_id"] for item in snapshot["workers"])
     assert all(item.get("desktop_id") != completed["desktop"]["desktop_id"] for item in snapshot["identities"])
 
 
@@ -77,7 +81,11 @@ def test_computer_pairing_is_durable_and_rotates_session_without_creating_worker
     assert store.resolve_session_token(first["session_token"]) is None
     assert store.resolve_session_token(second["session_token"])["desktop_id"] == second["desktop"]["desktop_id"]
 
-    assert store.get_fleet_snapshot(user_id=0, desktop_id=manager["desktop_id"])["workers"] == []
+    snapshot = store.get_fleet_snapshot(user_id=0, desktop_id=manager["desktop_id"])
+    assert len(snapshot["workers"]) == 1
+    assert snapshot["workers"][0]["is_default"] is True
+    assert snapshot["workers"][0]["protected"] is True
+    assert all(item.get("machine_desktop_id") != second["desktop"]["desktop_id"] for item in snapshot["workers"])
 
 
 def test_yggdrasil_status_exposes_connection_without_session_token(tmp_path: Path, monkeypatch):

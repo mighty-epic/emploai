@@ -1,8 +1,11 @@
 import type { DesktopConversationScope } from './DesktopConversationScope';
 import { DesktopModelPickerMenu } from './DesktopModelPickerMenu';
 import { DesktopFleetWorkspace } from './DesktopFleetWorkspace';
+import { DesktopFleetWorkerWorkspace } from './DesktopFleetWorkerWorkspace';
 import { DesktopFleetInfoButton } from './DesktopFleetInfoButton';
+import { DesktopLocalIdentitySelector } from './DesktopLocalIdentitySelector';
 import { fleetReportSummary, fleetWorkerStatusLabel } from './desktopFleetWorkerState';
+import { sessionBelongsToFleetIdentity } from './desktopSidebarState';
 import { useEffect } from 'react'; type NativeSyntheticEvent<T = any> = any; type ActiveCommandPanel = any; type ActivityItem = any; type AgentOverview = any; type ArtifactDetail = any; type ArtifactSummary = any; type ComposerInputOrigin = any; type ConversationSurfaceMode = any; type DesktopFleetEnrollment = any; type DesktopFleetIdentity = any; type DesktopFleetSnapshot = any; type DesktopFleetTask = any; type DesktopFleetWorker = any; type DesktopGitRepoState = any; type DesktopMessage = any; type DesktopPathStatus = any; type DesktopRuntimeStatus = any; type DesktopSidebarProjectActivity = any; type DesktopSidebarState = any; type DesktopVoicePackState = any; type DesktopVoiceRuntimeStatus = any; type InterruptPolicy = any; type JarvisSttBackend = any; type JarvisTtsBackend = any; type LayoutChangeEvent = any; type MessageSourceFormat = any; type ModelProviderGroup = any; type NativeScrollEvent = any; type PendingSearchJump = any; type QueuedComposerMessage = any; type QueuedMessage = any; type RealtimeChannel = any; type RealtimeEvent = any; type ReferenceEntry = any; type RuntimeOrchestratorStatus = any; type ScheduledJob = any; type SearchResultTarget = any; type SecurityPermissionMode = any; type SessionDetail = any; type SessionMessage = any; type SessionSearchResult = any; type SessionSummary = any; type SessionTimelineEvent = any; type SidebarChatTooltipState = any; type SidebarDragState = any; type SidebarDraftChat = any; type SidebarProjectGroup = any; type StartupReadinessState = any; type TaskBoard = any; type TelegramBotConfig = any; type TextInputContentSizeChangeEventData = any; type ToolPackInfoPopupState = any; type VoiceCaptureMode = any; type VoiceGateState = any;
 import { useReducedMotion } from './useReducedMotion';
 
@@ -240,7 +243,7 @@ useEffect(() => {
       <View style={styles.commandPanelHeader}>
         <View style={styles.commandPanelHeaderCopy}>
           <View style={styles.commandPanelHeaderLine}>
-            <Text style={styles.commandPanelCompactTitle}>Add + Tools</Text>
+            <Text style={styles.commandPanelCompactTitle}>Tools & mode</Text>
             <Pressable
               style={styles.commandPanelInfoButton}
               accessibilityRole="button"
@@ -990,6 +993,8 @@ useEffect(() => {
   const fleetLocalWorkers = fleetWorkers.filter((worker: any) => (
     !fleetManagerDesktopId || String(worker.machine_desktop_id || '') === fleetManagerDesktopId
   ));
+  const fleetWorkerMode = activeFleetIdentity?.role === 'worker';
+  const fleetManagerIdentity = fleetIdentities.find((identity: any) => identity.role === 'manager') || null;
   const fleetTasks = fleetSnapshot?.tasks || [];
   const fleetReports = fleetSnapshot?.reports || [];
   const fleetGroups = fleetSnapshot?.groups || [];
@@ -1021,23 +1026,31 @@ useEffect(() => {
   const fleetLatestReportForWorker = (worker: DesktopFleetWorker) => (
     fleetReports.find((report: any) => report.worker_id === worker.worker_id) || null
   );
-  const fleetManagerChatEntries = transcriptEntries.slice(-10);
+  const fleetManagerSessionMatchesIdentity = Boolean(
+    scope.activeSession
+    && sessionBelongsToFleetIdentity(scope.activeSession, activeFleetIdentity),
+  );
+  const fleetManagerChatEntries = fleetManagerSessionMatchesIdentity ? transcriptEntries.slice(-10) : [];
+  const fleetManagerAssistantDraft = fleetManagerSessionMatchesIdentity ? assistantDraft : '';
+  const fleetManagerShowThinking = fleetManagerSessionMatchesIdentity && shouldShowThinkingIndicator;
   const fleetManagerIdentityName = activeFleetIdentity?.display_name || 'Manager';
-  const fleetManagerChatEmpty = fleetManagerChatEntries.length === 0 && !assistantDraft && !shouldShowThinkingIndicator;
+  const fleetManagerChatEmpty = fleetManagerChatEntries.length === 0
+    && !fleetManagerAssistantDraft
+    && !fleetManagerShowThinking;
   const fleetManagerComposerPlaceholder = activeFleetIdentity?.role === 'worker'
     ? `Message ${fleetManagerIdentityName}`
     : 'Message the manager or delegate work';
   const fleetManagerChatEyebrow = activeFleetIdentity?.role === 'worker' ? 'Worker Chat' : 'Manager Chat';
   const fleetManagerChatPanel = (
     <View style={[styles.fleetManagerChatPanel, { width: fleetChatPanelWidth }]}>
-      <View style={styles.fleetChatIdentitySelector}>
-        <View style={styles.fleetChatIdentityHeaderRow}>
-          <View style={styles.fleetChatIdentityHeader}>
-            <Text style={styles.fleetEyebrow}>Identity</Text>
-            <Text style={styles.fleetChatIdentityHint} numberOfLines={1}>
-              Chat routes through the selected identity
-            </Text>
-          </View>
+      <DesktopLocalIdentitySelector
+        identities={fleetIdentities}
+        activeIdentity={activeFleetIdentity}
+        busy={fleetLoading}
+        compact
+        title="Identity"
+        hint="Chat and the Fleet workspace follow the selected local identity"
+        trailingControl={(
           <Pressable
             style={styles.panelCollapseButton}
             accessibilityRole="button"
@@ -1046,41 +1059,9 @@ useEffect(() => {
           >
             <Text style={styles.panelCollapseButtonText}>›</Text>
           </Pressable>
-        </View>
-        {fleetIdentities.length ? (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator
-            style={styles.fleetChatIdentityScroll}
-            contentContainerStyle={styles.fleetChatIdentityList}
-          >
-            {fleetIdentities.map((identity: any) => {
-              const active = activeFleetIdentity?.identity_id === identity.identity_id;
-              return (
-                <Pressable
-                  key={`fleet-chat-identity-${identity.identity_id}`}
-                  style={[
-                    styles.fleetChatIdentityChip,
-                    active ? styles.fleetChatIdentityChipActive : null,
-                    fleetLoading ? styles.fleetActionDisabled : null,
-                  ]}
-                  disabled={fleetLoading}
-                  onPress={() => void selectFleetIdentity(identity)}
-                >
-                  <Text style={[styles.fleetChatIdentityName, active ? styles.fleetChatIdentityNameActive : null]} numberOfLines={1}>
-                    {identity.display_name}
-                  </Text>
-                  <Text style={[styles.fleetChatIdentityMeta, active ? styles.fleetChatIdentityMetaActive : null]} numberOfLines={1}>
-                    {identity.role}{identity.status ? ` · ${identity.status}` : ''}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-        ) : (
-          <Text style={styles.fleetChatIdentityEmpty}>Identities will appear when Fleet is ready.</Text>
         )}
-      </View>
+        onSelect={selectFleetIdentity}
+      />
 
       <View style={styles.fleetManagerChatHeader}>
         <View style={styles.fleetManagerChatHeaderTop}>
@@ -1140,7 +1121,9 @@ useEffect(() => {
           <View style={styles.fleetManagerEmptyChat}>
             <Text style={styles.fleetManagerEmptyTitle}>Ready</Text>
             <Text style={styles.fleetManagerEmptyText}>
-              Ask directly, assign work, or inspect the fleet from this sidebar.
+              {fleetWorkerMode
+                ? `Work directly as ${fleetManagerIdentityName}. This worker cannot delegate or manage connected computers.`
+                : 'Ask the manager, delegate work, or inspect the Fleet from this sidebar.'}
             </Text>
           </View>
         ) : null}
@@ -1178,17 +1161,17 @@ useEffect(() => {
           );
         })}
 
-        {assistantDraft ? (
+        {fleetManagerAssistantDraft ? (
           <View style={[styles.fleetManagerMessage, styles.fleetManagerMessageAssistant, styles.messageBubbleDraft]}>
             <View style={styles.fleetManagerMessageHeader}>
               <Text style={styles.fleetManagerMessageLabel}>Assistant</Text>
               <Text style={styles.fleetManagerMessageTime}>streaming</Text>
             </View>
-            <Text style={styles.fleetManagerMessageText} numberOfLines={6}>{assistantDraft}</Text>
+            <Text style={styles.fleetManagerMessageText} numberOfLines={6}>{fleetManagerAssistantDraft}</Text>
           </View>
         ) : null}
 
-        {shouldShowThinkingIndicator ? (
+        {fleetManagerShowThinking ? (
           <View style={styles.fleetManagerThinkingRow}>
             <Text style={styles.fleetManagerThinkingText}>Thinking</Text>
           </View>
@@ -1368,13 +1351,11 @@ useEffect(() => {
   const fleetSidebarPanel = (
     <View style={styles.fleetSidebarPanel}>
       <View style={styles.fleetPanelHeader}>
-        <View style={styles.fleetPanelHeaderCopy}>
-          <Text style={styles.fleetEyebrow}>Fleet V1</Text>
-          <Text style={styles.fleetPanelTitle}>Fleet Dashboard</Text>
-        </View>
         <DesktopFleetInfoButton
-          label="Fleet Dashboard"
-          text="Manage connected computers, local worker identities, queues, reports, and private device enrollment from this workspace."
+          label={fleetWorkerMode ? `${fleetManagerIdentityName} worker console` : 'Fleet Dashboard'}
+          text={fleetWorkerMode
+            ? 'Inspect this worker’s execution profile, current work, queue, and reports. Connected-computer management remains available only to the manager identity.'
+            : 'Manage connected computers, local worker identities, queues, reports, and private device enrollment from this workspace.'}
         />
         <Pressable
           style={styles.panelCollapseButton}
@@ -1384,25 +1365,42 @@ useEffect(() => {
         >
           <Text style={styles.panelCollapseButtonText}>{fleetDashboardCollapsed ? '›' : '‹'}</Text>
         </Pressable>
-        <Pressable
-          style={[styles.fleetSmallDangerAction, (fleetLoading || !hasActiveFleetTask) ? styles.fleetActionDisabled : null]}
-          disabled={fleetLoading || !hasActiveFleetTask}
-          onPress={() => void stopAllFleetWorkers()}
-        >
-          <Text style={styles.fleetSmallDangerActionText}>Stop All</Text>
-        </Pressable>
+        {!fleetWorkerMode ? (
+          <Pressable
+            style={[styles.fleetSmallDangerAction, (fleetLoading || !hasActiveFleetTask) ? styles.fleetActionDisabled : null]}
+            disabled={fleetLoading || !hasActiveFleetTask}
+            onPress={() => void stopAllFleetWorkers()}
+          >
+            <Text style={styles.fleetSmallDangerActionText}>Stop All</Text>
+          </Pressable>
+        ) : null}
       </View>
 
-      <View style={styles.fleetStatusCard}>
-        <Text style={styles.fleetStatusLabel}>Status</Text>
-        <Text style={fleetError ? styles.fleetStatusError : styles.fleetStatusText}>{shortStatusText(fleetStatus)}</Text>
-      </View>
+      {fleetError ? (
+        <View style={styles.fleetStatusCard}>
+          <Text style={styles.fleetStatusLabel}>Fleet unavailable</Text>
+          <Text style={styles.fleetStatusError}>{fleetError}</Text>
+        </View>
+      ) : null}
 
       {fleetDashboardCollapsed ? (
         <View style={styles.fleetCollapsedNotice}>
-          <Text style={styles.fleetSectionTitle}>Dashboard collapsed</Text>
-          <Text style={styles.fleetPanelText}>Expand when you need worker cards, groups, queues, or enrollment controls.</Text>
+          <Text style={styles.fleetSectionTitle}>{fleetWorkerMode ? 'Worker console collapsed' : 'Dashboard collapsed'}</Text>
+          <Text style={styles.fleetPanelText}>
+            {fleetWorkerMode
+              ? 'Expand to inspect this worker’s profile, queue, and task history.'
+              : 'Expand when you need worker cards, groups, queues, or enrollment controls.'}
+          </Text>
         </View>
+      ) : (
+        <>
+
+      {fleetWorkerMode && activeFleetIdentity && fleetSnapshot ? (
+        <DesktopFleetWorkerWorkspace
+          snapshot={fleetSnapshot}
+          identity={activeFleetIdentity}
+          onSwitchToManager={fleetManagerIdentity ? () => void selectFleetIdentity(fleetManagerIdentity) : undefined}
+        />
       ) : (
         <>
 
@@ -1425,9 +1423,9 @@ useEffect(() => {
         </View>
         <TextInput
           style={styles.fleetInput}
-          placeholder="Name the new local agent"
+          placeholder="Name the additional local worker"
           placeholderTextColor="#667a9c"
-          accessibilityLabel="New local agent name"
+          accessibilityLabel="New local worker name"
           value={fleetWorkerNameDraft}
           onChangeText={setFleetWorkerNameDraft}
         />
@@ -1437,7 +1435,7 @@ useEffect(() => {
             disabled={fleetLoading || !fleetWorkerNameDraft.trim()}
             onPress={() => void createFleetLocalWorker()}
           >
-            <Text style={styles.fleetPrimaryActionText}>Create local agent</Text>
+            <Text style={styles.fleetPrimaryActionText}>Create worker</Text>
           </Pressable>
         </View>
       </View>
@@ -1469,7 +1467,9 @@ useEffect(() => {
                   <View style={styles.fleetWorkerHeader}>
                     <View style={styles.fleetWorkerTitleBlock}>
                       <Text style={styles.fleetWorkerName} numberOfLines={1}>{worker.display_name}</Text>
-                      <Text accessibilityLiveRegion="polite" style={styles.fleetWorkerMeta}>{workerQueueLabel}</Text>
+                      <Text accessibilityLiveRegion="polite" style={styles.fleetWorkerMeta}>
+                        {worker.is_default ? 'Default worker · ' : ''}{workerQueueLabel}
+                      </Text>
                     </View>
                     <Pressable
                       style={[styles.fleetWorkerMenuButton, workerMenuOpen ? styles.fleetWorkerMenuButtonActive : null]}
@@ -1535,8 +1535,8 @@ useEffect(() => {
                           <Text style={styles.fleetSmallDangerActionText}>Stop</Text>
                         </Pressable>
                         <Pressable
-                          style={[styles.fleetSmallDangerAction, styles.fleetWorkerMenuAction, fleetLoading ? styles.fleetActionDisabled : null]}
-                          disabled={fleetLoading}
+                          style={[styles.fleetSmallDangerAction, styles.fleetWorkerMenuAction, (fleetLoading || worker.protected) ? styles.fleetActionDisabled : null]}
+                          disabled={fleetLoading || worker.protected}
                           onPress={() => {
                             setOpenFleetWorkerMenuId(null);
                             void resetFleetWorkerIdentity(worker);
@@ -1552,7 +1552,7 @@ useEffect(() => {
                             void resetFleetWorker(worker);
                           }}
                         >
-                          <Text style={styles.fleetSmallDangerActionText}>Delete</Text>
+                          <Text style={styles.fleetSmallDangerActionText}>{worker.protected ? 'Protected' : 'Delete'}</Text>
                         </Pressable>
                       </View>
                     </View>
@@ -1685,6 +1685,8 @@ useEffect(() => {
           <Text style={styles.emptyText}>No groups yet.</Text>
         )}
       </View>
+        </>
+      )}
         </>
       )}
     </View>

@@ -267,6 +267,11 @@ def test_kickstart_and_contract_are_pack_aware_for_read_only_chat():
 def test_tool_pack_prompt_adds_coding_contract_once_for_workspace_packs():
     prompt = build_tool_pack_prompt([PACK_WORKSPACE_READ, PACK_WORKSPACE_WRITE])
 
+    assert "only pack-scoped tool capabilities" in prompt
+    assert "separately attach contextual tools" in prompt
+    assert "such as Fleet manager tools" in prompt
+    assert "enabled packs and any separately attached contextual tools" in prompt
+    assert "only tool capabilities available in this chat" not in prompt
     assert "## Coding Agent Contract" in prompt
     assert prompt.count("CODING CONTRACT - DISCOVERY") == 1
     assert prompt.count("CODING CONTRACT - EDITING") == 1

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { DesktopPressableState } from '../lib/pressableState';
+import { DESKTOP_UI as UI } from '../desktop/desktopUiTokens';
 
 type InfoHintProps = {
   label?: string;
@@ -47,21 +48,18 @@ const styles = StyleSheet.create({
     width: 24,
     height: 24,
     borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#385476',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#101b31',
+    backgroundColor: UI.color.surfaceMuted,
   },
   buttonActive: {
-    borderColor: '#7cc7ff',
-    backgroundColor: '#162742',
+    backgroundColor: UI.color.accentSoft,
   },
   buttonPressed: {
     transform: [{ scale: 0.96 }],
   },
   icon: {
-    color: '#d9f6ff',
+    color: UI.color.textMuted,
     fontSize: 13,
     fontWeight: '900',
     lineHeight: 16,
@@ -72,9 +70,10 @@ const styles = StyleSheet.create({
     right: 0,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#2e4568',
-    backgroundColor: '#08111f',
+    borderColor: UI.color.borderStrong,
+    backgroundColor: UI.color.surfaceRaised,
     padding: 10,
+    ...UI.elevation.high,
   },
   bubbleBottom: {
     top: 30,
@@ -83,7 +82,7 @@ const styles = StyleSheet.create({
     bottom: 30,
   },
   bubbleText: {
-    color: '#c7d7ef',
+    color: UI.color.textMuted,
     fontSize: 12,
     lineHeight: 17,
   },

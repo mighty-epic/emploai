@@ -11,6 +11,23 @@ PACK_WORKSPACE_READ = "workspace_read"
 PACK_WEB_RESEARCH = "web_research"
 PACK_SCHEDULER = "scheduler"
 PACK_APP_RUNTIME = "app_runtime"
+PACK_MANAGER_CORE = "manager_core"
+
+MANAGER_CORE_FLEET_TOOLS = {
+    "fleet_list_workers", "fleet_create_local_worker", "fleet_create_enrollment", "fleet_delegate",
+    "fleet_context_search", "fleet_context_window", "fleet_list_computers", "fleet_delegate_computer",
+    "fleet_create_worker_on_computer", "fleet_computer_host_status", "fleet_start_computer_runtime",
+    "fleet_start_computer_desktop", "fleet_check_computer_update", "fleet_update_computer",
+    "fleet_rename_worker", "fleet_reset_worker", "fleet_delete_worker", "fleet_list_groups",
+    "fleet_create_group", "fleet_update_group", "fleet_delete_group", "fleet_assign_task",
+    "fleet_assign_group_task", "fleet_send_worker_message", "fleet_send_group_message",
+    "fleet_redirect_worker_task", "fleet_delete_queued_message", "fleet_steer_queued_message",
+    "fleet_reorder_worker_queue", "fleet_continue_worker_queue", "fleet_update_task",
+    "fleet_stop_worker", "fleet_stop_all", "fleet_inspect_worker", "fleet_search_reports",
+    "fleet_read_report", "fleet_inspect_evidence", "fleet_open_worker_timeline",
+    "fleet_request_worker_preview", "fleet_list_tool_grants", "fleet_decide_tool_grant",
+    "fleet_check_workspace_binding", "fleet_request_workspace_reconnect",
+}
 
 
 @dataclass(frozen=True)
@@ -286,9 +303,33 @@ _PACKS: Dict[str, ToolPackDefinition] = {
             "- You may reason about app/runtime/session state, but still prefer task-local changes and explicit verification."
         ),
     ),
+    PACK_MANAGER_CORE: ToolPackDefinition(
+        id=PACK_MANAGER_CORE,
+        label="Manager Core",
+        description="Role-locked orchestration, memory, automation, and scheduler operations.",
+        tool_names={
+            "search_memory",
+            "update_memory",
+            "schedule_job",
+            "list_scheduled_jobs",
+            "get_scheduled_job",
+            "update_scheduled_job",
+            "run_scheduled_job_now",
+            "remove_scheduled_job",
+            "enable_job",
+            "disable_job",
+        } | MANAGER_CORE_FLEET_TOOLS,
+        prompt_fragment=(
+            "PACK: Manager Core\n"
+            "- You coordinate work through explicit local or child-computer routes.\n"
+            "- Answer conversational requests directly and delegate actionable execution work.\n"
+            "- Every delegation tool request carries its route scope; never rely on a mutable ambient mode.\n"
+            "- Desktop, browser, web-research, and workspace execution capabilities belong to workers."
+        ),
+    ),
 }
 
-DEFAULT_TOOL_PACKS: List[str] = list(_PACKS.keys())
+DEFAULT_TOOL_PACKS: List[str] = [pack_id for pack_id in _PACKS if pack_id != PACK_MANAGER_CORE]
 
 
 def all_tool_packs() -> List[ToolPackDefinition]:
@@ -371,10 +412,11 @@ def build_tool_pack_prompt(enabled_packs: Sequence[str]) -> str:
     enabled_ids = {definition.id for definition in definitions}
     lines: List[str] = [
         "# TOOL-PACK AUTHORITY",
-        "- The enabled packs listed below are the only tool capabilities available in this chat.",
-        "- If a pack or tool is not listed below, you do NOT have it here. Do not mention it as available, do not plan around it, and do not pretend you can use it.",
-        "- If the user asks what tools you have, answer only from the enabled packs and tool names listed below.",
-        "- When a task needs a disabled capability, say it is unavailable in the current tool-pack configuration instead of hallucinating access.",
+        "- The enabled packs listed below are the only pack-scoped tool capabilities available in this chat.",
+        "- The runtime may separately attach contextual tools for the current identity or workflow, such as Fleet manager tools. A contextual tool is available only when it is present in your callable tool schema or explicitly described by another system contract.",
+        "- If a pack or tool is neither listed below nor separately attached as a contextual tool, you do NOT have it here. Do not mention it as available, plan around it, or pretend you can use it.",
+        "- If the user asks what tools you have, include the enabled packs and any separately attached contextual tools that are actually available.",
+        "- When a task needs a disabled capability that is not separately attached, say it is unavailable in the current configuration instead of hallucinating access.",
         "- AGENTS.md, SOUL.md, USER.md, TOOLS.md, and MEMORY.md are already injected into prompt context when available. Do not spend file-search or file-read tool calls trying to rediscover them during normal execution.",
         "- Do not read MEMORY.md just to begin work. Touch memory only when you are intentionally saving durable reusable information.",
         "- If a local dependency, runtime, app launch path, file association, or other safely repairable environment detail is broken, repair it and continue instead of treating it as a blocker.",

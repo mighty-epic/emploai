@@ -236,3 +236,70 @@ def test_locally_verified_jarvis_wake_runs_command_only_transcript_once(monkeypa
     assert len(calls) == 1
     assert calls[0]["user_message"] == "wait stop"
     assert calls[0]["interrupt_policy"] == "none"
+
+
+def test_non_jarvis_voice_turn_never_synthesizes_assistant_speech(monkeypatch):
+    synth_calls: list[str] = []
+    runtime = SimpleNamespace(
+        session=SimpleNamespace(account_user_id=None),
+        session_manager=SimpleNamespace(get_current_session_id=lambda: "session-a"),
+        verbose_mode=False,
+    )
+    bridge = SimpleNamespace(load_runtime_session=lambda _session_id: runtime)
+
+    async def fake_run(_runtime, **_kwargs):
+        return {
+            "ok": True,
+            "busy": False,
+            "steering": False,
+            "session_id": "session-a",
+            "assistant_text": "This response must stay text-only.",
+            "duration_seconds": 0.01,
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "total_tokens": 2,
+        }
+
+    monkeypatch.setattr(app_server, "_resolve_ws_token", lambda _token: {"user_id": 7})
+    monkeypatch.setattr(app_server, "_bridge_for_user", lambda _user_id: bridge)
+    monkeypatch.setattr(app_server, "_new_voice_draft_state", _TranscriptDraft)
+    monkeypatch.setattr(app_server, "_run_app_chat_turn_lazy", fake_run)
+    monkeypatch.setattr(
+        app_server,
+        "_synthesize_assistant_audio_sync",
+        lambda text: synth_calls.append(text) or {"audio_base64": "audio", "mime_type": "audio/mpeg"},
+    )
+    monkeypatch.setattr(app_server, "_mirror_session_snapshot", lambda **_kwargs: None)
+
+    client = TestClient(app_server.create_app())
+    with client.websocket_connect(
+        "/ws/app/voice?token=test-token&session_id=session-a&surface_mode=chat"
+    ) as websocket:
+        _next_event(websocket, "voice_state")
+        websocket.send_json(
+            {
+                "type": "voice_start",
+                "session_id": "session-a",
+                "surface_mode": "chat",
+                "utterance_id": "chat-voice-turn",
+            }
+        )
+        _next_event(websocket, "voice_state")
+        websocket.send_json(
+            {
+                "type": "voice_commit",
+                "session_id": "session-a",
+                "surface_mode": "chat",
+                "utterance_id": "chat-voice-turn",
+                "auto_send": True,
+            }
+        )
+        _next_event(websocket, "voice_final")
+        for _ in range(12):
+            event = websocket.receive_json()
+            if event.get("type") == "voice_state" and event.get("payload", {}).get("state") == "idle":
+                break
+        else:
+            raise AssertionError("Non-Jarvis voice turn did not finish")
+
+    assert synth_calls == []

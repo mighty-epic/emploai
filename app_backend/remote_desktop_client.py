@@ -27,6 +27,7 @@ from shared.fleet_connection_policy import (
     record_permission_request,
 )
 from shared.fleet_upstream_activity import (
+    incoming_delegation_private_session_id,
     mark_upstream_request_sent,
     pending_upstream_requests,
     record_incoming_delegation,
@@ -394,6 +395,43 @@ async def _handle_command(
                 response=str(payload.get("response") or "").strip() or None,
             )
 
+        if command_name == "fleet_set_context_inspection":
+            response = await client.put(
+                f"{local_api_base_url}/api/fleet/context-inspection",
+                headers={"Authorization": f"Bearer {local_token}"},
+                json={"enabled": bool(payload.get("enabled"))},
+            )
+            response.raise_for_status()
+            return dict(response.json() or {})
+
+        if command_name == "fleet_context_search":
+            response = await client.post(
+                f"{local_api_base_url}/api/fleet/context/search",
+                headers={"Authorization": f"Bearer {local_token}"},
+                json={
+                    "query": str(payload.get("query") or ""),
+                    "computer": None,
+                    "include_descendants": bool(payload.get("include_descendants", True)),
+                    "limit": int(payload.get("limit") or 20),
+                },
+            )
+            response.raise_for_status()
+            return dict(response.json() or {})
+
+        if command_name == "fleet_context_window":
+            response = await client.post(
+                f"{local_api_base_url}/api/fleet/context/window",
+                headers={"Authorization": f"Bearer {local_token}"},
+                json={
+                    "message_id": str(payload.get("message_id") or ""),
+                    "computer": None,
+                    "direction": str(payload.get("direction") or "around"),
+                    "cursor": str(payload.get("cursor") or "").strip() or None,
+                },
+            )
+            response.raise_for_status()
+            return dict(response.json() or {})
+
         if command_name == "fleet_create_local_worker":
             if not permissions.get("create_workers", False):
                 raise PermissionError("Creating workers from the paired manager is not allowed on this computer")
@@ -422,6 +460,7 @@ async def _handle_command(
             prompt = str(payload.get("prompt") or "").strip()
             target_kind = str(payload.get("target_kind") or "manager").strip().lower()
             target_selector = str(payload.get("target_selector") or "").strip()
+            delegation_metadata = dict(payload.get("metadata") or {})
             if not delegation_id or not prompt:
                 raise ValueError("delegation_id and prompt are required")
             if target_kind not in {"manager", "worker"}:
@@ -478,6 +517,31 @@ async def _handle_command(
                 if not identity:
                     target_label = f"worker {target_selector!r}" if target_kind == "worker" else "manager"
                     raise LookupError(f"The local {target_label} agent was not found")
+                owning_worker = next(
+                    (
+                        item for item in list(local_fleet.get("workers") or [])
+                        if isinstance(item, dict)
+                        and str(item.get("worker_id") or "") == str(identity.get("worker_id") or "")
+                    ),
+                    {},
+                )
+                identity_tool_packs = list(
+                    identity.get("enabled_tool_packs")
+                    or owning_worker.get("enabled_tool_packs")
+                    or []
+                )
+
+                workspace_id = str(delegation_metadata.get("workspace_id") or "").strip() or None
+                workspace_binding = next(
+                    (
+                        item for item in list(local_fleet.get("workspace_bindings") or [])
+                        if workspace_id
+                        and str(item.get("workspace_id") or "") == workspace_id
+                        and str(item.get("status") or "").lower() == "active"
+                    ),
+                    None,
+                )
+                remote_workspace = str((workspace_binding or {}).get("local_path") or "").strip() or None
 
                 if home:
                     try:
@@ -492,22 +556,33 @@ async def _handle_command(
                     except Exception:
                         logger.exception("Failed updating incoming Fleet delegation target")
 
-                response = await client.post(
-                    f"{local_api_base_url}/api/app/sessions",
-                    headers={"Authorization": f"Bearer {local_token}"},
-                    json={
-                        "name": f"Delegation {delegation_id[-6:]}",
-                        "enabled_tool_packs": [],
-                        "headless_eligible": True,
-                        "fleet_identity_id": identity.get("identity_id"),
-                        "fleet_identity_role": identity.get("role"),
-                        "fleet_worker_id": identity.get("worker_id"),
-                    },
-                )
-                response.raise_for_status()
-                created = response.json()
-                session_payload = created.get("session") if isinstance(created, dict) else {}
-                session_id = str((session_payload or {}).get("id") or "").strip() or None
+                session_id = str(payload.get("target_session_id") or delegation_metadata.get("target_session_id") or "").strip() or None
+                continuation_id = str(delegation_metadata.get("continuation_task_id") or "").strip()
+                if not session_id and continuation_id and home:
+                    session_id = incoming_delegation_private_session_id(home, continuation_id)
+                if not session_id:
+                    response = await client.post(
+                        f"{local_api_base_url}/api/app/sessions",
+                        headers={"Authorization": f"Bearer {local_token}"},
+                        json={
+                            "name": f"Delegation {delegation_id[-6:]}",
+                            "workspace": remote_workspace,
+                            "workspace_id": workspace_id,
+                            "workspace_binding_status": "active" if workspace_binding else None,
+                            "security_permission_mode": delegation_metadata.get("security_permission_mode"),
+                            "enabled_tool_packs": identity_tool_packs,
+                            "headless_eligible": True,
+                            "fleet_identity_id": identity.get("identity_id"),
+                            "fleet_identity_role": identity.get("role"),
+                            "fleet_worker_id": identity.get("worker_id"),
+                            "fleet_task_mode": "delegated",
+                            "fleet_task_id": delegation_id,
+                        },
+                    )
+                    response.raise_for_status()
+                    created = response.json()
+                    session_payload = created.get("session") if isinstance(created, dict) else {}
+                    session_id = str((session_payload or {}).get("id") or "").strip() or None
                 if not session_id:
                     raise RuntimeError("The local agent session could not be created")
                 FLEET_ACTIVE_TASK_SESSIONS[delegation_id] = session_id
@@ -522,26 +597,27 @@ async def _handle_command(
                     remote_ws=remote_ws,
                     send_lock=send_lock,
                 )
+                stop_requested = delegation_id in FLEET_STOP_REQUESTED_TASKS
                 failure = result.get("failure") if isinstance(result.get("failure"), dict) else None
                 summary = str(result.get("assistant_text") or "").strip()
                 report = {
                     "delegation_id": delegation_id,
-                    "status": "failed" if failure else "completed",
-                    "summary": str((failure or {}).get("user_message") or summary or "Delegation completed."),
+                    "status": "stopped" if stop_requested else "failed" if failure else "completed",
+                    "summary": "Delegation stopped by manager." if stop_requested else str((failure or {}).get("user_message") or summary or "Delegation completed."),
                     "evidence": [],
                     "artifacts": [],
-                    "blockers": [
+                    "blockers": ["Stopped by manager"] if stop_requested else [
                         {
                             "code": str(failure.get("code") or "provider_failed"),
                             "message": str(failure.get("user_message") or "The provider could not complete this delegation."),
                         }
                     ] if failure else [],
-                    "confidence": "low" if failure else "medium",
-                    "next_suggested_action": "Review the provider configuration on the paired computer." if failure else None,
+                    "confidence": "medium" if stop_requested else "low" if failure else "medium",
+                    "next_suggested_action": "Review the partial worker transcript if needed." if stop_requested else "Review the provider configuration on the paired computer." if failure else None,
                     "target_kind": target_kind,
                     "target_label": str(identity.get("display_name") or target_kind),
                 }
-                parsed = extract_worker_report(summary) if summary and not failure else None
+                parsed = extract_worker_report(summary) if summary and not failure and not stop_requested else None
                 if parsed:
                     for key in ("status", "summary", "evidence", "artifacts", "blockers", "confidence", "next_suggested_action"):
                         if parsed.get(key) is not None:
@@ -555,7 +631,7 @@ async def _handle_command(
                             identity_id=str(identity.get("identity_id") or "").strip() or None,
                             identity_label=str(identity.get("display_name") or target_kind),
                             status=str(report.get("status") or "completed"),
-                            report=report,
+                            report={**report, "private_session_id": session_id},
                         )
                     except Exception:
                         logger.exception("Failed recording completed Fleet delegation activity")
@@ -589,6 +665,7 @@ async def _handle_command(
                 raise
             finally:
                 FLEET_ACTIVE_TASK_SESSIONS.pop(delegation_id, None)
+                FLEET_STOP_REQUESTED_TASKS.discard(delegation_id)
 
         if command_name in {
             "provider_availability_sync",
@@ -647,6 +724,8 @@ async def _handle_command(
                             "fleet_identity_id": payload.get("fleet_identity_id"),
                             "fleet_identity_role": "worker",
                             "fleet_worker_id": worker_id,
+                            "fleet_task_mode": "delegated",
+                            "fleet_task_id": task_id,
                         },
                     )
                     response.raise_for_status()
@@ -836,6 +915,8 @@ async def _handle_command(
             }
 
         if command_name == "fleet_stop_task":
+            if not (permissions.get("delegate_workers", False) or permissions.get("delegate_manager", False)):
+                raise PermissionError("Stopping delegated tasks is not allowed on this computer")
             task_id = str(payload.get("task_id") or "").strip()
             if not task_id:
                 raise ValueError("task_id is required")
@@ -855,13 +936,45 @@ async def _handle_command(
             response.raise_for_status()
             return {"stopped": True, "task_id": task_id, "session_id": session_id}
 
+        if command_name == "fleet_redirect_task":
+            if not (permissions.get("delegate_workers", False) or permissions.get("delegate_manager", False)):
+                raise PermissionError("Redirecting delegated tasks is not allowed on this computer")
+            task_id = str(payload.get("task_id") or "").strip()
+            direction = str(payload.get("direction") or "").strip()
+            if not task_id or not direction:
+                raise ValueError("task_id and direction are required")
+            session_id = FLEET_ACTIVE_TASK_SESSIONS.get(task_id)
+            if not session_id:
+                raise RuntimeError("The delegated task is not currently active on this computer")
+            result = await _relay_local_chat_command(
+                local_api_base_url=local_api_base_url,
+                local_token=local_token,
+                session_id=session_id,
+                text=direction,
+                source_format="fleet_redirect",
+                interrupt_policy="steer_now",
+                source_client_id=f"fleet-redirect:{task_id}",
+                remote_ws=remote_ws,
+                send_lock=send_lock,
+            )
+            return {
+                "redirected": True,
+                "task_id": task_id,
+                "session_id": session_id,
+                "assistant_text": str(result.get("assistant_text") or "")[:2000],
+            }
+
         raise ValueError(f"Unsupported paired-computer command: {command_name or '<empty>'}")
 
 
 def _fleet_capability_view(snapshot: Dict[str, Any], permissions: Dict[str, bool]) -> Dict[str, Any]:
     from app_backend.fleet_host_control import fleet_host_capabilities
 
-    identities = [item for item in list(snapshot.get("identities") or []) if isinstance(item, dict)]
+    identities = [
+        item
+        for item in list(snapshot.get("identities") or [])
+        if isinstance(item, dict) and bool(item.get("published_upstream", True))
+    ]
     targets: list[Dict[str, Any]] = []
     if permissions.get("delegate_manager", False):
         manager = next((item for item in identities if str(item.get("role") or "") == "manager"), None)
@@ -874,6 +987,10 @@ def _fleet_capability_view(snapshot: Dict[str, Any], permissions: Dict[str, bool
                     "display_name": str(manager.get("display_name") or "Main manager"),
                     "role": "manager",
                     "status": str(manager.get("status") or "ready"),
+                    "is_default": False,
+                    "protected": bool(manager.get("protected", True)),
+                    "tool_profile": manager.get("tool_profile") or "manager_core",
+                    "capability_tags": list(manager.get("capability_tags") or []),
                 }
             )
     if permissions.get("delegate_workers", False):
@@ -891,6 +1008,10 @@ def _fleet_capability_view(snapshot: Dict[str, Any], permissions: Dict[str, bool
                     "display_name": str(identity.get("display_name") or "Worker"),
                     "role": "worker",
                     "status": str(identity.get("status") or "ready"),
+                    "is_default": bool(identity.get("is_default")),
+                    "protected": bool(identity.get("protected")),
+                    "tool_profile": identity.get("tool_profile"),
+                    "capability_tags": list(identity.get("capability_tags") or []),
                 }
             )
     manager_desktop_id = str((snapshot.get("manager") or {}).get("desktop_id") or "").strip()
@@ -903,7 +1024,7 @@ def _fleet_capability_view(snapshot: Dict[str, Any], permissions: Dict[str, bool
     )
     return {
         **fleet_host_capabilities(),
-        "schema_version": 2,
+        "schema_version": 3,
         "node_role": "intermediary" if child_count else "leaf",
         "child_count": child_count,
         "can_enroll_children": True,
@@ -977,6 +1098,7 @@ async def _connection_state_loop(
                                 "request_kind": request["request_kind"],
                                 "identity_id": request.get("identity_id"),
                                 "identity_label": request.get("identity_label"),
+                                "task_id": str((request.get("report") or {}).get("task_id") or "").strip() or None,
                                 "message": request["message"],
                                 "created_at": request.get("created_at"),
                             },

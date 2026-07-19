@@ -28,15 +28,41 @@ export function sessionBelongsToFleetIdentity(session: SessionSummary, identity:
     return true;
   }
   const sessionIdentityId = String(session.fleet_identity_id || '').trim();
+  const sessionIdentityRole = String(session.fleet_identity_role || '').trim().toLowerCase();
+  const sessionWorkerId = String(session.fleet_worker_id || '').trim();
   const identityId = String(identity.identity_id || '').trim();
   const identityRole = String(identity.role || '').trim().toLowerCase();
-  if (sessionIdentityId) {
-    return sessionIdentityId === identityId;
-  }
   if (identityRole === 'worker') {
-    return Boolean(identity.worker_id && session.fleet_worker_id === identity.worker_id);
+    if (sessionIdentityId) {
+      return sessionIdentityId === identityId;
+    }
+    return Boolean(identity.worker_id && sessionWorkerId === identity.worker_id);
   }
-  return identityRole === 'manager';
+  if (identityRole === 'manager') {
+    if (sessionIdentityRole === 'worker' || sessionWorkerId) {
+      return false;
+    }
+    if (sessionIdentityId === identityId || sessionIdentityRole === 'manager') {
+      return true;
+    }
+    return !sessionIdentityId && !sessionIdentityRole;
+  }
+  return Boolean(sessionIdentityId && sessionIdentityId === identityId);
+}
+
+export function sessionIdForFleetIdentity(
+  sessionList: SessionSummary[],
+  identity: DesktopFleetIdentity | null | undefined,
+  selectedSessionId?: string | null,
+) {
+  const cleanSelectedSessionId = String(selectedSessionId || '').trim();
+  if (cleanSelectedSessionId) {
+    const selectedSession = sessionList.find((item) => item.id === cleanSelectedSessionId);
+    if (selectedSession && sessionBelongsToFleetIdentity(selectedSession, identity)) {
+      return cleanSelectedSessionId;
+    }
+  }
+  return sessionList.find((item) => sessionBelongsToFleetIdentity(item, identity))?.id || '';
 }
 
 export function fleetSessionCreateFields(identity: DesktopFleetIdentity | null | undefined) {

@@ -51,8 +51,9 @@ def test_capability_directory_only_publishes_allowed_targets():
             {"desktop_id": "child-a"},
         ],
         "identities": [
-            {"identity_id": "manager-1", "display_name": "Main", "role": "manager"},
-            {"identity_id": "worker-1", "display_name": "Research", "role": "worker"},
+            {"identity_id": "manager-1", "display_name": "Main", "role": "manager", "tool_profile": "manager_core"},
+            {"identity_id": "worker-1", "display_name": "Research", "role": "worker", "is_default": True, "protected": True, "tool_profile": "default_execution", "capability_tags": ["workspace"]},
+            {"identity_id": "worker-hidden", "display_name": "Private", "role": "worker", "published_upstream": False},
         ],
     }
 
@@ -69,6 +70,10 @@ def test_capability_directory_only_publishes_allowed_targets():
     assert manager_only["child_count"] == 1
     assert [target["role"] for target in manager_only["targets"]] == ["manager"]
     assert [target["display_name"] for target in all_targets["targets"]] == ["Main", "Research"]
+    assert all_targets["schema_version"] == 3
+    assert all_targets["targets"][1]["is_default"] is True
+    assert all_targets["targets"][1]["protected"] is True
+    assert all_targets["targets"][1]["capability_tags"] == ["workspace"]
     assert all_targets["can_create_workers"] is True
     assert "sessions" not in all_targets
     assert "providers" not in all_targets
@@ -81,8 +86,10 @@ def test_local_activity_ledger_survives_request_and_delegation_lifecycle(tmp_pat
         identity_id="worker-1",
         identity_label="Research",
         message="May I use the release workspace?",
+        task_id="task-approval",
     )
     assert pending_upstream_requests(tmp_path)[0]["activity_id"] == request["activity_id"]
+    assert request["report"]["task_id"] == "task-approval"
 
     sent = mark_upstream_request_sent(tmp_path, request["activity_id"])
     assert sent["status"] == "sent"
@@ -140,6 +147,7 @@ def test_manager_store_persists_capabilities_and_upstream_decisions(tmp_path: Pa
         message="Provider is unavailable.",
         identity_id="manager-1",
         identity_label="Main",
+        task_id="delegation-1",
     )
     decided = store.decide_upstream_request(
         user_id=0,
@@ -152,6 +160,7 @@ def test_manager_store_persists_capabilities_and_upstream_decisions(tmp_path: Pa
 
     assert state["capabilities"]["node_role"] == "leaf"
     assert decided["status"] == "replied"
+    assert decided["task_id"] == "delegation-1"
     assert snapshot["upstream_requests"][0]["response"] == "Switch to the configured local provider."
 
 
@@ -172,7 +181,7 @@ def test_local_agent_can_queue_a_narrow_request_to_its_manager(tmp_path: Path, m
         "_fleet_snapshot_uncached",
         lambda: {"identities": [{"identity_id": "worker-1", "display_name": "Research"}]},
     )
-    session = SimpleNamespace(fleet_identity_id="worker-1", fleet_worker_id=None)
+    session = SimpleNamespace(fleet_identity_id="worker-1", fleet_worker_id=None, fleet_task_id="delegation-1")
 
     result = runtime._fleet_tool_request_manager(
         session,
@@ -183,6 +192,44 @@ def test_local_agent_can_queue_a_narrow_request_to_its_manager(tmp_path: Path, m
     queued = pending_upstream_requests(tmp_path)
     assert queued[0]["identity_label"] == "Research"
     assert queued[0]["request_kind"] == "question"
+    assert queued[0]["report"]["task_id"] == "delegation-1"
+
+
+def test_local_delegated_worker_request_is_attached_to_its_manager_task(monkeypatch):
+    task = {
+        "task_id": "task-local",
+        "status": "running",
+        "metadata": {"origin_manager_session_id": "manager-chat"},
+    }
+    calls = []
+    monkeypatch.setattr(runtime, "_fleet_snapshot_uncached", lambda: {"tasks": [task], "identities": []})
+    monkeypatch.setattr(
+        runtime,
+        "_fleet_api_request",
+        lambda method, path, payload=None, **_kwargs: calls.append((method, path, payload)) or {
+            **task,
+            "status": payload["status"],
+            "metadata": payload["metadata"],
+        },
+    )
+    session = SimpleNamespace(
+        fleet_task_id="task-local",
+        fleet_identity_id="worker-local",
+        fleet_worker_id="worker-local",
+    )
+
+    result = runtime._fleet_tool_request_manager(
+        session,
+        {"request_kind": "approval", "message": "May I continue with the sensitive action?"},
+    )
+
+    assert result["ok"] is True
+    assert result["task_id"] == "task-local"
+    assert calls[0][0:2] == ("PUT", "/api/fleet/tasks/task-local/status")
+    assert calls[0][2]["status"] == "needs_review"
+    request = calls[0][2]["metadata"]["manager_requests"][0]
+    assert request["task_id"] == "task-local"
+    assert request["status"] == "pending"
 
 
 def test_role_aware_renderer_contains_all_four_surfaces_and_no_free_text_remote_selector():

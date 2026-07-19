@@ -24,6 +24,18 @@ type Props = {
   onDeleteRemoteAccountData?: () => void;
 };
 
+function formatRecoveryExpiry(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
+}
+
 export function DesktopSetupRecoverySection({
   pendingConfirmations,
   recoveryItems,
@@ -49,12 +61,6 @@ export function DesktopSetupRecoverySection({
 
   return (
     <View style={styles.section}>
-      <Text style={styles.sectionTitle}>{standaloneMode ? 'Local Recovery' : 'Recovery'}</Text>
-      <Text style={styles.helperText}>
-        {standaloneMode
-          ? 'EmploAI keeps recoverable local app state on this computer. Cloud backup and account cleanup are disabled.'
-          : 'EmploAI keeps chats, tool timelines, worker reports, automations, and generated artifacts recoverable where cloud backup is available.'}
-      </Text>
       <View style={styles.settingStack}>
         {!standaloneMode ? (
         <View style={styles.settingCard}>
@@ -89,9 +95,6 @@ export function DesktopSetupRecoverySection({
         ) : null}
         <View style={styles.settingCard}>
           <Text style={styles.settingCardTitle}>Pending confirmations</Text>
-          <Text style={styles.settingCardDescription}>
-            Sensitive actions requested from desktop, Telegram, Jarvis, or automations can be approved here before they continue.
-          </Text>
           {pendingConfirmations.length ? (
             <View style={styles.settingStack}>
               {pendingConfirmations.slice(0, 8).map((item) => (
@@ -130,9 +133,7 @@ export function DesktopSetupRecoverySection({
         </View>
         <View style={styles.settingCard}>
           <Text style={styles.settingCardTitle}>Archived items</Text>
-          <Text style={styles.settingCardDescription}>
-            Deleted chats, workers, automations, and reports are hidden first and kept for up to 30 days.
-          </Text>
+          <Text style={styles.settingCardDescription}>Kept for up to 30 days.</Text>
           <View style={styles.settingActionRow}>
             <Pressable
               accessibilityRole="button"
@@ -154,8 +155,8 @@ export function DesktopSetupRecoverySection({
                   <View key={item.archive_id} style={styles.settingCardInner}>
                     <Text style={styles.settingCardTitle}>{itemLabel}</Text>
                     <Text style={styles.settingCardDescription}>
-                      {item.object_kind} · {item.status}
-                      {item.expires_at ? ` · recoverable until ${item.expires_at}` : ''}
+                      {item.object_kind.replace(/_/g, ' ')}
+                      {item.expires_at ? ` · until ${formatRecoveryExpiry(item.expires_at)}` : ''}
                     </Text>
                     <View style={styles.settingActionRow}>
                       <Pressable

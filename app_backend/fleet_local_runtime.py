@@ -203,6 +203,9 @@ class LocalFleetRuntime:
                 fleet_identity_id=str(worker.get("instance_id") or "").strip() or None,
                 fleet_identity_role="worker",
                 fleet_worker_id=str(worker.get("worker_id") or "").strip() or None,
+                fleet_task_mode="delegated",
+                fleet_task_id=str(task.get("task_id") or "").strip() or None,
+                fleet_identity_metadata=dict(worker.get("metadata") or {}),
                 activate=False,
             )
             target_session_id = str(session.id)
@@ -488,6 +491,12 @@ class LocalFleetRuntime:
         if current.get("report_id"):
             return None
         try:
+            task_metadata = dict(current.get("metadata") or {})
+            origin = {
+                key: task_metadata.get(key)
+                for key in ("origin_manager_session_id", "origin_manager_message_id", "origin_run_id")
+                if task_metadata.get(key)
+            }
             report = store.complete_worker_task_report(
                 user_id=handle.user_id,
                 task_id=handle.task_id,
@@ -498,7 +507,7 @@ class LocalFleetRuntime:
                 blockers=blockers,
                 confidence=confidence,
                 next_suggested_action=next_suggested_action,
-                raw={"transport": "local_runtime", **dict(raw or {})},
+                raw={"transport": "local_runtime", "origin": origin, **dict(raw or {})},
             )
         except ValueError as exc:
             if "already has a completed report" in str(exc):

@@ -53,6 +53,7 @@ class AppUserProfile(BaseModel):
 
 
 class SessionMessageView(BaseModel):
+    message_id: Optional[str] = None
     role: str
     content: str
     timestamp: Optional[str] = None
@@ -99,6 +100,8 @@ class SessionSummaryView(BaseModel):
     fleet_identity_id: Optional[str] = None
     fleet_identity_role: Optional[str] = None
     fleet_worker_id: Optional[str] = None
+    fleet_task_mode: Optional[str] = None
+    fleet_task_id: Optional[str] = None
     account_user_id: Optional[int] = None
     account_email: Optional[str] = None
     plan_mode: Optional[Dict[str, Any]] = None
@@ -135,6 +138,8 @@ class SessionDetailView(BaseModel):
     fleet_identity_id: Optional[str] = None
     fleet_identity_role: Optional[str] = None
     fleet_worker_id: Optional[str] = None
+    fleet_task_mode: Optional[str] = None
+    fleet_task_id: Optional[str] = None
     account_user_id: Optional[int] = None
     account_email: Optional[str] = None
     plan_mode: Optional[Dict[str, Any]] = None
@@ -184,6 +189,8 @@ class CreateSessionRequest(BaseModel):
     fleet_identity_id: Optional[str] = Field(default=None, max_length=128)
     fleet_identity_role: Optional[str] = Field(default=None, max_length=40)
     fleet_worker_id: Optional[str] = Field(default=None, max_length=128)
+    fleet_task_mode: Optional[Literal["direct", "delegated"]] = None
+    fleet_task_id: Optional[str] = Field(default=None, max_length=128)
 
 
 class CreateSessionResponse(BaseModel):
@@ -1092,6 +1099,12 @@ class FleetIdentityView(BaseModel):
     worker_id: Optional[str] = None
     status: str = "active"
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    is_default: bool = False
+    protected: bool = False
+    tool_profile: Optional[str] = None
+    enabled_tool_packs: List[str] = Field(default_factory=list)
+    capability_tags: List[str] = Field(default_factory=list)
+    published_upstream: bool = True
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -1108,6 +1121,12 @@ class FleetWorkerView(BaseModel):
     group_id: Optional[str] = None
     active_task_id: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    is_default: bool = False
+    protected: bool = False
+    tool_profile: Optional[str] = None
+    enabled_tool_packs: List[str] = Field(default_factory=list)
+    capability_tags: List[str] = Field(default_factory=list)
+    published_upstream: bool = True
     queue_policy: Literal["review_required", "auto_continue_success"] = "review_required"
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -1214,6 +1233,10 @@ class FleetSetActiveChatRequest(BaseModel):
     source: Optional[str] = Field(default=None, max_length=80)
 
 
+class FleetIdentityVisibilityRequest(BaseModel):
+    published_upstream: bool = True
+
+
 class FleetActiveIdentityResponse(BaseModel):
     active_identity_id: Optional[str] = None
     active_identity: Optional[FleetIdentityView] = None
@@ -1288,6 +1311,54 @@ class FleetComputerDelegationRequest(BaseModel):
     target_kind: Literal["manager", "worker"] = "manager"
     target_selector: Optional[str] = Field(default=None, max_length=160)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FleetRoutedTaskRequest(BaseModel):
+    scope: Literal["auto", "local", "child"] = "auto"
+    computer: Optional[str] = Field(default=None, max_length=160)
+    identity: Optional[str] = Field(default=None, max_length=160)
+    target_role: Literal["auto", "manager", "worker"] = "auto"
+    prompt: str = Field(min_length=1, max_length=20000)
+    origin_manager_session_id: Optional[str] = Field(default=None, max_length=128)
+    origin_manager_message_id: Optional[str] = Field(default=None, max_length=128)
+    origin_run_id: Optional[str] = Field(default=None, max_length=128)
+    workspace: Optional[str] = None
+    workspace_id: Optional[str] = Field(default=None, max_length=256)
+    security_permission_mode: Optional[str] = Field(default=None, max_length=80)
+    continuation_task_id: Optional[str] = Field(default=None, max_length=128)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FleetRoutedTaskResponse(BaseModel):
+    route: Dict[str, Any]
+    state: str
+    task_id: Optional[str] = None
+    delegation_id: Optional[str] = None
+    origin: Dict[str, Any] = Field(default_factory=dict)
+    report_id: Optional[str] = None
+    report_linkage: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FleetContextInspectionSettingRequest(BaseModel):
+    enabled: bool
+
+
+class FleetContextSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    computer: Optional[str] = Field(default=None, max_length=160)
+    include_descendants: bool = True
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class FleetContextWindowRequest(BaseModel):
+    message_id: str = Field(min_length=1, max_length=128)
+    computer: Optional[str] = Field(default=None, max_length=160)
+    direction: Literal["around", "previous", "next"] = "around"
+    cursor: Optional[str] = Field(default=None, max_length=128)
+
+
+class RuntimePackMutationRequest(BaseModel):
+    force: bool = False
 
 
 class FleetRemoteWorkerCreateRequest(BaseModel):

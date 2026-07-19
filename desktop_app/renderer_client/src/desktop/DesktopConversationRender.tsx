@@ -15,6 +15,8 @@ import { DesktopLiveCommandCard } from './DesktopLiveCommandCard';
 import { DesktopProviderFailureCard } from './DesktopProviderFailureCard';
 import { DesktopProviderAvailabilityBanner } from './DesktopProviderAvailabilityBanner';
 import { DesktopArchiveUndoToast } from './DesktopArchiveUndoToast';
+import { DesktopLocalIdentitySelector } from './DesktopLocalIdentitySelector';
+import { DesktopManagerTaskCards } from './DesktopManagerTaskCards';
 import type { DesktopConversationScope } from './DesktopConversationScope';
 import { extractProposedPlan, planQuestionFromMessage, visiblePlanText, modeStatusLabel } from './desktopChatModes';
 
@@ -119,7 +121,7 @@ function editSummaryFromMessage(message: any) {
 }
 
 export function DesktopConversationRender({ scope }: DesktopConversationRenderProps) {
-    const { STT_BACKEND_LOCAL_WHISPER, STT_BACKEND_OPENAI_REALTIME, TTS_BACKEND_KOKORO, TTS_BACKEND_KYUTAI, activeCommandPanel, activePermissionInfo, activePermissionInfoId, activeTaskBoard, activeToolPackInfo, activeToolPackInfoAvailable, activeToolPackInfoConfiguredEnabled, activeToolPackInfoDisabledReason, askForProjectFolderChoice, assistantDraft, beginHorizontalResize, chatSettingsBotConfigId, chatSettingsSession, chatSettingsSleepSessionId, chooseModel, choosePlannerModel, chooseVariant, clearToolPackInfoHideTimer, commandSuggestionMenuRef, commandSuggestions, completedTaskBoards, composerInputHeight, composerTextRegionRef, confirmPendingSessionSwitch, confirmationDialog, contextBreakdownLabel, contextPercent, contextPercentLabel, contextStateLabel, contextTokenLabel, contextUsage, contextUsageHoverLabel, contextUsageHovered, contextUsageRatio, conversationMode, createAutomaticProjectFolderPath, currentJarvisSttBackend, currentJarvisSttLabel, currentJarvisTtsBackend, currentJarvisTtsLabel, currentModelLabel, currentPlannerLabel, currentSecurityPermissionLabel, currentSessionQueuedMessages, currentVariant, currentVariantHasControls, currentVariantLabel, currentVariantOptions, dismissPendingSessionSwitch, draftBranchCommandPanel, draftBranchLabel, draftBranchTriggerRef, draftChat, draftFolderLabel, draftGitRepoLoading, draftGitRepoState, draftModelGroups, draftPlannerModels, draftProjectCommandPanel, draftProjectTriggerRef, draftTelegramBotLabel, draftTelegramCommandPanel, draftTelegramTriggerRef, emptyConversationProjectName, expandedCompletedTaskIds, expandedModelProviders, expandedPlannerProviders, fleetChatPanelCollapsed, fleetChatPanelWidth, fleetManagerChatPanel, fleetSidebarPanel, floatingPanelKind, floatingPanelPositionStyle, floatingPanelRef, folderChoiceBusy, formatAbsoluteTime, formatRelativeTime, handleComposerContentSizeChange, handleComposerInputChange, handleComposerKeyPress, handleComposerMeasureLayout, handleJarvisSttBackendSelection, handleJarvisTtsBackendSelection, handleTranscriptScroll, hasCompletedTaskBoards, highlightedMessageIndex, id, input, isCenteredDraftComposerStage, isFleetMode, isJarvisMode, jarvisCircleMuted, jarvisHoldCaptureDetail, jarvisHoldCaptureDisabled, jarvisHoldCaptureValue, jarvisHoldToTalkMode, jarvisInputSummary, jarvisMuteButtonMuted, jarvisPulseOpacity, jarvisPulseScale, jarvisSpokenOutput, jarvisStatusDrawerOpen, jarvisToolActivity, jarvisToolSummary, jarvisTranscriptOutput, jarvisTtsSummary, jarvisVoiceSettingsOpen, killLiveCommand, liveVoiceStatus, messages, modelTriggerRef, openDraftChat, openMessageContextMenu, openReferenceRail, openToolContextMenu, overview, pendingSessionSwitch, pendingSwitchTargetLabel, permissionSettingsDraftMode, permissionSettingsIsDraft, permissionSettingsSession, permissionsTriggerRef, pinnedToolPackInfoId, plannerModelGroups, promptForProjectFolder, queuedComposerMessagesDisplay, referenceEntries, refreshFleetSnapshot, runControl, runSlashCommandFromComposer, runVerboseCommand, scheduleHideToolPackInfoPopup, scrollRef, securityPermissionOptions, selectCommandSuggestion, sendButtonGlyph, sendButtonMode, sendQueuedComposerSlice, sendText, sessionId, sessionSettingsMutationInFlight, setActiveCommandPanel, setActivePermissionInfoId, setContextUsageHovered, setConversationMode, setDismissedCommandSuggestionInput, setExpandedCompletedTaskIds, setExpandedModelProviders, setExpandedPlannerProviders, setFleetChatPanelCollapsed, setFleetChatPanelWidth, setFolderChoiceBusy, setHoveredToolPackInfoId, setJarvisPushToTalkMode, setJarvisStatusDrawerOpen, setJarvisVoiceSettingsOpen, setSleepChatForBot, setTaskBoardCollapsed, shellRef, shortStatusText, shouldRenderGlobalFloatingPanel, shouldShowThinkingIndicator, showFolderComposerMeta, showReferenceRail, showVoiceBanner, startJarvisPushToTalk, status, stopCurrentIdentity, stopJarvisPushToTalk, sttBackendChanging, taskBoardCollapsed, taskBoardStatusText, taskBoardStepPrefix, taskBoardSummary, taskBoardTone, taskBoardUpdatedLabel, telegramBotConfigs, thinkingShineTranslate, thinkingTextCounterTranslate, title, toggleJarvisMute, toolPackCommandPanelContent, toolPackInfoPopup, toolsTriggerRef, transcriptMessageLayoutRef, transcriptTimelineEntries, ttsBackendChanging, unavailableEnabledToolPackReason, updateChatHeadlessEligibility, updateChatSecurityPermissionMode, updateChatTelegramBotAssignment, updateDraftSecurityPermissionMode, verboseModeOn, voiceBannerText, voiceError, voiceRecording, voiceRunning, voiceStartInFlightRef } = scope;
+    const { STT_BACKEND_LOCAL_WHISPER, STT_BACKEND_OPENAI_REALTIME, TTS_BACKEND_KOKORO, TTS_BACKEND_KYUTAI, activeCommandPanel, activeFleetIdentity, activePermissionInfo, activePermissionInfoId, activeTaskBoard, activeToolPackInfo, activeToolPackInfoAvailable, activeToolPackInfoConfiguredEnabled, activeToolPackInfoDisabledReason, askForProjectFolderChoice, assistantDraft, beginHorizontalResize, chatSettingsBotConfigId, chatSettingsSession, chatSettingsSleepSessionId, chooseModel, choosePlannerModel, chooseVariant, clearToolPackInfoHideTimer, commandSuggestionMenuRef, commandSuggestions, completedTaskBoards, composerInputHeight, composerTextRegionRef, confirmPendingSessionSwitch, confirmationDialog, contextBreakdownLabel, contextPercent, contextPercentLabel, contextStateLabel, contextTokenLabel, contextUsage, contextUsageHoverLabel, contextUsageHovered, contextUsageRatio, conversationMode, createAutomaticProjectFolderPath, currentJarvisSttBackend, currentJarvisSttLabel, currentJarvisTtsBackend, currentJarvisTtsLabel, currentModelLabel, currentPlannerLabel, currentSecurityPermissionLabel, currentSessionQueuedMessages, currentVariant, currentVariantHasControls, currentVariantLabel, currentVariantOptions, dismissPendingSessionSwitch, draftBranchCommandPanel, draftBranchLabel, draftBranchTriggerRef, draftChat, draftFolderLabel, draftGitRepoLoading, draftGitRepoState, draftModelGroups, draftPlannerModels, draftProjectCommandPanel, draftProjectTriggerRef, draftTelegramBotLabel, draftTelegramCommandPanel, draftTelegramTriggerRef, emptyConversationProjectName, expandedCompletedTaskIds, expandedModelProviders, expandedPlannerProviders, fleetChatPanelCollapsed, fleetChatPanelWidth, fleetIdentities, fleetLoading, fleetManagerChatPanel, fleetSidebarPanel, floatingPanelKind, floatingPanelPositionStyle, floatingPanelRef, folderChoiceBusy, formatAbsoluteTime, formatRelativeTime, handleComposerContentSizeChange, handleComposerInputChange, handleComposerKeyPress, handleComposerMeasureLayout, handleJarvisSttBackendSelection, handleJarvisTtsBackendSelection, handleTranscriptScroll, hasCompletedTaskBoards, highlightedMessageIndex, id, input, isCenteredDraftComposerStage, isFleetMode, isJarvisMode, jarvisCircleMuted, jarvisHoldCaptureDetail, jarvisHoldCaptureDisabled, jarvisHoldCaptureValue, jarvisHoldToTalkMode, jarvisInputSummary, jarvisMuteButtonMuted, jarvisPulseOpacity, jarvisPulseScale, jarvisSpokenOutput, jarvisStatusDrawerOpen, jarvisToolActivity, jarvisToolSummary, jarvisTranscriptOutput, jarvisTtsSummary, jarvisVoiceSettingsOpen, killLiveCommand, liveVoiceStatus, messages, modelTriggerRef, openDraftChat, openMessageContextMenu, openReferenceRail, openToolContextMenu, overview, pendingSessionSwitch, pendingSwitchTargetLabel, permissionSettingsDraftMode, permissionSettingsIsDraft, permissionSettingsSession, permissionsTriggerRef, pinnedToolPackInfoId, plannerModelGroups, promptForProjectFolder, queuedComposerMessagesDisplay, referenceEntries, refreshFleetSnapshot, runControl, runSlashCommandFromComposer, runVerboseCommand, scheduleHideToolPackInfoPopup, scrollRef, securityPermissionOptions, selectCommandSuggestion, selectFleetIdentity, sendButtonGlyph, sendButtonMode, sendQueuedComposerSlice, sendText, sessionId, sessionSettingsMutationInFlight, setActiveCommandPanel, setActivePermissionInfoId, setContextUsageHovered, setConversationMode, setDismissedCommandSuggestionInput, setExpandedCompletedTaskIds, setExpandedModelProviders, setExpandedPlannerProviders, setFleetChatPanelCollapsed, setFleetChatPanelWidth, setFolderChoiceBusy, setHoveredToolPackInfoId, setJarvisPushToTalkMode, setJarvisStatusDrawerOpen, setJarvisVoiceSettingsOpen, setSleepChatForBot, setTaskBoardCollapsed, shellRef, shortStatusText, shouldRenderGlobalFloatingPanel, shouldShowThinkingIndicator, showFolderComposerMeta, showReferenceRail, showVoiceBanner, startJarvisPushToTalk, status, stopCurrentIdentity, stopJarvisPushToTalk, sttBackendChanging, taskBoardCollapsed, taskBoardStatusText, taskBoardStepPrefix, taskBoardSummary, taskBoardTone, taskBoardUpdatedLabel, telegramBotConfigs, thinkingShineTranslate, thinkingTextCounterTranslate, title, toggleJarvisMute, toolPackCommandPanelContent, toolPackInfoPopup, toolsTriggerRef, transcriptMessageLayoutRef, transcriptTimelineEntries, ttsBackendChanging, unavailableEnabledToolPackReason, updateChatHeadlessEligibility, updateChatSecurityPermissionMode, updateChatTelegramBotAssignment, updateDraftSecurityPermissionMode, verboseModeOn, voiceBannerText, voiceError, voiceRecording, voiceRunning, voiceStartInFlightRef } = scope;
   const activeVisualMonitorCount = Number(overview?.active_visual_monitors || 0);
   const identityStopActive = Boolean(scope.agentRunActive || activeVisualMonitorCount > 0 || scope.hasActiveFleetTask);
   const pendingRunMode = scope.pendingRunMode as 'plan' | 'goal' | 'normal' | null | undefined;
@@ -203,6 +205,15 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
           <DesktopConversationJarvisStage scope={scope} />
         ) : (
           <>
+        <View style={styles.centeredConversationBlock}>
+          <DesktopLocalIdentitySelector
+            identities={Array.isArray(fleetIdentities) ? fleetIdentities : []}
+            activeIdentity={activeFleetIdentity}
+            busy={Boolean(fleetLoading)}
+            compact
+            onSelect={selectFleetIdentity}
+          />
+        </View>
         <ScrollView
           ref={scrollRef}
           style={[
@@ -245,19 +256,12 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
                     <Text style={styles.emptyDraftFolderIcon}>⌂</Text>
                     <Text style={styles.emptyDraftFolderText}>{emptyConversationProjectName}</Text>
                   </View>
-                  <Text style={[styles.emptyText, styles.emptyDraftSupportingText]}>
-                    Start typing below or use voice. This new chat will stay in the folder shown here.
-                  </Text>
                 </>
               ) : (
                 <>
                   <Text style={styles.emptyDraftPrompt}>What should we work on?</Text>
-                  <View style={styles.emptyDraftFolderRow}>
-                    <MonoIcon name="folder_closed" style={styles.emptyDraftFolderIcon} />
-                    <Text style={styles.emptyDraftFolderText}>Choose folder</Text>
-                  </View>
                   <Text style={[styles.emptyText, styles.emptyDraftSupportingText]}>
-                    Pick where this chat should work, or create an automatic folder for it.
+                    Choose where this chat works.
                   </Text>
                   <View style={styles.emptyFolderActionRow}>
                     <Pressable
@@ -611,6 +615,16 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
               </View>
             );
           })}
+
+          {activeFleetIdentity?.role === 'manager' ? (
+            <DesktopManagerTaskCards
+              apiBaseUrl={String(scope.apiBaseUrl || '')}
+              token={String(scope.token || '')}
+              managerSessionId={sessionId}
+              snapshot={scope.fleetSnapshot}
+              onChanged={() => scope.refreshFleetSnapshot?.({ quiet: true })}
+            />
+          ) : null}
 
           {scope.providerFailure ? (
             <DesktopProviderFailureCard

@@ -214,7 +214,7 @@ def append_event(
 
 def append_fleet_report_event(*, user_id: int, report: Dict[str, Any]) -> Dict[str, Any]:
     status = str(report.get("status") or "completed")
-    task_id = str(report.get("task_id") or "").strip()
+    task_id = str(report.get("task_id") or report.get("delegation_id") or "").strip()
     worker_id = str(report.get("worker_id") or "").strip()
     summary = str(report.get("summary") or "Worker report completed.").strip()
     importance = "important" if status in {"failed", "blocked", "needs_review", "stopped"} else "normal"
@@ -228,7 +228,11 @@ def append_fleet_report_event(*, user_id: int, report: Dict[str, Any]) -> Dict[s
         automation_id=task_id or None,
         automation_name=f"Fleet task {task_id}" if task_id else "Fleet task",
         importance=importance,
-        metadata={"report": report},
+        metadata={
+            "report": report,
+            "origin": dict(report.get("origin") or (report.get("raw") or {}).get("origin") or {}),
+            "dedupe_key": f"fleet_report:{task_id}:{report.get('report_id') or report.get('status') or 'completed'}" if task_id else None,
+        },
     )
 
 

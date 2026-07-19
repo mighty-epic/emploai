@@ -116,9 +116,8 @@ export function DesktopLiveCommandCard({
 const localStyles = StyleSheet.create({
   card: {
     borderRadius: UI.radius.panel,
-    borderWidth: 1,
-    borderColor: UI.color.border,
-    backgroundColor: UI.color.surface,
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
     padding: 12,
     gap: 10,
   },
@@ -160,8 +159,7 @@ const localStyles = StyleSheet.create({
   },
   statusPillRunning: {
     backgroundColor: UI.color.successSoft,
-    borderWidth: 1,
-    borderColor: 'rgba(117, 198, 154, 0.34)',
+    borderWidth: 0,
   },
   statusText: {
     color: UI.color.textMuted,
@@ -201,8 +199,7 @@ const localStyles = StyleSheet.create({
     flexDirection: 'row',
     gap: 6,
     backgroundColor: UI.color.surfaceMuted,
-    borderWidth: 1,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   actionButtonDisabled: {
     opacity: 0.45,
@@ -227,8 +224,7 @@ const localStyles = StyleSheet.create({
   },
   outputBlock: {
     borderRadius: UI.radius.control,
-    borderWidth: 1,
-    borderColor: UI.color.border,
+    borderWidth: 0,
     backgroundColor: UI.color.canvas,
     padding: 10,
     gap: 6,

@@ -121,6 +121,10 @@ def register_session_routes(app):
 
                     "fleet_worker_id": request.fleet_worker_id,
 
+                    "fleet_task_mode": request.fleet_task_mode,
+
+                    "fleet_task_id": request.fleet_task_id,
+
                 },
 
                 timeout_seconds=30.0,
@@ -218,6 +222,34 @@ def register_session_routes(app):
 
         previous = bridge.get_current_session()
 
+        fleet_identity_metadata = None
+
+        if request.fleet_identity_id:
+
+            try:
+
+                fleet_snapshot = _get_remote_control_store().get_fleet_snapshot(user_id=user_id)
+
+                fleet_identity = next(
+
+                    (
+
+                        item for item in list(fleet_snapshot.get("identities") or [])
+
+                        if str(item.get("identity_id") or "") == str(request.fleet_identity_id)
+
+                    ),
+
+                    None,
+
+                )
+
+                fleet_identity_metadata = dict((fleet_identity or {}).get("metadata") or {})
+
+            except Exception:
+
+                logger.exception("[fleet] failed resolving identity tool profile")
+
         try:
 
             session = bridge.create_session(
@@ -243,6 +275,12 @@ def register_session_routes(app):
                 fleet_identity_role=request.fleet_identity_role,
 
                 fleet_worker_id=request.fleet_worker_id,
+
+                fleet_task_mode=request.fleet_task_mode,
+
+                fleet_task_id=request.fleet_task_id,
+
+                fleet_identity_metadata=fleet_identity_metadata,
 
             )
 

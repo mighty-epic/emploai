@@ -17,7 +17,7 @@ export const desktopAppShellVisualStyles = StyleSheet.create({
   startupGateCard: {
     borderRadius: UI.radius.large,
     backgroundColor: UI.color.surface,
-    borderColor: UI.color.border,
+    borderWidth: 0,
     ...UI.elevation.high,
   },
   startupGateTitle: {
@@ -33,7 +33,7 @@ export const desktopAppShellVisualStyles = StyleSheet.create({
   },
   accountModeRow: {
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    borderWidth: 0,
     borderRadius: UI.radius.control,
   },
   accountModeButton: {
@@ -85,7 +85,7 @@ export const desktopAppShellVisualStyles = StyleSheet.create({
   },
   startupSecondaryButton: {
     borderRadius: UI.radius.control,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
     backgroundColor: UI.color.surfaceRaised,
   },
   startupSecondaryButtonText: {
@@ -101,7 +101,7 @@ export const desktopAppShellVisualStyles = StyleSheet.create({
   skeletonTranscript: {
     borderRadius: UI.radius.large,
     backgroundColor: UI.color.surface,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   startupGlyphCore: {
     backgroundColor: UI.color.surfaceRaised,
@@ -122,7 +122,7 @@ export const desktopAppShellVisualStyles = StyleSheet.create({
   },
   windowChromeButtonHovered: {
     backgroundColor: UI.color.surfaceHover,
-    borderColor: UI.color.border,
+    borderColor: 'transparent',
   },
   windowChromeIconText: {
     color: UI.color.textMuted,
@@ -145,9 +145,9 @@ export const desktopAppShellVisualStyles = StyleSheet.create({
     color: UI.color.accentStrong,
   },
   headerSurfaceTabs: {
-    borderRadius: UI.radius.control,
-    backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    borderRadius: UI.radius.small,
+    backgroundColor: 'transparent',
+    borderWidth: 0,
   },
   headerSurfaceTab: {
     borderRadius: UI.radius.small,
@@ -156,9 +156,8 @@ export const desktopAppShellVisualStyles = StyleSheet.create({
     backgroundColor: UI.color.surfaceHover,
   },
   headerSurfaceTabActive: {
-    backgroundColor: UI.color.accentSoft,
-    borderWidth: 1,
-    borderColor: UI.color.accentBorder,
+    backgroundColor: UI.color.surfaceRaised,
+    borderWidth: 0,
   },
   headerSurfaceTabText: {
     color: UI.color.textMuted,
@@ -207,8 +206,8 @@ export const desktopAppShellVisualStyles = StyleSheet.create({
   },
   headerIconButton: {
     borderRadius: UI.radius.control,
-    borderColor: UI.color.border,
-    backgroundColor: UI.color.surface,
+    borderWidth: 0,
+    backgroundColor: 'transparent',
   },
   headerIconButtonHovered: {
     borderColor: UI.color.accentBorder,
@@ -227,8 +226,7 @@ export const desktopAppShellVisualStyles = StyleSheet.create({
   },
   headerActionWarn: {
     backgroundColor: UI.color.dangerSoft,
-    borderWidth: 1,
-    borderColor: 'rgba(224, 120, 132, 0.42)',
+    borderWidth: 0,
   },
   headerActionText: {
     color: UI.color.accentInk,
@@ -237,7 +235,7 @@ export const desktopAppShellVisualStyles = StyleSheet.create({
   headerSettingsButton: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   headerSettingsButtonHovered: {
     backgroundColor: UI.color.surfaceHover,
@@ -283,8 +281,8 @@ export const desktopAppShellVisualStyles = StyleSheet.create({
   },
   offlineMetaCard: {
     borderRadius: UI.radius.panel,
-    backgroundColor: UI.color.surface,
-    borderColor: UI.color.border,
+    backgroundColor: UI.color.surfaceMuted,
+    borderWidth: 0,
   },
   offlineMetaLabel: {
     color: UI.color.textSubtle,
@@ -307,8 +305,7 @@ export const desktopAppShellVisualStyles = StyleSheet.create({
   secondaryRuntimeButton: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceRaised,
-    borderWidth: 1,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
   },
   secondaryRuntimeButtonText: {
     color: UI.color.text,
@@ -320,11 +317,11 @@ export const desktopAppShellVisualStyles = StyleSheet.create({
     backgroundColor: UI.color.canvas,
   },
   remoteIntro: {
-    borderRadius: UI.radius.panel,
+    borderRadius: 0,
     backgroundColor: 'transparent',
-    borderColor: UI.color.border,
-    paddingHorizontal: 18,
-    paddingVertical: 16,
+    borderWidth: 0,
+    paddingHorizontal: 2,
+    paddingVertical: 8,
   },
   remoteIntroTitle: {
     color: UI.color.text,
@@ -344,7 +341,7 @@ export const desktopAppShellVisualStyles = StyleSheet.create({
   },
   remoteSecondaryButton: {
     borderRadius: UI.radius.control,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
     backgroundColor: UI.color.surfaceMuted,
   },
   remoteSecondaryButtonText: {
@@ -364,14 +361,14 @@ export const desktopAppShellVisualStyles = StyleSheet.create({
     fontFamily: Platform.OS === 'web' ? UI.type.mono : undefined,
   },
   remoteEmpty: {
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
     borderRadius: UI.radius.panel,
     backgroundColor: UI.color.surfaceMuted,
   },
   remoteCard: {
     borderRadius: UI.radius.panel,
-    backgroundColor: UI.color.surface,
-    borderColor: UI.color.border,
+    backgroundColor: UI.color.surfaceMuted,
+    borderWidth: 0,
     paddingHorizontal: 18,
     paddingVertical: 15,
     gap: 10,
@@ -386,8 +383,7 @@ export const desktopAppShellVisualStyles = StyleSheet.create({
   remoteStatusBadge: {
     borderRadius: UI.radius.small,
     backgroundColor: UI.color.accentSoft,
-    borderWidth: 1,
-    borderColor: UI.color.accentBorder,
+    borderWidth: 0,
   },
   remoteStatusText: {
     color: UI.color.accentStrong,
@@ -399,9 +395,8 @@ export const desktopAppShellVisualStyles = StyleSheet.create({
   },
   remoteReport: {
     borderRadius: UI.radius.control,
-    backgroundColor: UI.color.surfaceMuted,
-    borderWidth: 1,
-    borderColor: UI.color.border,
+    backgroundColor: UI.color.canvas,
+    borderWidth: 0,
   },
   remoteSectionLabel: {
     color: UI.color.textSubtle,
@@ -415,14 +410,13 @@ export const desktopAppShellVisualStyles = StyleSheet.create({
   },
   remotePreviewButton: {
     borderRadius: UI.radius.control,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
     backgroundColor: UI.color.surfaceMuted,
   },
   remotePreviewPanel: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderWidth: 1,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   remotePreviewImage: {
     backgroundColor: UI.color.canvas,

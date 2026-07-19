@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import json
 import inspect
 import re
 import time
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import quote
@@ -16,6 +18,7 @@ from cli.agent_tools.definitions import CLI_AGENT_TOOLS
 from local_agent_runtime.tool_manifest import AGENT_TOOLS
 from app_backend.auth_store import AppAuthStore
 from app_backend.local_runtime_server import load_desktop_runtime_config
+from app_backend.fleet_identity_profiles import role_locked_tool_packs
 from shared.channel_sync import get_channel_sync_hub
 from shared.chat_modes import (
     REQUEST_USER_INPUT_TOOL,
@@ -59,6 +62,7 @@ from shared.tool_pack_prompts import (
     build_pack_aware_task_execution_contract,
 )
 from shared.tool_packs import (
+    PACK_MANAGER_CORE,
     filter_openai_tools_by_enabled_packs,
     filter_tools_by_enabled_packs,
     tools_for_enabled_packs,
@@ -95,6 +99,58 @@ FLEET_MANAGER_TOOLS = [
         ["display_name"],
     ),
     _fleet_tool("fleet_create_enrollment", "Create a short-lived enrollment token for a remote worker computer or VPS.", {"display_name": {"type": "string"}, "expires_in_seconds": {"type": "integer", "default": 1800}}),
+    _fleet_tool(
+        "fleet_delegate",
+        "Route actionable work to the local default worker, a child computer's default worker, a child manager, or an explicitly named identity. Unqualified work routes to the local default worker and busy workers queue deterministically.",
+        {
+            "scope": {"type": "string", "enum": ["auto", "local", "child"], "default": "auto"},
+            "computer": _COMPUTER_ARG,
+            "identity": {"type": "string", "description": "Optional exact local or published child identity ID/name."},
+            "target_role": {"type": "string", "enum": ["auto", "manager", "worker"], "default": "auto"},
+            "prompt": {"type": "string"},
+            "continuation_task_id": {"type": "string"},
+        },
+        ["prompt"],
+    ),
+    _fleet_tool(
+        "fleet_context_search",
+        "Search redacted indexed activity on this computer and descendants when the user-enabled manager context inspection setting is on.",
+        {
+            "query": {"type": "string"},
+            "computer": _COMPUTER_ARG,
+            "limit": {"type": "integer", "default": 20},
+        },
+        ["query"],
+    ),
+    _fleet_tool(
+        "fleet_context_window",
+        "Expand a context-search match to a redacted paged message window. Use route_computer_id from search results for descendant matches.",
+        {
+            "message_id": {"type": "string"},
+            "computer": _COMPUTER_ARG,
+            "direction": {"type": "string", "enum": ["around", "previous", "next"], "default": "around"},
+            "cursor": {"type": "string"},
+        },
+        ["message_id"],
+    ),
+    _fleet_tool("fleet_list_computers", "List directly paired computers, their connection state, allowed actions, and explicitly published delegation targets."),
+    _fleet_tool(
+        "fleet_delegate_computer",
+        "Send a task to a manager or explicitly published worker identity on a directly paired computer. The remote chat and files remain private; only status and a compact report return.",
+        {
+            "computer": _COMPUTER_ARG,
+            "prompt": {"type": "string"},
+            "target_kind": {"type": "string", "enum": ["manager", "worker"], "default": "worker"},
+            "target_selector": {"type": "string", "description": "Published target selector from fleet_list_computers. Omit for the remote manager."},
+        },
+        ["computer", "prompt"],
+    ),
+    _fleet_tool(
+        "fleet_create_worker_on_computer",
+        "Create a named worker locally on a paired computer only when the user explicitly asks and that computer allows remote worker creation.",
+        {"computer": _COMPUTER_ARG, "display_name": {"type": "string"}},
+        ["computer", "display_name"],
+    ),
     _fleet_tool("fleet_computer_host_status", "Check whether a paired computer's persistent host, backend, and desktop app are running.", {"computer": _COMPUTER_ARG}, ["computer"]),
     _fleet_tool("fleet_start_computer_runtime", "Start the EmploAI backend on a paired computer through its persistent Yggdrasil host.", {"computer": _COMPUTER_ARG}, ["computer"]),
     _fleet_tool("fleet_start_computer_desktop", "Open the EmploAI desktop app and backend on a paired computer through its persistent Yggdrasil host.", {"computer": _COMPUTER_ARG}, ["computer"]),
@@ -349,6 +405,16 @@ def _fleet_manager_tool_context(session: Any) -> Dict[str, Any]:
     return context
 
 
+async def _resolve_fleet_manager_tool_context(session: Any) -> Dict[str, Any]:
+    """Resolve the local Fleet API snapshot without blocking the app event loop.
+
+    The Fleet API is hosted by this same backend. Calling it synchronously from
+    an app chat coroutine prevents the backend from serving its own request
+    until the HTTP timeout expires.
+    """
+    return await asyncio.to_thread(_fleet_manager_tool_context, session)
+
+
 def _invalidate_fleet_manager_tool_context(session: Any) -> None:
     try:
         setattr(session, "_fleet_manager_tool_context", None)
@@ -365,24 +431,71 @@ def _fleet_upstream_tool_enabled() -> bool:
 
 
 def _fleet_tool_request_manager(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    if not _fleet_upstream_tool_enabled():
-        return {
-            "error": "This computer is not connected to a Fleet manager above it.",
-            "error_type": "fleet_manager_not_connected",
-        }
     request_kind = str(args.get("request_kind") or "").strip().lower()
     message = str(args.get("message") or "").strip()
     if request_kind not in {"question", "approval", "blocked"}:
         return {"error": "request_kind must be question, approval, or blocked", "error_type": "invalid_request_kind"}
     if not message:
         return {"error": "message is required", "error_type": "missing_message"}
+    persisted = getattr(session, "session", None)
+    task_id = str(
+        getattr(session, "fleet_task_id", None)
+        or getattr(persisted, "fleet_task_id", None)
+        or ""
+    ).strip() or None
+    snapshot = _fleet_snapshot_uncached()
+    local_task = next(
+        (
+            item
+            for item in list(snapshot.get("tasks") or [])
+            if task_id and str(item.get("task_id") or "").strip() == task_id
+        ),
+        None,
+    )
+    if local_task is not None:
+        request_id = f"flr_{uuid.uuid4().hex[:16]}"
+        metadata = dict(local_task.get("metadata") or {})
+        requests = [dict(item) for item in list(metadata.get("manager_requests") or []) if isinstance(item, dict)]
+        requests.append(
+            {
+                "request_id": request_id,
+                "task_id": task_id,
+                "request_kind": request_kind,
+                "message": message[:8000],
+                "status": "pending",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        metadata["manager_requests"] = requests[-50:]
+        target_status = "blocked" if request_kind == "blocked" else "needs_review"
+        updated = _fleet_api_request(
+            "PUT",
+            f"/api/fleet/tasks/{quote(task_id, safe='')}/status",
+            {"status": target_status, "metadata": metadata},
+        )
+        if updated.get("error"):
+            return updated
+        _invalidate_fleet_manager_tool_context(session)
+        return {
+            "ok": True,
+            "request_id": request_id,
+            "task_id": task_id,
+            "status": "pending",
+            "detail": "The request is attached to this task in the local manager chat.",
+        }
+    if not _fleet_upstream_tool_enabled():
+        return {
+            "error": "This worker has no reachable owning manager for this task.",
+            "error_type": "fleet_manager_not_connected",
+        }
     identity_id = (
         str(getattr(session, "fleet_identity_id", "") or "").strip()
+        or str(getattr(persisted, "fleet_identity_id", "") or "").strip()
         or str(getattr(session, "fleet_worker_id", "") or "").strip()
+        or str(getattr(persisted, "fleet_worker_id", "") or "").strip()
         or None
     )
     identity_label = identity_id
-    snapshot = _fleet_snapshot_uncached()
     for identity in list(snapshot.get("identities") or []):
         if identity_id and identity_id in {
             str(identity.get("identity_id") or "").strip(),
@@ -396,6 +509,7 @@ def _fleet_tool_request_manager(session: Any, args: Dict[str, Any]) -> Dict[str,
         identity_id=identity_id,
         identity_label=identity_label or "Local agent",
         message=message,
+        task_id=task_id,
     )
     return {
         "ok": True,
@@ -440,6 +554,7 @@ def _fleet_compact_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     workers = list(snapshot.get("workers") or [])
     return {
         "manager": snapshot.get("manager"),
+        "computers": [_fleet_compact_computer_view(snapshot, computer) for computer in _fleet_direct_computers(snapshot)],
         "worker_count": len(workers),
         "workers": [_fleet_compact_worker_view(snapshot, worker) for worker in workers],
         "recent_reports": list(snapshot.get("reports") or [])[:5],
@@ -610,21 +725,29 @@ def _fleet_manager_contract(snapshot: Dict[str, Any]) -> dict[str, str]:
         for worker in list(snapshot.get("workers") or [])[:8]
     ]
     worker_text = ", ".join([name for name in worker_names if name]) or "workers available"
+    computer_names = [
+        str(computer.get("display_name") or computer.get("desktop_id") or "").strip()
+        for computer in _fleet_direct_computers(snapshot)[:8]
+    ]
+    computer_text = ", ".join([name for name in computer_names if name]) or "no directly paired computers"
     return {
         "role": "system",
         "content": (
             "FLEET MANAGER MODE:\n"
-            "- This desktop is the primary manager for an EmploAI worker fleet.\n"
+            "- You are this computer's local manager in an EmploAI worker fleet.\n"
+            "- Answer conversational questions yourself. For an actionable request that needs desktop, browser, web, files, code, or other execution tools, delegate it with fleet_delegate instead of attempting execution as the manager.\n"
+            "- Unqualified actionable work routes to this computer's protected default worker. A named child computer routes to that child's default worker; requests to coordinate a child route to its manager; an explicit identity name wins.\n"
             "- Use Fleet tools to control workers: create workers, group workers, send or queue work, redirect active work, stop workers, inspect reports/evidence, and continue queues.\n"
             "- Setup/list tools are available even when there are zero workers. Create or enroll workers when the user asks for fleet setup.\n"
-            "- Paired-computer host tools can check or start a remote backend or desktop even when its normal EmploAI runtime is closed.\n"
+            "- Paired-computer tools can list published targets, delegate work, create an allowed remote-local worker, and check or start a remote backend or desktop even when its normal EmploAI runtime is closed.\n"
             "- Do not use fleet tools for ordinary chat, simple questions, or tasks the manager should answer directly.\n"
             "- For broad delegation, inspect status first, assign clear task prompts, monitor milestones, read reports, then synthesize results for the user.\n"
             "- Sending a message to a busy worker queues by default. Redirecting the active task requires fleet_redirect_worker_task or fleet_steer_queued_message.\n"
             "- After a worker report, review the report before calling fleet_continue_worker_queue. Failed, blocked, low-confidence, stopped, canceled, or needs-review reports require manager review instead of continuing.\n"
             "- Destructive, bulk, and access-sensitive actions require same-surface confirmation before executing.\n"
             "- Prefer compact report/evidence/search tools over loading full timelines unless the user asks or the report is ambiguous.\n"
-            f"- Known workers this turn: {worker_text}."
+            f"- Known workers this turn: {worker_text}.\n"
+            f"- Directly paired computers this turn: {computer_text}."
         ),
     }
 
@@ -635,6 +758,18 @@ def _fleet_worker_contract(session: Any) -> dict[str, str]:
         or str(getattr(session, "fleet_identity_id", "") or "").strip()
         or "this worker"
     )
+    delegated = str(getattr(session, "fleet_task_mode", "") or "").strip().lower() == "delegated"
+    if not delegated:
+        return {
+            "role": "system",
+            "content": (
+                "DIRECT WORKER CHAT:\n"
+                f"- You are {worker_label}, an execution identity owned by this computer's manager.\n"
+                "- This is a normal persistent user chat, not a delegated Fleet assignment.\n"
+                "- Use only the worker's configured execution profile and answer naturally.\n"
+                "- Do not emit the structured Fleet report format unless the user explicitly asks for it."
+            ),
+        }
     return {
         "role": "system",
         "content": (
@@ -697,7 +832,7 @@ def _fleet_find_computer(snapshot: Dict[str, Any], selector: str) -> Optional[Di
         return None
     matches = [
         computer
-        for computer in list(snapshot.get("desktops") or [])
+        for computer in _fleet_direct_computers(snapshot)
         if clean
         in {
             str(computer.get("desktop_id") or "").strip().casefold(),
@@ -706,6 +841,192 @@ def _fleet_find_computer(snapshot: Dict[str, Any], selector: str) -> Optional[Di
         }
     ]
     return matches[0] if len(matches) == 1 else None
+
+
+def _fleet_direct_computers(snapshot: Dict[str, Any]) -> list[Dict[str, Any]]:
+    manager_desktop_id = str((snapshot.get("manager") or {}).get("desktop_id") or "").strip()
+    desktops = [
+        item
+        for item in list(snapshot.get("desktops") or [])
+        if str(item.get("desktop_id") or "").strip()
+        and str(item.get("desktop_id") or "").strip() != manager_desktop_id
+    ]
+    published_ids = {
+        str(item.get("desktop_id") or "").strip()
+        for item in list(snapshot.get("connection_permissions") or [])
+        if str(item.get("source") or "").strip().lower() == "paired_desktop"
+    }
+    if published_ids:
+        return [item for item in desktops if str(item.get("desktop_id") or "").strip() in published_ids]
+    return desktops
+
+
+def _fleet_compact_computer_view(snapshot: Dict[str, Any], computer: Dict[str, Any]) -> Dict[str, Any]:
+    desktop_id = str(computer.get("desktop_id") or "").strip()
+    permission_state = next(
+        (
+            item
+            for item in list(snapshot.get("connection_permissions") or [])
+            if str(item.get("desktop_id") or "").strip() == desktop_id
+        ),
+        {},
+    )
+    permissions = dict(permission_state.get("permissions") or {})
+    targets = []
+    for target in list((permission_state.get("capabilities") or {}).get("targets") or []):
+        target_kind = str(target.get("target_kind") or "").strip().lower()
+        if target_kind == "manager" and not permissions.get("delegate_manager"):
+            continue
+        if target_kind == "worker" and not permissions.get("delegate_workers"):
+            continue
+        targets.append({
+            "target_kind": target_kind,
+            "target_selector": target.get("target_selector"),
+            "display_name": target.get("display_name"),
+            "status": target.get("status"),
+            "is_default": bool(target.get("is_default")),
+            "protected": bool(target.get("protected")),
+            "tool_profile": target.get("tool_profile"),
+            "capability_tags": list(target.get("capability_tags") or []),
+        })
+    return {
+        "desktop_id": desktop_id,
+        "display_name": computer.get("display_name"),
+        "status": computer.get("status"),
+        "detail": computer.get("detail"),
+        "last_heartbeat_at": computer.get("last_heartbeat_at"),
+        "permissions": permissions,
+        "targets": targets,
+    }
+
+
+def _fleet_tool_list_computers(session: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot = _fleet_snapshot_uncached()
+    if snapshot.get("error"):
+        return snapshot
+    _invalidate_fleet_manager_tool_context(session)
+    computers = [_fleet_compact_computer_view(snapshot, item) for item in _fleet_direct_computers(snapshot)]
+    return {"computers": computers, "count": len(computers)}
+
+
+def _fleet_origin_refs(session: Any) -> Dict[str, Any]:
+    persisted = getattr(session, "session", None)
+    session_id = str(getattr(persisted, "id", None) or getattr(session, "id", "") or "").strip() or None
+    history = list(getattr(persisted, "chat_history", None) or getattr(session, "chat_history", None) or [])
+    last_user = next((item for item in reversed(history) if str(item.get("role") or "") == "user"), {})
+    if isinstance(last_user, dict) and not str(last_user.get("stable_message_id") or "").strip():
+        last_user["stable_message_id"] = str(uuid.uuid4())
+    return {
+        "origin_manager_session_id": session_id,
+        "origin_manager_message_id": str(last_user.get("stable_message_id") or last_user.get("message_id") or last_user.get("client_message_id") or "").strip() or None,
+        "origin_run_id": str(getattr(session, "current_run_id", "") or "").strip() or None,
+        "workspace": str(getattr(persisted, "workspace", None) or getattr(session, "workspace", "") or "").strip() or None,
+        "workspace_id": getattr(persisted, "workspace_id", None) or getattr(session, "workspace_id", None),
+        "security_permission_mode": getattr(persisted, "security_permission_mode", None) or getattr(session, "security_permission_mode", None),
+    }
+
+
+def _fleet_tool_delegate(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    prompt = str(args.get("prompt") or "").strip()
+    if not prompt:
+        return {"error": "prompt is required.", "error_type": "missing_prompt"}
+    result = _fleet_api_request(
+        "POST",
+        "/api/fleet/delegations/route",
+        {
+            "scope": str(args.get("scope") or "auto").strip().lower(),
+            "computer": str(args.get("computer") or "").strip() or None,
+            "identity": str(args.get("identity") or "").strip() or None,
+            "target_role": str(args.get("target_role") or "auto").strip().lower(),
+            "prompt": prompt,
+            "continuation_task_id": str(args.get("continuation_task_id") or "").strip() or None,
+            **_fleet_origin_refs(session),
+            "metadata": {"assigned_from": "manager_agent"},
+        },
+    )
+    _invalidate_fleet_manager_tool_context(session)
+    return result
+
+
+def _fleet_tool_context_search(_session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return {"error": "query is required.", "error_type": "missing_query"}
+    return _fleet_api_request(
+        "POST",
+        "/api/fleet/context/search",
+        {
+            "query": query,
+            "computer": str(args.get("computer") or "").strip() or None,
+            "include_descendants": True,
+            "limit": max(1, min(int(args.get("limit") or 20), 100)),
+        },
+    )
+
+
+def _fleet_tool_context_window(_session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    message_id = str(args.get("message_id") or "").strip()
+    if not message_id:
+        return {"error": "message_id is required.", "error_type": "missing_message_id"}
+    return _fleet_api_request(
+        "POST",
+        "/api/fleet/context/window",
+        {
+            "message_id": message_id,
+            "computer": str(args.get("computer") or "").strip() or None,
+            "direction": str(args.get("direction") or "around").strip().lower(),
+            "cursor": str(args.get("cursor") or "").strip() or None,
+        },
+    )
+
+
+def _fleet_tool_delegate_computer(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot = _fleet_snapshot_uncached()
+    if snapshot.get("error"):
+        return snapshot
+    computer = _fleet_find_computer(snapshot, str(args.get("computer") or ""))
+    if not computer:
+        return {"error": "Paired computer not found or name is ambiguous.", "error_type": "computer_not_found"}
+    prompt = str(args.get("prompt") or "").strip()
+    if not prompt:
+        return {"error": "prompt is required.", "error_type": "missing_prompt"}
+    target_kind = str(args.get("target_kind") or "worker").strip().lower()
+    if target_kind not in {"manager", "worker"}:
+        return {"error": "target_kind must be manager or worker.", "error_type": "invalid_target_kind"}
+    result = _fleet_api_request(
+        "POST",
+        "/api/fleet/delegations/route",
+        {
+            "scope": "child",
+            "computer": str(computer.get("desktop_id") or ""),
+            "prompt": prompt,
+            "target_role": target_kind,
+            "identity": str(args.get("target_selector") or "").strip() or None,
+            **_fleet_origin_refs(session),
+            "metadata": {"assigned_from": "manager_agent"},
+        },
+    )
+    _invalidate_fleet_manager_tool_context(session)
+    return result
+
+
+def _fleet_tool_create_worker_on_computer(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot = _fleet_snapshot_uncached()
+    if snapshot.get("error"):
+        return snapshot
+    computer = _fleet_find_computer(snapshot, str(args.get("computer") or ""))
+    if not computer:
+        return {"error": "Paired computer not found or name is ambiguous.", "error_type": "computer_not_found"}
+    display_name = str(args.get("display_name") or "").strip()
+    if not display_name:
+        return {"error": "display_name is required.", "error_type": "missing_display_name"}
+    result = _fleet_api_request(
+        "POST",
+        f"/api/fleet/desktops/{quote(str(computer.get('desktop_id') or ''), safe='')}/workers",
+        {"display_name": display_name},
+    )
+    _invalidate_fleet_manager_tool_context(session)
+    return result
 
 
 def _fleet_tool_computer_host_action(
@@ -1319,6 +1640,12 @@ def _fleet_manager_tool_handlers(session: Any) -> Dict[str, Callable[[Dict[str, 
         "fleet_list_workers": lambda args: _fleet_tool_list_workers(session, args),
         "fleet_create_local_worker": lambda args: _fleet_tool_create_local_worker(session, args),
         "fleet_create_enrollment": lambda args: _fleet_tool_create_enrollment(session, args),
+        "fleet_delegate": lambda args: _fleet_tool_delegate(session, args),
+        "fleet_context_search": lambda args: _fleet_tool_context_search(session, args),
+        "fleet_context_window": lambda args: _fleet_tool_context_window(session, args),
+        "fleet_list_computers": lambda args: _fleet_tool_list_computers(session, args),
+        "fleet_delegate_computer": lambda args: _fleet_tool_delegate_computer(session, args),
+        "fleet_create_worker_on_computer": lambda args: _fleet_tool_create_worker_on_computer(session, args),
         "fleet_computer_host_status": lambda args: _fleet_tool_computer_host_action(session, args, action="status"),
         "fleet_start_computer_runtime": lambda args: _fleet_tool_computer_host_action(session, args, action="runtime"),
         "fleet_start_computer_desktop": lambda args: _fleet_tool_computer_host_action(session, args, action="desktop"),
@@ -1701,11 +2028,21 @@ async def run_app_chat_turn(
     screen_observation_turn = is_screen_observation_message(user_message)
     task_like_turn = screen_observation_turn or is_task_like_message(user_message)
     tool_evidence_turn = request_requires_tool_evidence(user_message)
+    fleet_tool_context = await _resolve_fleet_manager_tool_context(session)
     active_tool_packs = list(
         getattr(session, "_active_tool_packs_for_current_run", None)
         or getattr(session, "enabled_tool_packs", [])
         or []
     )
+    fleet_role = str(getattr(session, "fleet_identity_role", "") or "").strip().lower()
+    if fleet_tool_context.get("enabled"):
+        fleet_role = "manager"
+    if fleet_role in {"manager", "worker"}:
+        active_tool_packs = role_locked_tool_packs(role=fleet_role, requested=active_tool_packs)
+        session.enabled_tool_packs = list(active_tool_packs)
+        persisted_session = getattr(session, "session", None)
+        if persisted_session is not None:
+            persisted_session.enabled_tool_packs = list(active_tool_packs)
     prelude_messages = []
     if tool_evidence_turn and len(session.chat_history) <= 3:
         prelude_messages.extend(_kickstart_prelude(active_tool_packs))
@@ -1740,13 +2077,13 @@ async def run_app_chat_turn(
         system_messages.append(_task_execution_contract(session, active_tool_packs))
     if not tool_evidence_turn or not task_like_turn:
         system_messages.append(_conversational_turn_guard())
-    fleet_tool_context = _fleet_manager_tool_context(session)
     if fleet_tool_context.get("enabled"):
         system_messages.append(_fleet_manager_contract(dict(fleet_tool_context.get("snapshot") or {})))
+    manager_core_enabled = PACK_MANAGER_CORE in active_tool_packs
     session.current_turn_allowed_tool_names = tools_for_enabled_packs(active_tool_packs)
     plan_mode_active = bool(active_plan_mode(session))
     goal_mode_active = bool(active_goal(session))
-    if fleet_tool_context.get("enabled") and not plan_mode_active:
+    if manager_core_enabled and not plan_mode_active:
         session.current_turn_allowed_tool_names.update(FLEET_MANAGER_TOOL_NAMES)
     if upstream_tool_enabled and not plan_mode_active:
         session.current_turn_allowed_tool_names.update(FLEET_UPSTREAM_TOOL_NAMES)
@@ -1771,7 +2108,7 @@ async def run_app_chat_turn(
                     **get_auto_mode_tool_handlers(runtime_session),
                     **(
                         _fleet_manager_tool_handlers(runtime_session)
-                        if _fleet_manager_tool_context(runtime_session).get("enabled") and not active_plan_mode(runtime_session)
+                        if manager_core_enabled and not active_plan_mode(runtime_session)
                         else {}
                     ),
                     **(
@@ -1814,7 +2151,7 @@ async def run_app_chat_turn(
                         ),
                         (
                             FLEET_MANAGER_TOOLS
-                            if _fleet_manager_tool_context(runtime_session).get("enabled")
+                            if manager_core_enabled
                             else []
                         ),
                         FLEET_UPSTREAM_TOOLS if _fleet_upstream_tool_enabled() else [],

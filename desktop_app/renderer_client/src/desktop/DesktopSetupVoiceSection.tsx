@@ -90,10 +90,6 @@ export function DesktopSetupVoiceSection({
   return (
     <>
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Voice</Text>
-        <Text style={styles.helperText}>
-          Choose speech input and voices for Jarvis and desktop voice features.
-        </Text>
         <View style={styles.metaRow}>
           <View style={styles.metaCard}>
             <Text style={styles.metaLabel}>Selected path</Text>
@@ -162,7 +158,6 @@ export function DesktopSetupVoiceSection({
                 <View style={styles.voicePackHeader}>
                   <View style={styles.voicePackCopy}>
                     <Text style={styles.voicePackTitle}>{pack.title}</Text>
-                    <Text style={styles.voicePackDescription}>{pack.description}</Text>
                   </View>
                   <VoicePackStatusBadge
                     label={pack.available ? 'Ready' : pack.installed ? 'Installed' : 'Optional'}
@@ -170,9 +165,8 @@ export function DesktopSetupVoiceSection({
                   />
                 </View>
                 <Text style={styles.voicePackMeta}>
-                  Installed: {pack.installed ? 'yes' : 'no'}
-                  {pack.source ? ` · Source: ${pack.source}` : ''}
-                  {pack.supportsAlwaysOn ? ' · Always-on target included' : ''}
+                  {pack.installed ? 'Installed' : 'Not installed'}
+                  {pack.supportsAlwaysOn ? ' · Always-on ready' : ''}
                 </Text>
                 {pack.issues?.length ? <Text style={styles.metaIssue}>{pack.issues[0]}</Text> : null}
                 {activeProgress ? <VoicePackProgress progress={activeProgress} /> : null}
@@ -244,9 +238,6 @@ export function DesktopSetupVoiceSection({
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Jarvis speech packs</Text>
-        <Text style={styles.helperText}>
-          Install local voices for Jarvis mode. Online speech remains the fallback when no local voice is selected.
-        </Text>
         <View style={styles.voicePackList}>
           {ttsVoicePacks.map((pack) => {
             const activeProgress = isVoicePackBusy(pack.id) ? voicePackProgress : null;
@@ -276,9 +267,7 @@ export function DesktopSetupVoiceSection({
                   />
                 </View>
                 <Text style={styles.voicePackMeta}>
-                  Installed: {pack.installed ? 'yes' : 'no'}
-                  {pack.source ? ` · Source: ${pack.source}` : ''}
-                  {packBackend ? ` · Backend: ${packBackend}` : ''}
+                  {pack.installed ? 'Installed' : 'Not installed'}
                 </Text>
                 {pack.issues?.length ? <Text style={styles.metaIssue}>{pack.issues[0]}</Text> : null}
                 {activeProgress ? <VoicePackProgress progress={activeProgress} /> : null}

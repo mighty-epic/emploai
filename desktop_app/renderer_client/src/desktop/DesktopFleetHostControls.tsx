@@ -229,9 +229,7 @@ export function DesktopFleetHostControls({
               <Text style={styles.warning}>{updateCheck.dirty_count} local project change{updateCheck.dirty_count === 1 ? '' : 's'} will be saved in an automatic Git backup.</Text>
             ) : null}
           </View>
-        ) : (
-          <Text style={styles.updateMeta}>Check the configured remote branch before choosing an exact update commit.</Text>
-        )}
+        ) : null}
 
         <View style={styles.actions}>
           <Pressable
@@ -269,10 +267,9 @@ const styles = StyleSheet.create({
   section: {
     padding: 14,
     gap: 12,
-    borderWidth: 1,
-    borderColor: UI.color.accentBorder,
+    borderWidth: 0,
     borderRadius: UI.radius.panel,
-    backgroundColor: UI.color.canvas,
+    backgroundColor: UI.color.surfaceMuted,
   },
   headingRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 },
   headingCopy: { flex: 1, gap: 4 },
@@ -285,14 +282,14 @@ const styles = StyleSheet.create({
   version: { marginLeft: 'auto', color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: TYPE.micro },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   updatePanel: { gap: 10, paddingTop: 12, borderTopWidth: 1, borderTopColor: UI.color.border },
-  updateStatusCard: { gap: 5, padding: 12, borderWidth: 1, borderColor: UI.color.border, borderRadius: UI.radius.control, backgroundColor: UI.color.surface },
+  updateStatusCard: { gap: 5, padding: 12, borderWidth: 0, borderRadius: UI.radius.control, backgroundColor: UI.color.surface },
   updateFailed: { borderColor: UI.color.danger },
   updatePhase: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900', letterSpacing: 0.7 },
   updateMessage: { color: UI.color.text, fontSize: TYPE.body, lineHeight: TYPE.bodyLine, fontWeight: '700' },
   updateMeta: { color: UI.color.textMuted, fontFamily: UI.type.mono, fontSize: TYPE.meta, lineHeight: TYPE.compactLine },
   primaryButton: { minHeight: 44, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center', borderRadius: UI.radius.control, backgroundColor: UI.color.accentStrong },
   primaryText: { color: UI.color.accentInk, fontSize: TYPE.body, fontWeight: '900' },
-  secondaryButton: { minHeight: 44, paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: UI.color.borderStrong, borderRadius: UI.radius.control, backgroundColor: UI.color.surface },
+  secondaryButton: { minHeight: 44, paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center', borderWidth: 0, borderRadius: UI.radius.control, backgroundColor: UI.color.surfaceRaised },
   secondaryText: { color: UI.color.text, fontSize: TYPE.body, fontWeight: '800' },
   disabled: { opacity: 0.42 },
   warning: { color: UI.color.warning, fontSize: TYPE.body, lineHeight: TYPE.bodyLine, fontWeight: '700' },

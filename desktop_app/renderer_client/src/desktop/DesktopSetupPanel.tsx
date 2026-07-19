@@ -7,6 +7,7 @@ import { DesktopSetupLocalIntelligenceSection } from './DesktopSetupLocalIntelli
 import { DesktopSetupOnboardingSection } from './DesktopSetupOnboardingSection';
 import { DesktopSetupSharedSettingsSection } from './DesktopSetupSharedSettingsSection';
 import { DesktopSetupVoiceSection } from './DesktopSetupVoiceSection';
+import { DesktopSetupRuntimePacksSection } from './DesktopSetupRuntimePacksSection';
 import { VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW, VOICE_ENGINE_NONE } from './desktopVoicePolicy';
 import { configuredProviderChipLabels, normalizeDesktopSetupValues } from './setupValues';
 import { buildOnboardingSuggestion, type OnboardingSuggestion } from './desktopOnboardingStatus';
@@ -117,9 +118,11 @@ type Props = {
   sharedSettingsStatus?: string | null;
   onSharedSettingsDraftChange?: (draft: SharedSettingsDraft) => void;
   onSaveSharedSettings?: () => boolean | void | Promise<boolean | void>;
+  initialTab?: SettingsTabKey;
+  focusPackId?: string | null;
 };
 
-type SettingsTabKey = 'general' | 'onboarding' | 'chrome' | 'remote' | 'telegram' | 'voice' | 'recovery';
+export type SettingsTabKey = 'general' | 'onboarding' | 'chrome' | 'remote' | 'telegram' | 'voice' | 'packs' | 'recovery';
 
 const SETTINGS_TABS: Array<{ key: SettingsTabKey; label: string; description: string }> = [
   { key: 'general', label: 'General', description: 'Models, keys, workspace, memory' },
@@ -128,6 +131,7 @@ const SETTINGS_TABS: Array<{ key: SettingsTabKey; label: string; description: st
   { key: 'remote', label: 'Devices', description: 'Sign-in, phone pairing, other computers' },
   { key: 'telegram', label: 'Telegram', description: 'Bot connection and routing' },
   { key: 'voice', label: 'Voice', description: 'Speech input, voices, and Jarvis' },
+  { key: 'packs', label: 'Runtime Packs', description: 'Optional local voice and context models' },
   { key: 'recovery', label: 'Recovery', description: 'Restore archived app data' },
 ];
 
@@ -237,6 +241,8 @@ export function DesktopSetupPanel({
   sharedSettingsStatus = null,
   onSharedSettingsDraftChange,
   onSaveSharedSettings,
+  initialTab = 'general',
+  focusPackId = null,
 }: Props) {
   const [values, setValues] = useState<DesktopSetupValues>(() => setupValuesWithoutPlannerOverride(setupState.values));
   const [memoryDraft, setMemoryDraft] = useState(memoryState?.content || '');
@@ -247,7 +253,7 @@ export function DesktopSetupPanel({
   const [gmailLoginEmail, setGmailLoginEmail] = useState('');
   const [gmailLoginPassword, setGmailLoginPassword] = useState('');
   const [maxConcurrentChatsDraft, setMaxConcurrentChatsDraft] = useState(String(runtimeOrchestratorStatus?.max_concurrent_chats || 4));
-  const [activeTab, setActiveTab] = useState<SettingsTabKey>('general');
+  const [activeTab, setActiveTab] = useState<SettingsTabKey>(initialTab);
   const [onboardingSuggestion, setOnboardingSuggestion] = useState<OnboardingSuggestion | null>(null);
   const [remoteBusy, setRemoteBusy] = useState(false);
   const [remotePairingToken, setRemotePairingToken] = useState('');
@@ -272,6 +278,10 @@ export function DesktopSetupPanel({
   const codexPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sharedSettingsBaselineRef = useRef(sharedSettingsDraft ? JSON.stringify(sharedSettingsDraft) : '');
   const memoryBaselineRef = useRef(memoryState?.content || '');
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab, focusPackId]);
 
   useEffect(() => {
     setValues((current) => {
@@ -593,13 +603,13 @@ export function DesktopSetupPanel({
     return true;
   };
 
-  const title = setupState.required ? 'Desktop setup is required' : 'Setup and settings';
+  const title = setupState.required ? 'Desktop setup is required' : 'Settings';
   const primaryActionLabel = setupState.required ? 'Save Setup And Continue' : 'Save Settings';
   const subtitle = setupState.required
     ? 'Complete the local runtime settings before EmploAI starts the agent on this machine.'
     : setupState.versioned
       ? 'This release reopened setup once so you can review paths, keys, and optional Telegram access.'
-      : 'Change API keys, Telegram access, workspace, extension help, and bundled runtime checks at any time.';
+      : '';
 
   const voicePackState = setupState.voicePacks;
   const voicePacks = voicePackState?.packs ?? [];
@@ -941,9 +951,9 @@ export function DesktopSetupPanel({
     <View style={styles.shell}>
       <View style={styles.header}>
         <View style={styles.headerCopy}>
-          <Text style={styles.eyebrow}>Desktop Setup</Text>
+          {setupState.required ? <Text style={styles.eyebrow}>SETUP REQUIRED</Text> : null}
           <Text style={styles.title}>{title}</Text>
-          <Text style={styles.subtitle}>{subtitle}</Text>
+          {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
         </View>
         <View style={styles.versionBadge}>
           <Text style={styles.versionLabel}>Release</Text>
@@ -1001,18 +1011,11 @@ export function DesktopSetupPanel({
               </View>
             ) : null}
 
-            {onboardingSuggestion && activeTab !== 'onboarding' ? (
-              <View style={styles.onboardingSuggestionCard}>
-                <View style={styles.onboardingSuggestionCopy}>
-                  <Text style={styles.onboardingSuggestionEyebrow}>Optional setup suggestion</Text>
-                  <Text style={styles.onboardingSuggestionTitle}>{onboardingSuggestion.title}</Text>
-                  <Text style={styles.onboardingSuggestionText}>{onboardingSuggestion.message}</Text>
-                  {onboardingSuggestion.missingLabels.length ? (
-                    <Text style={styles.onboardingSuggestionMeta}>
-                      Missing: {onboardingSuggestion.missingLabels.join(', ')}
-                    </Text>
-                  ) : null}
-                </View>
+            {onboardingSuggestion && activeTab === 'general' ? (
+                <View style={styles.onboardingSuggestionCard}>
+                  <View style={styles.onboardingSuggestionCopy}>
+                    <Text style={styles.onboardingSuggestionTitle}>{onboardingSuggestion.title}</Text>
+                  </View>
                 <Pressable style={styles.compactActionButton} onPress={() => setActiveTab('onboarding')}>
                   <Text style={styles.compactActionButtonText}>{onboardingSuggestion.actionLabel}</Text>
                 </Pressable>
@@ -1038,7 +1041,7 @@ export function DesktopSetupPanel({
                 <View style={styles.section}>
                   <Text style={styles.sectionTitle}>Runtime workers</Text>
                   <Text style={styles.helperText}>
-                    Control how many independent chats may work at the same time when this desktop is not in a managed Fleet role.
+                    Independent chats allowed to run at once.
                   </Text>
                   <View style={styles.settingCard}>
                     <View style={styles.settingRow}>
@@ -1510,7 +1513,7 @@ export function DesktopSetupPanel({
               <>
                 <View style={styles.section}>
                   <Text style={styles.sectionTitle}>Browser helper</Text>
-                  <Text style={styles.helperText}>Use these controls when the browser helper needs to be installed or inspected.</Text>
+                  <Text style={styles.helperText}>Browser helper paths and diagnostics.</Text>
 
                   <Text style={styles.fieldLabel}>App workspace</Text>
                   <Text style={styles.pathValue}>{setupState.runtimeHome}</Text>
@@ -1537,12 +1540,8 @@ export function DesktopSetupPanel({
                     The extension folder is already placed on disk by the release backend. OCR remains bundled with the Windows release.
                   </Text>
                   <View style={styles.extensionGuideCard}>
-                    <Text style={styles.extensionGuideTitle}>Load the Chrome extension in this order</Text>
-                    <Text style={styles.extensionGuideStep}>1. Click `Open Chrome Extensions`.</Text>
-                    <Text style={styles.extensionGuideStep}>2. In Chrome, enable `Developer mode` in the top-right.</Text>
-                    <Text style={styles.extensionGuideStep}>3. Click `Load unpacked`.</Text>
-                    <Text style={styles.extensionGuideStep}>4. Click `Open Extension Folder` here and select that folder in Chrome.</Text>
-                    <Text style={styles.extensionGuideStep}>5. Return to EmploAI after Chrome shows the extension card.</Text>
+                    <Text style={styles.extensionGuideTitle}>Chrome extension</Text>
+                    <Text style={styles.extensionGuideStep}>Open Chrome Extensions, enable Developer mode, then load the folder below as an unpacked extension.</Text>
                   </View>
                   <View style={styles.extensionActionRow}>
                     <Pressable style={styles.pathButton} onPress={() => onOpenChromeExtensions?.()}>
@@ -1582,8 +1581,7 @@ export function DesktopSetupPanel({
             {activeTab === 'telegram' ? (
               <>
                 <View style={styles.section}>
-                  <Text style={styles.sectionTitle}>Telegram (optional)</Text>
-                  <Text style={styles.helperText}>Connect Telegram so messages can reach the same chats you use in the desktop app.</Text>
+                  <Text style={styles.sectionTitle}>Primary bot</Text>
 
                   <View style={styles.fieldBlock}>
                     <Text style={styles.fieldLabel}>Telegram bot token</Text>
@@ -1652,17 +1650,14 @@ export function DesktopSetupPanel({
                   </View>
 
                   <View style={styles.noteCard}>
-                    <Text style={styles.noteLine}>1. Open Telegram and talk to `@BotFather`.</Text>
-                    <Text style={styles.noteLine}>2. Create a bot and paste the token here.</Text>
-                    <Text style={styles.noteLine}>3. Get your numeric user ID from `@userinfobot`.</Text>
-                    <Text style={styles.noteLine}>4. Save setup. Desktop, Telegram, and mobile will then stay in sync.</Text>
+                    <Text style={styles.noteLine}>Create a bot with `@BotFather`, then add your numeric ID from `@userinfobot`.</Text>
                   </View>
                 </View>
 
                 <View style={styles.section}>
-                  <Text style={styles.sectionTitle}>Telegram bot routing</Text>
+                  <Text style={styles.sectionTitle}>Additional bots</Text>
                   <Text style={styles.helperText}>
-                    When a chat has no specific bot selected, EmploAI uses the first bot in this list.
+                    The first bot is used when a chat has no selection.
                   </Text>
 
                   <View style={styles.voicePackList}>
@@ -1693,10 +1688,6 @@ export function DesktopSetupPanel({
                     })}
 
                     <View style={styles.voicePackCard}>
-                      <Text style={styles.voicePackTitle}>Add Telegram bot</Text>
-                      <Text style={styles.voicePackDescription}>
-                        This adds an additional bot configuration. The allowed Telegram user ID stays universal.
-                      </Text>
                       <View style={styles.fieldBlock}>
                         <Text style={styles.fieldLabel}>Label</Text>
                         <TextInput
@@ -1971,6 +1962,14 @@ export function DesktopSetupPanel({
                 onInstallVoicePack={onInstallVoicePack}
                 onSelectTtsVoicePack={onSelectTtsVoicePack}
                 onRemoveVoicePack={onRemoveVoicePack}
+              />
+            ) : null}
+
+            {activeTab === 'packs' ? (
+              <DesktopSetupRuntimePacksSection
+                apiBaseUrl={localIntelligenceApi?.apiBaseUrl}
+                token={localIntelligenceApi?.token}
+                focusPackId={focusPackId}
               />
             ) : null}
 

@@ -408,6 +408,17 @@ class RemoteControlStoreAutomationMixin:
             ).fetchall()
             return [self._automation_event_run_view(row) for row in rows]
 
+    def get_event_run(self, *, user_id: int, event_run_id: str) -> Optional[Dict[str, Any]]:
+        clean_id = str(event_run_id or "").strip()
+        if not clean_id:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM automation_event_runs WHERE user_id = ? AND event_run_id = ?",
+                (int(user_id), clean_id),
+            ).fetchone()
+            return self._automation_event_run_view(row) if row else None
+
     def cancel_event_runs_for_session(self, *, user_id: int, session_id: str, reason: str = "stopped") -> List[Dict[str, Any]]:
         clean_session_id = str(session_id or "").strip()
         if not clean_session_id:

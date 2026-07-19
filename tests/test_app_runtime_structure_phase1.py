@@ -205,6 +205,11 @@ def test_mobile_surfaces_expose_chat_fleet_and_jarvis_navigation():
     assert "initialSurfaceMode?: ConversationSurfaceMode" in desktop_conversation_surface
     assert "useState<ConversationSurfaceMode>(initialSurfaceMode)" in desktop_conversation_surface
     assert "setConversationMode(initialSurfaceMode)" in desktop_conversation_surface
+    assert desktop_shell_view.count("<DesktopConversationView") == 1
+    assert "conversationHeaderControls?.setMode(tab)" in desktop_shell_view
+    assert "activeScope?.setConversationMode?.(mode)" in desktop_conversation
+    assert "if (!isJarvisMode)" in desktop_conversation_surface
+    assert "deactivateVoiceRuntime('idle')" in desktop_conversation_surface
     assert "const DESKTOP_NO_ACTIVE_SESSION_STATUS" in desktop_conversation_surface
     assert "const requireActiveDesktopSession = () =>" in desktop_conversation_surface
     assert "setStatus(DESKTOP_NO_ACTIVE_SESSION_STATUS)" in desktop_conversation_surface
@@ -2369,6 +2374,11 @@ def test_load_session_by_id_updates_tool_executor_workspace_path(tmp_path: Path)
         agent_mode="auto",
         chat_history=[{"role": "user", "content": "hello"}],
         active_skills=["skill-a"],
+        fleet_identity_id="worker-identity",
+        fleet_identity_role="worker",
+        fleet_worker_id="worker-1",
+        fleet_task_mode="delegated",
+        fleet_task_id="task-1",
     )
 
     class DummySessionManager:
@@ -2402,6 +2412,11 @@ def test_load_session_by_id_updates_tool_executor_workspace_path(tmp_path: Path)
     assert runtime.current_model == "gpt-test"
     assert runtime.current_variant == "thinking"
     assert runtime.active_skills == ["skill-a"]
+    assert runtime.fleet_identity_id == "worker-identity"
+    assert runtime.fleet_identity_role == "worker"
+    assert runtime.fleet_worker_id == "worker-1"
+    assert runtime.fleet_task_mode == "delegated"
+    assert runtime.fleet_task_id == "task-1"
 
 
 def test_set_workspace_refreshes_workspace_scoped_runtime_managers(monkeypatch, tmp_path: Path):

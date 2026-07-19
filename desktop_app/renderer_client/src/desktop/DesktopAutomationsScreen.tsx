@@ -413,7 +413,6 @@ export default function DesktopAutomationsScreen() {
       <View style={styles.page}>
         <PageHeader
           title="Automations"
-          subtitle="Schedule local work, review results, and keep risky actions behind a clear pause."
           fallbackHref="/desktop?tab=chat"
           right={(
             <View style={styles.headerActions}>
@@ -478,9 +477,8 @@ export default function DesktopAutomationsScreen() {
             ) : (
               <View style={styles.heroEmpty}>
                 <View style={styles.heroInner}>
-                  <Text style={styles.heroEyebrow}>LOCAL SCHEDULER // READY</Text>
-                  <Text style={styles.heroTitle}>Set the work in motion, then come back to evidence.</Text>
-                  <Text style={styles.heroCopy}>Automations run on this computer. Start with a narrow task, choose when it should run, and decide where the agent must pause for approval.</Text>
+                  <Text style={styles.heroTitle}>Schedule work.</Text>
+                  <Text style={styles.heroCopy}>Runs locally with your chosen approval rules.</Text>
                   <View style={styles.templateGrid}>
                     {QUICK_TEMPLATES.map((template) => (
                       <Pressable

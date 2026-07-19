@@ -332,6 +332,7 @@ class RemoteControlStoreCoreMixin:
                     desktop_id TEXT NOT NULL,
                     identity_id TEXT,
                     identity_label TEXT,
+                    task_id TEXT,
                     request_kind TEXT NOT NULL,
                     message TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'pending',
@@ -634,6 +635,12 @@ class RemoteControlStoreCoreMixin:
                 self._conn.execute(
                     "ALTER TABLE fleet_connection_permissions ADD COLUMN capabilities TEXT NOT NULL DEFAULT '{}'"
                 )
+            existing_upstream_request_columns = {
+                str(row["name"])
+                for row in self._conn.execute("PRAGMA table_info(fleet_upstream_requests)").fetchall()
+            }
+            if "task_id" not in existing_upstream_request_columns:
+                self._conn.execute("ALTER TABLE fleet_upstream_requests ADD COLUMN task_id TEXT")
             self._conn.commit()
             if self._meta_get("schema_version") is None:
                 self._migrate_json_store_if_needed()

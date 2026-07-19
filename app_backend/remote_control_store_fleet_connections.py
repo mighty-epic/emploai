@@ -206,14 +206,21 @@ class RemoteControlStoreFleetConnectionMixin:
         delegation_id: str,
         status: str,
         report: Optional[Dict[str, Any]] = None,
+        desktop_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         clean_status = str(status or "").strip().lower()
         if clean_status not in {"queued", "running", "needs_review", "completed", "failed", "stopped", "canceled"}:
             raise ValueError("Unsupported delegation status")
         with self._lock:
+            clean_desktop_id = str(desktop_id or "").strip()
             row = self._conn.execute(
-                "SELECT * FROM fleet_delegations WHERE user_id = ? AND delegation_id = ?",
-                (int(user_id), str(delegation_id or "").strip()),
+                "SELECT * FROM fleet_delegations WHERE user_id = ? AND delegation_id = ?"
+                + (" AND desktop_id = ?" if clean_desktop_id else ""),
+                (
+                    int(user_id),
+                    str(delegation_id or "").strip(),
+                    *([clean_desktop_id] if clean_desktop_id else []),
+                ),
             ).fetchone()
             if not row:
                 raise KeyError("Unknown computer delegation")
@@ -245,12 +252,47 @@ class RemoteControlStoreFleetConnectionMixin:
             ).fetchall()
             return [self._delegation_view(row) for row in rows]
 
+    def redirect_computer_delegation(
+        self,
+        *,
+        user_id: int,
+        delegation_id: str,
+        direction: str,
+        source: str = "manager",
+    ) -> Dict[str, Any]:
+        clean_direction = str(direction or "").strip()
+        if not clean_direction:
+            raise ValueError("direction is required")
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM fleet_delegations WHERE user_id = ? AND delegation_id = ?",
+                (int(user_id), str(delegation_id or "").strip()),
+            ).fetchone()
+            if not row:
+                raise KeyError("Unknown computer delegation")
+            if str(row["status"] or "") not in {"queued", "running", "paused", "blocked", "needs_review"}:
+                raise ValueError("Only an active delegation can be redirected")
+            metadata = _json_loads(row["metadata"], {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+            redirects = list(metadata.get("redirects") or [])
+            redirects.append({"direction": clean_direction, "source": str(source or "manager")[:80]})
+            metadata["redirects"] = redirects[-20:]
+            metadata["latest_redirect"] = clean_direction
+            self._conn.execute(
+                "UPDATE fleet_delegations SET metadata = ?, updated_at = ? WHERE delegation_id = ?",
+                (_json_dumps(metadata), time.time(), row["delegation_id"]),
+            )
+            self._conn.commit()
+            return self.get_computer_delegation(user_id=int(user_id), delegation_id=str(row["delegation_id"]))
+
     def _upstream_request_view(self, row) -> Dict[str, Any]:
         return {
             "request_id": str(row["request_id"]),
             "desktop_id": str(row["desktop_id"]),
             "identity_id": row["identity_id"],
             "identity_label": row["identity_label"],
+            "task_id": row["task_id"],
             "request_kind": str(row["request_kind"]),
             "message": str(row["message"]),
             "status": str(row["status"]),
@@ -270,6 +312,7 @@ class RemoteControlStoreFleetConnectionMixin:
         message: str,
         identity_id: Optional[str] = None,
         identity_label: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         clean_request_id = str(request_id or "").strip()
         clean_desktop_id = str(desktop_id or "").strip()
@@ -290,12 +333,13 @@ class RemoteControlStoreFleetConnectionMixin:
             self._conn.execute(
                 """
                 INSERT INTO fleet_upstream_requests(
-                    request_id, user_id, desktop_id, identity_id, identity_label,
+                    request_id, user_id, desktop_id, identity_id, identity_label, task_id,
                     request_kind, message, status, response, created_at, updated_at, decided_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?, NULL)
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?, NULL)
                 ON CONFLICT(request_id) DO UPDATE SET
                     identity_id = excluded.identity_id,
                     identity_label = excluded.identity_label,
+                    task_id = excluded.task_id,
                     request_kind = excluded.request_kind,
                     message = excluded.message,
                     updated_at = excluded.updated_at
@@ -308,6 +352,7 @@ class RemoteControlStoreFleetConnectionMixin:
                     clean_desktop_id,
                     str(identity_id or "").strip()[:128] or None,
                     str(identity_label or "").strip()[:160] or None,
+                    str(task_id or "").strip()[:128] or None,
                     clean_kind,
                     clean_message[:8000],
                     now,

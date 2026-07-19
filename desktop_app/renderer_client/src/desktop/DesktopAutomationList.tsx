@@ -40,7 +40,7 @@ export function DesktopAutomationList({ jobs, selectedJobId, query, filter, onQu
     <View style={[styles.listPane, style]}>
       <View style={styles.listHeader}>
         <View style={styles.listTitleRow}>
-          <Text style={styles.sectionTitle}>Your Automations</Text>
+          <Text style={styles.sectionTitle}>Schedules</Text>
           <Text style={styles.sectionMeta}>{jobs.length}</Text>
         </View>
         <TextInput
@@ -121,7 +121,7 @@ export function DesktopAutomationList({ jobs, selectedJobId, query, filter, onQu
       ) : (
         <View style={styles.listEmpty}>
           <Text style={styles.emptyTitle}>{jobs.length ? 'No matching automations' : 'No automations yet'}</Text>
-          <Text style={styles.emptyCopy}>{jobs.length ? 'Adjust the search or filter to see more results.' : 'Create a scheduled task, reminder, or local project monitor.'}</Text>
+          <Text style={styles.emptyCopy}>{jobs.length ? 'Try another search or filter.' : 'Create a scheduled task or reminder.'}</Text>
         </View>
       )}
     </View>

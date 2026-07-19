@@ -3,6 +3,7 @@ import { createClientMessageId } from './desktopRealtimeProtocol';
 import { createAsyncSingleFlight, createLatestAsyncQueue } from './desktopAsyncCoordination';
 import { restoreRecoveryItem, stopIdentityTree } from '@/lib/appApi';
 import { modelExistsInGroups } from './modelProviders';
+import { sessionIdForFleetIdentity } from './desktopSidebarState';
 import { useRef } from 'react';
 type NativeSyntheticEvent<T = any> = any; type ActiveCommandPanel = any; type ActivityItem = any; type AgentOverview = any; type ArtifactDetail = any; type ArtifactSummary = any; type ComposerInputOrigin = any; type ConversationSurfaceMode = any; type DesktopFleetEnrollment = any; type DesktopFleetIdentity = any; type DesktopFleetSnapshot = any; type DesktopFleetTask = any; type DesktopFleetWorker = any; type DesktopGitRepoState = any; type DesktopMessage = any; type DesktopPathStatus = any; type DesktopRuntimeStatus = any; type DesktopSidebarProjectActivity = any; type DesktopSidebarState = any; type DesktopVoicePackState = any; type DesktopVoiceRuntimeStatus = any; type InterruptPolicy = any; type JarvisSttBackend = any; type JarvisTtsBackend = any; type LayoutChangeEvent = any; type MessageSourceFormat = any; type ModelProviderGroup = any; type NativeScrollEvent = any; type PendingSearchJump = any; type QueuedComposerMessage = any; type QueuedMessage = any; type RealtimeChannel = any; type RealtimeEvent = any; type ReferenceEntry = any; type RuntimeOrchestratorStatus = any; type ScheduledJob = any; type SearchResultTarget = any; type SecurityPermissionMode = any; type SessionDetail = any; type SessionMessage = any; type SessionSearchResult = any; type SessionSummary = any; type SessionTimelineEvent = any; type SidebarChatTooltipState = any; type SidebarDragState = any; type SidebarDraftChat = any; type SidebarProjectGroup = any; type StartupReadinessState = any; type TaskBoard = any; type TelegramBotConfig = any; type TextInputContentSizeChangeEventData = any; type ToolPackInfoPopupState = any; type VoiceCaptureMode = any; type VoiceGateState = any;
 
@@ -653,8 +654,12 @@ const isBusySessionSwitchError = (error: unknown) => (
       if (!scope.activeFleetIdentity || (currentSummary && sessionBelongsToFleetIdentity(currentSummary, scope.activeFleetIdentity))) {
         return sessionIdRef.current;
       }
-      const selectedChatId = String(fleetSnapshot?.selected_chat_by_identity?.[scope.activeFleetIdentity.identity_id] || '').trim();
-      if (selectedChatId && sessions.some((item: any) => item.id === selectedChatId)) {
+      const selectedChatId = sessionIdForFleetIdentity(
+        sessions,
+        scope.activeFleetIdentity,
+        fleetSnapshot?.selected_chat_by_identity?.[scope.activeFleetIdentity.identity_id],
+      );
+      if (selectedChatId) {
         return activateResolvedSessionForOutgoingMessage(selectedChatId);
       }
       const fallbackProject = preferredProjectPath || currentSummary?.workspace || '';
@@ -665,8 +670,12 @@ const isBusySessionSwitchError = (error: unknown) => (
     }
 
     if (scope.activeFleetIdentity) {
-      const selectedChatId = String(fleetSnapshot?.selected_chat_by_identity?.[scope.activeFleetIdentity.identity_id] || '').trim();
-      if (selectedChatId && sessions.some((item: any) => item.id === selectedChatId)) {
+      const selectedChatId = sessionIdForFleetIdentity(
+        sessions,
+        scope.activeFleetIdentity,
+        fleetSnapshot?.selected_chat_by_identity?.[scope.activeFleetIdentity.identity_id],
+      );
+      if (selectedChatId) {
         return activateResolvedSessionForOutgoingMessage(selectedChatId);
       }
     }

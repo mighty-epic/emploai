@@ -1,4 +1,5 @@
 import type { DesktopConversationScope } from './DesktopConversationScope';
+import { sessionIdForFleetIdentity as resolveSessionIdForFleetIdentity } from './desktopSidebarState';
 import {
   defaultVariantForModel,
   filterModelGroupsByConfiguredProviders,
@@ -13,6 +14,7 @@ import { useEffect } from 'react'; type NativeSyntheticEvent<T = any> = any; typ
 
 export function useDesktopConversationDerivedValues(scope: DesktopConversationScope) {
   const { ALWAYS_ON_VOICE_AUTO_SEND, JARVIS_ENGLISH_VOICE_PATH_ERROR, TOOL_PACK_DEFINITIONS, VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW, VOICE_ENGINE_NONE, activeCommandPanel, activePermissionInfoId, activity, allowedWorkspaceRoot, alwaysOnEnabled, alwaysOnEnabledRef, apiVoiceInputActive, assistantDraft, availableToolPackIdsFrom, cachedModelGroups, cachedPlannerModels, chatRunActive, clampUsagePercent, clearConversationSelection, completedTaskBoards, configuredModelGroups, configuredPlannerModels, conversationMode, defaultToolPackIds, describeError, draftBranchSearch, draftChat, draftGitRepoLoading, draftGitRepoState, draftProjectSearch, enabledToolPackIdsFrom, extractReferenceTitle, fleetSnapshot, formatRelativeTime, formatStatusNumber, formatToolPackLockReasonText, groupPlannerModelsByProvider, hoveredToolPackInfoId, input, isReferenceSidebarMessage, jarvisPulseProgress, jobs, lastAssistantOutputAt, lastVoiceWarmRequestEngineRef, liveVoiceStatus, mergeTimelineEntries, messages, modelProviderKey, normalizeWorkspacePath, onOpenSetup, onSelectVoiceEngine, openSession, orchestratorStatus, overview, pendingDraftSecurityPermissionMode, pendingSessionSwitch, pinnedToolPackInfoId, preferredModelFromGroups, projectDisplayName, projectPathBasename, projectPathHint, projectPathStatuses, pushActivity, queuedComposerMessages, resetVoiceCaptureBuffers, runtimeRunState, runtimeStatus, selectedProjectPath, selectedVoiceEngine, sessionBelongsToFleetIdentity, sessionId, sessionIdRef, sessionName, sessionSidebarSortComparator, sessions, setAlwaysOnEnabled, setExpandedModelProviders, setExpandedPlannerProviders, setStatus, setVoiceEngineChanging, setVoiceError, setVoiceRecording, setVoiceRunning, setVoiceState, shortStatusText, shouldKeepSidebarProjectPath, showVoicePanel, sidebarSearch, sidebarSearchModalOpen, sidebarSearchResults, sidebarState, status, stopVoiceTracks, summarizeReferenceContent, summarizeRuntimeStatus, taskBoard, taskBoardStatusLabel, telegramBotConfigs, thinking, thinkingShineProgress, timelineEvents, toolPackInfoPopup, useEffect, voiceDraft, voiceEngineChanging, voiceError, voicePackState, voicePanelHidden, voiceRecording, voiceRecordingRef, voiceRunning, voiceRunningRef, voiceState, warmSelectedVoicePath, workspaceSortOrder } = scope;
+  const confirmAction = scope.confirmAction as ((options: Record<string, any>) => Promise<boolean>) | undefined;
 const dueJobs = jobs.filter((job: any) => job.due).length;
   const heartbeatLabel = overview?.heartbeat
     ? `${overview.heartbeat.interval_seconds}s${overview.heartbeat.running ? ' · running' : ''}`
@@ -31,7 +33,7 @@ const dueJobs = jobs.filter((job: any) => job.due).length;
     ? String(fleetSnapshot?.selected_chat_by_identity?.[activeFleetIdentityId] || '').trim()
     : '';
   const activeFleetIdentityTargetChatId = activeFleetIdentity
-    ? activeFleetIdentitySelectedChatId || visibleSessions[0]?.id || ''
+    ? resolveSessionIdForFleetIdentity(sessions, activeFleetIdentity, activeFleetIdentitySelectedChatId)
     : '';
   const activeSession = sessions.find((item: any) => item.id === sessionId);
   useEffect(() => {
@@ -618,10 +620,21 @@ const dueJobs = jobs.filter((job: any) => job.due).length;
       return;
     }
     if (!targetPack?.available) {
-      const message = `${engine === VOICE_ENGINE_HEBREW ? 'Hebrew' : 'English'} voice pack is not ready yet. Open setup to install it.`;
+      const language = engine === VOICE_ENGINE_HEBREW ? 'Hebrew' : 'English';
+      const approximateSize = engine === VOICE_ENGINE_HEBREW ? 'about 1.1 GB' : 'about 320 MB';
+      const message = `${language} voice pack is not ready yet. It is an optional local download of ${approximateSize}.`;
       setVoiceError(message);
       pushActivity(message, 'warn');
-      onOpenSetup?.();
+      const confirmed = await confirmAction?.({
+        title: `Open the ${language} runtime pack?`,
+        message: `${language} voice requires an optional local download of ${approximateSize}. Nothing will download until you confirm again on its Runtime Packs card.`,
+        confirmLabel: 'Open Runtime Packs',
+        cancelLabel: 'Cancel',
+        tone: 'normal',
+      });
+      if (confirmed) {
+        onOpenSetup?.({ tab: 'packs', packId: engine });
+      }
       return;
     }
     if (selectedVoiceEngine === engine) {

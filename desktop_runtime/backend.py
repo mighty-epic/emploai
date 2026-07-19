@@ -127,18 +127,16 @@ TTS_VOICE_PACK_IDS = (VOICE_ENGINE_KOKORO_TTS, VOICE_ENGINE_KYUTAI_TTS)
 VOICE_PACK_IDS = (*STT_VOICE_PACK_IDS, *TTS_VOICE_PACK_IDS)
 
 
-def _voice_pack_manager():
-    from app_backend import voice_pack_manager
-
-    return voice_pack_manager
-
-
 def install_voice_pack(pack_id: str, **kwargs):
-    return _voice_pack_manager().install_voice_pack(pack_id, **kwargs)
+    from app_backend.runtime_pack_registry import install_runtime_pack
+
+    return install_runtime_pack(pack_id, **kwargs)
 
 
 def remove_voice_pack(pack_id: str):
-    return _voice_pack_manager().remove_voice_pack(pack_id)
+    from app_backend.runtime_pack_registry import remove_runtime_pack
+
+    return remove_runtime_pack(pack_id)
 
 
 def install_latest_update(home: Path, root: Path, *, restart_executable: Path | None = None) -> dict[str, Any]:

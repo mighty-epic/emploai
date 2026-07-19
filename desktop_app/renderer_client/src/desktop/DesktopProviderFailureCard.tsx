@@ -156,8 +156,7 @@ export function DesktopProviderFailureCard({
 const styles = StyleSheet.create({
   card: {
     marginVertical: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(224, 120, 132, 0.38)',
+    borderWidth: 0,
     borderRadius: UI.radius.panel,
     backgroundColor: UI.color.dangerSoft,
     padding: 16,
@@ -172,13 +171,12 @@ const styles = StyleSheet.create({
   choice: {
     minHeight: 44,
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
     borderRadius: UI.radius.control,
     paddingHorizontal: 12,
     backgroundColor: UI.color.surfaceMuted,
   },
-  choiceActive: { borderColor: UI.color.accent, backgroundColor: UI.color.accentSoft },
+  choiceActive: { backgroundColor: UI.color.accentSoft },
   choiceText: { color: UI.color.textMuted, fontSize: 12, fontWeight: '600' },
   choiceTextActive: { color: UI.color.accentStrong },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
@@ -193,8 +191,7 @@ const styles = StyleSheet.create({
   secondary: {
     minHeight: 44,
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
     paddingHorizontal: 16,

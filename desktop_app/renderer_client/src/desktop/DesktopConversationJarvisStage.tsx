@@ -35,18 +35,6 @@ function clockLabel() {
   ].join(':');
 }
 
-function formatUptime(seconds: unknown) {
-  const total = Number(seconds);
-  if (!Number.isFinite(total) || total <= 0) {
-    return '--:--:--';
-  }
-  const whole = Math.floor(total);
-  const hours = Math.floor(whole / 3600);
-  const minutes = Math.floor((whole % 3600) / 60);
-  const secs = whole % 60;
-  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-}
-
 function firstFiniteNumber(...values: unknown[]) {
   for (const value of values) {
     const numeric = Number(value);
@@ -388,26 +376,10 @@ export function DesktopConversationJarvisStage({ scope }: JarvisStageProps) {
 
   const onlineWorkers = workers.filter(isFleetWorkerAvailable).length;
   const totalWorkers = workers.length;
-  const runtimeStatus = scope.runtimeStatus || {};
-  const runtimeMemoryMb = firstFiniteNumber(
-    runtimeStatus.memory_mb,
-    runtimeStatus.memory?.rss_mb,
-    scope.overview?.memory_mb,
-    scope.overview?.runtime?.memory_mb,
-  );
-  const memoryLabel = runtimeMemoryMb === null ? '--' : `${runtimeMemoryMb.toFixed(runtimeMemoryMb >= 10 ? 0 : 1)}MB`;
   const latencyMs = firstFiniteNumber(scope.liveVoiceStatus?.latency_ms, scope.liveVoiceStatus?.rtt_ms);
   const latencyLabel = latencyMs === null ? '--ms' : `${Math.max(1, Math.round(latencyMs))}ms`;
-  const uptimeLabel = formatUptime(
-    runtimeStatus.uptime_seconds
-    ?? runtimeStatus.uptime
-    ?? scope.overview?.uptime_seconds
-    ?? scope.liveVoiceStatus?.uptime_seconds,
-  );
   const activeStatus = statusWord(scope);
   const sessionLabel = scope.sessionId ? 'ACTIVE' : 'NO SESSION';
-  const buildLabel = compactText(scope.bootstrap?.appVersion || scope.runtimeStatus?.version || scope.overview?.version, 'LOCAL');
-  const systemLoad = compactText(scope.contextPercentLabel, '--');
   const contextValue = compactText(scope.contextTokenLabel, 'No context data');
   const assistantAudioActive = Boolean(scope.assistantAudioRef?.current);
   const interruptible = Boolean(
@@ -481,11 +453,9 @@ export function DesktopConversationJarvisStage({ scope }: JarvisStageProps) {
       <View style={hudStyles.topbar}>
         <View style={hudStyles.systemId}>
           <View style={hudStyles.systemDot} />
-          <Text style={hudStyles.systemIdText}>EMPLOAI CORE // MANAGER AGENT - NODE 01</Text>
+          <Text style={hudStyles.systemIdText}>EMPLOAI · JARVIS</Text>
         </View>
         <View style={hudStyles.systemRight}>
-          <Text style={hudStyles.systemRightText}>BUILD <Text style={hudStyles.systemRightStrong}>{buildLabel}</Text></Text>
-          <Text style={hudStyles.systemRightText}>ENCRYPTION <Text style={hudStyles.systemRightStrong}>AES-256</Text></Text>
           <Text style={hudStyles.systemRightText}>{clock}</Text>
         </View>
       </View>
@@ -511,10 +481,6 @@ export function DesktopConversationJarvisStage({ scope }: JarvisStageProps) {
       <View style={hudStyles.console}>
         <View style={hudStyles.telemetry}>
           <TelemetryItem label="WORKERS ONLINE" value={`${onlineWorkers} / ${totalWorkers || 0}`} accent />
-          <View style={hudStyles.telemetryDivider} />
-          <TelemetryItem label="SYSTEM LOAD" value={systemLoad} spark />
-          <View style={hudStyles.telemetryDivider} />
-          <TelemetryItem label="UPTIME" value={uptimeLabel} />
           <View style={hudStyles.telemetryDivider} />
           <TelemetryItem label="WAKE PHRASE" value={wakePhraseLabel.toUpperCase()} accent />
           <View style={hudStyles.telemetryDivider} />
@@ -634,7 +600,7 @@ export function DesktopConversationJarvisStage({ scope }: JarvisStageProps) {
 
           <View style={hudStyles.statusBlock}>
             <Text accessibilityLiveRegion="polite" style={hudStyles.statusText}>
-              STATUS - <Text style={hudStyles.statusTextAccent}>{activeStatus}</Text>
+              <Text style={hudStyles.statusTextAccent}>{activeStatus}</Text>
             </Text>
             <Text style={hudStyles.statusDetail} numberOfLines={1}>{statusDetail}</Text>
             <View style={hudStyles.waveform}>
@@ -662,8 +628,6 @@ export function DesktopConversationJarvisStage({ scope }: JarvisStageProps) {
 
         <View style={[hudStyles.telemetry, hudStyles.telemetryRight]}>
           <TelemetryItem label="LATENCY" value={latencyLabel} accent spark alignRight />
-          <View style={hudStyles.telemetryDivider} />
-          <TelemetryItem label="MEMORY" value={memoryLabel} alignRight />
           <View style={hudStyles.telemetryDivider} />
           <TelemetryItem label="SESSION" value={sessionLabel} accent alignRight />
           <View style={hudStyles.telemetryDivider} />

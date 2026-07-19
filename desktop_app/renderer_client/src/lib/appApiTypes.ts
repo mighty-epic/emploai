@@ -201,6 +201,8 @@ export type SessionSummary = {
   fleet_identity_id?: string | null;
   fleet_identity_role?: string | null;
   fleet_worker_id?: string | null;
+  fleet_task_mode?: 'direct' | 'delegated' | string | null;
+  fleet_task_id?: string | null;
   account_user_id?: number | null;
   account_email?: string | null;
   plan_mode?: Record<string, unknown> | null;
@@ -210,6 +212,7 @@ export type SessionSummary = {
 };
 
 export type SessionMessage = {
+  message_id?: string | null;
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp?: string | null;
@@ -261,6 +264,8 @@ export type SessionDetail = {
   fleet_identity_id?: string | null;
   fleet_identity_role?: string | null;
   fleet_worker_id?: string | null;
+  fleet_task_mode?: 'direct' | 'delegated' | string | null;
+  fleet_task_id?: string | null;
   account_user_id?: number | null;
   account_email?: string | null;
   plan_mode?: Record<string, unknown> | null;
@@ -277,6 +282,12 @@ export type FleetIdentity = {
   desktop_id?: string | null;
   worker_id?: string | null;
   status?: string;
+  is_default?: boolean;
+  protected?: boolean;
+  tool_profile?: string | null;
+  enabled_tool_packs?: string[];
+  capability_tags?: string[];
+  published_upstream?: boolean;
   metadata?: Record<string, unknown>;
   created_at?: string | null;
   updated_at?: string | null;
@@ -296,6 +307,12 @@ export type FleetWorker = {
   created_at?: string | null;
   updated_at?: string | null;
   last_seen_at?: string | null;
+  is_default?: boolean;
+  protected?: boolean;
+  tool_profile?: string | null;
+  enabled_tool_packs?: string[];
+  capability_tags?: string[];
+  published_upstream?: boolean;
 };
 
 export type FleetTask = {
@@ -309,6 +326,9 @@ export type FleetTask = {
   metadata?: Record<string, unknown>;
   created_at?: string | null;
   updated_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  canceled_at?: string | null;
 };
 
 export type FleetReport = {

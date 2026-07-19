@@ -778,7 +778,7 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
       .map((entry: any) => entry.message);
   };
 
-  const applySessionDetail = (detail: SessionDetail) => {
+  const applySessionDetail = (detail: SessionDetail, options?: { preserveActiveRun?: boolean }) => {
     const switchingSessions = detail.id !== sessionIdRef.current;
     const nextEnabledToolPacks = Array.isArray(detail.enabled_tool_packs) ? detail.enabled_tool_packs : [];
     const nextAvailableToolPacks = Array.isArray(detail.available_tool_packs) ? detail.available_tool_packs : [];
@@ -799,13 +799,14 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
       setThinking('');
       setLastAssistantOutputAt(null);
     }
-    const nextRunState = detail.run_state === 'running' || detail.is_running ? 'running' : 'idle';
+    const nextRunState = options?.preserveActiveRun || detail.run_state === 'running' || detail.is_running ? 'running' : 'idle';
     sessionIdRef.current = detail.id;
     setSessionId(detail.id);
     setSessionName(detail.name);
     scope.setPlanMode?.((detail.plan_mode && typeof detail.plan_mode === 'object') ? detail.plan_mode : null);
     scope.setActiveGoal?.((detail.active_goal && typeof detail.active_goal === 'object') ? detail.active_goal : null);
     setRuntimeRunState(nextRunState);
+    chatRunActiveRef.current = nextRunState === 'running';
     setChatRunActive(nextRunState === 'running');
     if (nextRunState === 'idle') {
       setAssistantDraft('');
@@ -843,8 +844,8 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
       security_permission_mode: detail.security_permission_mode || 'standard',
       artifact_count: Number(detail.artifact_count || 0),
       latest_artifact_at: detail.latest_artifact_at ?? null,
-      is_running: Boolean(detail.is_running),
-      run_state: detail.run_state || nextRunState,
+      is_running: nextRunState === 'running',
+      run_state: nextRunState,
       workspace_id: detail.workspace_id ?? null,
       workspace_binding_status: detail.workspace_binding_status ?? null,
       fleet_identity_id: detail.fleet_identity_id ?? null,
@@ -879,7 +880,7 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
         current_model: detail.model || previous.current_model,
         current_variant: detail.variant || previous.current_variant,
         planner_model: detail.planner_model ?? previous.planner_model,
-        run_state: detail.run_state || previous.run_state,
+        run_state: nextRunState,
         enabled_tool_packs: nextEnabledToolPacks,
         available_tool_packs: nextAvailableToolPacks,
         lock_status: nextLockStatus,
@@ -944,7 +945,7 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
     }
   };
 
-  const applySessionSync = (payload: Record<string, any>) => {
+  const applySessionSync = (payload: Record<string, any>, options?: { preserveActiveRun?: boolean }) => {
     const detail = payload.session as SessionDetail | undefined;
     const syncedSessions = payload.sessions as SessionSummary[] | undefined;
     const syncedRuntime = payload.runtime as RuntimeOrchestratorStatus | undefined;
@@ -970,7 +971,7 @@ const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
           || overview.context_usage?.model !== detail.model
         )
       );
-      applySessionDetail(detail);
+      applySessionDetail(detail, options);
       setOverview((previous: any) => {
         if (!previous) {
           return previous;

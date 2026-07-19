@@ -56,3 +56,13 @@ def test_ready_desktop_keeps_monitoring_runtime_liveness_and_drops_stale_process
     assert "Checking local runtime status..." not in shell
     assert "accessibilityLiveRegion=\"polite\"" in render
     assert "{shortStatusText(status)}" in render
+
+
+def test_empty_chat_folder_choice_is_not_rendered_twice():
+    render = (
+        ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopConversationRender.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert ">Choose folder</Text>" not in render
+    assert "Automatic folder" in render
+    assert "Choose location" in render

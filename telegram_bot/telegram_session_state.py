@@ -198,6 +198,11 @@ class TelegramSession:
     enabled_tool_packs: List[str] = field(default_factory=default_enabled_tool_packs)
     telegram_bot_config_id: Optional[str] = None
     headless_eligible: bool = False
+    fleet_identity_id: Optional[str] = None
+    fleet_identity_role: Optional[str] = None
+    fleet_worker_id: Optional[str] = None
+    fleet_task_mode: Optional[str] = None
+    fleet_task_id: Optional[str] = None
     agent_mode: str = "auto"  # Default to auto for full autonomous behavior
     max_turns: int = 100
     chat_history: List[Dict] = field(default_factory=list)
@@ -960,6 +965,11 @@ class TelegramSession:
         session_obj.enabled_tool_packs = list(getattr(self, "enabled_tool_packs", []) or [])
         session_obj.telegram_bot_config_id = getattr(self, "telegram_bot_config_id", None)
         session_obj.headless_eligible = bool(getattr(self, "headless_eligible", False))
+        session_obj.fleet_identity_id = getattr(self, "fleet_identity_id", None)
+        session_obj.fleet_identity_role = getattr(self, "fleet_identity_role", None)
+        session_obj.fleet_worker_id = getattr(self, "fleet_worker_id", None)
+        session_obj.fleet_task_mode = getattr(self, "fleet_task_mode", None)
+        session_obj.fleet_task_id = getattr(self, "fleet_task_id", None)
         session_obj.task_history = self.task_history
         session_obj.active_task_id = self.active_task_id
         session_obj.task_board_armed_next_turn = bool(self.task_board_armed_next_turn)
@@ -1000,6 +1010,11 @@ class TelegramSession:
         self.enabled_tool_packs = list(getattr(session_obj, "enabled_tool_packs", []) or [])
         self.telegram_bot_config_id = getattr(session_obj, "telegram_bot_config_id", None)
         self.headless_eligible = bool(getattr(session_obj, "headless_eligible", False))
+        self.fleet_identity_id = getattr(session_obj, "fleet_identity_id", None)
+        self.fleet_identity_role = getattr(session_obj, "fleet_identity_role", None)
+        self.fleet_worker_id = getattr(session_obj, "fleet_worker_id", None)
+        self.fleet_task_mode = getattr(session_obj, "fleet_task_mode", None)
+        self.fleet_task_id = getattr(session_obj, "fleet_task_id", None)
         self.agent_mode = "auto"
         self.task_history = session_obj.task_history
         self.active_task_id = session_obj.active_task_id

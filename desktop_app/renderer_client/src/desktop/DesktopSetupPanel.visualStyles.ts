@@ -31,11 +31,11 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   },
   versionBadge: {
     width: 168,
-    backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
-    borderRadius: UI.radius.control,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    borderRadius: 0,
+    paddingHorizontal: 0,
+    paddingVertical: 4,
   },
   versionLabel: {
     color: UI.color.textSubtle,
@@ -49,13 +49,12 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
     fontFamily: WEB_MONO,
   },
   settingsFrame: {
-    gap: 1,
+    gap: 0,
     minHeight: 640,
-    borderRadius: UI.radius.panel,
+    borderRadius: 0,
     overflow: 'hidden',
-    backgroundColor: UI.color.border,
-    borderWidth: 1,
-    borderColor: UI.color.border,
+    backgroundColor: UI.color.canvas,
+    borderWidth: 0,
   },
   settingsSidebar: {
     width: 244,
@@ -68,8 +67,7 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   backToAppButton: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderWidth: 1,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   backToAppButtonText: {
     color: UI.color.textMuted,
@@ -91,7 +89,7 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   },
   settingsNavItemActive: {
     backgroundColor: UI.color.accentSoft,
-    borderColor: UI.color.accentBorder,
+    borderColor: 'transparent',
   },
   settingsNavItemTitle: {
     color: UI.color.textMuted,
@@ -101,7 +99,7 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
     color: UI.color.accentStrong,
   },
   settingsNavItemDescription: {
-    color: UI.color.textSubtle,
+    display: 'none',
   },
   settingsContentPane: {
     backgroundColor: UI.color.surfaceMuted,
@@ -113,7 +111,7 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
     paddingTop: 20,
     paddingBottom: 17,
     borderBottomColor: UI.color.border,
-    backgroundColor: UI.color.surface,
+    backgroundColor: UI.color.canvas,
   },
   settingsContentTitle: {
     color: UI.color.text,
@@ -145,7 +143,7 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   onboardingSuggestionCard: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.accentSoft,
-    borderColor: UI.color.accentBorder,
+    borderWidth: 0,
     marginTop: 16,
   },
   onboardingSuggestionEyebrow: {
@@ -182,17 +180,18 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
     color: UI.color.textMuted,
   },
   settingStack: {
-    gap: 1,
-    backgroundColor: UI.color.border,
-    borderRadius: UI.radius.panel,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: UI.color.border,
+    gap: 0,
+    backgroundColor: 'transparent',
+    borderRadius: 0,
+    overflow: 'visible',
+    borderWidth: 0,
   },
   settingCard: {
     borderRadius: 0,
-    backgroundColor: UI.color.surface,
+    backgroundColor: 'transparent',
     borderWidth: 0,
+    borderBottomWidth: 1,
+    borderBottomColor: UI.color.border,
     paddingHorizontal: 15,
     paddingVertical: 13,
     gap: 10,
@@ -200,7 +199,7 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   settingCardInner: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   settingCardTitle: {
     color: UI.color.text,
@@ -248,13 +247,13 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   },
   localColumn: {
     borderRadius: UI.radius.panel,
-    backgroundColor: UI.color.surface,
-    borderColor: UI.color.border,
+    backgroundColor: UI.color.surfaceMuted,
+    borderWidth: 0,
   },
   localRow: {
     borderRadius: UI.radius.control,
-    backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    backgroundColor: 'transparent',
+    borderWidth: 0,
   },
   localRowTitle: {
     color: UI.color.text,
@@ -266,7 +265,7 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   localActionButton: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceRaised,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
   },
   localActionButtonText: {
     color: UI.color.text,
@@ -317,13 +316,13 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   },
   sleepModeCard: {
     borderRadius: UI.radius.panel,
-    backgroundColor: UI.color.surface,
-    borderColor: UI.color.border,
+    backgroundColor: UI.color.surfaceMuted,
+    borderWidth: 0,
   },
   sleepModeStatusBadge: {
     borderRadius: UI.radius.small,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   sleepModeStatusActive: {
     backgroundColor: UI.color.successSoft,
@@ -332,7 +331,7 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   sleepModeActionButton: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
   },
   sleepModeActionButtonActive: {
     backgroundColor: UI.color.accent,
@@ -348,7 +347,7 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   sleepModeSecondaryButton: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
   },
   sleepModeSecondaryButtonText: {
     color: UI.color.textMuted,
@@ -372,7 +371,7 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   compactActionButton: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceRaised,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
   },
   compactActionButtonText: {
     color: UI.color.text,
@@ -399,7 +398,7 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   pathButton: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceRaised,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
   },
   pathButtonText: {
     color: UI.color.text,
@@ -408,7 +407,7 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   providerChip: {
     borderRadius: UI.radius.small,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   providerChipText: {
     color: UI.color.textMuted,
@@ -416,7 +415,7 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   providerVaultStatus: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   providerVaultStatusText: {
     color: UI.color.textMuted,
@@ -432,7 +431,7 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   noteCard: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   noteLine: {
     color: UI.color.textMuted,
@@ -440,12 +439,12 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   pairingQrCard: {
     borderRadius: UI.radius.panel,
     backgroundColor: UI.color.surface,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   voiceModeButton: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   voiceModeButtonActive: {
     backgroundColor: UI.color.accentSoft,
@@ -459,8 +458,8 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   },
   voicePackCard: {
     borderRadius: UI.radius.panel,
-    backgroundColor: UI.color.surface,
-    borderColor: UI.color.border,
+    backgroundColor: UI.color.surfaceMuted,
+    borderWidth: 0,
   },
   voicePackTitle: {
     color: UI.color.text,
@@ -474,8 +473,8 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   },
   voicePackProgressCard: {
     borderRadius: UI.radius.control,
-    backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    backgroundColor: UI.color.canvas,
+    borderWidth: 0,
   },
   voicePackProgressTrack: {
     backgroundColor: UI.color.border,
@@ -499,7 +498,7 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   metaCard: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   metaLabel: {
     color: UI.color.textSubtle,
@@ -511,8 +510,8 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   },
   extensionGuideCard: {
     borderRadius: UI.radius.panel,
-    backgroundColor: UI.color.surface,
-    borderColor: UI.color.border,
+    backgroundColor: UI.color.surfaceMuted,
+    borderWidth: 0,
   },
   footer: {
     borderTopColor: UI.color.border,
@@ -539,7 +538,7 @@ export const desktopSetupPanelVisualStyles = StyleSheet.create({
   secondaryButton: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
   },
   secondaryButtonText: {
     color: UI.color.text,

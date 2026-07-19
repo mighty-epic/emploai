@@ -13,14 +13,14 @@ export const desktopConversationJarvisVisualStyles = StyleSheet.create({
     color: UI.color.text,
     ...(Platform.OS === 'web'
       ? ({
-          backgroundImage: 'radial-gradient(ellipse at 50% 44%, rgba(92,200,215,0.09), transparent 46%)',
+          backgroundImage: 'radial-gradient(ellipse at 50% 44%, rgba(97,194,209,0.06), transparent 48%)',
           backgroundSize: '100% 100%',
         } as any)
       : null),
   },
   hudCorner: {
     borderColor: UI.color.borderStrong,
-    opacity: 0.7,
+    opacity: 0,
   },
   topbar: {
     minHeight: 62,
@@ -81,7 +81,7 @@ export const desktopConversationJarvisVisualStyles = StyleSheet.create({
     backgroundColor: UI.color.accent,
   },
   controlStrip: {
-    borderColor: UI.color.border,
+    borderWidth: 0,
     backgroundColor: UI.color.surfaceMuted,
     borderRadius: UI.radius.control,
   },
@@ -99,7 +99,7 @@ export const desktopConversationJarvisVisualStyles = StyleSheet.create({
     fontWeight: '600',
   },
   switchTrack: {
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
     backgroundColor: UI.color.canvas,
   },
   switchTrackActive: {
@@ -217,7 +217,7 @@ export const desktopConversationJarvisVisualStyles = StyleSheet.create({
     width: '84%',
     maxWidth: 860,
     borderRadius: UI.radius.panel,
-    borderColor: UI.color.border,
+    borderWidth: 0,
     backgroundColor: 'rgba(16, 23, 32, 0.96)',
     paddingHorizontal: 16,
     paddingVertical: 14,
@@ -237,7 +237,7 @@ export const desktopConversationJarvisVisualStyles = StyleSheet.create({
   },
   engineButton: {
     borderRadius: UI.radius.control,
-    borderColor: UI.color.border,
+    borderWidth: 0,
     backgroundColor: UI.color.surfaceMuted,
   },
   engineButtonHovered: {
@@ -258,7 +258,7 @@ export const desktopConversationJarvisVisualStyles = StyleSheet.create({
   },
   activityNotice: {
     borderRadius: UI.radius.control,
-    borderColor: UI.color.accentBorder,
+    borderWidth: 0,
     backgroundColor: UI.color.accentSoft,
   },
   activityNoticeText: {
@@ -282,7 +282,7 @@ export const desktopConversationJarvisVisualStyles = StyleSheet.create({
   dockButton: {
     borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
-    borderColor: UI.color.border,
+    borderWidth: 0,
   },
   dockButtonPrimary: {
     backgroundColor: UI.color.accent,

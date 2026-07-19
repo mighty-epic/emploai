@@ -55,8 +55,7 @@ export function DesktopProviderAvailabilityBanner({
 const styles = StyleSheet.create({
   banner: {
     marginVertical: 10,
-    borderWidth: 1,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
     borderRadius: UI.radius.panel,
     backgroundColor: UI.color.surfaceMuted,
     padding: 14,
@@ -72,8 +71,8 @@ const styles = StyleSheet.create({
   action: {
     minHeight: 44,
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceRaised,
     borderRadius: UI.radius.control,
     paddingHorizontal: 12,
   },

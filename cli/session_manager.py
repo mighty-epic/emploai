@@ -155,6 +155,13 @@ class SessionManager:
         with _SESSION_IO_LOCK:
             self._save_session(session)
             self._update_index(session)
+        try:
+            from app_backend.context_inspection import index_persisted_session
+
+            index_persisted_session(session)
+        except Exception:
+            # Context inspection is optional and must never block chat persistence.
+            pass
 
     def _recovery_dir(self) -> Path:
         return self.sessions_dir / ".recovery"
@@ -263,6 +270,8 @@ class SessionManager:
                 fleet_identity_id=payload.get("fleet_identity_id"),
                 fleet_identity_role=payload.get("fleet_identity_role"),
                 fleet_worker_id=payload.get("fleet_worker_id"),
+                fleet_task_mode=payload.get("fleet_task_mode"),
+                fleet_task_id=payload.get("fleet_task_id"),
                 account_user_id=payload.get("account_user_id"),
                 account_email=payload.get("account_email"),
             )

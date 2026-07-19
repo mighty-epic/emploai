@@ -593,6 +593,7 @@ export async function createSession(
     fleet_identity_id?: string | null;
     fleet_identity_role?: string | null;
     fleet_worker_id?: string | null;
+    fleet_task_id?: string | null;
   },
   workspaceArg?: string,
 ) {
@@ -610,6 +611,7 @@ export async function createSession(
         fleet_identity_id: nameOrOptions?.fleet_identity_id,
         fleet_identity_role: nameOrOptions?.fleet_identity_role,
         fleet_worker_id: nameOrOptions?.fleet_worker_id,
+        fleet_task_id: nameOrOptions?.fleet_task_id,
       };
   const request = () => requestJson<{ session: SessionDetail }>({
     scope: 'sessions.create',
@@ -1688,6 +1690,96 @@ export async function controlAgentRun(
       headers: authHeaders(token),
     },
     timeoutMs: 30000,
+  });
+}
+
+export async function fetchRuntimePacks(apiBaseUrl: string, token: string) {
+  return requestJson<{ packs: Array<Record<string, any>>; count: number; installed_count: number }>({
+    scope: 'runtime_packs.summary',
+    url: `${apiBaseUrl}/api/runtime-packs`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function installRuntimePack(apiBaseUrl: string, token: string, packId: string, force = false) {
+  return requestJson<Record<string, any>>({
+    scope: 'runtime_packs.install',
+    url: `${apiBaseUrl}/api/runtime-packs/${encodeURIComponent(packId)}/install`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force }),
+    },
+  });
+}
+
+export async function removeRuntimePack(apiBaseUrl: string, token: string, packId: string) {
+  return requestJson<Record<string, any>>({
+    scope: 'runtime_packs.remove',
+    url: `${apiBaseUrl}/api/runtime-packs/${encodeURIComponent(packId)}`,
+    init: { method: 'DELETE', headers: authHeaders(token) },
+  });
+}
+
+export async function fetchRuntimePackProgress(apiBaseUrl: string, token: string, packId: string) {
+  return requestJson<Record<string, any>>({
+    scope: 'runtime_packs.progress',
+    url: `${apiBaseUrl}/api/runtime-packs/${encodeURIComponent(packId)}/progress`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function fetchManagerContextInspectionSetting(apiBaseUrl: string, token: string) {
+  return requestJson<Record<string, any>>({
+    scope: 'fleet.context_inspection.setting',
+    url: `${apiBaseUrl}/api/fleet/context-inspection`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function setManagerContextInspectionSetting(apiBaseUrl: string, token: string, enabled: boolean) {
+  return requestJson<Record<string, any>>({
+    scope: 'fleet.context_inspection.update',
+    url: `${apiBaseUrl}/api/fleet/context-inspection`,
+    init: {
+      method: 'PUT',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    },
+  });
+}
+
+export async function stopFleetComputerDelegation(
+  apiBaseUrl: string,
+  token: string,
+  delegationId: string,
+  reason?: string | null,
+) {
+  return requestJson<Record<string, unknown>>({
+    scope: 'fleet.delegation.stop',
+    url: `${apiBaseUrl}/api/fleet/delegations/${encodeURIComponent(delegationId)}/stop`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: reason || null, metadata: { source: 'desktop_task_card' } }),
+    },
+  });
+}
+
+export async function redirectFleetComputerDelegation(
+  apiBaseUrl: string,
+  token: string,
+  delegationId: string,
+  direction: string,
+) {
+  return requestJson<Record<string, unknown>>({
+    scope: 'fleet.delegation.redirect',
+    url: `${apiBaseUrl}/api/fleet/delegations/${encodeURIComponent(delegationId)}/redirect`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ direction, source: 'desktop_task_card', metadata: {} }),
+    },
   });
 }
 

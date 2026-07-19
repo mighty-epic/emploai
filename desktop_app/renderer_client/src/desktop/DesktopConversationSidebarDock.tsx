@@ -467,11 +467,6 @@ export function DesktopConversationSidebarDock({ scope }: DesktopConversationSid
                               </View>
                             ))}
 
-                            {project.sessions.length === 0 && !projectHasDraft && project.activity.length === 0 ? (
-                              <View style={styles.projectEmptyState}>
-                                <Text style={styles.projectEmptyText}>No chats in this folder yet.</Text>
-                              </View>
-                            ) : null}
                           </View>
                         ) : null}
                       </View>
@@ -681,7 +676,7 @@ export function DesktopConversationSidebarDock({ scope }: DesktopConversationSid
                     <Text style={styles.referencePanelTitle}>History & Artifacts</Text>
                     <Text style={styles.referencePanelSummary}>
                       {historyAvailable
-                        ? `${referenceEntries.length ? `${historySummary} · ${referenceSummary}` : historySummary} · ${activeSessionArtifactCount ? `${activeSessionArtifactCount} artifacts` : 'no artifacts'}`
+                        ? `${referenceEntries.length ? `${historySummary} · ${referenceSummary}` : historySummary}${activeSessionArtifactCount ? ` · ${activeSessionArtifactCount} artifacts` : ''}`
                         : activeSessionArtifactCount
                           ? `${activeSessionArtifactCount} saved artifacts`
                           : 'No history or artifacts yet'}
@@ -731,7 +726,7 @@ export function DesktopConversationSidebarDock({ scope }: DesktopConversationSid
                   ) : (
                     <View style={styles.emptyCard}>
                       <Text style={styles.emptyTitle}>No history yet</Text>
-                      <Text style={styles.emptyText}>Chat timeline events and referenced messages for this session will appear here.</Text>
+                      <Text style={styles.emptyText}>Timeline events will appear here.</Text>
                     </View>
                   )}
                 </View>
@@ -741,7 +736,7 @@ export function DesktopConversationSidebarDock({ scope }: DesktopConversationSid
                     {artifactsLoading ? (
                   <View style={styles.emptyCard}>
                     <Text style={styles.emptyTitle}>Loading artifacts…</Text>
-                    <Text style={styles.emptyText}>Pulling saved files, screenshots, and command outputs for this chat.</Text>
+                    <Text style={styles.emptyText}>Loading saved files and captures.</Text>
                   </View>
                 ) : artifactError ? (
                   <View style={styles.emptyCard}>
@@ -751,7 +746,7 @@ export function DesktopConversationSidebarDock({ scope }: DesktopConversationSid
                 ) : artifacts.length === 0 ? (
                   <View style={styles.emptyCard}>
                     <Text style={styles.emptyTitle}>No artifacts yet</Text>
-                    <Text style={styles.emptyText}>Files, screenshots, OCR, browser captures, uploads, and command outputs for this chat will land here.</Text>
+                    <Text style={styles.emptyText}>Generated files and captures will appear here.</Text>
                   </View>
                 ) : (
                   <View style={styles.artifactPanelStack}>

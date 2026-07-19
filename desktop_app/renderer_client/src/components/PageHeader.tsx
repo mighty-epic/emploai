@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { DesktopPressableState } from '../lib/pressableState';
+import { DESKTOP_UI as UI } from '../desktop/desktopUiTokens';
 
 type PageHeaderProps = {
   title: string;
@@ -62,24 +63,21 @@ const styles = StyleSheet.create({
   backButton: {
     width: 34,
     height: 34,
-    borderRadius: 10,
+    borderRadius: UI.radius.control,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#1f3f62',
-    backgroundColor: '#0b172a',
+    backgroundColor: UI.color.surfaceMuted,
   },
   backButtonHover: {
-    borderColor: '#2dd4ff',
-    backgroundColor: '#10233d',
+    backgroundColor: UI.color.surfaceHover,
   },
   backButtonPressed: {
     transform: [{ scale: 0.97 }],
   },
   backButtonText: {
-    color: '#d9f6ff',
+    color: UI.color.textMuted,
     fontSize: 24,
-    fontWeight: '900',
+    fontWeight: '700',
     lineHeight: 26,
   },
   copy: {
@@ -88,19 +86,19 @@ const styles = StyleSheet.create({
     gap: 3,
   },
   eyebrow: {
-    color: '#7cc7ff',
+    color: UI.color.accentStrong,
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: '700',
     letterSpacing: 0,
     textTransform: 'uppercase',
   },
   title: {
-    color: '#ffffff',
+    color: UI.color.text,
     fontSize: 24,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   subtitle: {
-    color: '#aebdd8',
+    color: UI.color.textMuted,
     fontSize: 13,
     lineHeight: 19,
   },

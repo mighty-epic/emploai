@@ -254,6 +254,33 @@ def test_fleet_stop_task_records_pending_stop_without_active_session():
         remote_desktop_client.FLEET_STOP_REQUESTED_TASKS.clear()
 
 
+@pytest.mark.parametrize("command_name", ["fleet_stop_task", "fleet_redirect_task"])
+def test_fleet_task_controls_require_delegation_permission(monkeypatch, tmp_path, command_name):
+    monkeypatch.setattr(remote_desktop_client, "runtime_home", lambda: tmp_path)
+    monkeypatch.setattr(
+        remote_desktop_client,
+        "load_connection_policy",
+        lambda _home: {
+            "permissions": {
+                "delegate_manager": False,
+                "delegate_workers": False,
+            }
+        },
+    )
+
+    with pytest.raises(PermissionError, match="delegated tasks"):
+        asyncio.run(
+            remote_desktop_client._handle_command(
+                command_name=command_name,
+                payload={"task_id": "task-1", "direction": "Try another route"},
+                local_api_base_url="http://127.0.0.1:8787",
+                local_token="local-token",
+                remote_ws=None,
+                send_lock=asyncio.Lock(),
+            )
+        )
+
+
 def test_provider_availability_sync_is_rejected_by_privacy_boundary():
     with pytest.raises(PermissionError, match="provider"):
         asyncio.run(

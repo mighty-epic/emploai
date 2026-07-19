@@ -224,6 +224,120 @@ def _install_proactive_event_store_callback() -> None:
 
             event["auto_resume_disabled_reason"] = "process_wait_stopped_by_user"
 
+        if event_kind == "fleet_report":
+
+            report = dict(metadata.get("report") or {})
+
+            origin = dict(metadata.get("origin") or (report.get("raw") or {}).get("origin") or {})
+
+            target_chat_id = str(origin.get("origin_manager_session_id") or "").strip() or None
+
+            route_id = str(report.get("task_id") or report.get("delegation_id") or "").strip()
+
+            report_key = str(report.get("report_id") or report.get("status") or "completed").strip()
+
+            if target_chat_id and route_id:
+
+                review = store.append_automation_event(
+
+                    user_id=user_id,
+
+                    automation_id=route_id,
+
+                    kind="manager_review_needed",
+
+                    event_type="fleet_manager_result_followup",
+
+                    event_source="fleet",
+
+                    content="A delegated worker report is ready for manager synthesis.",
+
+                    status="queued",
+
+                    target_chat_id=target_chat_id,
+
+                    dedupe_key=f"fleet_manager_followup:{route_id}:{report_key}",
+
+                    importance="important" if str(report.get("status") or "") in {"failed", "blocked", "needs_review"} else "normal",
+
+                    metadata={"report": report, "origin": origin, "source_event_id": event.get("event_id")},
+
+                )
+
+                prompt = (
+
+                    "A delegated task has returned to you. Review the structured report, relate it to the user's original request, "
+
+                    "call out blockers or uncertainty, and give the user a concise final synthesis. Do not pretend you performed "
+
+                    "the worker's actions yourself.\n\n"
+
+                    f"Worker report:\n{json.dumps(report, ensure_ascii=False, indent=2, default=str)[:12_000]}"
+
+                )
+
+                review_run_id = "erun_fleet_review_" + hashlib.sha256(
+
+                    f"{user_id}:{route_id}:{report_key}".encode("utf-8")
+
+                ).hexdigest()[:24]
+
+                existing_review_run = store.get_event_run(
+
+                    user_id=user_id,
+
+                    event_run_id=review_run_id,
+
+                )
+
+                if existing_review_run:
+
+                    return event
+
+                review_run = store.create_or_update_event_run(
+
+                    user_id=user_id,
+
+                    event_run_id=review_run_id,
+
+                    event_id=review.get("event_id") or review.get("id"),
+
+                    automation_id=f"manager_review:fleet:{route_id}:{report_key}",
+
+                    status="queued",
+
+                    target_chat_id=target_chat_id,
+
+                    max_attempts=1,
+
+                    metadata={"review_event": review, "prompt": prompt, "policy": "start_if_idle_else_queue"},
+
+                )
+
+                try:
+
+                    loop = asyncio.get_running_loop()
+
+                    loop.create_task(
+
+                        _try_start_manager_review_turn(
+
+                            user_id=user_id,
+
+                            event_run_id=str(review_run.get("event_run_id") or ""),
+
+                            prompt=prompt,
+
+                            target_chat_id=target_chat_id,
+
+                        )
+
+                    )
+
+                except RuntimeError:
+
+                    pass
+
         if event_source == "background_process" and command_id:
 
             completed_at = time.time() if event_type in {"process_completed", "process_failed"} else None

@@ -100,9 +100,7 @@ export function DesktopJarvisWakeEnrollmentPanel({
             <Text style={panelStyles.title}>
               {profile ? 'Redo Jarvis wake phrase' : 'Train Jarvis before always-on listening'}
             </Text>
-            <Text style={panelStyles.subtitle}>
-              EmploAI stores a small audio fingerprint on this computer and checks it before any always-on audio is sent to transcription.
-            </Text>
+            <Text style={panelStyles.subtitle}>A small wake-phrase fingerprint stays on this computer.</Text>
           </View>
           {profile ? (
             <View style={panelStyles.statusBadge}>
@@ -214,8 +212,7 @@ const panelStyles = StyleSheet.create({
     width: '100%',
     maxWidth: 680,
     borderRadius: UI.radius.large,
-    borderWidth: 1,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
     backgroundColor: UI.color.surfaceRaised,
     padding: 22,
     gap: 18,
@@ -254,8 +251,8 @@ const panelStyles = StyleSheet.create({
   },
   statusBadge: {
     borderRadius: 999,
-    borderWidth: 1,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
+    backgroundColor: UI.color.surfaceMuted,
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
@@ -297,14 +294,12 @@ const panelStyles = StyleSheet.create({
     flex: 1,
     minWidth: 150,
     borderRadius: UI.radius.control,
-    borderWidth: 1,
-    borderColor: UI.color.border,
+    borderWidth: 0,
     backgroundColor: UI.color.surfaceMuted,
     padding: 14,
     gap: 8,
   },
   sampleButtonDone: {
-    borderColor: 'rgba(117, 198, 154, 0.36)',
     backgroundColor: UI.color.successSoft,
   },
   sampleButtonHover: {
@@ -360,8 +355,7 @@ const panelStyles = StyleSheet.create({
   secondaryButton: {
     minHeight: 40,
     borderRadius: UI.radius.control,
-    borderWidth: 1,
-    borderColor: UI.color.borderStrong,
+    borderWidth: 0,
     backgroundColor: UI.color.surfaceMuted,
     justifyContent: 'center',
     alignItems: 'center',
