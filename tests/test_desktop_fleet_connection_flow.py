@@ -144,6 +144,7 @@ def test_yggdrasil_status_exposes_connection_without_session_token(tmp_path: Pat
             "delegate_manager": True,
             "delegate_workers": True,
             "create_workers": False,
+            "configure_manager_tools": False,
             "manage_runtime": True,
             "manage_updates": True,
         },

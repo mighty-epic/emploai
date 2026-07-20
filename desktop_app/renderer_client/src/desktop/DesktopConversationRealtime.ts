@@ -9,7 +9,11 @@ import type {
 import type { DesktopFleetSnapshot } from '@/lib/desktopBridge';
 import { composeVoiceDraftInput } from '@/desktop/desktopVoicePolicy';
 import type { DesktopRealtimeEvent, RealtimeChannel } from './desktopRealtimeProtocol';
-import { fleetTopologyStatus, normalizeFleetSnapshotForDesktop } from './desktopFleetSnapshot';
+import {
+  fleetTopologyStatus,
+  normalizeFleetSnapshotForDesktop,
+  preferNewerFleetIdentitySnapshot,
+} from './desktopFleetSnapshot';
 
 type DesktopConversationRealtimeContext = DesktopConversationScope;
 
@@ -64,7 +68,9 @@ export function handleDesktopConversationRealtimeEvent(
       const snapshot = payload.snapshot as DesktopFleetSnapshot | undefined;
       if (snapshot && Array.isArray(snapshot.workers)) {
         const normalizedSnapshot = normalizeFleetSnapshotForDesktop(snapshot) as DesktopFleetSnapshot;
-        setFleetSnapshot(normalizedSnapshot);
+        setFleetSnapshot((current: DesktopFleetSnapshot | null) => (
+          preferNewerFleetIdentitySnapshot(current, normalizedSnapshot)
+        ));
         setFleetError(null);
         setFleetStatus(fleetTopologyStatus(normalizedSnapshot));
       }

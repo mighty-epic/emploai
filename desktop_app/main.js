@@ -1023,26 +1023,10 @@ async function rebuildRendererForUpdate() {
   });
 }
 
-function resolvePowerShellExecutable() {
-  const systemRoot = process.env.SystemRoot || 'C:\\Windows';
-  const candidate = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  return fs.existsSync(candidate) ? candidate : 'powershell.exe';
-}
-
-function resolveDesktopStartScript() {
-  return path.join(repoRoot, 'scripts', 'desktop', 'start.ps1');
-}
-
 function relaunchDesktopApp() {
-  const startScript = resolveDesktopStartScript();
-  if (!app.isPackaged && process.platform === 'win32' && fs.existsSync(startScript)) {
-    app.relaunch({
-      execPath: resolvePowerShellExecutable(),
-      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', startScript, '-Fast'],
-    });
-  } else {
-    app.relaunch();
-  }
+  // Relaunch Electron directly. Routing through PowerShell can flash a console
+  // window before -WindowStyle Hidden is applied.
+  app.relaunch();
   // The normal quit path deliberately asks the renderer how to handle active
   // work. An updater relaunch has already coordinated that decision, so it
   // must bypass the close prompt or the old process can remain open forever.
@@ -1272,26 +1256,14 @@ function createDesktopShortcut() {
   }
 
   const shortcutPath = path.join(app.getPath('desktop'), 'EmploAI.lnk');
-  const startScript = resolveDesktopStartScript();
-  const options = app.isPackaged && process.execPath
-    ? {
-        target: process.execPath,
-        cwd: path.dirname(process.execPath),
-        description: 'Start EmploAI Desktop',
-        icon: process.execPath,
-        appUserModelId,
-      }
-    : {
-        target: resolvePowerShellExecutable(),
-        args: `-NoProfile -ExecutionPolicy Bypass -File "${startScript}"`,
-        cwd: repoRoot,
-        description: 'Start EmploAI Desktop',
-        appUserModelId,
-      };
-
-  if (!app.isPackaged && !fs.existsSync(startScript)) {
-    throw new Error(`Desktop startup script was not found: ${startScript}`);
-  }
+  const options = {
+    target: process.execPath,
+    ...(app.isPackaged ? {} : { args: '.', cwd: desktopRoot }),
+    ...(app.isPackaged ? { cwd: path.dirname(process.execPath) } : {}),
+    description: 'Start EmploAI Desktop',
+    icon: process.execPath,
+    appUserModelId,
+  };
 
   const created = shell.writeShortcutLink(shortcutPath, 'create', options);
   if (!created) {
@@ -2293,6 +2265,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('emploai:fleet:snapshot', async () => remoteControlServices().fleetSnapshot());
   ipcMain.handle('emploai:fleet:delegate-to-computer', async (_event, payload) => remoteControlServices().fleetDelegateToComputer(payload || {}));
   ipcMain.handle('emploai:fleet:create-worker-on-computer', async (_event, payload) => remoteControlServices().fleetCreateWorkerOnComputer(payload || {}));
+  ipcMain.handle('emploai:fleet:set-manager-tool-packs-on-computer', async (_event, payload) => remoteControlServices().fleetSetManagerToolPacksOnComputer(payload || {}));
   ipcMain.handle('emploai:fleet:computer-host-status', async (_event, payload) => remoteControlServices().fleetComputerHostStatus(payload || {}));
   ipcMain.handle('emploai:fleet:start-computer-runtime', async (_event, payload) => remoteControlServices().fleetStartComputerRuntime(payload || {}));
   ipcMain.handle('emploai:fleet:start-computer-desktop', async (_event, payload) => remoteControlServices().fleetStartComputerDesktop(payload || {}));

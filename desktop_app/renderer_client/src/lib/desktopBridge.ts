@@ -255,6 +255,7 @@ export type DesktopFleetConnectionPermissions = {
     delegate_manager: boolean;
     delegate_workers: boolean;
     create_workers: boolean;
+    configure_manager_tools: boolean;
     manage_runtime: boolean;
     manage_updates: boolean;
   };
@@ -264,6 +265,7 @@ export type DesktopFleetConnectionPermissions = {
     child_count?: number;
     can_enroll_children?: boolean;
     can_create_workers?: boolean;
+    can_configure_manager_tools?: boolean;
     can_manage_runtime?: boolean;
     can_manage_updates?: boolean;
     fleet_protocol_version?: number;
@@ -301,6 +303,7 @@ export type DesktopFleetRemoteTarget = {
   is_default?: boolean;
   protected?: boolean;
   tool_profile?: string | null;
+  enabled_tool_packs?: string[];
   capability_tags?: string[];
 };
 
@@ -840,6 +843,7 @@ type DesktopBridge = {
     snapshot: () => Promise<DesktopFleetSnapshot>;
     delegateToComputer: (payload: { desktopId?: string; desktop_id?: string; prompt: string; targetKind?: string; target_kind?: string; targetSelector?: string | null; target_selector?: string | null; metadata?: Record<string, unknown> }) => Promise<DesktopFleetDelegation>;
     createWorkerOnComputer: (payload: { desktopId?: string; desktop_id?: string; displayName?: string; display_name?: string }) => Promise<Record<string, unknown>>;
+    setManagerToolPacksOnComputer: (payload: { desktopId?: string; desktop_id?: string; enabledToolPacks?: string[]; enabled_tool_packs?: string[] }) => Promise<Record<string, unknown>>;
     computerHostStatus: (payload: { desktopId?: string; desktop_id?: string }) => Promise<DesktopFleetHostStatus>;
     startComputerRuntime: (payload: { desktopId?: string; desktop_id?: string }) => Promise<DesktopFleetHostStatus>;
     startComputerDesktop: (payload: { desktopId?: string; desktop_id?: string }) => Promise<DesktopFleetHostStatus>;
@@ -1125,6 +1129,12 @@ export async function createDesktopFleetWorkerOnComputer(desktopId: string, disp
   const bridge = getDesktopBridge();
   if (!bridge?.fleet?.createWorkerOnComputer) return null;
   return bridge.fleet.createWorkerOnComputer({ desktopId, displayName });
+}
+
+export async function setDesktopFleetManagerToolPacksOnComputer(desktopId: string, enabledToolPacks: string[]) {
+  const bridge = getDesktopBridge();
+  if (!bridge?.fleet?.setManagerToolPacksOnComputer) return null;
+  return bridge.fleet.setManagerToolPacksOnComputer({ desktopId, enabledToolPacks });
 }
 
 export async function getDesktopFleetComputerHostStatus(desktopId: string) {

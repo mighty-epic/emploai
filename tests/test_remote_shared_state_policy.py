@@ -3,8 +3,10 @@ from __future__ import annotations
 from app_backend.remote_shared_state_policy import (
     empty_fleet_state,
     empty_sidebar_state,
+    fleet_selection_for_desktop,
     normalize_fleet_state,
     project_groups_from_sessions,
+    store_fleet_selection_for_desktop,
 )
 
 
@@ -35,6 +37,7 @@ def test_normalize_fleet_state_preserves_known_fields_and_sanitizes_selection_ma
         },
         "active_identity_version": 7,
         "active_identity_updated_at": 123.4,
+        "selection_by_desktop": {},
     }
 
 
@@ -44,6 +47,25 @@ def test_normalize_fleet_state_defaults_invalid_values():
     assert state["selected_chat_by_identity"] == {}
     assert state["active_identity_version"] == 0
     assert state["active_identity_id"] is None
+
+
+def test_fleet_identity_selection_is_scoped_per_desktop():
+    state = empty_fleet_state()
+    state = store_fleet_selection_for_desktop(
+        state,
+        "desktop-a",
+        {"active_identity_id": "manager-a", "active_identity_version": 3},
+    )
+    state = store_fleet_selection_for_desktop(
+        state,
+        "desktop-b",
+        {"active_identity_id": "worker-b", "active_identity_version": 8},
+    )
+
+    assert fleet_selection_for_desktop(state, "desktop-a")["active_identity_id"] == "manager-a"
+    assert fleet_selection_for_desktop(state, "desktop-a")["active_identity_version"] == 3
+    assert fleet_selection_for_desktop(state, "desktop-b")["active_identity_id"] == "worker-b"
+    assert fleet_selection_for_desktop(state, "desktop-b")["active_identity_version"] == 8
 
 
 def test_empty_state_helpers_return_independent_mutable_defaults():

@@ -74,10 +74,6 @@ class RemoteControlStoreFleetSnapshotMixin:
                     selected_by_identity.setdefault(active_identity_id, current_session_id)
                 fleet_state["active_identity_id"] = active_identity_id
                 fleet_state["selected_chat_by_identity"] = selected_by_identity
-                state["fleet"] = fleet_state
-                self._bump_fleet_selection_locked(int(user_id), state)
-            state = self._bump_shared_state_locked(int(user_id), state)
-            fleet_state = _normalize_fleet_state(state.get("fleet"))
             workers = [item for item in all_workers if str(item.get("worker_id") or "") not in hidden_connection_worker_ids]
             tasks = [
                 self._task_view(row)
@@ -95,8 +91,6 @@ class RemoteControlStoreFleetSnapshotMixin:
                 ).fetchall()
                 if str(row["worker_id"] or "") not in hidden_connection_worker_ids
             ]
-            self._write_shared_state_locked(int(user_id), state)
-            self._conn.commit()
             visible_identity_ids = {str(item.get("identity_id") or "") for item in identities}
             selected_chat_by_identity = {
                 key: value
@@ -226,12 +220,13 @@ class RemoteControlStoreFleetSnapshotMixin:
             identity = self._resolve_scoped_fleet_identity_locked(int(user_id), identity_id, desktop_id)
             if not identity:
                 raise KeyError("Unknown fleet identity")
+            effective_desktop_id = str(desktop_id or identity.get("desktop_id") or "").strip() or None
             state = self._ensure_shared_state_locked(int(user_id))
             fleet = self._ensure_fleet_selection_locked(
                 user_id=int(user_id),
                 state=state,
                 preferred_identity_id=str(identity["identity_id"]),
-                desktop_id=desktop_id,
+                desktop_id=effective_desktop_id,
             )
             fleet["active_identity_id"] = str(identity["identity_id"])
             selected_by_identity = dict(fleet.get("selected_chat_by_identity") or {})
@@ -240,7 +235,12 @@ class RemoteControlStoreFleetSnapshotMixin:
                 selected_by_identity[str(identity["identity_id"])] = clean_chat_id
             fleet["selected_chat_by_identity"] = selected_by_identity
             state["current_session_id"] = selected_by_identity.get(str(identity["identity_id"])) or None
-            self._bump_fleet_selection_locked(int(user_id), state)
+            fleet = self._bump_fleet_selection_locked(
+                int(user_id),
+                state,
+                fleet=fleet,
+                desktop_id=effective_desktop_id,
+            )
             self._audit_locked(
                 user_id=int(user_id),
                 event_type="fleet_identity_changed",
@@ -252,7 +252,6 @@ class RemoteControlStoreFleetSnapshotMixin:
             next_state = self._bump_shared_state_locked(int(user_id), state)
             self._conn.commit()
             self._secure_db_files()
-            fleet = _normalize_fleet_state(next_state.get("fleet"))
             return {
                 "active_identity_id": fleet.get("active_identity_id"),
                 "active_identity": identity,
@@ -274,11 +273,12 @@ class RemoteControlStoreFleetSnapshotMixin:
             identity = self._resolve_scoped_fleet_identity_locked(int(user_id), identity_id, desktop_id)
             if not identity:
                 raise KeyError("Unknown fleet identity")
+            effective_desktop_id = str(desktop_id or identity.get("desktop_id") or "").strip() or None
             state = self._ensure_shared_state_locked(int(user_id))
             fleet = self._ensure_fleet_selection_locked(
                 user_id=int(user_id),
                 state=state,
-                desktop_id=desktop_id,
+                desktop_id=effective_desktop_id,
             )
             selected_by_identity = dict(fleet.get("selected_chat_by_identity") or {})
             clean_chat_id = str(chat_id or "").strip()
@@ -289,7 +289,12 @@ class RemoteControlStoreFleetSnapshotMixin:
             fleet["selected_chat_by_identity"] = selected_by_identity
             if str(fleet.get("active_identity_id") or "") == str(identity["identity_id"]):
                 state["current_session_id"] = clean_chat_id or None
-            self._bump_fleet_selection_locked(int(user_id), state)
+            fleet = self._bump_fleet_selection_locked(
+                int(user_id),
+                state,
+                fleet=fleet,
+                desktop_id=effective_desktop_id,
+            )
             self._audit_locked(
                 user_id=int(user_id),
                 event_type="fleet_identity_chat_selected",
@@ -301,7 +306,6 @@ class RemoteControlStoreFleetSnapshotMixin:
             next_state = self._bump_shared_state_locked(int(user_id), state)
             self._conn.commit()
             self._secure_db_files()
-            fleet = _normalize_fleet_state(next_state.get("fleet"))
             return {
                 "active_identity_id": fleet.get("active_identity_id"),
                 "active_identity": self._resolve_fleet_identity_locked(int(user_id), str(fleet.get("active_identity_id") or "")),

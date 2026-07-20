@@ -238,6 +238,10 @@ useEffect(() => {
   const setPendingRunMode = scope.setPendingRunMode as ((mode: 'plan' | 'goal' | 'normal' | null) => void) | undefined;
   const exitPlanMode = scope.exitPlanMode as (() => void | Promise<void>) | undefined;
   const clearActiveGoal = scope.clearActiveGoal as (() => void | Promise<void>) | undefined;
+  const activeToolProfileRole = String(
+    activeFleetIdentity?.role || scope.activeSession?.fleet_identity_role || '',
+  ).trim().toLowerCase();
+  const managerProfileSelected = activeToolProfileRole === 'manager';
   const toolPackCommandPanelContent = (
     <>
       <View style={styles.commandPanelHeader}>
@@ -317,6 +321,13 @@ useEffect(() => {
             </Text>
           </Pressable>
         </View>
+        {managerProfileSelected ? (
+          <View style={styles.toolPackRoleNotice}>
+            <Text style={styles.toolPackRoleNoticeText}>
+              Manager Core stays enabled. Optional packs let this manager act directly; work outside them is delegated.
+            </Text>
+          </View>
+        ) : null}
         <View style={styles.toolPackCompactList}>
           {TOOL_PACK_DEFINITIONS.map((pack: any) => {
             const configuredEnabled = currentEnabledToolPacks.includes(pack.id);
@@ -382,6 +393,8 @@ useEffect(() => {
                       ]}
                       onPress={() => void toggleCurrentSessionToolPack(pack.id)}
                       disabled={toolPackMutationInFlight === pack.id}
+                      accessibilityRole="switch"
+                      accessibilityState={{ checked: enabled, disabled: locked }}
                     >
                       <View
                         style={[

@@ -51,7 +51,7 @@ def test_capability_directory_only_publishes_allowed_targets():
             {"desktop_id": "child-a"},
         ],
         "identities": [
-            {"identity_id": "manager-1", "display_name": "Main", "role": "manager", "tool_profile": "manager_core"},
+            {"identity_id": "manager-1", "display_name": "Main", "role": "manager", "tool_profile": "manager_core", "enabled_tool_packs": ["manager_core", "web_research"]},
             {"identity_id": "worker-1", "display_name": "Research", "role": "worker", "is_default": True, "protected": True, "tool_profile": "default_execution", "capability_tags": ["workspace"]},
             {"identity_id": "worker-hidden", "display_name": "Private", "role": "worker", "published_upstream": False},
         ],
@@ -59,22 +59,24 @@ def test_capability_directory_only_publishes_allowed_targets():
 
     manager_only = _fleet_capability_view(
         snapshot,
-        {"delegate_manager": True, "delegate_workers": False, "create_workers": False},
+        {"delegate_manager": True, "delegate_workers": False, "create_workers": False, "configure_manager_tools": False},
     )
     all_targets = _fleet_capability_view(
         snapshot,
-        {"delegate_manager": True, "delegate_workers": True, "create_workers": True},
+        {"delegate_manager": True, "delegate_workers": True, "create_workers": True, "configure_manager_tools": True},
     )
 
     assert manager_only["node_role"] == "intermediary"
     assert manager_only["child_count"] == 1
     assert [target["role"] for target in manager_only["targets"]] == ["manager"]
     assert [target["display_name"] for target in all_targets["targets"]] == ["Main", "Research"]
-    assert all_targets["schema_version"] == 3
+    assert all_targets["schema_version"] == 4
+    assert all_targets["targets"][0]["enabled_tool_packs"] == ["manager_core", "web_research"]
     assert all_targets["targets"][1]["is_default"] is True
     assert all_targets["targets"][1]["protected"] is True
     assert all_targets["targets"][1]["capability_tags"] == ["workspace"]
     assert all_targets["can_create_workers"] is True
+    assert all_targets["can_configure_manager_tools"] is True
     assert "sessions" not in all_targets
     assert "providers" not in all_targets
 

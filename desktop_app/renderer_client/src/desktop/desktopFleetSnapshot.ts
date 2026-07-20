@@ -4,6 +4,39 @@ function text(value: unknown) {
   return String(value || '').trim();
 }
 
+function fleetIdentitySelectionVersion(snapshot: DesktopFleetSnapshot | null | undefined) {
+  const version = Number(snapshot?.active_identity_version || 0);
+  return Number.isFinite(version) && version > 0 ? version : 0;
+}
+
+export function preferNewerFleetIdentitySnapshot(
+  current: DesktopFleetSnapshot | null | undefined,
+  incoming: DesktopFleetSnapshot,
+) {
+  if (!current) return incoming;
+  return fleetIdentitySelectionVersion(incoming) < fleetIdentitySelectionVersion(current)
+    ? current
+    : incoming;
+}
+
+export function applyFleetIdentitySelection(
+  snapshot: DesktopFleetSnapshot | null | undefined,
+  selection: Partial<DesktopFleetSnapshot> | null | undefined,
+) {
+  if (!snapshot || !selection) return snapshot;
+  if (fleetIdentitySelectionVersion(selection as DesktopFleetSnapshot) < fleetIdentitySelectionVersion(snapshot)) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    active_identity_id: selection.active_identity_id ?? snapshot.active_identity_id,
+    active_identity: selection.active_identity ?? snapshot.active_identity,
+    selected_chat_by_identity: selection.selected_chat_by_identity ?? snapshot.selected_chat_by_identity,
+    active_identity_version: selection.active_identity_version ?? snapshot.active_identity_version,
+    active_identity_updated_at: selection.active_identity_updated_at ?? snapshot.active_identity_updated_at,
+  };
+}
+
 export function fleetLocalDesktopId(snapshot: DesktopFleetSnapshot | null | undefined) {
   return text(snapshot?.manager?.desktop_id);
 }

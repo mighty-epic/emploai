@@ -846,6 +846,53 @@ def register_fleet_routes(app):
             "note": "The worker exists only on the paired computer and was not copied into this Fleet database.",
         }
 
+    @app.put("/api/fleet/desktops/{desktop_id}/manager/tool-packs")
+    async def fleet_set_connected_manager_tool_packs(
+        desktop_id: str,
+        request: FleetIdentityToolPacksRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        auth = _require_fleet_manager_auth(authorization)
+        permission_state = _paired_computer_permissions_for_action(auth, desktop_id)
+        if not bool((permission_state.get("permissions") or {}).get("configure_manager_tools", False)):
+            raise HTTPException(
+                status_code=403,
+                detail="That computer has not allowed its manager tool profile to be configured remotely",
+            )
+        result = await _request_paired_computer_command(
+            auth,
+            desktop_id=desktop_id,
+            command_name="fleet_set_manager_tool_packs",
+            payload={"enabled_tool_packs": list(request.enabled_tool_packs or [])},
+        )
+        updated_identity = dict(result.get("identity") or {})
+        if updated_identity:
+            capabilities = dict(permission_state.get("capabilities") or {})
+            targets = []
+            for target in list(capabilities.get("targets") or []):
+                if str(target.get("target_kind") or "").strip().lower() != "manager":
+                    targets.append(target)
+                    continue
+                targets.append({
+                    **dict(target),
+                    "tool_profile": updated_identity.get("tool_profile") or target.get("tool_profile"),
+                    "enabled_tool_packs": list(updated_identity.get("enabled_tool_packs") or []),
+                    "capability_tags": list(updated_identity.get("capability_tags") or []),
+                })
+            capabilities["targets"] = targets
+            _get_remote_control_store().record_connection_permission_state(
+                user_id=int(auth["user_id"]),
+                desktop_id=desktop_id,
+                policy={
+                    "permissions": dict(permission_state.get("permissions") or {}),
+                    "capabilities": capabilities,
+                    "pendingRequest": permission_state.get("pending_request"),
+                    "lastDecision": permission_state.get("last_decision"),
+                },
+                source="paired_desktop",
+            )
+        return {"ok": True, "desktop_id": desktop_id, "result": result}
+
     @app.get("/api/fleet/desktops/{desktop_id}/host")
     async def fleet_connected_computer_host_status(
         desktop_id: str,
@@ -1165,6 +1212,40 @@ def register_fleet_routes(app):
 
         )
 
+        return FleetIdentityView.model_validate(identity)
+
+    @app.put("/api/fleet/identities/{identity_id}/tool-packs", response_model=FleetIdentityView)
+    async def fleet_set_manager_identity_tool_packs(
+        identity_id: str,
+        request: FleetIdentityToolPacksRequest,
+        authorization: Optional[str] = Header(default=None),
+    ) -> FleetIdentityView:
+        auth = _require_fleet_manager_auth(authorization)
+        store = _get_remote_control_store()
+        try:
+            identity = store.set_manager_identity_tool_packs(
+                user_id=int(auth["user_id"]),
+                identity_id=identity_id,
+                enabled_tool_packs=list(request.enabled_tool_packs or []),
+                source=str(auth.get("actor_kind") or "app"),
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        bridge = _bridge_for_user(int(auth["user_id"]))
+        snapshot = store.get_fleet_snapshot(
+            user_id=int(auth["user_id"]),
+            desktop_id=str(identity.get("desktop_id") or "").strip() or _fleet_snapshot_desktop_id(auth),
+        )
+        reconcile_local_identity_session_profiles(bridge=bridge, snapshot=snapshot)
+        _publish_fleet_delta(
+            user_id=int(auth["user_id"]),
+            event_type="fleet_identity_tool_profile_changed",
+            payload={"identity": identity},
+            origin_channel=str(auth.get("actor_kind") or "app"),
+        )
         return FleetIdentityView.model_validate(identity)
 
     @app.post("/api/fleet/groups")

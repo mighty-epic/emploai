@@ -16,7 +16,7 @@ PACK_MANAGER_CORE = "manager_core"
 MANAGER_CORE_FLEET_TOOLS = {
     "fleet_list_workers", "fleet_create_local_worker", "fleet_create_enrollment", "fleet_delegate",
     "fleet_context_search", "fleet_context_window", "fleet_list_computers", "fleet_delegate_computer",
-    "fleet_create_worker_on_computer", "fleet_computer_host_status", "fleet_start_computer_runtime",
+    "fleet_create_worker_on_computer", "fleet_set_computer_manager_tools", "fleet_computer_host_status", "fleet_start_computer_runtime",
     "fleet_start_computer_desktop", "fleet_check_computer_update", "fleet_update_computer",
     "fleet_rename_worker", "fleet_reset_worker", "fleet_delete_worker", "fleet_list_groups",
     "fleet_create_group", "fleet_update_group", "fleet_delete_group", "fleet_assign_task",
@@ -322,9 +322,9 @@ _PACKS: Dict[str, ToolPackDefinition] = {
         prompt_fragment=(
             "PACK: Manager Core\n"
             "- You coordinate work through explicit local or child-computer routes.\n"
-            "- Answer conversational requests directly and delegate actionable execution work.\n"
+            "- Answer conversational requests directly and delegate execution work when the required optional pack is not enabled on this manager or the user explicitly asks for a worker.\n"
             "- Every delegation tool request carries its route scope; never rely on a mutable ambient mode.\n"
-            "- Desktop, browser, web-research, and workspace execution capabilities belong to workers."
+            "- Workers remain the default execution identities; optional manager execution packs grant direct use of only their listed tools."
         ),
     ),
 }

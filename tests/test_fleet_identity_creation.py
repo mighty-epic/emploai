@@ -128,6 +128,59 @@ def test_startup_reconciles_exactly_one_manager_and_default_worker(tmp_path):
     assert refreshed_default["status"] == "idle"
 
 
+def test_manager_optional_tool_packs_persist_across_startup_reconciliation(tmp_path):
+    store = RemoteControlPlaneStore(root_path=tmp_path)
+    desktop = store.ensure_standalone_manager_desktop(
+        user_id=0,
+        display_name="Manager PC",
+        device_platform="desktop",
+        device_key="manager-key",
+    )
+    snapshot = store.get_fleet_snapshot(user_id=0, desktop_id=desktop["desktop_id"])
+    manager = next(identity for identity in snapshot["identities"] if identity["role"] == "manager")
+
+    updated = store.set_manager_identity_tool_packs(
+        user_id=0,
+        identity_id=manager["identity_id"],
+        enabled_tool_packs=["web_research", "workspace_read"],
+    )
+    store.ensure_standalone_manager_desktop(
+        user_id=0,
+        display_name="Manager PC",
+        device_platform="desktop",
+        device_key="manager-key",
+    )
+    refreshed = store.get_fleet_snapshot(user_id=0, desktop_id=desktop["desktop_id"])
+    refreshed_manager = next(identity for identity in refreshed["identities"] if identity["role"] == "manager")
+
+    assert updated["enabled_tool_packs"] == ["manager_core", "web_research", "workspace_read"]
+    assert refreshed_manager["enabled_tool_packs"] == updated["enabled_tool_packs"]
+    assert {"orchestration", "web", "workspace"}.issubset(refreshed_manager["capability_tags"])
+
+
+def test_manager_core_cannot_be_removed_from_manager_profile(tmp_path):
+    store = RemoteControlPlaneStore(root_path=tmp_path)
+    desktop = store.ensure_standalone_manager_desktop(
+        user_id=0,
+        display_name="Manager PC",
+        device_platform="desktop",
+        device_key="manager-key",
+    )
+    manager = next(
+        identity
+        for identity in store.get_fleet_snapshot(user_id=0, desktop_id=desktop["desktop_id"])["identities"]
+        if identity["role"] == "manager"
+    )
+
+    updated = store.set_manager_identity_tool_packs(
+        user_id=0,
+        identity_id=manager["identity_id"],
+        enabled_tool_packs=[],
+    )
+
+    assert updated["enabled_tool_packs"] == ["manager_core"]
+
+
 def test_protected_default_worker_can_be_renamed_but_not_deleted(tmp_path):
     store = RemoteControlPlaneStore(root_path=tmp_path)
     manager = store.ensure_standalone_manager_desktop(
@@ -239,3 +292,75 @@ def test_snapshot_reads_never_create_or_rotate_manager_identities(tmp_path):
     assert len(after) == 1
     assert after[0]["desktop_id"] == manager["desktop_id"]
     assert after[0]["reset_at"] is None
+
+
+def test_computers_keep_independent_active_identity_selections(tmp_path):
+    store = RemoteControlPlaneStore(root_path=tmp_path)
+    first = store.ensure_standalone_manager_desktop(
+        user_id=0,
+        display_name="First PC",
+        device_platform="desktop",
+        device_key="first-key",
+    )
+    second = store.ensure_standalone_manager_desktop(
+        user_id=0,
+        display_name="Second PC",
+        device_platform="desktop",
+        device_key="second-key",
+    )
+    first_snapshot = store.get_fleet_snapshot(user_id=0, desktop_id=first["desktop_id"])
+    second_snapshot = store.get_fleet_snapshot(user_id=0, desktop_id=second["desktop_id"])
+    first_worker = next(identity for identity in first_snapshot["identities"] if identity["role"] == "worker")
+    second_manager = next(identity for identity in second_snapshot["identities"] if identity["role"] == "manager")
+
+    store.set_active_fleet_identity(
+        user_id=0,
+        identity_id=first_worker["identity_id"],
+        desktop_id=first["desktop_id"],
+    )
+    store.set_active_fleet_identity(
+        user_id=0,
+        identity_id=second_manager["identity_id"],
+        desktop_id=second["desktop_id"],
+    )
+
+    for _ in range(3):
+        assert store.get_fleet_snapshot(
+            user_id=0,
+            desktop_id=second["desktop_id"],
+        )["active_identity_id"] == second_manager["identity_id"]
+        assert store.get_fleet_snapshot(
+            user_id=0,
+            desktop_id=first["desktop_id"],
+        )["active_identity_id"] == first_worker["identity_id"]
+
+
+def test_remembering_an_inactive_identity_chat_does_not_switch_roles(tmp_path):
+    store = RemoteControlPlaneStore(root_path=tmp_path)
+    desktop = store.ensure_standalone_manager_desktop(
+        user_id=0,
+        display_name="Manager PC",
+        device_platform="desktop",
+        device_key="manager-key",
+    )
+    snapshot = store.get_fleet_snapshot(user_id=0, desktop_id=desktop["desktop_id"])
+    manager = next(identity for identity in snapshot["identities"] if identity["role"] == "manager")
+    worker = next(identity for identity in snapshot["identities"] if identity["role"] == "worker")
+    store.set_active_fleet_identity(
+        user_id=0,
+        identity_id=worker["identity_id"],
+        selected_chat_id="worker-chat",
+        desktop_id=desktop["desktop_id"],
+    )
+
+    store.set_active_chat_for_fleet_identity(
+        user_id=0,
+        identity_id=manager["identity_id"],
+        chat_id="manager-chat",
+        desktop_id=desktop["desktop_id"],
+    )
+    refreshed = store.get_fleet_snapshot(user_id=0, desktop_id=desktop["desktop_id"])
+
+    assert refreshed["active_identity_id"] == worker["identity_id"]
+    assert refreshed["selected_chat_by_identity"][manager["identity_id"]] == "manager-chat"
+    assert refreshed["selected_chat_by_identity"][worker["identity_id"]] == "worker-chat"

@@ -89,6 +89,26 @@ def test_manager_core_formally_owns_fleet_tools_and_workers_cannot_receive_it():
     assert PACK_MANAGER_CORE not in DEFAULT_WORKER_TOOL_PACKS
 
 
+def test_manager_contract_routes_only_work_outside_its_enabled_capabilities():
+    contract = runtime._fleet_manager_contract(
+        {
+            "workers": [
+                {
+                    "display_name": "Default Worker",
+                    "is_default": True,
+                    "capability_tags": ["desktop", "browser", "workspace", "web"],
+                }
+            ],
+            "desktops": [],
+        },
+        ["manager_core", "web_research"],
+    )["content"]
+
+    assert "execute other actionable work directly only when the required execution pack is enabled" in contract
+    assert "Manager execution packs enabled this turn: web_research" in contract
+    assert "Default Worker (default) [desktop, browser, workspace, web]" in contract
+
+
 def test_duplicate_worker_report_enqueues_exactly_one_manager_review(monkeypatch):
     from shared.proactive_runtime import append_fleet_report_event, set_event_store_callback
 
@@ -202,6 +222,7 @@ def test_manager_tools_include_private_connected_computer_delegation(monkeypatch
         "is_default": False,
         "protected": False,
         "tool_profile": None,
+        "enabled_tool_packs": [],
         "capability_tags": [],
     }
     assert calls[0][0:2] == ("POST", "/api/fleet/delegations/route")

@@ -14,6 +14,7 @@ const permissionRows: Array<[PermissionKey, string]> = [
   ['delegate_manager', 'Manager route'],
   ['delegate_workers', 'Existing workers'],
   ['create_workers', 'Create workers'],
+  ['configure_manager_tools', 'Configure manager tools'],
   ['manage_runtime', 'Start EmploAI'],
   ['manage_updates', 'Update EmploAI'],
 ];

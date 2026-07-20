@@ -182,6 +182,7 @@ def start_desktop_from_fleet_host() -> dict[str, Any]:
         creationflags = (
             getattr(subprocess, "DETACHED_PROCESS", 0)
             | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "CREATE_NO_WINDOW", 0)
         )
     log_dir = Path(os.environ.get("EMPLOAI_HOME") or root) / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)

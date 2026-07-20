@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from shared.artifact_store import ChatArtifactStore
+from shared.subprocess_utils import hidden_subprocess_kwargs
 
 
 FATAL_ERROR_PATTERNS = {
@@ -1388,6 +1389,7 @@ class AgentEvalHarness:
                     stderr=subprocess.DEVNULL,
                     timeout=10,
                     check=False,
+                    **hidden_subprocess_kwargs(),
                 )
             else:
                 os.kill(int(pid), 15)
@@ -1433,6 +1435,7 @@ class AgentEvalHarness:
                 stderr=subprocess.DEVNULL,
                 timeout=10,
                 check=False,
+                **hidden_subprocess_kwargs(),
             )
             time.sleep(0.5)
         except Exception:
@@ -1448,6 +1451,7 @@ class AgentEvalHarness:
                 stderr=subprocess.DEVNULL,
                 timeout=5,
                 check=False,
+                **hidden_subprocess_kwargs(),
             )
             return True
         except Exception:

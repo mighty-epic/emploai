@@ -155,7 +155,7 @@ def register_session_routes(app):
 
                             user_id=int(auth["user_id"]),
 
-                            event_type="fleet_identity_changed",
+                            event_type="fleet_identity_chat_selected",
 
                             payload={"identity_id": request.fleet_identity_id, "selected_chat_id": detail.id},
 
@@ -199,7 +199,7 @@ def register_session_routes(app):
 
                         user_id=int(auth["user_id"]),
 
-                        event_type="fleet_identity_changed",
+                        event_type="fleet_identity_chat_selected",
 
                         payload={"identity_id": request.fleet_identity_id, "selected_chat_id": detail.id},
 
@@ -221,6 +221,8 @@ def register_session_routes(app):
         enabled_tool_packs = list(request.enabled_tool_packs or [])
 
         previous = bridge.get_current_session()
+
+        activate_created_session = str(request.fleet_task_mode or "").strip().lower() != "delegated"
 
         fleet_identity_metadata = None
 
@@ -282,6 +284,8 @@ def register_session_routes(app):
 
                 fleet_identity_metadata=fleet_identity_metadata,
 
+                activate=activate_created_session,
+
             )
 
         except RuntimeError as exc:
@@ -316,19 +320,21 @@ def register_session_routes(app):
 
         _mirror_session_snapshot_later(user_id=user_id, bridge=bridge, session=session, reason="session_created")
 
-        publish_current_session_changed(
+        if activate_created_session:
 
-            user_id=user_id,
+            publish_current_session_changed(
 
-            session_id=session.id,
+                user_id=user_id,
 
-            previous_session_id=previous.id if previous else None,
+                session_id=session.id,
 
-            origin_channel="app",
+                previous_session_id=previous.id if previous else None,
 
-            reason="session_created",
+                origin_channel="app",
 
-        )
+                reason="session_created",
+
+            )
 
         if request.fleet_identity_id:
 
@@ -350,7 +356,7 @@ def register_session_routes(app):
 
                     user_id=user_id,
 
-                    event_type="fleet_identity_changed",
+                    event_type="fleet_identity_chat_selected",
 
                     payload={"identity_id": request.fleet_identity_id, "selected_chat_id": session.id},
 
@@ -396,13 +402,13 @@ def register_session_routes(app):
 
                     try:
 
-                        _get_remote_control_store().set_active_fleet_identity(
+                        _get_remote_control_store().set_active_chat_for_fleet_identity(
 
                             user_id=int(auth["user_id"]),
 
                             identity_id=detail.fleet_identity_id,
 
-                            selected_chat_id=detail.id,
+                            chat_id=detail.id,
 
                             source=str(auth.get("actor_kind") or "app"),
 
@@ -412,7 +418,7 @@ def register_session_routes(app):
 
                             user_id=int(auth["user_id"]),
 
-                            event_type="fleet_identity_changed",
+                            event_type="fleet_identity_chat_selected",
 
                             payload={"identity_id": detail.fleet_identity_id, "selected_chat_id": detail.id},
 
@@ -422,7 +428,7 @@ def register_session_routes(app):
 
                     except Exception:
 
-                        logger.exception("[fleet] failed selecting remote-activated identity chat")
+                        logger.exception("[fleet] failed remembering remote-activated identity chat")
 
                 return detail
 
@@ -440,13 +446,13 @@ def register_session_routes(app):
 
                 try:
 
-                    _get_remote_control_store().set_active_fleet_identity(
+                    _get_remote_control_store().set_active_chat_for_fleet_identity(
 
                         user_id=int(auth["user_id"]),
 
                         identity_id=detail.fleet_identity_id,
 
-                        selected_chat_id=detail.id,
+                        chat_id=detail.id,
 
                         source=str(auth.get("actor_kind") or "app"),
 
@@ -456,7 +462,7 @@ def register_session_routes(app):
 
                         user_id=int(auth["user_id"]),
 
-                        event_type="fleet_identity_changed",
+                        event_type="fleet_identity_chat_selected",
 
                         payload={"identity_id": detail.fleet_identity_id, "selected_chat_id": detail.id},
 
@@ -466,7 +472,7 @@ def register_session_routes(app):
 
                 except Exception:
 
-                    logger.exception("[fleet] failed selecting remote-activated identity chat")
+                    logger.exception("[fleet] failed remembering remote-activated identity chat")
 
             return detail
 
@@ -506,13 +512,13 @@ def register_session_routes(app):
 
             try:
 
-                _get_remote_control_store().set_active_fleet_identity(
+                _get_remote_control_store().set_active_chat_for_fleet_identity(
 
                     user_id=user_id,
 
                     identity_id=str(session.fleet_identity_id),
 
-                    selected_chat_id=session.id,
+                    chat_id=session.id,
 
                     source="app",
 
@@ -522,7 +528,7 @@ def register_session_routes(app):
 
                     user_id=user_id,
 
-                    event_type="fleet_identity_changed",
+                    event_type="fleet_identity_chat_selected",
 
                     payload={"identity_id": str(session.fleet_identity_id), "selected_chat_id": session.id},
 
@@ -532,7 +538,7 @@ def register_session_routes(app):
 
             except Exception:
 
-                logger.exception("[fleet] failed selecting local-activated identity chat")
+                logger.exception("[fleet] failed remembering local-activated identity chat")
 
         return SessionDetailView(**bridge.detailed_session_view(session))
 

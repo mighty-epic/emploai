@@ -2,6 +2,8 @@ from __future__ import annotations
 
 # Split from app_server.py; dependencies are injected by the app_server facade.
 
+from shared.subprocess_utils import hidden_subprocess_kwargs
+
 def _persist_sleep_mode_enabled(user_id, enabled):
 
     try:
@@ -319,6 +321,8 @@ def register_event_routes(app):
                     text=True,
 
                     timeout=8,
+
+                    **hidden_subprocess_kwargs(),
 
                 )
 

@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('emploaiDesktop', {
     snapshot: () => ipcRenderer.invoke('emploai:fleet:snapshot'),
     delegateToComputer: (payload) => ipcRenderer.invoke('emploai:fleet:delegate-to-computer', payload),
     createWorkerOnComputer: (payload) => ipcRenderer.invoke('emploai:fleet:create-worker-on-computer', payload),
+    setManagerToolPacksOnComputer: (payload) => ipcRenderer.invoke('emploai:fleet:set-manager-tool-packs-on-computer', payload),
     computerHostStatus: (payload) => ipcRenderer.invoke('emploai:fleet:computer-host-status', payload),
     startComputerRuntime: (payload) => ipcRenderer.invoke('emploai:fleet:start-computer-runtime', payload),
     startComputerDesktop: (payload) => ipcRenderer.invoke('emploai:fleet:start-computer-desktop', payload),

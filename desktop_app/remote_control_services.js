@@ -287,6 +287,18 @@ function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, get
     });
   }
 
+  async function fleetSetManagerToolPacksOnComputer(payload = {}) {
+    const desktopId = String(payload.desktop_id || payload.desktopId || '').trim();
+    const enabledToolPacks = payload.enabled_tool_packs || payload.enabledToolPacks || [];
+    if (!desktopId || !Array.isArray(enabledToolPacks)) {
+      throw new Error('desktop_id and enabled_tool_packs are required');
+    }
+    return fleetApi(`/api/fleet/desktops/${encodeURIComponent(desktopId)}/manager/tool-packs`, {
+      method: 'PUT',
+      body: { enabled_tool_packs: enabledToolPacks },
+    });
+  }
+
   async function fleetComputerHostStatus(payload = {}) {
     const desktopId = String(payload.desktop_id || payload.desktopId || '').trim();
     if (!desktopId) throw new Error('desktop_id is required');
@@ -754,6 +766,7 @@ function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, get
     fleetSnapshot,
     fleetDelegateToComputer,
     fleetCreateWorkerOnComputer,
+    fleetSetManagerToolPacksOnComputer,
     fleetComputerHostStatus,
     fleetStartComputerRuntime,
     fleetStartComputerDesktop,

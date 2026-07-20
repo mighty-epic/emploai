@@ -1470,6 +1470,21 @@ export const desktopConversationStylesPart3 = StyleSheet.create({
   toolPackCompactList: {
     gap: 6,
   },
+  toolPackRoleNotice: {
+    minHeight: 32,
+    justifyContent: 'center',
+    backgroundColor: '#111c2d',
+    borderLeftWidth: 2,
+    borderLeftColor: '#6fd8e7',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  toolPackRoleNoticeText: {
+    color: '#a9bad3',
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
   toolPackCompactGroup: {
     gap: 6,
   },

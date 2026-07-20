@@ -83,6 +83,117 @@ def test_fleet_workspace_switches_to_worker_only_controls_for_worker_identity():
     assert "Update and restart" not in worker_workspace
 
 
+def test_manager_tool_pack_menu_keeps_core_but_allows_optional_packs():
+    derived = (
+        ROOT
+        / "desktop_app"
+        / "renderer_client"
+        / "src"
+        / "desktop"
+        / "DesktopConversationDerivedTail.tsx"
+    ).read_text(encoding="utf-8")
+    controls = (
+        ROOT
+        / "desktop_app"
+        / "renderer_client"
+        / "src"
+        / "desktop"
+        / "DesktopConversationVoiceControls.ts"
+    ).read_text(encoding="utf-8")
+
+    assert "const managerProfileSelected = activeToolProfileRole === 'manager'" in derived
+    assert "Manager Core stays enabled. Optional packs let this manager act directly" in derived
+    assert "disabled={toolPackMutationInFlight === pack.id}" in derived
+    assert "Manager tools are fixed" not in controls
+
+
+def test_connected_manager_tools_have_a_compact_permissioned_editor():
+    machines = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopFleetMachinesPanel.tsx").read_text(encoding="utf-8")
+    manager_tools = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopFleetManagerTools.tsx").read_text(encoding="utf-8")
+    access = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopFleetConnectionAccess.tsx").read_text(encoding="utf-8")
+
+    assert "<DesktopFleetManagerTools" in machines
+    assert "setDesktopFleetManagerToolPacksOnComputer" in machines
+    assert "Configure manager tools" in access
+    assert "Manager Core" in manager_tools
+    assert "Remote configuration blocked" in manager_tools
+    assert "Save tools" in manager_tools
+
+
+def test_fleet_identity_snapshots_cannot_roll_selection_back():
+    snapshot_policy = (
+        ROOT
+        / "desktop_app"
+        / "renderer_client"
+        / "src"
+        / "desktop"
+        / "desktopFleetSnapshot.ts"
+    ).read_text(encoding="utf-8")
+    actions = (
+        ROOT
+        / "desktop_app"
+        / "renderer_client"
+        / "src"
+        / "desktop"
+        / "DesktopConversationFleetActions.ts"
+    ).read_text(encoding="utf-8")
+    realtime = (
+        ROOT
+        / "desktop_app"
+        / "renderer_client"
+        / "src"
+        / "desktop"
+        / "DesktopConversationRealtime.ts"
+    ).read_text(encoding="utf-8")
+
+    assert "fleetIdentitySelectionVersion(incoming) < fleetIdentitySelectionVersion(current)" in snapshot_policy
+    assert "applyFleetIdentitySelection" in actions
+    assert "requestId !== fleetSnapshotRequestRef.current" in actions
+    assert "preferNewerFleetIdentitySnapshot(current, snapshot)" in actions
+    assert "preferNewerFleetIdentitySnapshot(current, normalizedSnapshot)" in realtime
+
+
+def test_cold_desktop_startup_resolves_manager_before_loading_a_chat():
+    shell = (
+        ROOT
+        / "desktop_app"
+        / "renderer_client"
+        / "src"
+        / "desktop"
+        / "DesktopAppShellView.tsx"
+    ).read_text(encoding="utf-8")
+    actions = (
+        ROOT
+        / "desktop_app"
+        / "renderer_client"
+        / "src"
+        / "desktop"
+        / "DesktopConversationFleetActions.ts"
+    ).read_text(encoding="utf-8")
+    sync = (
+        ROOT
+        / "desktop_app"
+        / "renderer_client"
+        / "src"
+        / "desktop"
+        / "DesktopConversationSyncControls.ts"
+    ).read_text(encoding="utf-8")
+
+    assert "initialSessionId={requestedSessionId || undefined}" in shell
+    assert "'desktop_startup'" in actions
+    assert "String(identity.role || '').toLowerCase() === 'manager'" in actions
+    assert "if (!apiBaseUrl || !token || !fleetSnapshot) return;" in sync
+    assert "initialSessionId || selectedIdentityChatId || null" in sync
+
+
+def test_session_opening_remembers_a_chat_without_changing_identity():
+    session_routes = (ROOT / "app_backend" / "app_server_routes_sessions.py").read_text(encoding="utf-8")
+
+    assert ".set_active_fleet_identity(" not in session_routes
+    assert ".set_active_chat_for_fleet_identity(" in session_routes
+    assert 'event_type="fleet_identity_chat_selected"' in session_routes
+
+
 def test_live_preview_stops_automatic_retries_when_windows_display_is_unavailable():
     preview = (
         ROOT

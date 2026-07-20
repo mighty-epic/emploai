@@ -84,6 +84,7 @@ export function DesktopFleetConnectionPanel({ onFleetChanged }: { onFleetChanged
     delegate_manager: true,
     delegate_workers: true,
     create_workers: false,
+    configure_manager_tools: false,
     manage_runtime: true,
     manage_updates: true,
   };
@@ -366,6 +367,7 @@ export function DesktopFleetConnectionPanel({ onFleetChanged }: { onFleetChanged
               ['delegate_manager', 'Delegate to this computer’s manager agent', 'Task messages in; reports and requests out.'],
               ['delegate_workers', 'Delegate to existing local workers', 'The manager supplies a local worker name; identities are not copied.'],
               ['create_workers', 'Create new workers on this computer', 'Creates the worker here only when explicitly requested.'],
+              ['configure_manager_tools', 'Configure this manager’s optional tools', 'Allows the directly connected manager above to change this manager’s execution packs. Manager Core always remains enabled.'],
               ['manage_runtime', 'Start EmploAI from the manager above', 'Keeps the small Yggdrasil host available and allows it to start this backend or desktop app when closed.'],
               ['manage_updates', 'Update EmploAI from the manager above', 'Allows a confirmed fast-forward source update with local-change backup, rebuild, restart, and recovery status.'],
             ] as const).map(([key, label, detail]) => {

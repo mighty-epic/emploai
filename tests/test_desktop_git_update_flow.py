@@ -111,6 +111,11 @@ def test_desktop_update_ui_explains_local_data_and_keeps_manual_update_available
     assert "emitUpdateProgress('building'" in main
     assert "quitAfterManagedShutdown = true" in main
     assert "setTimeout(() => app.exit(0), 250)" in main
+    relaunch_body = main.split("function relaunchDesktopApp()", 1)[1].split("async function installUpdate()", 1)[0]
+    assert "app.relaunch();" in relaunch_body
+    assert "execPath:" not in relaunch_body
+    assert "target: process.execPath" in main
+    assert "args: '.', cwd: desktopRoot" in main
     assert "DesktopUpdateOverlay" in shell_view
     assert 'pointerEvents="auto"' in overlay
     assert "Controls are paused while the project is updated" in overlay

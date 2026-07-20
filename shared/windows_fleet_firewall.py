@@ -9,6 +9,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from shared.subprocess_utils import hidden_subprocess_kwargs
+
 
 YGGDRASIL_REMOTE_PREFIX = "200::/7"
 FIREWALL_RULE_PREFIX = "EmploAI Yggdrasil Fleet"
@@ -147,6 +149,7 @@ def _run_powershell_json(script: str, *, timeout_seconds: float = 30.0) -> dict[
         capture_output=True,
         text=True,
         timeout=max(1.0, timeout_seconds),
+        **hidden_subprocess_kwargs(),
     )
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "Windows Firewall status check failed").strip()
@@ -169,6 +172,7 @@ def _run_elevated_repair(script: str, *, result_path: Path, timeout_seconds: flo
             capture_output=True,
             text=True,
             timeout=max(1.0, timeout_seconds),
+            **hidden_subprocess_kwargs(),
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError("Windows Firewall approval timed out") from exc

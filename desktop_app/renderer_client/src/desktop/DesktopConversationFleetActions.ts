@@ -1,6 +1,12 @@
 import type { DesktopConversationScope } from './DesktopConversationScope'; type NativeSyntheticEvent<T = any> = any; type ActiveCommandPanel = any; type ActivityItem = any; type AgentOverview = any; type ArtifactDetail = any; type ArtifactSummary = any; type ComposerInputOrigin = any; type ConversationSurfaceMode = any; type DesktopFleetEnrollment = any; type DesktopFleetIdentity = any; type DesktopFleetSnapshot = any; type DesktopFleetTask = any; type DesktopFleetWorker = any; type DesktopGitRepoState = any; type DesktopMessage = any; type DesktopPathStatus = any; type DesktopRuntimeStatus = any; type DesktopSidebarProjectActivity = any; type DesktopSidebarState = any; type DesktopVoicePackState = any; type DesktopVoiceRuntimeStatus = any; type InterruptPolicy = any; type JarvisSttBackend = any; type JarvisTtsBackend = any; type LayoutChangeEvent = any; type MessageSourceFormat = any; type ModelProviderGroup = any; type NativeScrollEvent = any; type PendingSearchJump = any; type QueuedComposerMessage = any; type QueuedMessage = any; type RealtimeChannel = any; type RealtimeEvent = any; type ReferenceEntry = any; type RuntimeOrchestratorStatus = any; type ScheduledJob = any; type SearchResultTarget = any; type SecurityPermissionMode = any; type SessionDetail = any; type SessionMessage = any; type SessionSearchResult = any; type SessionSummary = any; type SessionTimelineEvent = any; type SidebarChatTooltipState = any; type SidebarDragState = any; type SidebarDraftChat = any; type SidebarProjectGroup = any; type StartupReadinessState = any; type TaskBoard = any; type TelegramBotConfig = any; type TextInputContentSizeChangeEventData = any; type ToolPackInfoPopupState = any; type VoiceCaptureMode = any; type VoiceGateState = any;
+import { useRef } from 'react';
 import { updateDesktopFleetWorkerQueuePolicy } from '@/lib/desktopBridge';
-import { fleetTopologyStatus, normalizeFleetSnapshotForDesktop } from './desktopFleetSnapshot';
+import {
+  applyFleetIdentitySelection,
+  fleetTopologyStatus,
+  normalizeFleetSnapshotForDesktop,
+  preferNewerFleetIdentitySnapshot,
+} from './desktopFleetSnapshot';
 import { sessionIdForFleetIdentity as resolveSessionIdForFleetIdentity } from './desktopSidebarState';
 
 export function useDesktopConversationFleetActions(scope: DesktopConversationScope) {
@@ -10,6 +16,8 @@ export function useDesktopConversationFleetActions(scope: DesktopConversationSco
   const fleetSelectedChatIdForWorker = (...args: any[]) => scope.fleetSelectedChatIdForWorker?.(...args);
   const telegramBotLabelForSession = (...args: any[]) => scope.telegramBotLabelForSession?.(...args);
   const setFleetPreview = scope.setFleetPreview as ((value: any) => void) | undefined;
+  const fleetSnapshotRequestRef = useRef(0);
+  const fleetStartupIdentityInitializedRef = useRef(false);
 const setProjectMenuRef = (projectPath: string) => (node: any) => {
     if (node) {
       projectMenuRefs.current[projectPath] = node;
@@ -208,16 +216,43 @@ const setProjectMenuRef = (projectPath: string) => (node: any) => {
   };
 
   const refreshFleetSnapshot = async (options?: { quiet?: boolean }) => {
+    const requestId = ++fleetSnapshotRequestRef.current;
+    const initializeManagerIdentity = !fleetStartupIdentityInitializedRef.current
+      && !String(scope.initialSessionId || '').trim();
     if (!options?.quiet) {
       setFleetLoading(true);
       setFleetStatus('Refreshing fleet');
     }
     try {
-      const snapshot = normalizeFleetSnapshotForDesktop(await loadDesktopFleetSnapshot());
-      if (!snapshot) {
+      const loadedSnapshot = normalizeFleetSnapshotForDesktop(await loadDesktopFleetSnapshot());
+      if (!loadedSnapshot) {
         throw new Error('Desktop fleet bridge is not available.');
       }
-      setFleetSnapshot(snapshot);
+      let snapshot: DesktopFleetSnapshot = loadedSnapshot;
+      if (requestId !== fleetSnapshotRequestRef.current && !initializeManagerIdentity) {
+        return null;
+      }
+      if (initializeManagerIdentity) {
+        const managerIdentity = (snapshot.identities || []).find(
+          (identity: DesktopFleetIdentity) => String(identity.role || '').toLowerCase() === 'manager',
+        );
+        if (managerIdentity?.identity_id && snapshot.active_identity_id !== managerIdentity.identity_id) {
+          const selectedChatId = snapshot.selected_chat_by_identity?.[managerIdentity.identity_id] || null;
+          const selection = await setDesktopFleetActiveIdentity(
+            managerIdentity.identity_id,
+            selectedChatId,
+            'desktop_startup',
+          );
+          if (!selection) {
+            throw new Error('Desktop fleet bridge is not available.');
+          }
+          snapshot = applyFleetIdentitySelection(snapshot, selection as Partial<DesktopFleetSnapshot>) as DesktopFleetSnapshot;
+        }
+        fleetStartupIdentityInitializedRef.current = true;
+      }
+      setFleetSnapshot((current: DesktopFleetSnapshot | null) => (
+        preferNewerFleetIdentitySnapshot(current, snapshot)
+      ));
       setFleetError(null);
       setFleetStatus(fleetTopologyStatus(snapshot));
       return snapshot;
@@ -622,10 +657,17 @@ const setProjectMenuRef = (projectPath: string) => (node: any) => {
     try {
       const selectedChatId = fleetSnapshot?.selected_chat_by_identity?.[identity.identity_id] || null;
       const result = await setDesktopFleetActiveIdentity(identity.identity_id, selectedChatId, 'desktop');
+      if (!result) {
+        throw new Error('Desktop fleet bridge is not available.');
+      }
+      setFleetSnapshot((current: DesktopFleetSnapshot | null) => (
+        applyFleetIdentitySelection(current || fleetSnapshot, result as Partial<DesktopFleetSnapshot>)
+      ));
       const nextSnapshot = await refreshFleetSnapshot({ quiet: true });
       const nextSelectedChatId = String(
         selectedChatId
         || (result as Record<string, any> | null | undefined)?.selected_chat_id
+        || (result as Record<string, any>).selected_chat_by_identity?.[identity.identity_id]
         || nextSnapshot?.selected_chat_by_identity?.[identity.identity_id]
         || '',
       ).trim();

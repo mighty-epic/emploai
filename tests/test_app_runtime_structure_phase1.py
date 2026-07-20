@@ -678,6 +678,98 @@ def test_app_chat_send_allows_active_steering_before_orchestrator_lease(monkeypa
     ]
 
 
+def test_delegated_worker_session_creation_does_not_replace_the_active_desktop_session(monkeypatch):
+    create_calls: list[dict] = []
+    current_session_events: list[dict] = []
+    created = SimpleNamespace(
+        id="delegated-worker-session",
+        name="Default Worker: task-1",
+        created_at="2026-07-19T00:00:00Z",
+        updated_at="2026-07-19T00:00:00Z",
+        model="gpt-test",
+        variant="medium",
+        agent_mode="auto",
+        workspace="",
+        enabled_tool_packs=[],
+        fleet_identity_id="worker-identity",
+        fleet_identity_role="worker",
+        fleet_worker_id="worker-1",
+        fleet_task_mode="delegated",
+        fleet_task_id="task-1",
+    )
+
+    class DummyBridge:
+        session_manager = SimpleNamespace(save_session=lambda _session: None)
+
+        def get_current_session(self):
+            return SimpleNamespace(id="manager-session")
+
+        def create_session(self, _name, **kwargs):
+            create_calls.append(kwargs)
+            return created
+
+        def detailed_session_view(self, session):
+            assert session is created
+            return {
+                "id": created.id,
+                "name": created.name,
+                "created_at": created.created_at,
+                "updated_at": created.updated_at,
+                "model": created.model,
+                "variant": created.variant,
+                "agent_mode": created.agent_mode,
+                "workspace": created.workspace,
+                "enabled_tool_packs": created.enabled_tool_packs,
+                "fleet_identity_id": created.fleet_identity_id,
+                "fleet_identity_role": created.fleet_identity_role,
+                "fleet_worker_id": created.fleet_worker_id,
+                "fleet_task_mode": created.fleet_task_mode,
+                "fleet_task_id": created.fleet_task_id,
+            }
+
+    class DummyFleetStore:
+        def get_fleet_snapshot(self, *, user_id):
+            assert user_id == 9
+            return {
+                "identities": [
+                    {"identity_id": "worker-identity", "metadata": {"tool_profile": "execution_default"}}
+                ]
+            }
+
+        def set_active_chat_for_fleet_identity(self, **_kwargs):
+            return {}
+
+    monkeypatch.setattr(app_server, "_resolve_token", lambda _authorization: {"user_id": 9})
+    monkeypatch.setattr(app_server, "_is_remote_session_auth", lambda _auth: False)
+    monkeypatch.setattr(app_server, "_bridge_for_user", lambda _user_id: DummyBridge())
+    monkeypatch.setattr(app_server, "_get_remote_control_store", lambda: DummyFleetStore())
+    monkeypatch.setattr(app_server, "_sync_session_workspace_binding", lambda **_kwargs: None)
+    monkeypatch.setattr(app_server, "_mirror_session_snapshot_later", lambda **_kwargs: None)
+    monkeypatch.setattr(app_server, "_publish_fleet_delta", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        app_server,
+        "publish_current_session_changed",
+        lambda **kwargs: current_session_events.append(kwargs),
+    )
+
+    response = TestClient(app_server.create_app()).post(
+        "/api/app/sessions",
+        json={
+            "name": created.name,
+            "fleet_identity_id": created.fleet_identity_id,
+            "fleet_identity_role": created.fleet_identity_role,
+            "fleet_worker_id": created.fleet_worker_id,
+            "fleet_task_mode": created.fleet_task_mode,
+            "fleet_task_id": created.fleet_task_id,
+        },
+        headers={"Authorization": "Bearer test"},
+    )
+
+    assert response.status_code == 200
+    assert create_calls[0]["activate"] is False
+    assert current_session_events == []
+
+
 def test_app_chat_websocket_runs_local_turn_with_client_metadata(monkeypatch, tmp_path):
     prepare_calls: list[str] = []
     complete_calls: list[object] = []

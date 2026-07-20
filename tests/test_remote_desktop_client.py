@@ -457,6 +457,75 @@ def test_host_update_start_passes_only_the_confirmed_commit(monkeypatch, tmp_pat
     assert received == [target]
 
 
+def test_child_manager_tool_update_requires_permission_and_targets_local_manager(monkeypatch, tmp_path):
+    received = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"identity_id": "manager-local", "enabled_tool_packs": ["manager_core", "web_research"]}
+
+    class FakeAsyncClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def put(self, url, **kwargs):
+            received.append((url, kwargs))
+            return FakeResponse()
+
+    async def fake_request_json(_client, **_kwargs):
+        return {"identities": [{"identity_id": "manager-local", "role": "manager"}]}
+
+    monkeypatch.setattr(remote_desktop_client, "runtime_home", lambda: tmp_path)
+    monkeypatch.setattr(
+        remote_desktop_client,
+        "load_connection_policy",
+        lambda _home: {"permissions": {"configure_manager_tools": True}},
+    )
+    monkeypatch.setattr(remote_desktop_client.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(remote_desktop_client, "_request_json", fake_request_json)
+
+    result = asyncio.run(
+        remote_desktop_client._handle_command(
+            command_name="fleet_set_manager_tool_packs",
+            payload={"enabled_tool_packs": ["web_research"]},
+            local_api_base_url="http://127.0.0.1:8787",
+            local_token="local-token",
+            remote_ws=None,
+            send_lock=asyncio.Lock(),
+        )
+    )
+
+    assert received[0][0].endswith("/api/fleet/identities/manager-local/tool-packs")
+    assert received[0][1]["json"] == {"enabled_tool_packs": ["web_research"]}
+    assert result["identity"]["enabled_tool_packs"] == ["manager_core", "web_research"]
+
+    monkeypatch.setattr(
+        remote_desktop_client,
+        "load_connection_policy",
+        lambda _home: {"permissions": {"configure_manager_tools": False}},
+    )
+    with pytest.raises(PermissionError, match="not allowed"):
+        asyncio.run(
+            remote_desktop_client._handle_command(
+                command_name="fleet_set_manager_tool_packs",
+                payload={"enabled_tool_packs": []},
+                local_api_base_url="http://127.0.0.1:8787",
+                local_token="local-token",
+                remote_ws=None,
+                send_lock=asyncio.Lock(),
+            )
+        )
+
+
 def test_screen_preview_is_bounded_and_view_only(monkeypatch):
     monkeypatch.setattr(
         "app_backend.capture_runtime.capture_screen_snapshot",

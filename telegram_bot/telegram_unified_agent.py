@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
+from shared.subprocess_utils import hidden_subprocess_kwargs
+
 try:
     from telegram_bot import telegram_browser_tools as _browser_tools
     from telegram_bot import telegram_runtime_tools as _runtime_tools
@@ -895,7 +897,8 @@ def _execute_command(session, args: Dict) -> str:
             cwd=args.get('cwd') or str(session.workspace),
             capture_output=True,
             text=True,
-            timeout=600
+            timeout=600,
+            **hidden_subprocess_kwargs(),
         )
         output = result.stdout or result.stderr or "(no output)"
         return output[:5000]

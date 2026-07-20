@@ -1,12 +1,12 @@
 import asyncio
 import logging
 import os
-import sys
-import subprocess
 from collections import deque
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+
+from shared.subprocess_utils import hidden_subprocess_kwargs
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
@@ -43,18 +43,13 @@ class ShellSession:
         # Detect functionality for 'powershell' (Windows standard)
         shell_cmd = "powershell"
         
-        # Use CREATE_NEW_CONSOLE to make it visible
-        creation_flags = 0
-        if sys.platform == "win32":
-            creation_flags = subprocess.CREATE_NEW_CONSOLE
-
         try:
             self.process = await asyncio.create_subprocess_exec(
                 shell_cmd,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                creationflags=creation_flags
+                **hidden_subprocess_kwargs(),
             )
             logger.info(f"Shell process ({shell_cmd}) started with PID {self.process.pid}.")
             

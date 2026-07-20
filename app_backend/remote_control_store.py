@@ -28,8 +28,10 @@ from app_backend.local_profile_policy import (
 from app_backend.remote_shared_state_policy import (
     empty_fleet_state as _empty_fleet_state,
     empty_sidebar_state as _empty_sidebar_state,
+    fleet_selection_for_desktop as _fleet_selection_for_desktop,
     normalize_fleet_state as _normalize_fleet_state,
     project_groups_from_sessions as _project_groups_from_sessions,
+    store_fleet_selection_for_desktop as _store_fleet_selection_for_desktop,
 )
 from app_backend.fleet_lock_policy import (
     FLEET_LOCK_CONFLICT_ERROR,

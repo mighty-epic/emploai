@@ -4,6 +4,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from shared.subprocess_utils import hidden_subprocess_kwargs
+
 
 def _run_git(git_root: Path | str, args: list[str], *, timeout: float = 5.0) -> Optional[str]:
     try:
@@ -15,6 +17,7 @@ def _run_git(git_root: Path | str, args: list[str], *, timeout: float = 5.0) -> 
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
+            **hidden_subprocess_kwargs(),
         )
     except Exception:
         return None

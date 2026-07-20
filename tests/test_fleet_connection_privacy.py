@@ -41,6 +41,7 @@ def test_paired_computer_owns_permissions_and_manager_request_needs_decision(tmp
         "delegate_manager": True,
         "delegate_workers": True,
         "create_workers": False,
+        "configure_manager_tools": False,
         "manage_runtime": True,
         "manage_updates": True,
     }

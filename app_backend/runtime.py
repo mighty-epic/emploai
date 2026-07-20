@@ -151,6 +151,19 @@ FLEET_MANAGER_TOOLS = [
         {"computer": _COMPUTER_ARG, "display_name": {"type": "string"}},
         ["computer", "display_name"],
     ),
+    _fleet_tool(
+        "fleet_set_computer_manager_tools",
+        "Set the optional tool packs on a directly paired computer's manager when that computer has allowed remote manager-tool configuration. Manager Core remains enabled.",
+        {
+            "computer": _COMPUTER_ARG,
+            "enabled_tool_packs": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional pack ids such as interactive_desktop, browser_isolated, workspace_read, workspace_write, web_research, scheduler, or app_runtime.",
+            },
+        },
+        ["computer", "enabled_tool_packs"],
+    ),
     _fleet_tool("fleet_computer_host_status", "Check whether a paired computer's persistent host, backend, and desktop app are running.", {"computer": _COMPUTER_ARG}, ["computer"]),
     _fleet_tool("fleet_start_computer_runtime", "Start the EmploAI backend on a paired computer through its persistent Yggdrasil host.", {"computer": _COMPUTER_ARG}, ["computer"]),
     _fleet_tool("fleet_start_computer_desktop", "Open the EmploAI desktop app and backend on a paired computer through its persistent Yggdrasil host.", {"computer": _COMPUTER_ARG}, ["computer"]),
@@ -542,6 +555,11 @@ def _fleet_compact_worker_view(snapshot: Dict[str, Any], worker: Dict[str, Any])
         "kind": worker.get("kind"),
         "status": worker.get("status"),
         "detail": worker.get("detail"),
+        "is_default": bool(worker.get("is_default")),
+        "protected": bool(worker.get("protected")),
+        "tool_profile": worker.get("tool_profile"),
+        "enabled_tool_packs": list(worker.get("enabled_tool_packs") or []),
+        "capability_tags": list(worker.get("capability_tags") or []),
         "active_task_id": worker.get("active_task_id"),
         "active_task": active,
         "queue_depth": len(queued),
@@ -719,34 +737,45 @@ def _fleet_next_actions_for_task(task: Dict[str, Any]) -> list[str]:
     return []
 
 
-def _fleet_manager_contract(snapshot: Dict[str, Any]) -> dict[str, str]:
-    worker_names = [
-        str(worker.get("display_name") or worker.get("worker_id") or "").strip()
-        for worker in list(snapshot.get("workers") or [])[:8]
-    ]
-    worker_text = ", ".join([name for name in worker_names if name]) or "workers available"
+def _fleet_manager_contract(
+    snapshot: Dict[str, Any],
+    enabled_tool_packs: Optional[list[str]] = None,
+) -> dict[str, str]:
+    worker_descriptions = []
+    for worker in list(snapshot.get("workers") or [])[:8]:
+        name = str(worker.get("display_name") or worker.get("worker_id") or "").strip()
+        capabilities = list(worker.get("capability_tags") or []) or list(worker.get("enabled_tool_packs") or [])
+        suffix = f" [{', '.join(str(item) for item in capabilities)}]" if capabilities else ""
+        default_marker = " (default)" if worker.get("is_default") else ""
+        if name:
+            worker_descriptions.append(f"{name}{default_marker}{suffix}")
+    worker_text = ", ".join(worker_descriptions) or "no local workers"
     computer_names = [
         str(computer.get("display_name") or computer.get("desktop_id") or "").strip()
         for computer in _fleet_direct_computers(snapshot)[:8]
     ]
     computer_text = ", ".join([name for name in computer_names if name]) or "no directly paired computers"
+    direct_packs = [pack for pack in list(enabled_tool_packs or []) if pack != PACK_MANAGER_CORE]
+    direct_capability_text = ", ".join(direct_packs) if direct_packs else "none"
     return {
         "role": "system",
         "content": (
             "FLEET MANAGER MODE:\n"
             "- You are this computer's local manager in an EmploAI worker fleet.\n"
-            "- Answer conversational questions yourself. For an actionable request that needs desktop, browser, web, files, code, or other execution tools, delegate it with fleet_delegate instead of attempting execution as the manager.\n"
-            "- Unqualified actionable work routes to this computer's protected default worker. A named child computer routes to that child's default worker; requests to coordinate a child route to its manager; an explicit identity name wins.\n"
+            "- Answer conversational questions yourself. Memory, automations, scheduling, and Fleet coordination are manager-native actions and should stay with you.\n"
+            "- You may execute other actionable work directly only when the required execution pack is enabled on this manager. Otherwise delegate with fleet_delegate.\n"
+            "- Explicit requests to use or tell a worker always delegate. Unqualified actionable work that exceeds your enabled packs routes to this computer's protected default worker. A named child computer routes to that child's default worker; requests to coordinate a child route to its manager; an explicit identity name wins.\n"
             "- Use Fleet tools to control workers: create workers, group workers, send or queue work, redirect active work, stop workers, inspect reports/evidence, and continue queues.\n"
             "- Setup/list tools are available even when there are zero workers. Create or enroll workers when the user asks for fleet setup.\n"
-            "- Paired-computer tools can list published targets, delegate work, create an allowed remote-local worker, and check or start a remote backend or desktop even when its normal EmploAI runtime is closed.\n"
+            "- Paired-computer tools can list published targets, delegate work, create an allowed remote-local worker, configure a child manager's optional packs when permitted, and check or start a remote backend or desktop even when its normal EmploAI runtime is closed.\n"
             "- Do not use fleet tools for ordinary chat, simple questions, or tasks the manager should answer directly.\n"
             "- For broad delegation, inspect status first, assign clear task prompts, monitor milestones, read reports, then synthesize results for the user.\n"
             "- Sending a message to a busy worker queues by default. Redirecting the active task requires fleet_redirect_worker_task or fleet_steer_queued_message.\n"
             "- After a worker report, review the report before calling fleet_continue_worker_queue. Failed, blocked, low-confidence, stopped, canceled, or needs-review reports require manager review instead of continuing.\n"
             "- Destructive, bulk, and access-sensitive actions require same-surface confirmation before executing.\n"
             "- Prefer compact report/evidence/search tools over loading full timelines unless the user asks or the report is ambiguous.\n"
-            f"- Known workers this turn: {worker_text}.\n"
+            f"- Manager execution packs enabled this turn: {direct_capability_text}.\n"
+            f"- Known local workers and capabilities this turn: {worker_text}.\n"
             f"- Directly paired computers this turn: {computer_text}."
         ),
     }
@@ -887,6 +916,7 @@ def _fleet_compact_computer_view(snapshot: Dict[str, Any], computer: Dict[str, A
             "is_default": bool(target.get("is_default")),
             "protected": bool(target.get("protected")),
             "tool_profile": target.get("tool_profile"),
+            "enabled_tool_packs": list(target.get("enabled_tool_packs") or []),
             "capability_tags": list(target.get("capability_tags") or []),
         })
     return {
@@ -1024,6 +1054,25 @@ def _fleet_tool_create_worker_on_computer(session: Any, args: Dict[str, Any]) ->
         "POST",
         f"/api/fleet/desktops/{quote(str(computer.get('desktop_id') or ''), safe='')}/workers",
         {"display_name": display_name},
+    )
+    _invalidate_fleet_manager_tool_context(session)
+    return result
+
+
+def _fleet_tool_set_computer_manager_tools(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot = _fleet_snapshot_uncached()
+    if snapshot.get("error"):
+        return snapshot
+    computer = _fleet_find_computer(snapshot, str(args.get("computer") or ""))
+    if not computer:
+        return {"error": "Paired computer not found or name is ambiguous.", "error_type": "computer_not_found"}
+    enabled_tool_packs = args.get("enabled_tool_packs")
+    if not isinstance(enabled_tool_packs, list):
+        return {"error": "enabled_tool_packs must be a list.", "error_type": "invalid_tool_packs"}
+    result = _fleet_api_request(
+        "PUT",
+        f"/api/fleet/desktops/{quote(str(computer.get('desktop_id') or ''), safe='')}/manager/tool-packs",
+        {"enabled_tool_packs": [str(item) for item in enabled_tool_packs]},
     )
     _invalidate_fleet_manager_tool_context(session)
     return result
@@ -1646,6 +1695,7 @@ def _fleet_manager_tool_handlers(session: Any) -> Dict[str, Callable[[Dict[str, 
         "fleet_list_computers": lambda args: _fleet_tool_list_computers(session, args),
         "fleet_delegate_computer": lambda args: _fleet_tool_delegate_computer(session, args),
         "fleet_create_worker_on_computer": lambda args: _fleet_tool_create_worker_on_computer(session, args),
+        "fleet_set_computer_manager_tools": lambda args: _fleet_tool_set_computer_manager_tools(session, args),
         "fleet_computer_host_status": lambda args: _fleet_tool_computer_host_action(session, args, action="status"),
         "fleet_start_computer_runtime": lambda args: _fleet_tool_computer_host_action(session, args, action="runtime"),
         "fleet_start_computer_desktop": lambda args: _fleet_tool_computer_host_action(session, args, action="desktop"),
@@ -2078,7 +2128,12 @@ async def run_app_chat_turn(
     if not tool_evidence_turn or not task_like_turn:
         system_messages.append(_conversational_turn_guard())
     if fleet_tool_context.get("enabled"):
-        system_messages.append(_fleet_manager_contract(dict(fleet_tool_context.get("snapshot") or {})))
+        system_messages.append(
+            _fleet_manager_contract(
+                dict(fleet_tool_context.get("snapshot") or {}),
+                active_tool_packs,
+            )
+        )
     manager_core_enabled = PACK_MANAGER_CORE in active_tool_packs
     session.current_turn_allowed_tool_names = tools_for_enabled_packs(active_tool_packs)
     plan_mode_active = bool(active_plan_mode(session))

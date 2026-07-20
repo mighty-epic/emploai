@@ -166,9 +166,14 @@ class RemoteControlStoreSyncMixin:
                     for item in list(snapshot.get("provider_availability") or [])[:100]
                     if isinstance(item, dict)
                 ]
-            existing_fleet_state = _normalize_fleet_state(state.get("fleet"))
+            existing_fleet_state = _fleet_selection_for_desktop(state.get("fleet"), desktop_id)
             seed_identity_id = default_identity_id if not existing_fleet_state.get("active_identity_id") else None
-            fleet_state = self._ensure_fleet_selection_locked(user_id=int(user_id), state=state, preferred_identity_id=seed_identity_id)
+            fleet_state = self._ensure_fleet_selection_locked(
+                user_id=int(user_id),
+                state=state,
+                preferred_identity_id=seed_identity_id,
+                desktop_id=desktop_id,
+            )
             if current_session_id and str(fleet_state.get("active_identity_id") or "") == default_identity_id:
                 selected_by_identity = dict(fleet_state.get("selected_chat_by_identity") or {})
                 raw_current_detail = session_details.get(current_session_id)
@@ -179,7 +184,11 @@ class RemoteControlStoreSyncMixin:
                 if raw_current_identity_id == default_identity_id or not existing_selected_chat_id:
                     selected_by_identity[default_identity_id] = current_session_id
                     fleet_state["selected_chat_by_identity"] = selected_by_identity
-                    state["fleet"] = fleet_state
+            state["fleet"] = _store_fleet_selection_for_desktop(
+                state.get("fleet"),
+                desktop_id,
+                fleet_state,
+            )
             state["desktop_connection"] = {
                 "status": "connected",
                 "desktop_id": desktop_id,

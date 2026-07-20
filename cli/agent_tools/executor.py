@@ -22,6 +22,7 @@ from shared.security_policy import (
     filter_tool_result,
     normalize_permission_mode,
 )
+from shared.subprocess_utils import hidden_subprocess_kwargs
 
 INJECTED_CONTEXT_FILENAMES = {
     "agents.md",
@@ -221,6 +222,7 @@ class ToolExecutor:
                     stderr=subprocess.DEVNULL,
                     timeout=max(1.0, timeout),
                     check=False,
+                    **hidden_subprocess_kwargs(),
                 )
                 return
             except Exception:
@@ -787,7 +789,8 @@ class ToolExecutor:
             command,
             cwd=work_dir,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
+            **hidden_subprocess_kwargs(),
         )
         
         try:

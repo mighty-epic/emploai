@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import subprocess
 
+from shared.subprocess_utils import hidden_subprocess_kwargs
+
 
 def run_command(context, args, result_cls):
     if not args:
@@ -15,6 +17,7 @@ def run_command(context, args, result_cls):
         cwd=context.cwd,
         capture_output=True,
         text=True,
+        **hidden_subprocess_kwargs(),
     )
     output = result.stdout.strip()
     error = result.stderr.strip()

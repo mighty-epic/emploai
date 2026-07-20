@@ -3,9 +3,11 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Optional
 
 from shared.tool_packs import (
+    PACK_APP_RUNTIME,
     PACK_BROWSER_ISOLATED,
     PACK_INTERACTIVE_DESKTOP,
     PACK_MANAGER_CORE,
+    PACK_SCHEDULER,
     PACK_WEB_RESEARCH,
     PACK_WORKSPACE_READ,
     PACK_WORKSPACE_WRITE,
@@ -32,11 +34,15 @@ DEFAULT_WORKER_CAPABILITY_TAGS = ["desktop", "browser", "workspace", "web"]
 
 def manager_identity_metadata(existing: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     metadata = dict(existing or {})
+    enabled_tool_packs = role_locked_tool_packs(
+        role="manager",
+        requested=metadata.get("enabled_tool_packs") or MANAGER_TOOL_PACKS,
+    )
     metadata.update(
         {
             "tool_profile": MANAGER_TOOL_PROFILE,
-            "enabled_tool_packs": list(MANAGER_TOOL_PACKS),
-            "capability_tags": list(MANAGER_CAPABILITY_TAGS),
+            "enabled_tool_packs": enabled_tool_packs,
+            "capability_tags": _manager_capability_tags_for_packs(enabled_tool_packs),
             "protected": True,
             "published_upstream": bool(metadata.get("published_upstream", True)),
         }
@@ -81,7 +87,9 @@ def role_locked_tool_packs(
     clean_role = str(role or "").strip().lower()
     metadata = dict(identity_metadata or {})
     if clean_role == "manager":
-        return list(MANAGER_TOOL_PACKS)
+        configured = metadata.get("enabled_tool_packs")
+        packs = normalize_enabled_tool_packs(configured if configured is not None else requested)
+        return [PACK_MANAGER_CORE, *[pack for pack in packs if pack != PACK_MANAGER_CORE]]
     if clean_role == "worker":
         configured = metadata.get("enabled_tool_packs")
         packs = normalize_enabled_tool_packs(configured if configured is not None else requested)
@@ -114,4 +122,12 @@ def _capability_tags_for_packs(packs: Iterable[str]) -> List[str]:
         tags.append("workspace")
     if PACK_WEB_RESEARCH in enabled:
         tags.append("web")
+    if PACK_SCHEDULER in enabled:
+        tags.append("scheduler")
+    if PACK_APP_RUNTIME in enabled:
+        tags.append("runtime")
     return tags
+
+
+def _manager_capability_tags_for_packs(packs: Iterable[str]) -> List[str]:
+    return list(dict.fromkeys([*MANAGER_CAPABILITY_TAGS, *_capability_tags_for_packs(packs)]))

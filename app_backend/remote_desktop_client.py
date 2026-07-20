@@ -432,6 +432,45 @@ async def _handle_command(
             response.raise_for_status()
             return dict(response.json() or {})
 
+        if command_name == "fleet_set_manager_tool_packs":
+            if not permissions.get("configure_manager_tools", False):
+                raise PermissionError("Changing this computer's manager tools from above is not allowed")
+            local_fleet = await _request_json(
+                client,
+                method="GET",
+                url=f"{local_api_base_url}/api/fleet/snapshot",
+                token=local_token,
+            )
+            manager = next(
+                (
+                    item for item in list(local_fleet.get("identities") or [])
+                    if isinstance(item, dict) and str(item.get("role") or "").strip().lower() == "manager"
+                ),
+                None,
+            )
+            manager_id = str((manager or {}).get("identity_id") or "").strip()
+            if not manager_id:
+                raise RuntimeError("The local manager identity is unavailable")
+            response = await client.put(
+                f"{local_api_base_url}/api/fleet/identities/{manager_id}/tool-packs",
+                headers={"Authorization": f"Bearer {local_token}"},
+                json={"enabled_tool_packs": list(payload.get("enabled_tool_packs") or [])},
+            )
+            response.raise_for_status()
+            identity = dict(response.json() or {})
+            return {
+                "identity": {
+                    "identity_id": identity.get("identity_id"),
+                    "display_name": identity.get("display_name"),
+                    "role": "manager",
+                    "status": identity.get("status"),
+                    "protected": bool(identity.get("protected", True)),
+                    "tool_profile": identity.get("tool_profile") or "manager_core",
+                    "enabled_tool_packs": list(identity.get("enabled_tool_packs") or []),
+                    "capability_tags": list(identity.get("capability_tags") or []),
+                }
+            }
+
         if command_name == "fleet_create_local_worker":
             if not permissions.get("create_workers", False):
                 raise PermissionError("Creating workers from the paired manager is not allowed on this computer")
@@ -976,7 +1015,7 @@ def _fleet_capability_view(snapshot: Dict[str, Any], permissions: Dict[str, bool
         if isinstance(item, dict) and bool(item.get("published_upstream", True))
     ]
     targets: list[Dict[str, Any]] = []
-    if permissions.get("delegate_manager", False):
+    if permissions.get("delegate_manager", False) or permissions.get("configure_manager_tools", False):
         manager = next((item for item in identities if str(item.get("role") or "") == "manager"), None)
         if manager:
             targets.append(
@@ -990,6 +1029,7 @@ def _fleet_capability_view(snapshot: Dict[str, Any], permissions: Dict[str, bool
                     "is_default": False,
                     "protected": bool(manager.get("protected", True)),
                     "tool_profile": manager.get("tool_profile") or "manager_core",
+                    "enabled_tool_packs": list(manager.get("enabled_tool_packs") or []),
                     "capability_tags": list(manager.get("capability_tags") or []),
                 }
             )
@@ -1011,6 +1051,7 @@ def _fleet_capability_view(snapshot: Dict[str, Any], permissions: Dict[str, bool
                     "is_default": bool(identity.get("is_default")),
                     "protected": bool(identity.get("protected")),
                     "tool_profile": identity.get("tool_profile"),
+                    "enabled_tool_packs": list(identity.get("enabled_tool_packs") or []),
                     "capability_tags": list(identity.get("capability_tags") or []),
                 }
             )
@@ -1024,11 +1065,12 @@ def _fleet_capability_view(snapshot: Dict[str, Any], permissions: Dict[str, bool
     )
     return {
         **fleet_host_capabilities(),
-        "schema_version": 3,
+        "schema_version": 4,
         "node_role": "intermediary" if child_count else "leaf",
         "child_count": child_count,
         "can_enroll_children": True,
         "can_create_workers": bool(permissions.get("create_workers", False)),
+        "can_configure_manager_tools": bool(permissions.get("configure_manager_tools", False)),
         "can_manage_runtime": bool(permissions.get("manage_runtime", False)),
         "can_manage_updates": bool(permissions.get("manage_updates", False)),
         "targets": targets,

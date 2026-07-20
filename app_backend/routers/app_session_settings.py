@@ -20,6 +20,7 @@ class AppSessionSettingsRouterDeps:
     resolve_token: Callable[[Optional[str]], Dict[str, object]]
     is_remote_session_auth: Callable[[Dict[str, Any]], bool]
     bridge_for_user: Callable[[int], Any]
+    update_manager_identity_tool_packs: Callable[..., Dict[str, Any]]
     consume_approved_confirmation: Callable[..., Dict[str, Any]]
     check_rate_limit: Callable[..., None]
     rate_limit_max_attempts: int
@@ -38,7 +39,27 @@ def create_app_session_settings_router(deps: AppSessionSettingsRouterDeps) -> AP
         auth = _require_local_app_backend(deps, authorization)
         _check_session_setting_rate_limit(deps, http_request, auth)
         bridge = deps.bridge_for_user(int(auth["user_id"]))
-        session = bridge.update_session_tool_packs(session_id, request.enabled_tool_packs)
+        existing = bridge.get_session(session_id)
+        role = str(getattr(existing, "fleet_identity_role", "") or "").strip().lower()
+        identity_id = str(getattr(existing, "fleet_identity_id", "") or "").strip()
+        requested_packs = list(request.enabled_tool_packs or [])
+        if role == "manager" and identity_id:
+            identity = deps.update_manager_identity_tool_packs(
+                user_id=int(auth["user_id"]),
+                identity_id=identity_id,
+                enabled_tool_packs=requested_packs,
+                source="local_chat",
+            )
+            requested_packs = list(identity.get("enabled_tool_packs") or [])
+            for candidate in bridge.list_sessions():
+                candidate_role = str(getattr(candidate, "fleet_identity_role", "") or "").strip().lower()
+                candidate_identity_id = str(getattr(candidate, "fleet_identity_id", "") or "").strip()
+                if candidate_role != "manager" or candidate_identity_id not in {"", identity_id}:
+                    continue
+                bridge.update_session_tool_packs(str(candidate.id), requested_packs)
+            session = bridge.get_session(session_id)
+        else:
+            session = bridge.update_session_tool_packs(session_id, requested_packs)
         return SessionDetailView(**bridge.detailed_session_view(session))
 
     @router.post("/api/app/sessions/{session_id}/telegram-bot", response_model=SessionDetailView)

@@ -4,6 +4,7 @@ from app_backend.fleet_identity_profiles import (
     DEFAULT_WORKER_DISPLAY_NAME,
     additional_worker_metadata,
     default_worker_metadata,
+    manager_identity_metadata,
 )
 from app_backend.fleet_identity_creation import validate_local_worker_creation
 from app_backend.fleet_policy import FLEET_PREVIEW_MODE, FLEET_WORKER_SESSION_TTL_SECONDS, normalize_fleet_enrollment_ttl
@@ -15,6 +16,48 @@ REMOTE_PAIRING_TTL_SECONDS = 60 * 10
 FLEET_ENROLLMENT_TTL_SECONDS = 60 * 30
 
 class RemoteControlStoreFleetWorkerMixin:
+    def set_manager_identity_tool_packs(
+        self,
+        *,
+        user_id: int,
+        identity_id: str,
+        enabled_tool_packs: List[str],
+        source: str = "local_user",
+    ) -> Dict[str, Any]:
+        """Persist the manager profile; manager_core remains mandatory."""
+        with self._lock:
+            identity = self._conn.execute(
+                "SELECT * FROM fleet_instances WHERE user_id = ? AND instance_id = ? AND reset_at IS NULL",
+                (int(user_id), str(identity_id or "").strip()),
+            ).fetchone()
+            if not identity:
+                raise KeyError("Unknown identity")
+            if str(identity["role"] or "").strip().lower() != "manager":
+                raise ValueError("Only manager tool profiles can be changed through this route")
+
+            metadata = _json_loads(identity["metadata"], {})
+            metadata["enabled_tool_packs"] = list(enabled_tool_packs or [])
+            metadata = manager_identity_metadata(metadata)
+            now = time.time()
+            self._conn.execute(
+                "UPDATE fleet_instances SET metadata = ?, updated_at = ? WHERE instance_id = ?",
+                (_json_dumps(metadata), now, identity["instance_id"]),
+            )
+            self._audit_locked(
+                user_id=int(user_id),
+                event_type="manager_tool_profile_updated",
+                actor_kind="manager",
+                actor_id=str(source or "local_user")[:80],
+                target_kind="manager",
+                target_id=str(identity["instance_id"]),
+                metadata={"enabled_tool_packs": list(metadata.get("enabled_tool_packs") or [])},
+            )
+            self._conn.commit()
+            refreshed = self._conn.execute(
+                "SELECT * FROM fleet_instances WHERE instance_id = ?", (identity["instance_id"],)
+            ).fetchone()
+            return self._identity_view(refreshed)
+
     def set_identity_upstream_visibility(
         self,
         *,
@@ -618,18 +661,27 @@ class RemoteControlStoreFleetWorkerMixin:
 
         state = self._ensure_shared_state_locked(int(user_id))
         fleet = _normalize_fleet_state(state.get("fleet"))
-        selected_by_identity = {
-            key: value
-            for key, value in dict(fleet.get("selected_chat_by_identity") or {}).items()
-            if key not in identity_ids
+        selections = {
+            str(desktop_id): _fleet_selection_for_desktop(fleet, str(desktop_id))
+            for desktop_id in dict(fleet.get("selection_by_desktop") or {})
         }
-        active_identity_id = str(fleet.get("active_identity_id") or "").strip()
-        fleet["selected_chat_by_identity"] = selected_by_identity
-        if active_identity_id in identity_ids:
-            fleet["active_identity_id"] = None
+        selections[""] = _fleet_selection_for_desktop(fleet, None)
+        removed_active_identity = False
+        for desktop_id, selection in selections.items():
+            selection["selected_chat_by_identity"] = {
+                key: value
+                for key, value in dict(selection.get("selected_chat_by_identity") or {}).items()
+                if key not in identity_ids
+            }
+            if str(selection.get("active_identity_id") or "").strip() in identity_ids:
+                selection["active_identity_id"] = None
+                removed_active_identity = True
+            selection["active_identity_version"] = int(selection.get("active_identity_version") or 0) + 1
+            selection["active_identity_updated_at"] = time.time()
+            fleet = _store_fleet_selection_for_desktop(fleet, desktop_id or None, selection)
+        if removed_active_identity:
             state["current_session_id"] = None
         state["fleet"] = fleet
-        self._bump_fleet_selection_locked(int(user_id), state)
         self._bump_shared_state_locked(int(user_id), state)
 
     def delete_worker(self, *, user_id: int, worker_id: str, wipe_state: bool = True) -> Dict[str, Any]:

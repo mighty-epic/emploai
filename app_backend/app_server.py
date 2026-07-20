@@ -94,6 +94,8 @@ from app_backend.models import (
     FleetActiveIdentityResponse,
     FleetGroupMembershipRequest,
     FleetGroupRequest,
+    FleetIdentityToolPacksRequest,
+    FleetIdentityVisibilityRequest,
     FleetIdentityView,
     FleetReportSearchRequest,
     FleetReportRequest,
@@ -470,6 +472,9 @@ def create_app() -> FastAPI:
                 resolve_token=_resolve_token,
                 is_remote_session_auth=_is_remote_session_auth,
                 bridge_for_user=_bridge_for_user,
+                update_manager_identity_tool_packs=(
+                    lambda **kwargs: _get_remote_control_store().set_manager_identity_tool_packs(**kwargs)
+                ),
                 consume_approved_confirmation=_consume_approved_confirmation,
                 check_rate_limit=_check_remote_auth_rate_limit,
                 rate_limit_max_attempts=REMOTE_AUTH_RATE_LIMIT_MAX_ATTEMPTS,

@@ -3,6 +3,8 @@ import subprocess
 import logging
 from typing import Dict, List, Optional
 
+from shared.subprocess_utils import hidden_subprocess_kwargs
+
 logger = logging.getLogger(__name__)
 
 
@@ -89,14 +91,24 @@ def get_system_info() -> str:
         if platform.system() == "Windows":
             try:
                 # CPU Info
-                cpu_raw = subprocess.check_output("wmic cpu get Name /Value", shell=True, text=True)
+                cpu_raw = subprocess.check_output(
+                    "wmic cpu get Name /Value",
+                    shell=True,
+                    text=True,
+                    **hidden_subprocess_kwargs(),
+                )
                 for line in cpu_raw.splitlines():
                     if "Name=" in line:
                         cpu_info = line.split("=", 1)[1].strip()
                         break
                 
                 # RAM Info
-                ram_raw = subprocess.check_output("wmic computerSystem get totalPhysicalMemory /Value", shell=True, text=True)
+                ram_raw = subprocess.check_output(
+                    "wmic computerSystem get totalPhysicalMemory /Value",
+                    shell=True,
+                    text=True,
+                    **hidden_subprocess_kwargs(),
+                )
                 for line in ram_raw.splitlines():
                     if "TotalPhysicalMemory=" in line:
                         bytes_val = int(line.split("=", 1)[1].strip())
@@ -104,7 +116,12 @@ def get_system_info() -> str:
                         break
                 
                 # Model Info
-                model_raw = subprocess.check_output("wmic computerSystem get model /Value", shell=True, text=True)
+                model_raw = subprocess.check_output(
+                    "wmic computerSystem get model /Value",
+                    shell=True,
+                    text=True,
+                    **hidden_subprocess_kwargs(),
+                )
                 for line in model_raw.splitlines():
                     if "Model=" in line:
                         model_info = f" | Model: {line.split('=', 1)[1].strip()}"

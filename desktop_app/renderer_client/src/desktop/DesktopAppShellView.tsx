@@ -1055,7 +1055,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
               <DesktopConversationView
                 apiBaseUrl={bootstrap.apiBaseUrl}
                 token={bootstrap.accessToken}
-                initialSessionId={requestedSessionId || bootstrap.currentSessionId || undefined}
+                initialSessionId={requestedSessionId || undefined}
                 initialSurfaceMode={pendingSurfaceMode}
                 runtimeMode={bootstrap.runtimeMode}
                 runtimeStatus={effectiveRuntimeStatus}

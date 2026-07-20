@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Callable, Set
 from datetime import datetime
 
+from shared.subprocess_utils import hidden_subprocess_kwargs
+
 
 logger = logging.getLogger(__name__)
 
@@ -300,7 +302,8 @@ class SkillLoader:
                 cmd,
                 capture_output=True,
                 text=True,
-                cwd=str(skill.skill_path)
+                cwd=str(skill.skill_path),
+                **hidden_subprocess_kwargs(),
             )
             
             return {
@@ -446,7 +449,12 @@ class SkillGating:
         """Check if a binary is available in PATH."""
         try:
             import subprocess
-            subprocess.run(['which', binary], capture_output=True, check=True)
+            subprocess.run(
+                ['where.exe' if os.name == 'nt' else 'which', binary],
+                capture_output=True,
+                check=True,
+                **hidden_subprocess_kwargs(),
+            )
             return True
         except:
             return False

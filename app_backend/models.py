@@ -1237,6 +1237,10 @@ class FleetIdentityVisibilityRequest(BaseModel):
     published_upstream: bool = True
 
 
+class FleetIdentityToolPacksRequest(BaseModel):
+    enabled_tool_packs: List[str] = Field(default_factory=list, max_length=64)
+
+
 class FleetActiveIdentityResponse(BaseModel):
     active_identity_id: Optional[str] = None
     active_identity: Optional[FleetIdentityView] = None

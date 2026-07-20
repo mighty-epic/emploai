@@ -641,7 +641,8 @@ class RemoteControlStoreViewMixin:
         preferred_identity_id: Optional[str] = None,
         desktop_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        fleet = _normalize_fleet_state(state.get("fleet"))
+        fleet_state = _normalize_fleet_state(state.get("fleet"))
+        fleet = _fleet_selection_for_desktop(fleet_state, desktop_id)
         identities = self._scope_fleet_identities_to_desktop(
             self._fleet_identities_locked(int(user_id)),
             desktop_id,
@@ -659,14 +660,24 @@ class RemoteControlStoreViewMixin:
             if current_session_id:
                 selected_by_identity[selected] = current_session_id
         fleet["selected_chat_by_identity"] = selected_by_identity
-        state["fleet"] = fleet
         return fleet
 
-    def _bump_fleet_selection_locked(self, user_id: int, state: Dict[str, Any]) -> Dict[str, Any]:
-        fleet = _normalize_fleet_state(state.get("fleet"))
+    def _bump_fleet_selection_locked(
+        self,
+        user_id: int,
+        state: Dict[str, Any],
+        *,
+        fleet: Optional[Dict[str, Any]] = None,
+        desktop_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        fleet = dict(fleet or self._ensure_fleet_selection_locked(
+            user_id=int(user_id),
+            state=state,
+            desktop_id=desktop_id,
+        ))
         fleet["active_identity_version"] = int(fleet.get("active_identity_version") or 0) + 1
         fleet["active_identity_updated_at"] = time.time()
-        state["fleet"] = fleet
+        state["fleet"] = _store_fleet_selection_for_desktop(state.get("fleet"), desktop_id, fleet)
         return fleet
 
     def _next_worker_name_locked(self, user_id: int) -> str:

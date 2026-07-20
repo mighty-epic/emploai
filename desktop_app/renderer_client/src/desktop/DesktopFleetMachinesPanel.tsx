@@ -7,6 +7,7 @@ import {
   decideDesktopFleetUpstreamRequest,
   delegateDesktopFleetComputer,
   requestDesktopFleetComputerPermissions,
+  setDesktopFleetManagerToolPacksOnComputer,
   type DesktopFleetConnectionPermissions,
   type DesktopFleetRemoteTarget,
   type DesktopFleetSnapshot,
@@ -17,6 +18,7 @@ import { DesktopFleetInfoButton } from './DesktopFleetInfoButton';
 import { DesktopFleetComputerActivity } from './DesktopFleetComputerActivity';
 import { DesktopFleetConnectionAccess } from './DesktopFleetConnectionAccess';
 import { DesktopFleetLivePreview } from './DesktopFleetLivePreview';
+import { DesktopFleetManagerTools } from './DesktopFleetManagerTools';
 import { DesktopFleetHostControls } from './DesktopFleetHostControls';
 import { fleetReportSummary } from './desktopFleetWorkerState';
 import { FLEET_TYPE as TYPE } from './desktopFleetUi';
@@ -35,6 +37,12 @@ function targetsForConnection(permissionState: DesktopFleetConnectionPermissions
     if (target.target_kind === 'worker') return Boolean(permissionState?.permissions.delegate_workers);
     return false;
   });
+}
+
+function publishedTargetsForConnection(permissionState: DesktopFleetConnectionPermissions | null): DesktopFleetRemoteTarget[] {
+  return Array.isArray(permissionState?.capabilities?.targets)
+    ? permissionState?.capabilities?.targets || []
+    : [];
 }
 
 export function DesktopFleetMachinesPanel({
@@ -64,6 +72,8 @@ export function DesktopFleetMachinesPanel({
   const selectedMachine = machines.find((machine) => machine.id === selectedId) || null;
   const selectedPermissionState = selectedMachine ? permissionForDesktop(snapshot, selectedMachine.id) : null;
   const selectedTargets = targetsForConnection(selectedPermissionState);
+  const selectedManagerTarget = publishedTargetsForConnection(selectedPermissionState)
+    .find((target) => target.target_kind === 'manager') || null;
 
   useEffect(() => {
     if (!selectedMachine) return;
@@ -208,7 +218,7 @@ export function DesktopFleetMachinesPanel({
 
       {selectedMachine ? (() => {
         const permissionState = selectedPermissionState;
-        const permissions = permissionState?.permissions || { delegate_manager: false, delegate_workers: false, create_workers: false, manage_runtime: false, manage_updates: false };
+        const permissions = permissionState?.permissions || { delegate_manager: false, delegate_workers: false, create_workers: false, configure_manager_tools: false, manage_runtime: false, manage_updates: false };
         const protocolReady = permissionState?.source === 'paired_desktop';
         const online = selectedMachine.status === 'connected';
         const targets = selectedTargets;
@@ -265,6 +275,20 @@ export function DesktopFleetMachinesPanel({
                   'Permission change requested by the direct manager',
                 ),
                 'Permission request sent.',
+              )}
+            />
+
+            <DesktopFleetManagerTools
+              desktopId={selectedMachine.id}
+              desktopName={selectedMachine.name}
+              manager={selectedManagerTarget}
+              allowed={Boolean(permissions.configure_manager_tools)}
+              online={online}
+              busy={busy}
+              onSave={(enabledToolPacks) => run(
+                `manager-tools:${selectedMachine.id}`,
+                () => setDesktopFleetManagerToolPacksOnComputer(selectedMachine.id, enabledToolPacks),
+                'Manager tools updated on the connected computer.',
               )}
             />
 
