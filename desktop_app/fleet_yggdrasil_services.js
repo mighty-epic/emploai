@@ -25,6 +25,16 @@ function createFleetYggdrasilServices({ runBackendJson }) {
 
   const status = () => runBackendJson(['yggdrasil-status'], { timeoutMs: 15_000 });
 
+  const prepareManager = () => runBackendJson(
+    ['fleet-yggdrasil-manager-prepare'],
+    { timeoutMs: 45_000 },
+  );
+
+  const refreshManager = () => runBackendJson(
+    ['fleet-yggdrasil-manager-refresh'],
+    { timeoutMs: 90_000 },
+  );
+
   const startHost = () => runBackendJson(['fleet-host-start'], { timeoutMs: 30_000 });
 
   const bootstrap = () => runBackendJson(
@@ -36,14 +46,16 @@ function createFleetYggdrasilServices({ runBackendJson }) {
     const displayName = cleanLabel(payload.displayName || payload.display_name, 'Paired computer');
     const requestedTtl = Number(payload.expiresInSeconds || payload.expires_in_seconds || 30 * 60);
     const expiresInSeconds = Math.min(24 * 60 * 60, Math.max(60, Math.trunc(requestedTtl || 30 * 60)));
+    // Keep the primary connection flow self-contained. Both operations are
+    // idempotent, so an already-ready manager only pays for a status check.
     await bootstrap();
+    await refreshManager();
     return runBackendJson([
       'fleet-yggdrasil-pair',
       '--display-name',
       displayName,
       '--expires-in-seconds',
       String(expiresInSeconds),
-      '--configure-manager-bind',
     ], { timeoutMs: 90_000 });
   };
 
@@ -95,7 +107,7 @@ function createFleetYggdrasilServices({ runBackendJson }) {
     return runBackendJson(args, { timeoutMs: 15_000 });
   };
 
-  return { status, startHost, bootstrap, createPairing, join, permissions, setPermissions, decidePermissionRequest, activity, requestManager };
+  return { status, prepareManager, refreshManager, startHost, bootstrap, createPairing, join, permissions, setPermissions, decidePermissionRequest, activity, requestManager };
 }
 
 module.exports = {

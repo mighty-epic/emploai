@@ -1,13 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { ReactNode } from 'react';
+import Settings2 from 'lucide-react-native/icons/settings-2';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import {
   createDesktopFleetWorkerOnComputer,
   decideDesktopFleetUpstreamRequest,
   delegateDesktopFleetComputer,
-  requestDesktopFleetComputerPermissions,
-  setDesktopFleetManagerToolPacksOnComputer,
   type DesktopFleetConnectionPermissions,
   type DesktopFleetRemoteTarget,
   type DesktopFleetSnapshot,
@@ -16,11 +14,10 @@ import { userFacingError } from '../../lib/diagnostics';
 import { remoteRuntimesFromFleetSnapshot } from './desktopRemoteRuntimes';
 import { DesktopFleetInfoButton } from './DesktopFleetInfoButton';
 import { DesktopFleetComputerActivity } from './DesktopFleetComputerActivity';
-import { DesktopFleetConnectionAccess } from './DesktopFleetConnectionAccess';
 import { DesktopFleetLivePreview } from './DesktopFleetLivePreview';
-import { DesktopFleetManagerTools } from './DesktopFleetManagerTools';
 import { DesktopFleetHostControls } from './DesktopFleetHostControls';
-import { fleetReportSummary } from './desktopFleetWorkerState';
+import { DesktopFleetRequestsPanel } from './DesktopFleetRequestsPanel';
+import { DesktopFleetReportsPanel } from './DesktopFleetReportsPanel';
 import { FLEET_TYPE as TYPE } from './desktopFleetUi';
 import { DESKTOP_UI as UI } from './desktopUiTokens';
 
@@ -39,23 +36,18 @@ function targetsForConnection(permissionState: DesktopFleetConnectionPermissions
   });
 }
 
-function publishedTargetsForConnection(permissionState: DesktopFleetConnectionPermissions | null): DesktopFleetRemoteTarget[] {
-  return Array.isArray(permissionState?.capabilities?.targets)
-    ? permissionState?.capabilities?.targets || []
-    : [];
-}
-
 export function DesktopFleetMachinesPanel({
   snapshot,
   onChanged,
   onConnectRequested,
+  onOpenComputerSettings,
   showConnectAction = true,
   compact = false,
 }: {
   snapshot: DesktopFleetSnapshot | null | undefined;
   onChanged?: () => void;
   onConnectRequested?: () => void;
-  localComputerContent?: ReactNode;
+  onOpenComputerSettings?: (desktopId: string) => void;
   showConnectAction?: boolean;
   compact?: boolean;
 }) {
@@ -64,7 +56,6 @@ export function DesktopFleetMachinesPanel({
   const [targetByDesktop, setTargetByDesktop] = useState<Record<string, string>>({});
   const [prompts, setPrompts] = useState<Record<string, string>>({});
   const [workerNames, setWorkerNames] = useState<Record<string, string>>({});
-  const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -72,8 +63,6 @@ export function DesktopFleetMachinesPanel({
   const selectedMachine = machines.find((machine) => machine.id === selectedId) || null;
   const selectedPermissionState = selectedMachine ? permissionForDesktop(snapshot, selectedMachine.id) : null;
   const selectedTargets = targetsForConnection(selectedPermissionState);
-  const selectedManagerTarget = publishedTargetsForConnection(selectedPermissionState)
-    .find((target) => target.target_kind === 'manager') || null;
 
   useEffect(() => {
     if (!selectedMachine) return;
@@ -179,10 +168,13 @@ export function DesktopFleetMachinesPanel({
               <View style={styles.machineHeader}>
                 <View style={styles.machineIdentity}>
                   <Text style={styles.machineName} numberOfLines={1}>{machine.name}</Text>
-                  <Text style={styles.machineMeta}>{isIntermediary ? `Direct child · ${capabilities?.child_count} below it` : 'Direct child computer'}</Text>
+                  <Text style={[styles.machineMeta, !online ? styles.machineMetaOffline : null]}>
+                    {isIntermediary ? `Direct child · ${capabilities?.child_count} below it` : 'Direct child computer'}
+                    {!online ? ` · ${machine.hostLabel}` : ''}
+                  </Text>
                 </View>
                 <View style={[styles.statusBadge, online ? styles.statusBadgeOnline : styles.statusBadgeOffline]}>
-                  <Text style={styles.statusBadgeText}>{online ? '● ONLINE' : '○ OFFLINE'}</Text>
+                  <Text style={[styles.statusBadgeText, !online ? styles.statusBadgeTextOffline : null]}>{online ? '● ONLINE' : '○ OFFLINE'}</Text>
                 </View>
               </View>
               <View style={styles.cardStats}>
@@ -199,10 +191,26 @@ export function DesktopFleetMachinesPanel({
                   <Text style={styles.latestValue} numberOfLines={1}>{machine.queuedCount ? `${machine.queuedCount} queued` : recentDelegation?.status || machine.latestReport || 'No work yet'}</Text>
                 </View>
               </View>
-              <View style={[styles.openHintPill, selectedId === machine.id ? styles.openHintPillSelected : null]}>
-                <Text style={[styles.openHint, selectedId === machine.id ? styles.openHintSelected : null]}>
-                  {selectedId === machine.id ? 'DETAILS OPEN ↓' : 'OPEN WORKSPACE →'}
-                </Text>
+              <View style={styles.machineActions}>
+                <View style={[styles.openHintPill, selectedId === machine.id ? styles.openHintPillSelected : null]}>
+                  <Text style={[styles.openHint, selectedId === machine.id ? styles.openHintSelected : null]}>
+                    {selectedId === machine.id ? 'DETAILS OPEN ↓' : 'OPEN WORKSPACE →'}
+                  </Text>
+                </View>
+                {onOpenComputerSettings ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open settings for ${machine.name}`}
+                    onPress={(event) => {
+                      event.stopPropagation();
+                      onOpenComputerSettings(machine.id);
+                    }}
+                    style={styles.settingsButton}
+                  >
+                    <Settings2 size={14} color={UI.color.accentStrong} strokeWidth={2} />
+                    <Text style={styles.settingsButtonText}>Settings</Text>
+                  </Pressable>
+                ) : null}
               </View>
             </Pressable>
           );
@@ -259,236 +267,140 @@ export function DesktopFleetMachinesPanel({
               updateSupported={Boolean(permissionState?.capabilities?.host_control?.start_update)}
             />
 
-            <DesktopFleetConnectionAccess
-              desktopId={selectedMachine.id}
-              desktopName={selectedMachine.name}
-              permissions={permissions}
-              pendingRequest={permissionState?.pending_request || permissionState?.pendingRequest}
-              online={online}
-              protocolReady={protocolReady}
-              busy={busy}
-              onRequest={(nextPermissions) => run(
-                `permissions:${selectedMachine.id}`,
-                () => requestDesktopFleetComputerPermissions(
-                  selectedMachine.id,
-                  nextPermissions,
-                  'Permission change requested by the direct manager',
-                ),
-                'Permission request sent.',
-              )}
-            />
-
-            <DesktopFleetManagerTools
-              desktopId={selectedMachine.id}
-              desktopName={selectedMachine.name}
-              manager={selectedManagerTarget}
-              allowed={Boolean(permissions.configure_manager_tools)}
-              online={online}
-              busy={busy}
-              onSave={(enabledToolPacks) => run(
-                `manager-tools:${selectedMachine.id}`,
-                () => setDesktopFleetManagerToolPacksOnComputer(selectedMachine.id, enabledToolPacks),
-                'Manager tools updated on the connected computer.',
-              )}
-            />
-
-            <View style={styles.drawerColumns}>
-              <DesktopFleetComputerActivity
-                snapshot={snapshot}
-                desktopId={selectedMachine.id}
-                targets={targets}
-              />
-              <DesktopFleetLivePreview
-                desktopId={selectedMachine.id}
-                desktopName={selectedMachine.name}
-                online={online}
-                automatic={protocolReady}
-              />
-            </View>
-
-            <View style={styles.drawerColumns}>
-              <View style={styles.controlSection}>
-                <Text style={styles.controlEyebrow}>DELEGATE</Text>
-                <Text style={styles.controlTitle}>Choose a destination identity</Text>
-                {targets.length ? (
-                  <View style={styles.targetList}>
-                    {targets.map((item) => {
-                      const key = String(item.identity_id || item.target_selector || item.display_name);
-                      const selected = target === item;
-                      return (
-                        <Pressable
-                          key={key}
-                          accessibilityRole="radio"
-                          accessibilityState={{ checked: selected }}
-                          onPress={() => setTargetByDesktop((current) => ({ ...current, [selectedMachine.id]: key }))}
-                          style={[styles.targetRow, selected ? styles.targetRowSelected : null]}
-                        >
-                          <View style={styles.targetCopy}>
-                            <Text style={styles.targetName}>{item.display_name}</Text>
-                            <Text style={styles.targetMeta}>{item.role === 'manager' ? 'Manager route' : item.is_default ? 'Default worker' : 'Worker'} · {item.status || 'ready'}</Text>
-                          </View>
-                          <Text style={styles.targetCheck}>{selected ? '●' : '○'}</Text>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-                ) : (
-                  <Text style={styles.emptyText}>No target identities are currently allowed by this computer.</Text>
-                )}
-                <Text style={styles.inputLabel}>Task</Text>
-                <TextInput
-                  accessibilityLabel={`Delegation for ${selectedMachine.name}`}
-                  multiline
-                  value={prompts[selectedMachine.id] || ''}
-                  onChangeText={(value) => setPrompts((current) => ({ ...current, [selectedMachine.id]: value }))}
-                  placeholder="Describe the outcome, constraints, and what the report should include."
-                  placeholderTextColor={UI.color.textSubtle}
-                  style={[styles.input, styles.promptInput]}
+            <View style={styles.signalRow}>
+              <View style={styles.signalItem}>
+                <DesktopFleetComputerActivity
+                  snapshot={snapshot}
+                  desktopId={selectedMachine.id}
+                  targets={targets}
                 />
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityState={{ disabled: busy || !online || !target || !(prompts[selectedMachine.id] || '').trim() }}
-                  disabled={busy || !online || !target || !(prompts[selectedMachine.id] || '').trim()}
-                  onPress={() => {
-                    if (!target) return;
-                    const prompt = prompts[selectedMachine.id] || '';
-                    void run(
-                      `delegate:${selectedMachine.id}`,
-                      async () => {
-                        await delegateDesktopFleetComputer(
-                          selectedMachine.id,
-                          prompt,
-                          target.target_kind,
-                          target.target_selector,
-                        );
-                        setPrompts((current) => current[selectedMachine.id] === prompt
-                          ? { ...current, [selectedMachine.id]: '' }
-                          : current);
-                      },
-                      `Delegation sent to ${target.display_name}.`,
-                    );
-                  }}
-                  style={[styles.primaryButton, (busy || !online || !target || !(prompts[selectedMachine.id] || '').trim()) ? styles.disabled : null]}
-                >
-                  <Text style={styles.primaryButtonText}>{busyId === `delegate:${selectedMachine.id}` ? 'Sending…' : 'Send delegation'}</Text>
-                </Pressable>
               </View>
-
-              <View style={styles.controlSection}>
-                <Text style={styles.controlEyebrow}>REQUESTS FROM BELOW</Text>
-                <Text style={styles.controlTitle}>Questions, approvals, and blockers</Text>
-                {requests.length ? requests.slice(0, 8).map((request) => {
-                  const pending = request.status === 'pending';
-                  const reply = replyDrafts[request.request_id] || '';
-                  return (
-                    <View key={request.request_id} style={[styles.requestCard, request.request_kind === 'blocked' ? styles.requestBlocked : null]}>
-                      <View style={styles.requestHeader}>
-                        <Text style={styles.requestKind}>{request.request_kind.toUpperCase()}</Text>
-                        <Text style={styles.requestStatus}>{request.status.toUpperCase()}</Text>
-                      </View>
-                      <Text style={styles.requestIdentity}>{request.identity_label || 'Local agent'}</Text>
-                      <Text style={styles.requestMessage}>{request.message}</Text>
-                      {request.response ? <Text style={styles.responseText}>Response: {request.response}</Text> : null}
-                      {pending ? (
-                        <>
-                          <TextInput
-                            accessibilityLabel={`Reply to ${request.identity_label || 'agent request'}`}
-                            value={reply}
-                            onChangeText={(value) => setReplyDrafts((current) => ({ ...current, [request.request_id]: value }))}
-                            placeholder="Optional response"
-                            placeholderTextColor={UI.color.textSubtle}
-                            style={styles.input}
-                          />
-                          <View style={styles.requestActions}>
-                            <Pressable
-                              accessibilityRole="button"
-                              disabled={busy}
-                              onPress={() => void run(
-                                `request:${request.request_id}`,
-                                () => decideDesktopFleetUpstreamRequest(selectedMachine.id, request.request_id, 'approved', reply),
-                                'Request approved.',
-                              )}
-                              style={styles.approveButton}
-                            ><Text style={styles.approveButtonText}>Approve</Text></Pressable>
-                            <Pressable
-                              accessibilityRole="button"
-                              disabled={busy}
-                              onPress={() => void run(
-                                `request:${request.request_id}`,
-                                () => decideDesktopFleetUpstreamRequest(selectedMachine.id, request.request_id, 'denied', reply),
-                                'Request denied.',
-                              )}
-                              style={styles.denyButton}
-                            ><Text style={styles.denyButtonText}>Deny</Text></Pressable>
-                            <Pressable
-                              accessibilityRole="button"
-                              disabled={busy || !reply.trim()}
-                              onPress={() => void run(
-                                `request:${request.request_id}`,
-                                () => decideDesktopFleetUpstreamRequest(selectedMachine.id, request.request_id, 'replied', reply),
-                                'Reply sent.',
-                              )}
-                              style={[styles.replyButton, !reply.trim() ? styles.disabled : null]}
-                            ><Text style={styles.replyButtonText}>Reply</Text></Pressable>
-                          </View>
-                        </>
-                      ) : null}
-                    </View>
-                  );
-                }) : <Text style={styles.emptyText}>No requests from this computer yet.</Text>}
+              <View style={styles.signalItem}>
+                <DesktopFleetRequestsPanel
+                  desktopId={selectedMachine.id}
+                  requests={requests}
+                  busy={busy}
+                  onDecision={(requestId, decision, response) => run(
+                    `request:${requestId}`,
+                    () => decideDesktopFleetUpstreamRequest(selectedMachine.id, requestId, decision, response),
+                    decision === 'approved' ? 'Request approved.' : decision === 'denied' ? 'Request denied.' : 'Reply sent.',
+                  )}
+                />
               </View>
             </View>
 
-            <View style={styles.drawerColumns}>
-              {permissions.create_workers ? (
+            <View style={styles.workRow}>
+              <View style={styles.workItem}>
                 <View style={styles.controlSection}>
-                  <View style={styles.controlHeadingRow}>
-                    <View style={styles.controlHeadingCopy}>
-                      <Text style={styles.controlEyebrow}>OPTIONAL AGENT</Text>
-                      <Text style={styles.controlTitle}>Create an identity on {selectedMachine.name}</Text>
+                  <Text style={styles.controlTitle}>Delegate work</Text>
+                  {targets.length ? (
+                    <View style={styles.targetList}>
+                      {targets.map((item) => {
+                        const key = String(item.identity_id || item.target_selector || item.display_name);
+                        const selected = target === item;
+                        return (
+                          <Pressable
+                            key={key}
+                            accessibilityRole="radio"
+                            accessibilityState={{ checked: selected }}
+                            onPress={() => setTargetByDesktop((current) => ({ ...current, [selectedMachine.id]: key }))}
+                            style={[styles.targetRow, selected ? styles.targetRowSelected : null]}
+                          >
+                            <View style={styles.targetCopy}>
+                              <Text style={styles.targetName}>{item.display_name}</Text>
+                              <Text style={styles.targetMeta}>{item.role === 'manager' ? 'Manager route' : item.is_default ? 'Default worker' : 'Worker'} · {item.status || 'ready'}</Text>
+                            </View>
+                            <Text style={styles.targetCheck}>{selected ? '●' : '○'}</Text>
+                          </Pressable>
+                        );
+                      })}
                     </View>
-                    <DesktopFleetInfoButton
-                      label="Remote agent creation"
-                      text="The worker is created and stored there only. It appears here after that computer publishes its next capability update."
-                    />
-                  </View>
+                  ) : (
+                    <Text style={styles.emptyText}>No target identities are currently allowed by this computer.</Text>
+                  )}
+                  <Text style={styles.inputLabel}>Instructions</Text>
                   <TextInput
-                    accessibilityLabel={`New agent name on ${selectedMachine.name}`}
-                    value={workerNames[selectedMachine.id] || ''}
-                    onChangeText={(value) => setWorkerNames((current) => ({ ...current, [selectedMachine.id]: value }))}
-                    placeholder="Agent name"
+                    accessibilityLabel={`Delegation for ${selectedMachine.name}`}
+                    multiline
+                    value={prompts[selectedMachine.id] || ''}
+                    onChangeText={(value) => setPrompts((current) => ({ ...current, [selectedMachine.id]: value }))}
+                    placeholder="Describe the outcome and any constraints."
                     placeholderTextColor={UI.color.textSubtle}
-                    style={styles.input}
+                    style={[styles.input, styles.promptInput]}
                   />
                   <Pressable
                     accessibilityRole="button"
-                    disabled={busy || !online || !(workerNames[selectedMachine.id] || '').trim()}
-                    onPress={() => void run(
-                      `create:${selectedMachine.id}`,
-                      async () => {
-                        await createDesktopFleetWorkerOnComputer(selectedMachine.id, workerNames[selectedMachine.id]);
-                        setWorkerNames((current) => ({ ...current, [selectedMachine.id]: '' }));
-                      },
-                      'Agent created on the connected computer.',
-                    )}
-                    style={[styles.secondaryButton, (busy || !online || !(workerNames[selectedMachine.id] || '').trim()) ? styles.disabled : null]}
-                  ><Text style={styles.secondaryButtonText}>Create on that computer</Text></Pressable>
+                    accessibilityState={{ disabled: busy || !online || !target || !(prompts[selectedMachine.id] || '').trim() }}
+                    disabled={busy || !online || !target || !(prompts[selectedMachine.id] || '').trim()}
+                    onPress={() => {
+                      if (!target) return;
+                      const prompt = prompts[selectedMachine.id] || '';
+                      void run(
+                        `delegate:${selectedMachine.id}`,
+                        async () => {
+                          await delegateDesktopFleetComputer(
+                            selectedMachine.id,
+                            prompt,
+                            target.target_kind,
+                            target.target_selector,
+                          );
+                          setPrompts((current) => current[selectedMachine.id] === prompt
+                            ? { ...current, [selectedMachine.id]: '' }
+                            : current);
+                        },
+                        `Delegation sent to ${target.display_name}.`,
+                      );
+                    }}
+                    style={[styles.primaryButton, (busy || !online || !target || !(prompts[selectedMachine.id] || '').trim()) ? styles.disabled : null]}
+                  >
+                    <Text style={styles.primaryButtonText}>{busyId === `delegate:${selectedMachine.id}` ? 'Sending…' : 'Send delegation'}</Text>
+                  </Pressable>
                 </View>
-              ) : null}
-
-              <View style={styles.controlSection}>
-                <Text style={styles.controlEyebrow}>RECENT REPORTS</Text>
-                {recentDelegations.length ? recentDelegations.map((delegation) => (
-                  <View key={delegation.delegation_id} style={styles.reportRow}>
-                    <View style={styles.reportCopy}>
-                      <Text style={styles.reportTarget}>{String((delegation.report || {}).target_label || delegation.target_selector || 'Main identity')}</Text>
-                      <Text style={styles.reportSummary} numberOfLines={3}>{fleetReportSummary({ summary: (delegation.report || {}).summary || delegation.prompt, provider_failure: (delegation.report || {}).provider_failure })}</Text>
-                    </View>
-                    <Text style={styles.reportStatus}>{delegation.status.toUpperCase()}</Text>
-                  </View>
-                )) : <Text style={styles.emptyText}>No reports from this computer yet.</Text>}
+              </View>
+              <View style={styles.workItem}>
+                <DesktopFleetLivePreview
+                  desktopId={selectedMachine.id}
+                  desktopName={selectedMachine.name}
+                  online={online}
+                  automatic={protocolReady}
+                />
               </View>
             </View>
+
+            {permissions.create_workers ? (
+              <View style={styles.utilitySection}>
+                <View style={styles.utilityCopy}>
+                  <Text style={styles.controlTitle}>Add a worker</Text>
+                  <DesktopFleetInfoButton
+                    label="Remote agent creation"
+                    text="The worker is created and stored there only. It appears here after that computer publishes its next capability update."
+                  />
+                </View>
+                <TextInput
+                  accessibilityLabel={`New agent name on ${selectedMachine.name}`}
+                  value={workerNames[selectedMachine.id] || ''}
+                  onChangeText={(value) => setWorkerNames((current) => ({ ...current, [selectedMachine.id]: value }))}
+                  placeholder="Worker name"
+                  placeholderTextColor={UI.color.textSubtle}
+                  style={[styles.input, styles.workerInput]}
+                />
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={busy || !online || !(workerNames[selectedMachine.id] || '').trim()}
+                  onPress={() => void run(
+                    `create:${selectedMachine.id}`,
+                    async () => {
+                      await createDesktopFleetWorkerOnComputer(selectedMachine.id, workerNames[selectedMachine.id]);
+                      setWorkerNames((current) => ({ ...current, [selectedMachine.id]: '' }));
+                    },
+                    'Worker created on the connected computer.',
+                  )}
+                  style={[styles.secondaryButton, (busy || !online || !(workerNames[selectedMachine.id] || '').trim()) ? styles.disabled : null]}
+                ><Text style={styles.secondaryButtonText}>Create worker</Text></Pressable>
+              </View>
+            ) : null}
+
+            <DesktopFleetReportsPanel delegations={recentDelegations} />
 
             {error || message ? (
               <View style={[styles.notice, error ? styles.noticeError : null]} accessibilityLiveRegion="polite">
@@ -520,10 +432,12 @@ const styles = StyleSheet.create({
   machineIdentity: { flex: 1, minWidth: 0 },
   machineName: { color: UI.color.text, fontSize: TYPE.sectionTitle, fontWeight: '700' },
   machineMeta: { marginTop: 4, color: UI.color.textMuted, fontSize: TYPE.meta },
+  machineMetaOffline: { color: UI.color.warning },
   statusBadge: { paddingHorizontal: 7, paddingVertical: 5, borderRadius: UI.radius.pill, borderWidth: 0 },
   statusBadgeOnline: { backgroundColor: UI.color.successSoft },
-  statusBadgeOffline: { backgroundColor: UI.color.surfaceRaised },
+  statusBadgeOffline: { backgroundColor: UI.color.dangerSoft },
   statusBadgeText: { color: UI.color.textMuted, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900' },
+  statusBadgeTextOffline: { color: UI.color.danger },
   cardStats: { flexDirection: 'row', gap: 8 },
   stat: { minWidth: 50, paddingRight: 8, borderRightWidth: 1, borderColor: UI.color.border },
   statWide: { flex: 1, minWidth: 70 },
@@ -535,11 +449,14 @@ const styles = StyleSheet.create({
   openHintPillSelected: { backgroundColor: UI.color.accent },
   openHint: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900', letterSpacing: 0.4 },
   openHintSelected: { color: UI.color.accentInk },
+  machineActions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  settingsButton: { minHeight: 30, paddingHorizontal: 10, borderRadius: UI.radius.pill, backgroundColor: UI.color.surfaceRaised, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  settingsButtonText: { color: UI.color.accentStrong, fontSize: TYPE.meta, fontWeight: '800' },
   emptyMachine: { alignItems: 'center', justifyContent: 'center', borderStyle: 'dashed' },
   emptyGlyph: { color: UI.color.accentStrong, fontSize: 26, lineHeight: 28 },
   emptyTitle: { color: UI.color.text, fontSize: TYPE.sectionTitle, fontWeight: '800', textAlign: 'center' },
   emptyText: { color: UI.color.textSubtle, fontSize: TYPE.body, lineHeight: TYPE.bodyLine },
-  drawer: { marginTop: 6, paddingVertical: 20, gap: 18, borderTopWidth: 1, borderTopColor: UI.color.accentBorder, backgroundColor: 'transparent' },
+  drawer: { marginTop: 8, paddingVertical: 14, gap: 16, backgroundColor: 'transparent' },
   drawerHeader: { position: 'relative', zIndex: 20, flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   drawerHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   drawerEyebrow: { color: UI.color.accentInk, fontFamily: UI.type.mono, fontSize: TYPE.eyebrow, fontWeight: '900', letterSpacing: 1.1, alignSelf: 'flex-start', paddingHorizontal: 9, paddingVertical: 5, borderRadius: UI.radius.pill, backgroundColor: UI.color.accent },
@@ -548,11 +465,11 @@ const styles = StyleSheet.create({
   closeButtonText: { color: UI.color.textMuted, fontSize: 20 },
   warning: { padding: 10, borderWidth: 0, borderRadius: UI.radius.control, backgroundColor: UI.color.warningSoft },
   warningText: { color: UI.color.warning, fontSize: TYPE.body, fontWeight: '700', lineHeight: TYPE.bodyLine },
-  drawerColumns: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  controlSection: { flexGrow: 1, flexBasis: 310, minWidth: 280, padding: 15, gap: 11, borderWidth: 0, borderRadius: UI.radius.panel, backgroundColor: UI.color.surfaceMuted },
-  controlHeadingRow: { position: 'relative', zIndex: 20, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 },
-  controlHeadingCopy: { flex: 1, gap: 4 },
-  controlEyebrow: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: TYPE.eyebrow, fontWeight: '900', letterSpacing: 0.9 },
+  signalRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', gap: 10 },
+  signalItem: { flexGrow: 1, flexBasis: 310, minWidth: 280 },
+  workRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', gap: 24 },
+  workItem: { flexGrow: 1, flexBasis: 340, minWidth: 300 },
+  controlSection: { width: '100%', paddingVertical: 4, gap: 9, borderWidth: 0, backgroundColor: 'transparent' },
   controlTitle: { color: UI.color.text, fontSize: TYPE.sectionTitle, fontWeight: '800' },
   targetList: { gap: 6 },
   targetRow: { minHeight: 52, paddingHorizontal: 10, paddingVertical: 8, borderWidth: 0, borderRadius: UI.radius.control, flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -564,31 +481,14 @@ const styles = StyleSheet.create({
   inputLabel: { color: UI.color.textMuted, fontSize: TYPE.body, fontWeight: '700' },
   input: { minHeight: 48, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, borderColor: UI.color.borderStrong, borderRadius: UI.radius.control, backgroundColor: UI.color.canvas, color: UI.color.text, fontSize: TYPE.control },
   promptInput: { minHeight: 112, textAlignVertical: 'top' },
+  utilitySection: { paddingVertical: 6, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
+  utilityCopy: { flexGrow: 1, flexShrink: 1, flexBasis: 220, flexDirection: 'row', alignItems: 'center', gap: 7 },
+  workerInput: { flexGrow: 1, flexBasis: 220, minWidth: 190 },
   primaryButton: { minHeight: 44, paddingHorizontal: 12, borderRadius: UI.radius.control, backgroundColor: UI.color.accent, alignItems: 'center', justifyContent: 'center' },
   primaryButtonText: { color: UI.color.accentInk, fontSize: TYPE.body, fontWeight: '900' },
   secondaryButton: { minHeight: 44, paddingHorizontal: 12, borderRadius: UI.radius.control, borderWidth: 0, backgroundColor: UI.color.accentSoft, alignItems: 'center', justifyContent: 'center' },
   secondaryButtonText: { color: UI.color.accentStrong, fontSize: TYPE.body, fontWeight: '800' },
   disabled: { opacity: 0.4 },
-  requestCard: { paddingVertical: 10, gap: 7, borderBottomWidth: 1, borderBottomColor: UI.color.border, backgroundColor: 'transparent' },
-  requestBlocked: { borderColor: UI.color.warning },
-  requestHeader: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
-  requestKind: { color: UI.color.warning, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900' },
-  requestStatus: { color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900' },
-  requestIdentity: { color: UI.color.text, fontSize: TYPE.body, fontWeight: '800' },
-  requestMessage: { color: UI.color.textMuted, fontSize: TYPE.body, lineHeight: TYPE.bodyLine },
-  responseText: { color: UI.color.accentStrong, fontSize: TYPE.body, lineHeight: TYPE.bodyLine },
-  requestActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  approveButton: { minHeight: 40, paddingHorizontal: 10, borderRadius: UI.radius.control, backgroundColor: UI.color.successSoft, borderWidth: 0, alignItems: 'center', justifyContent: 'center' },
-  approveButtonText: { color: UI.color.success, fontSize: TYPE.body, fontWeight: '900' },
-  denyButton: { minHeight: 40, paddingHorizontal: 10, borderRadius: UI.radius.control, backgroundColor: UI.color.dangerSoft, borderWidth: 0, alignItems: 'center', justifyContent: 'center' },
-  denyButtonText: { color: UI.color.danger, fontSize: TYPE.body, fontWeight: '900' },
-  replyButton: { minHeight: 40, paddingHorizontal: 10, borderRadius: UI.radius.control, borderWidth: 0, backgroundColor: UI.color.surfaceRaised, alignItems: 'center', justifyContent: 'center' },
-  replyButtonText: { color: UI.color.textMuted, fontSize: TYPE.body, fontWeight: '900' },
-  reportRow: { paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: UI.color.border, flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
-  reportCopy: { flex: 1, gap: 3 },
-  reportTarget: { color: UI.color.text, fontSize: TYPE.body, fontWeight: '800' },
-  reportSummary: { color: UI.color.textSubtle, fontSize: TYPE.body, lineHeight: TYPE.bodyLine },
-  reportStatus: { color: UI.color.accentStrong, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '900' },
   notice: { padding: 10, borderWidth: 0, borderRadius: UI.radius.control, backgroundColor: UI.color.accentSoft },
   noticeError: { borderColor: UI.color.danger, backgroundColor: UI.color.dangerSoft },
   noticeText: { color: UI.color.textMuted, fontSize: TYPE.body },

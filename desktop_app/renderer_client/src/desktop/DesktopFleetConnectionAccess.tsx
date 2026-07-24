@@ -201,16 +201,13 @@ const styles = StyleSheet.create({
   disclosureLabel: { color: UI.color.accentStrong, fontSize: TYPE.body, fontWeight: '800' },
   editor: {
     paddingHorizontal: 14,
+    paddingTop: 4,
     paddingBottom: 14,
-    borderTopWidth: 1,
-    borderTopColor: UI.color.border,
   },
   permissionList: { paddingVertical: 3 },
   permissionRow: {
     minHeight: 43,
     paddingHorizontal: 2,
-    borderBottomWidth: 1,
-    borderBottomColor: UI.color.border,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,

@@ -485,6 +485,17 @@ export type DesktopFleetYggdrasilStatus = {
   public_key?: string | null;
   installHint?: string | null;
   connection?: DesktopFleetYggdrasilConnection | null;
+  manager?: {
+    enabled: boolean;
+    ready: boolean;
+    state: 'online' | 'offline' | 'starting' | 'needs_repair' | 'unavailable';
+    detail?: string | null;
+    address?: string | null;
+    transport_ready: boolean;
+    bind_ready: boolean;
+    runtime_ready: boolean;
+    persistent: boolean;
+  } | null;
 };
 
 export type DesktopFleetYggdrasilPairing = {
@@ -857,6 +868,7 @@ type DesktopBridge = {
     createLocalWorker: (payload?: { displayName?: string | null; display_name?: string | null; metadata?: Record<string, unknown> }) => Promise<DesktopFleetWorker>;
     createEnrollment: (payload?: { displayName?: string | null; display_name?: string | null; expiresInSeconds?: number | null; expires_in_seconds?: number | null; metadata?: Record<string, unknown> }) => Promise<DesktopFleetEnrollment>;
     yggdrasilStatus: () => Promise<DesktopFleetYggdrasilStatus>;
+    yggdrasilManagerRefresh: () => Promise<DesktopFleetYggdrasilStatus>;
     yggdrasilBootstrap: () => Promise<Record<string, unknown>>;
     yggdrasilCreatePairing: (payload?: { displayName?: string | null; expiresInSeconds?: number | null }) => Promise<DesktopFleetYggdrasilPairing>;
     yggdrasilJoin: (payload: { pairingToken: string; deviceName?: string | null }) => Promise<DesktopFleetYggdrasilJoinResult>;
@@ -1642,6 +1654,12 @@ export async function loadDesktopFleetYggdrasilStatus(): Promise<DesktopFleetYgg
   const bridge = getDesktopBridge();
   if (!bridge?.fleet?.yggdrasilStatus) return null;
   return bridge.fleet.yggdrasilStatus();
+}
+
+export async function refreshDesktopFleetManagerConnection(): Promise<DesktopFleetYggdrasilStatus | null> {
+  const bridge = getDesktopBridge();
+  if (!bridge?.fleet?.yggdrasilManagerRefresh) return null;
+  return bridge.fleet.yggdrasilManagerRefresh();
 }
 
 export async function bootstrapDesktopFleetYggdrasil(): Promise<Record<string, unknown> | null> {

@@ -18,6 +18,16 @@ def session_belongs_to_fleet_identity(session: Any, identity: Mapping[str, Any])
     session_identity_id = str(_field(session, "fleet_identity_id") or "").strip()
     session_identity_role = str(_field(session, "fleet_identity_role") or "").strip().lower()
     session_worker_id = str(_field(session, "fleet_worker_id") or "").strip()
+    identity_company_id = str(
+        dict(identity.get("metadata") or {}).get("company_id") or ""
+    ).strip()
+    session_company_id = str(_field(session, "company_id") or "").strip()
+    if (
+        identity_company_id
+        and session_company_id
+        and identity_company_id != session_company_id
+    ):
+        return False
 
     if identity_role == "worker":
         if session_identity_id:
@@ -58,6 +68,9 @@ def reconcile_local_manager_chat_selection(
     desktop_id: str,
     snapshot: Mapping[str, Any],
     sessions: Sequence[Any],
+    company_id: Optional[str] = None,
+    include_legacy: bool = False,
+    company_computer_ids: Optional[Sequence[str]] = None,
 ) -> dict[str, Any]:
     clean_desktop_id = str(desktop_id or "").strip()
     manager = next(
@@ -79,22 +92,48 @@ def reconcile_local_manager_chat_selection(
     if resolved_session_id == selected_session_id:
         return dict(snapshot)
 
+    company_kwargs: dict[str, Any] = {}
+    clean_company_id = str(company_id or "").strip()
+    if clean_company_id:
+        company_kwargs = {
+            "company_id": clean_company_id,
+            "include_unscoped_company_records": include_legacy,
+        }
     store.set_active_chat_for_fleet_identity(
         user_id=int(user_id),
         identity_id=identity_id,
         chat_id=resolved_session_id,
         source="local_session_reconciliation",
         desktop_id=clean_desktop_id,
+        **company_kwargs,
     )
-    return store.get_fleet_snapshot(user_id=int(user_id), desktop_id=clean_desktop_id)
+    snapshot_kwargs: dict[str, Any] = dict(company_kwargs)
+    if company_computer_ids:
+        snapshot_kwargs["company_computer_ids"] = list(company_computer_ids)
+    return store.get_fleet_snapshot(
+        user_id=int(user_id),
+        desktop_id=clean_desktop_id,
+        **snapshot_kwargs,
+    )
 
 
-def reconcile_local_identity_session_profiles(*, bridge: Any, snapshot: Mapping[str, Any]) -> int:
+def reconcile_local_identity_session_profiles(
+    *,
+    bridge: Any,
+    snapshot: Mapping[str, Any],
+    company_id: Optional[str] = None,
+    include_legacy: bool = False,
+) -> int:
     """Persist role authority onto legacy local chats without changing their conversation history."""
     identities = [item for item in list(snapshot.get("identities") or []) if isinstance(item, Mapping)]
     manager = next((item for item in identities if str(item.get("role") or "") == "manager"), None)
     changed = 0
     for session in bridge.list_sessions():
+        session_company_id = str(_field(session, "company_id") or "").strip()
+        clean_company_id = str(company_id or "").strip()
+        if clean_company_id and session_company_id != clean_company_id:
+            if not (include_legacy and not session_company_id):
+                continue
         identity = next(
             (item for item in identities if session_belongs_to_fleet_identity(session, item)),
             manager,
@@ -114,6 +153,7 @@ def reconcile_local_identity_session_profiles(*, bridge: Any, snapshot: Mapping[
             "fleet_worker_id": str(identity.get("worker_id") or "").strip() or None,
             "fleet_task_mode": getattr(session, "fleet_task_mode", None) or ("direct" if role == "worker" else None),
             "enabled_tool_packs": desired_packs,
+            "company_id": clean_company_id or session_company_id or None,
         }
         if all(getattr(session, key, None) == value for key, value in desired.items()):
             continue

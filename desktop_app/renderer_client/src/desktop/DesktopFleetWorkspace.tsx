@@ -12,8 +12,10 @@ import { DESKTOP_UI as UI } from './desktopUiTokens';
 import { DesktopFleetActivityPanel } from './DesktopFleetActivityPanel';
 import { DesktopFleetChildConnectionPanel } from './DesktopFleetChildConnectionPanel';
 import { DesktopFleetConnectionPanel } from './DesktopFleetConnectionPanel';
+import { DesktopFleetComputerSettingsPage } from './DesktopFleetComputerSettingsPage';
 import { DesktopFleetInfoButton } from './DesktopFleetInfoButton';
 import { DesktopFleetMachinesPanel } from './DesktopFleetMachinesPanel';
+import { DesktopFleetManagerConnectionPanel } from './DesktopFleetManagerConnectionPanel';
 import { DesktopFleetParentPanel } from './DesktopFleetParentPanel';
 import { DesktopFleetUpstreamAccessPanel } from './DesktopFleetUpstreamAccessPanel';
 import { directFleetChildren, resolveDesktopFleetHierarchyRole } from './desktopFleetHierarchy';
@@ -26,7 +28,7 @@ const LAYOUT_STORAGE_KEY = 'emploai.fleet.intermediary-layout';
 function roleCopy(role: ReturnType<typeof resolveDesktopFleetHierarchyRole>) {
   if (role === 'root_manager') return ['MANAGER COMPUTER', 'Computers managed from here', 'This computer delegates directly to the computers below and receives their reports and requests.'];
   if (role === 'leaf') return ['CONNECTED COMPUTER', 'Work and requests on this computer', 'This computer receives work from one manager above it and currently manages no computers below.'];
-  if (role === 'intermediary') return ['INTERMEDIARY COMPUTER', 'Managing below, reporting above', 'This computer is both a worker in the chain above and a direct manager for the computers below it.'];
+  if (role === 'intermediary') return ['INTERMEDIARY COMPUTER', 'Managing below, reporting above', 'This computer reports through its manager above, while its local manager directly coordinates the computers below it.'];
   return ['PRIVATE FLEET', 'Connect your computers', 'Create a private Yggdrasil hierarchy with no hosted account or cloud control plane.'];
 }
 
@@ -49,6 +51,7 @@ export function DesktopFleetWorkspace({
   const [status, setStatus] = useState<DesktopFleetYggdrasilStatus | null | undefined>(undefined);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
+  const [settingsDesktopId, setSettingsDesktopId] = useState<string | null>(null);
   const [preferredLayout, setPreferredLayout] = useState<IntermediaryLayout>('side_by_side');
 
   const refreshStatus = async (quiet = false) => {
@@ -127,6 +130,17 @@ export function DesktopFleetWorkspace({
     );
   }
 
+  if (settingsDesktopId) {
+    return (
+      <DesktopFleetComputerSettingsPage
+        snapshot={snapshot}
+        desktopId={settingsDesktopId}
+        onBack={() => setSettingsDesktopId(null)}
+        onChanged={changed}
+      />
+    );
+  }
+
   if (role === 'standalone') {
     return (
       <View style={styles.workspace}>
@@ -139,13 +153,21 @@ export function DesktopFleetWorkspace({
             <DesktopFleetInfoButton label={title} text={detail} />
           </View>
         </View>
+        <DesktopFleetManagerConnectionPanel
+          status={status}
+          onRefreshed={(next) => {
+            setStatus(next);
+            changed();
+          }}
+        />
         <DesktopFleetMachinesPanel
           snapshot={snapshot}
           onChanged={changed}
           onConnectRequested={() => setConnectOpen(true)}
-          localComputerContent={localComputerContent}
+          onOpenComputerSettings={setSettingsDesktopId}
           showConnectAction={false}
         />
+        {localComputerContent}
         <DesktopFleetConnectionPanel onFleetChanged={changed} />
         {statusError ? <Text style={styles.errorText}>{statusError}</Text> : null}
       </View>
@@ -201,7 +223,17 @@ export function DesktopFleetWorkspace({
       {connectOpen ? <DesktopFleetChildConnectionPanel onClose={() => setConnectOpen(false)} onChanged={changed} /> : null}
 
       {role === 'root_manager' ? (
-        <DesktopFleetMachinesPanel snapshot={snapshot} onChanged={changed} onConnectRequested={() => setConnectOpen(true)} localComputerContent={localComputerContent} />
+        <>
+          <DesktopFleetManagerConnectionPanel
+            status={status}
+            onRefreshed={(next) => {
+              setStatus(next);
+              changed();
+            }}
+          />
+          <DesktopFleetMachinesPanel snapshot={snapshot} onChanged={changed} onConnectRequested={() => setConnectOpen(true)} onOpenComputerSettings={setSettingsDesktopId} />
+          {localComputerContent}
+        </>
       ) : null}
 
       {role === 'leaf' ? (
@@ -214,6 +246,13 @@ export function DesktopFleetWorkspace({
 
       {role === 'intermediary' ? (
         <>
+          <DesktopFleetManagerConnectionPanel
+            status={status}
+            onRefreshed={(next) => {
+              setStatus(next);
+              changed();
+            }}
+          />
           <View style={[styles.intermediary, effectiveLayout === 'side_by_side' ? styles.intermediarySide : styles.intermediaryStack]}>
             <View style={styles.intermediaryPane}>
               <View style={styles.paneLabel}><Text style={styles.paneLabelText}>↑ REPORTING TO THE MANAGER ABOVE</Text></View>
@@ -222,7 +261,8 @@ export function DesktopFleetWorkspace({
             </View>
             <View style={styles.intermediaryPane}>
               <View style={styles.paneLabel}><Text style={styles.paneLabelText}>↓ MANAGING COMPUTERS BELOW</Text></View>
-              <DesktopFleetMachinesPanel snapshot={snapshot} onChanged={changed} onConnectRequested={() => setConnectOpen(true)} localComputerContent={localComputerContent} compact />
+              <DesktopFleetMachinesPanel snapshot={snapshot} onChanged={changed} onConnectRequested={() => setConnectOpen(true)} onOpenComputerSettings={setSettingsDesktopId} compact />
+              {localComputerContent}
             </View>
           </View>
           <DesktopFleetUpstreamAccessPanel status={status || null} onChanged={changed} />

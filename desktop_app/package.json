@@ -25,7 +25,7 @@
     "package:win:legacy": "powershell -ExecutionPolicy Bypass -File ../deploy/windows/build_beta_release.ps1"
   },
   "devDependencies": {
-    "electron": "^35.5.1",
+    "electron": "^39.8.5",
     "electron-packager": "^17.1.2"
   }
 }

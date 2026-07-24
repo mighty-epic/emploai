@@ -231,6 +231,46 @@ def test_ensure_runtime_restarts_incompatible_attached_runtime(monkeypatch, tmp_
     assert mode == "reattached"
 
 
+def test_attached_runtime_restarts_when_live_bind_differs_from_config(monkeypatch, tmp_path: Path):
+    config = DesktopRuntimeConfig(
+        enabled=True,
+        host="::",
+        port=8787,
+        auto_start=True,
+        attach_timeout_seconds=3,
+        restart_attach_timeout_seconds=3,
+        workspace=str(tmp_path),
+    )
+    status = SimpleNamespace(ok=True, process_id=4321)
+    monkeypatch.setattr(
+        desktop_backend,
+        "_read_pid_record",
+        lambda _home: {
+            "pid": 4321,
+            "host": "127.0.0.1",
+            "port": 8787,
+            "releaseVersion": "test-release",
+            "executable": str(Path(sys.executable).resolve()),
+        },
+    )
+    monkeypatch.setattr(desktop_backend, "current_release_version", lambda _root: "test-release")
+
+    assert desktop_backend._attached_runtime_requires_restart(
+        status,
+        home=tmp_path,
+        root=tmp_path,
+        config=config,
+    ) is True
+
+    config.host = "127.0.0.1"
+    assert desktop_backend._attached_runtime_requires_restart(
+        status,
+        home=tmp_path,
+        root=tmp_path,
+        config=config,
+    ) is False
+
+
 def test_stop_runtime_kills_detected_runtime_pids_without_pid_file(monkeypatch, tmp_path: Path):
     config = DesktopRuntimeConfig(
         enabled=True,

@@ -44,12 +44,23 @@ def test_desktop_automation_helpers_validate_and_scope_records():
         draft.prompt = 'Summarize project status.';
         draft.scheduleMode = 'daily';
         draft.dailyTime = '08:30';
+        draft.targetIdentityId = 'manager-1';
+        draft.model = 'openai/gpt-5.6';
         draft.toolPacksText = 'scheduler, browser_isolated, scheduler';
         assert.strictEqual(automation.buildAutomationSchedule(draft), 'every day at 08:30');
         assert.deepStrictEqual(Array.from(automation.splitAutomationToolPacks(draft.toolPacksText)), ['scheduler', 'browser_isolated']);
         const payload = automation.automationPayloadFromDraft(draft);
         assert.strictEqual(payload.metadata.cloud_mirror_policy, undefined);
-        assert.strictEqual(payload.chat_target, 'existing_or_new');
+        assert.strictEqual(payload.chat_target, 'new');
+        assert.strictEqual(payload.target_identity_id, 'manager-1');
+        assert.strictEqual(payload.model, 'openai/gpt-5.6');
+
+        draft.chatMode = 'existing';
+        draft.targetChatId = 'chat-1';
+        const existingPayload = automation.automationPayloadFromDraft(draft);
+        assert.strictEqual(existingPayload.chat_target, 'existing');
+        assert.strictEqual(existingPayload.session_id, 'chat-1');
+        assert.strictEqual(existingPayload.model, null);
 
         const next = automation.previewAutomationNextRun(draft, new Date('2026-07-12T07:00:00'));
         assert.strictEqual(next.getHours(), 8);
@@ -101,6 +112,9 @@ def test_scheduler_add_is_immediately_visible_and_update_preserves_history(tmp_p
         prompt="Updated prompt",
         schedule_text="in 20 minutes",
         interval_seconds=1200,
+        origin_session_id="chat-2",
+        origin_model="openai/gpt-5.6",
+        origin_variant="high",
     ) is True
 
     updated = scheduler.get_job(job_id)
@@ -112,6 +126,9 @@ def test_scheduler_add_is_immediately_visible_and_update_preserves_history(tmp_p
     assert updated.last_run == 200.0
     assert updated.run_count == 7
     assert updated.error_count == 2
+    assert updated.origin_session_id == "chat-2"
+    assert updated.origin_model == "openai/gpt-5.6"
+    assert updated.origin_variant == "high"
 
 
 def test_automation_edit_contract_is_exposed_without_cloud_metadata():

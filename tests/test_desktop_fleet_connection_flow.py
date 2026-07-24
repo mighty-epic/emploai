@@ -24,7 +24,7 @@ def test_yggdrasil_enrollment_adds_computer_without_creating_a_child_worker_or_i
         user_id=0,
         desktop_id=manager["desktop_id"],
         display_name="Build worker",
-        metadata={"transport": "yggdrasil"},
+        metadata={"transport": "yggdrasil", "company_id": "company-a"},
     )
     completed = store.complete_worker_enrollment(
         enrollment_token=enrollment["enrollment_token"],
@@ -37,6 +37,11 @@ def test_yggdrasil_enrollment_adds_computer_without_creating_a_child_worker_or_i
     desktop_ids = {item["desktop_id"] for item in snapshot["desktops"]}
 
     assert completed["worker"] is None
+    assert completed["enrollment"]["metadata"]["company_id"] == "company-a"
+    assert (
+        completed["enrollment"]["created_by_desktop_id"]
+        == manager["desktop_id"]
+    )
     assert completed["desktop"]["desktop_id"] in desktop_ids
     assert len(snapshot["workers"]) == 1
     assert snapshot["workers"][0]["is_default"] is True
@@ -239,14 +244,19 @@ const services = createFleetYggdrasilServices({
   catch (error) { rejected = String(error.message || error).includes('complete EmploAI Yggdrasil Fleet pairing code'); }
   if (!rejected || calls.length !== 0) process.exit(2);
   await services.startHost();
+  await services.prepareManager();
+  await services.refreshManager();
   await services.createPairing({ displayName: 'Worker One', expiresInSeconds: 1800 });
   await services.join({ pairingToken: 'emploai-yggdrasil-v1.abc', deviceName: 'Worker One' });
   if (calls[0].args[0] !== 'fleet-host-start') process.exit(3);
-  if (calls[1].args[0] !== 'yggdrasil-bootstrap') process.exit(4);
-  if (calls[2].args[0] !== 'fleet-yggdrasil-pair') process.exit(5);
-  if (!calls[2].args.includes('--configure-manager-bind')) process.exit(6);
-  if (calls[3].args[0] !== 'yggdrasil-bootstrap') process.exit(7);
-  if (calls[4].args[0] !== 'fleet-yggdrasil-join') process.exit(8);
+  if (calls[1].args[0] !== 'fleet-yggdrasil-manager-prepare') process.exit(4);
+  if (calls[2].args[0] !== 'fleet-yggdrasil-manager-refresh') process.exit(5);
+  if (calls[3].args[0] !== 'yggdrasil-bootstrap') process.exit(6);
+  if (calls[4].args[0] !== 'fleet-yggdrasil-manager-refresh') process.exit(7);
+  if (calls[5].args[0] !== 'fleet-yggdrasil-pair') process.exit(8);
+  if (calls[5].args.includes('--configure-manager-bind')) process.exit(9);
+  if (calls[6].args[0] !== 'yggdrasil-bootstrap') process.exit(10);
+  if (calls[7].args[0] !== 'fleet-yggdrasil-join') process.exit(11);
 })().catch(() => process.exit(8));
 """
     result = subprocess.run(
@@ -269,10 +279,10 @@ def test_desktop_has_one_fleet_surface_and_redirects_legacy_remote_links():
     main = (ROOT / "desktop_app" / "main.js").read_text(encoding="utf-8")
 
     header_tabs = shell_view.split("const CONVERSATION_HEADER_TABS", 1)[1].split("] as const", 1)[0]
-    assert "label: 'Fleet'" in header_tabs
+    assert "label: 'Company'" in header_tabs
     assert "label: 'Remote'" not in header_tabs
     assert "return { mode: 'local', surface: 'fleet' };" in shell
-    assert "nextUrl.searchParams.set('tab', 'fleet')" in shell_view
+    assert "nextUrl.searchParams.set('tab', 'company')" in shell_view
     assert "Connect computers with Yggdrasil" in fleet_panel
     assert "No EmploAI account" in fleet_panel
     assert "joinDesktopFleetYggdrasil" in fleet_panel
@@ -280,7 +290,9 @@ def test_desktop_has_one_fleet_surface_and_redirects_legacy_remote_links():
     assert "completed pairings reconnect after restarts" in fleet_panel
     assert "It does not copy" in fleet_panel or "stay local" in fleet_panel
     assert "yggdrasilCreatePairing" in preload
+    assert "yggdrasilManagerRefresh" in preload
     assert "yggdrasilJoin" in preload
+    assert "fleetYggdrasilServices().prepareManager()" in main
     assert main.count("schedulePairedFleetHostStart();") >= 2
     assert "fleetYggdrasilServices().startHost()" in main
     assert "checkComputerUpdate" in preload

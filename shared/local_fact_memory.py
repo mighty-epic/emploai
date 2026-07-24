@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -51,7 +52,7 @@ class LocalFactStore:
         return conn
 
     def _init_db(self) -> None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS facts (
@@ -106,7 +107,7 @@ class LocalFactStore:
         trust = max(0.0, min(1.0, float(trust)))
         tags_json = json.dumps(_normalise_tags(tags), ensure_ascii=False)
         now = _utc_now()
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             existing = conn.execute("SELECT * FROM facts WHERE content = ?", (content,)).fetchone()
             if existing:
                 current_trust = float(existing["trust"])
@@ -138,7 +139,7 @@ class LocalFactStore:
         terms = [term.lower() for term in query.split() if len(term.strip()) >= 2]
         if not terms:
             terms = [query.lower()]
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             rows = conn.execute(
                 "SELECT * FROM facts WHERE trust >= ? ORDER BY trust DESC, updated_at DESC LIMIT 250",
                 (max(0.0, min(1.0, float(min_trust))),),
@@ -170,13 +171,13 @@ class LocalFactStore:
             params.append(str(category).strip().lower())
         sql += " ORDER BY trust DESC, updated_at DESC LIMIT ?"
         params.append(max(1, int(limit)))
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             return [self._row_to_dict(row) for row in conn.execute(sql, params).fetchall()]
 
     def record_feedback(self, fact_id: int, *, helpful: bool) -> Dict[str, Any]:
         delta = 0.08 if helpful else -0.14
         now = _utc_now()
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             row = conn.execute("SELECT * FROM facts WHERE id = ?", (int(fact_id),)).fetchone()
             if not row:
                 raise KeyError(f"Fact not found: {fact_id}")
@@ -194,7 +195,7 @@ class LocalFactStore:
 
     def remove_fact(self, fact_id: int) -> bool:
         """Delete a fact by id."""
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             cursor = conn.execute("DELETE FROM facts WHERE id = ?", (int(fact_id),))
         return cursor.rowcount > 0
 

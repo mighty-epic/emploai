@@ -274,7 +274,11 @@ def _resolve_token(auth_header: Optional[str]) -> Dict[str, object]:
 
     if not payload:
 
-        payload = _get_remote_control_store().resolve_session_token(token)
+        remote_payload = _get_remote_control_store().resolve_session_token(token)
+
+        if remote_payload:
+
+            raise HTTPException(status_code=403, detail="Fleet computer credentials are restricted to the Fleet connection channel")
 
     if not payload:
 
@@ -650,7 +654,17 @@ async def _ensure_websocket_origin_allowed(websocket: WebSocket) -> bool:
 
 async def _resolve_ws_token_or_close(websocket: WebSocket) -> Optional[Dict[str, object]]:
 
-    token = websocket.query_params.get("token")
+    authorization = str(websocket.headers.get("authorization") or "").strip()
+
+    token = ""
+
+    if authorization.lower().startswith("bearer "):
+
+        token = authorization.split(" ", 1)[1].strip()
+
+    if not token:
+
+        token = str(websocket.query_params.get("token") or "").strip()
 
     try:
 

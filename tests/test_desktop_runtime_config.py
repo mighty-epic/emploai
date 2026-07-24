@@ -7,6 +7,7 @@ from desktop_runtime.config import (
     PACKAGED_RUNTIME_HOME_NAME,
     RUNTIME_DATA_SCHEMA_STATE_KEY,
     RUNTIME_DATA_SCHEMA_VERSION,
+    apply_installer_voice_pack_preferences,
     build_setup_state,
     configure_ssl_certificate_environment,
     configure_process_environment,
@@ -24,6 +25,29 @@ from desktop_runtime.config import (
     update_voice_pack_preferences,
     validate_setup_values,
 )
+
+
+def test_unchanged_installer_voice_preferences_do_not_rewrite_runtime_config(monkeypatch, tmp_path: Path):
+    runtime_home = tmp_path / "runtime"
+    runtime_home.mkdir()
+    config_path = runtime_home / "config.json"
+    config_path.write_text(json.dumps(default_release_config(), indent=2), encoding="utf-8")
+    writes: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        desktop_config,
+        "_read_installer_voice_pack_preferences",
+        lambda: {"schema_version": 0, "english_requested": None, "hebrew_requested": None},
+    )
+    monkeypatch.setattr(
+        desktop_config,
+        "save_runtime_config",
+        lambda _home, payload: writes.append(dict(payload)),
+    )
+
+    result = apply_installer_voice_pack_preferences(runtime_home)
+
+    assert result == default_release_config()
+    assert writes == []
 
 
 def test_packaged_runtime_home_defaults_to_isolated_beta_home(monkeypatch, tmp_path: Path):

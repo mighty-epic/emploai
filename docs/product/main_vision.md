@@ -1,144 +1,142 @@
-# Main Vision: Fleet-Scale EmploAI
+# Main Vision: Accountless AI Company
+
+> This is a concise north-star summary. The authoritative product contract is [emploai_company_operating_system_and_fleet_ux_spec.md](emploai_company_operating_system_and_fleet_ux_spec.md), which controls wherever product details differ.
 
 ## North Star
 
-EmploAI is not only a personal desktop agent. The larger vision is an AI employee operating system: one human manager can control a fleet of EmploAI workers across many computers, VPSs, and safe same-machine runtimes.
+EmploAI is a local-first AI employee operating system. One human should be able to direct a manager, delegate real computer work to workers, and scale that operating model across a hierarchy of paired computers without creating a cloud account for the company or separate accounts for its agents.
 
-The product should let a company install EmploAI on a large number of machines, designate one or more manager instances, and use those managers to direct many worker agents. Each worker acts like an employee with access to its assigned computer, tools, files, applications, credentials, connectors, and workspace. The manager can assign tasks, monitor progress, redirect work, and gather results without manually operating every machine.
+Every computer contributes the same smallest useful unit:
 
-This is the reason the desktop app originally had space for `This Computer` and `Other Computers`. The third surface should evolve into a real fleet dashboard where the manager can control many EmploAI instances, not merely a paired phone or a single remote desktop.
+```text
+Computer
+├─ Manager
+├─ Protected default worker
+├─ Optional additional workers
+└─ Direct child computers
+```
+
+Workers use real tools, files, browsers, applications, credentials, connectors, and workspaces. Managers translate human intent into objectives and tasks, choose routes, supervise progress, recover from blockers, verify reports, and present accepted outcomes.
+
+The main surface is the desktop app. Chat and Jarvis provide direct manager or worker interaction. Company provides the operating view for objectives, workforce, attention, and the underlying computers.
+
+## Product Documents
+
+- [company_system_details.md](company_system_details.md) defines the locked company operating model, shared glossary, objectives, review, Company UX, offline behavior, governance, and recovery. Locking the specification does not itself authorize application implementation.
+- [fleet_system_details.md](fleet_system_details.md) defines the execution infrastructure: computers, identities, pairing, routing, queues, reports, permissions, locks, and transport.
+
+These layers are related but not interchangeable. Company organizes purpose and responsibility. Fleet determines where execution lives and which authenticated route may reach it.
 
 ## Existing Foundation
 
-The current EmploAI system already contains the pieces needed to move toward this vision:
+EmploAI already contains the foundation for this direction:
 
-- The desktop runtime owns real execution: local tools, files, browser control, screen vision, OCR, shell commands, and app control.
-- The cloud login and remote control plane already provide identity, device records, pairing, shared state, websocket routing, and desktop presence.
-- Mobile and Telegram already act as remote control surfaces that can send tasks into a desktop runtime.
-- The desktop UI already contains a disabled `Other Computers` concept, which should become the fleet view.
-- The multi-agent work already points toward multiple logical agents operating from one environment.
+- The desktop runtime owns local execution: tools, files, browser control, screen vision, OCR, shell commands, and app control.
+- The Fleet runtime provides computer identity, direct pairing, presence, task routing, permissions, reports, and persistent host recovery over Yggdrasil.
+- Every installation reconciles one local manager and one protected default worker before pairing.
+- Chat, Jarvis, Company/Fleet, automations, workspaces, and structured task reports provide the main operating surfaces.
+- Mobile and Telegram can remain optional command surfaces attached to a chosen local installation without becoming identity authorities.
 
-This document supersedes the older framing where EmploAI was only a personal app connected to one user's own desktop. That use case still matters, but it becomes the smallest version of the larger product: one manager, one worker, one machine.
+The personal one-computer use case remains first-class. It is simply the smallest company: one operator, one manager, one worker, and one computer.
 
-## Roles
+## Local-First And Accountless By Design
+
+EmploAI does not use a cloud login, hosted user account, agent account, or central company account. This is intentional.
+
+Agents control private computers, files, applications, connectors, and credentials. Making a hosted account authoritative would add a remote dependency and create a high-value centralized copy of company topology, activity, access metadata, and potentially sensitive work.
+
+Instead:
+
+- The root computer owns the local company manifest.
+- Every computer owns its local identities, chats, tools, secrets, workspaces, task execution, reports, and detailed history.
+- Computers establish explicit parent-child relationships through short-lived pairing codes and persistent pair credentials stored only on paired machines.
+- Yggdrasil supplies encrypted network transport; EmploAI independently authenticates and authorizes every paired request.
+- Parents receive only published identity/capability summaries, delegated-work state, approved reports, evidence, and company rollups needed to manage their direct children.
+- The root operating-system user is the sole root operator and ultimate company authority in the first release. A human with OS access to a child computer is not a company role and has authority only over that computer's local operations and safety controls.
+
+One-computer EmploAI remains useful offline. Child branches may continue already authorized work while disconnected. Removing a pairing removes the route without deleting either computer's local identities or data.
+
+## Company And Fleet
+
+The company operating model never mirrors the physical computer tree.
+
+- `Company` contains objectives, manager responsibility, optional lightweight departments, attention, review, and acceptance.
+- `Fleet` contains computers, manager routes, workers, capabilities, presence, connection permissions, resource locks, and transport.
+
+A computer is a complete EmploAI node and is never itself a worker. A department does not own a computer, move an identity, grant a tool, or bypass a child manager. Interactive work is constrained by scarce machine resources; background work may run concurrently only when its locks are compatible.
+
+## Roles And Authority
+
+### Root Operator
+
+The root operator is the human using the root computer's local OS session and is the company owner. The operator can perform or override every company-level operation: direction, structure, objectives, reviews, acceptance, reassignment, archival, recovery, grants, settings, and pairing decisions. Root authority cannot make an offline computer reachable, bypass its operating system, or restore revoked pairing trust. Multiple human account roles are outside the first release.
 
 ### Manager
 
-A manager instance is the human-facing control surface for the fleet.
+Every computer has one mandatory manager identity. A manager is the human-facing orchestration agent for that computer and the coordination route for its direct children.
 
-The manager desktop should have:
+Managers have role-locked orchestration, memory, automation, and verification capabilities. The user may explicitly enable compatible execution tools on a manager, but workers never inherit manager authority. A manager coordinates grandchildren through the direct child manager instead of bypassing it.
 
-- `Chat`: the normal direct conversation with the manager's own local agent.
-- `Jarvis`: the voice-first local agent mode.
-- `Fleet` / `Other Computers`: the dashboard for controlling worker and subordinate manager instances.
-
-A manager can prompt one worker, multiple selected workers, or an entire group such as Research, Sales, Support, Engineering, Operations, or Admin. The manager's own agent should also be able to delegate work, monitor workers, redirect tasks, and compile results for the human manager.
+The root manager may be presented as the company's `CEO manager`: the top agentic manager working beneath the root operator. `CEO` is a display title and responsibility, not a separate technical role or a human authority above the operator.
 
 ### Worker
 
-A worker instance is an execution unit.
+A worker is an execution identity owned by its source computer's manager. The protected default worker guarantees that every manager can delegate ordinary action without setup. Additional workers may specialize by behavior, tools, connectors, workspace, or optional department.
 
-A worker should have only the local work surfaces it needs, primarily `Chat` and `Jarvis`. It receives delegated work, executes on its assigned computer or runtime, asks for help only when blocked, and reports progress and final results back to its manager.
+Workers execute tasks, report milestones, raise blockers, and return structured reports. They do not create departments, grant themselves tools, assign other workers, or control managers.
 
-Workers are not subordinate chatbots. They are local agents with real computer access, scoped tools, scoped credentials, and assigned responsibilities.
+## Work, Review, And Acceptance
 
-### Hierarchy
+Company work is organized around durable objectives rather than unrelated prompts. An objective describes an intended outcome, success criteria, owning manager, priority, optional deadline and explicitly created department, and the tasks and reports used to achieve it. Companies have no departments by default.
 
-The hierarchy should always preserve authority:
+A manager may decompose an objective across local workers or delegate a child objective to a direct child manager. Worker completion produces a report; it does not by itself finish the business outcome. The owning manager verifies the evidence and either accepts the objective or requests linked rework. Explicit low-risk policy may allow automatic acceptance, but it is off by default.
 
-- A manager can control a worker.
-- A manager can control another manager when a larger fleet needs multiple layers.
-- A worker can never control a manager.
+Managers may decompose approved scope but cannot silently expand it. Extra work appears as a proposal until the root operator or authorized owning manager approves it. Objectives may be paused without losing assignments, sessions, evidence, or route history.
 
-This supports small teams and large organizations without changing the basic model. A single manager may control a few workers, or a top-level manager may coordinate multiple department managers that each coordinate their own workers.
+Direct manager and worker chats remain normal conversations. Delegated tasks use isolated sessions and preserve route, origin, evidence, and report linkage.
 
-## Fleet Enrollment
+## Company Desktop Experience
 
-The fleet must not require one email account per worker. A company or user should be able to create many workers under one account.
+The top-level Fleet surface evolves into `Company` with four focused internal pages:
 
-Enrollment should be easy enough for a manager to create workers on new computers, VPSs, or safe same-machine runtimes. A likely flow is:
+- `Overview`: objectives, progress, capacity, and a compact attention feed.
+- `Work`: objectives, assignments, reports, acceptance, and rework.
+- `Workforce`: manager branches, workers, optional departments, capabilities, and queues.
+- `Computers`: Fleet health, direct child computers, pairing, connection recovery, updates, previews, and per-computer settings.
 
-- The manager creates a short-lived worker enrollment code or installer token.
-- A new EmploAI instance starts in setup and chooses `Worker`.
-- The worker enters the enrollment code or receives the token from the installer.
-- The control plane registers the worker under the manager's account.
-- The worker receives an automatic identity such as `Worker-001`, `Worker-002`, or `Research-003`.
+The surface is role-aware. Managers see only the company and infrastructure controls allowed for their branch. Workers see a focused My Work view and never receive manager-only connection, delegation, or configuration controls.
 
-Managers should be able to rename, reset, delete, classify, and group workers. Worker identity should be operational, not bureaucratic: easy to create, easy to replace, and easy to understand from the dashboard.
+Every assignment must make its route visible: issuing manager, destination computer, destination manager or worker, optional department, and state. Approvals, blockers, failed work, permission requests, and results awaiting acceptance converge in one attention model rather than being scattered across oversized panels.
 
-## Worker Units
+The interface should use progressive disclosure, compact empty states, stable navigation, immediate interaction feedback, accessible keyboard/focus behavior, and layouts that neither waste space nor leave gaps when content collapses.
 
-A worker can be:
+## Access, Security, And Privacy
 
-- A separate physical computer.
-- A VPS or remote desktop environment.
-- A logical worker runtime on the same machine as a manager or other workers, as long as capabilities do not conflict.
+Company responsibility never creates technical access. Effective authority is the intersection of company policy, manager ownership, pair permissions, identity grants, local approvals, resource locks, and hard safety boundaries. A denial at any layer wins.
 
-One machine may contain:
+Credentials remain locally brokered. Models may use an authorized connector without seeing raw passwords, OAuth tokens, API keys, recovery codes, or session tokens. Company knowledge contains only explicitly published handbook and policy material. Chats, full memory, provider state, absolute paths, secrets, and raw tool payloads are not silently copied upward.
 
-- One manager and no workers.
-- One manager and many logical workers.
-- Zero managers and one or more workers.
+Context inspection is separately opt-in, redacted, and audited. Artifact metadata may remain visible when its source is offline, but the UI must not imply that unavailable artifact bytes are present.
 
-Same-machine workers are useful when tasks do not compete for the same interactive desktop, browser profile, workspace, local files, or credentials. If workers need the same scarce resource, the system should isolate them or prevent unsafe parallel use.
+## Scale Without Flattening
 
-## Manager Experience
+Managers directly control local identities and direct child routes only. Child managers publish aggregate objective progress, capacity, blockers, risks, and accepted outcomes upward. This gives the top manager company-scale awareness without flattening every descendant worker or weakening intermediary authority.
 
-The manager's third tab should become a fleet dashboard.
+Remote control is the transport layer, not the product. The product is the ability to define outcomes, assign responsibility, coordinate capable local agents, observe work without leaking unnecessary context, and accept verified results.
 
-The dashboard should show:
+## Non-Goals
 
-- All workers and subordinate managers attached to the account.
-- Groups and departments.
-- Online, offline, idle, working, blocked, and failed states.
-- Current task per worker.
-- Recent transcript and tool timeline.
-- Produced artifacts and files.
-- Optional live screen view for a worker when the manager needs to inspect or intervene.
+This vision does not authorize code implementation and does not define APIs, database schemas, migrations, or wire formats. The company product specification is locked, but implementation begins only after a separate engineering plan and explicit user authorization.
 
-The manager should be able to:
+The first release does not include:
 
-- Send a prompt to one worker.
-- Send the same prompt to multiple workers.
-- Assign a task to a group.
-- Ask the manager agent to split a larger task across workers.
-- Pause, stop, reset, or reassign worker tasks.
-- Review worker reports and combine them into a final result.
-- Move workers between groups or roles.
+- cloud login, hosted company accounts, or agent accounts;
+- multiple companies on one Fleet root;
+- multiple human operator profiles;
+- planned live transfer of an active company root in the first implementation;
+- HR-style positions, payroll, or nested department bureaucracy;
+- peer-to-peer worker management authority;
+- automatic copying of child chats, secrets, full memory, or artifact contents;
+- a generic connector marketplace unrelated to real assigned work.
 
-The worker should operate independently once assigned work. It should not require constant approval for normal progress. It should report status, ask for help when blocked, and escalate sensitive actions according to its role permissions.
-
-## Access And Security
-
-Fleet control requires stronger access boundaries than a personal desktop agent.
-
-Access should be role-scoped by worker or group:
-
-- A research worker may have browser, files, and read-only document access.
-- A support worker may have inbox and customer communication access.
-- An engineering worker may have repository, terminal, and issue tracker access.
-- An operations worker may have scheduling, reporting, and dashboard access.
-
-Workers should only receive the connectors, credentials, files, applications, and tools needed for their assigned job. Company-wide credentials should not automatically become available to every worker.
-
-Credentials and connectors should remain brokered. A worker can use an authorized capability, but the model should not see raw passwords, OAuth tokens, API keys, recovery codes, or session tokens. Secrets should be usable by the agent, not readable by the agent.
-
-The manager dashboard should provide observability without creating unnecessary leakage. The default view should show status, current task, transcript/tool timeline, and artifacts. Live screen viewing should be available when needed, but it should be treated as a supervision feature.
-
-## Product Ambition
-
-The goal is scalable AI labor coordination.
-
-EmploAI should let a manager control an army of local agents that perform everyday computer work like employees: reading information, creating files, using web apps, managing communication, running workflows, coordinating tasks, and reporting outcomes.
-
-Remote control is only the transport layer. The real product is the ability to create, organize, supervise, and direct many AI workers across many computers from one manager surface.
-
-In the smallest case, EmploAI is one person controlling one local agent. In the larger case, EmploAI is a company-scale manager platform where one human can direct hundreds or thousands of workers without needing one login, one email, or one manual setup flow per worker.
-
-## Non-Goals For This Vision Document
-
-This document does not define exact APIs, database schemas, migrations, or implementation tickets.
-
-It also does not turn EmploAI into a generic connector marketplace. Connectors and saved credentials matter only because they let workers perform real employee tasks on approved surfaces.
-
-The implementation should continue to build on the existing EmploAI architecture: desktop execution, cloud identity and routing, mobile and Telegram as control surfaces, and the unified agent runtime as the worker brain.
+Implementation must continue to build on local desktop execution, direct authenticated Fleet routing over Yggdrasil, optional local command surfaces, and the unified agent runtime as the worker brain.

@@ -35,6 +35,9 @@ from cli.tui_constants import AVAILABLE_MODELS, MODEL_CONFIGS, MODEL_CONTEXT_SIZ
 from shared.runtime_paths import runtime_home
 from shared.standalone_policy import standalone_desktop_enabled
 from app_backend.auth_store import AppAuthStore
+from app_backend.company_store import CompanyStore
+from app_backend.job_catalog import get_job_catalog
+from app_backend.network_boundary import TrustedAppNetworkMiddleware
 from app_backend.app_confirmation_workflow import (
     consume_approved_confirmation as _consume_approved_confirmation_workflow,
     publish_confirmation_delta as _publish_confirmation_delta_workflow,
@@ -171,6 +174,23 @@ from app_backend.models import (
     ProviderAvailabilitySyncRequest,
 )
 from app_backend.routers.app_confirmations import AppConfirmationsRouterDeps, create_app_confirmations_router
+from app_backend.routers.app_companies import AppCompaniesRouterDeps, create_app_companies_router
+from app_backend.routers.app_company_backup import (
+    AppCompanyBackupRouterDeps,
+    create_app_company_backup_router,
+)
+from app_backend.routers.app_company_domain import (
+    AppCompanyDomainRouterDeps,
+    create_app_company_domain_router,
+)
+from app_backend.routers.app_company_intelligence import (
+    AppCompanyIntelligenceRouterDeps,
+    create_app_company_intelligence_router,
+)
+from app_backend.routers.app_company_operating import (
+    AppCompanyOperatingRouterDeps,
+    create_app_company_operating_router,
+)
 from app_backend.routers.app_files import AppFilesRouterDeps, create_app_files_router
 from app_backend.routers.app_onboarding import AppOnboardingRouterDeps, create_app_onboarding_router
 from app_backend.routers.app_recovery import AppRecoveryRouterDeps, create_app_recovery_router
@@ -184,6 +204,10 @@ from app_backend.remote_command_broker import (
     dispatch_remote_desktop_command_via_broker,
     pump_remote_desktop_command_broker,
     request_remote_desktop_command_via_broker,
+)
+from app_backend.request_company_context import (
+    bind_requested_company_id,
+    reset_requested_company_id,
 )
 from app_backend.fleet_policy import FLEET_WORKER_SESSION_TTL_SECONDS
 from app_backend.remote_control_runtime import get_remote_desktop_manager, remote_control_routing_status, remote_control_sqlite_broker_enabled
@@ -233,6 +257,7 @@ DEPLOYMENT_ENV_ENV = "EMPLOAI_ENV"
 CORS_ORIGINS_ENV = "EMPLOAI_CORS_ORIGINS"
 
 _auth_store: Optional[AppAuthStore] = None
+_company_store: Optional[CompanyStore] = None
 _remote_control_store: Optional[RemoteControlPlaneStore] = None
 _security_manager: Optional[SecurityManager] = None
 _security_manager_attempted = False
@@ -355,6 +380,13 @@ def _get_auth_store() -> AppAuthStore:
     return _auth_store
 
 
+def _get_company_store() -> CompanyStore:
+    global _company_store
+    if _company_store is None:
+        _company_store = CompanyStore()
+    return _company_store
+
+
 def _get_remote_control_store() -> RemoteControlPlaneStore:
     global _remote_control_store
     if _remote_control_store is None:
@@ -405,12 +437,63 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(TrustedAppNetworkMiddleware)
+    app.include_router(
+        create_app_companies_router(
+            AppCompaniesRouterDeps(
+                resolve_token=_resolve_token,
+                get_store=_get_company_store,
+                get_fleet_store=_get_remote_control_store,
+                bridge_for_user=_bridge_for_user,
+                consume_approved_confirmation=_consume_approved_confirmation,
+            )
+        )
+    )
+    app.include_router(
+        create_app_company_domain_router(
+            AppCompanyDomainRouterDeps(
+                resolve_token=_resolve_token,
+                get_store=_get_company_store,
+                get_fleet_store=_get_remote_control_store,
+                get_job_catalog=get_job_catalog,
+            )
+        )
+    )
+    app.include_router(
+        create_app_company_operating_router(
+            AppCompanyOperatingRouterDeps(
+                resolve_token=_resolve_token,
+                get_store=_get_company_store,
+                get_fleet_store=_get_remote_control_store,
+            )
+        )
+    )
+    app.include_router(
+        create_app_company_intelligence_router(
+            AppCompanyIntelligenceRouterDeps(
+                resolve_token=_resolve_token,
+                get_store=_get_company_store,
+                get_fleet_store=_get_remote_control_store,
+            )
+        )
+    )
+    app.include_router(
+        create_app_company_backup_router(
+            AppCompanyBackupRouterDeps(
+                resolve_token=_resolve_token,
+                get_store=_get_company_store,
+                get_fleet_store=_get_remote_control_store,
+            )
+        )
+    )
     app.include_router(
         create_app_files_router(
             AppFilesRouterDeps(
                 resolve_token=_resolve_token,
                 is_remote_session_auth=_is_remote_session_auth,
                 bridge_for_user=_bridge_for_user,
+                get_company_store=_get_company_store,
+                get_fleet_store=_get_remote_control_store,
                 load_runtime_session_or_409=_load_runtime_session_or_409,
                 check_rate_limit=_check_remote_auth_rate_limit,
                 rate_limit_max_attempts=REMOTE_AUTH_RATE_LIMIT_MAX_ATTEMPTS,
@@ -472,6 +555,8 @@ def create_app() -> FastAPI:
                 resolve_token=_resolve_token,
                 is_remote_session_auth=_is_remote_session_auth,
                 bridge_for_user=_bridge_for_user,
+                get_company_store=_get_company_store,
+                get_fleet_store=_get_remote_control_store,
                 update_manager_identity_tool_packs=(
                     lambda **kwargs: _get_remote_control_store().set_manager_identity_tool_packs(**kwargs)
                 ),
@@ -505,9 +590,21 @@ def create_app() -> FastAPI:
                 mirror_session_snapshot=_mirror_session_snapshot,
                 check_rate_limit=_check_remote_auth_rate_limit,
                 rate_limit_max_attempts=REMOTE_AUTH_RATE_LIMIT_MAX_ATTEMPTS,
+                get_company_store=_get_company_store,
+                get_fleet_store=_get_remote_control_store,
             )
         )
     )
+    @app.middleware("http")
+    async def bind_company_request_context(request: Request, call_next):
+        token = bind_requested_company_id(
+            request.headers.get("x-emploai-company-id")
+        )
+        try:
+            return await call_next(request)
+        finally:
+            reset_requested_company_id(token)
+
     @app.middleware("http")
     async def log_http_requests(request: Request, call_next):
         started_at = time.perf_counter()
@@ -547,6 +644,8 @@ def create_app() -> FastAPI:
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Permissions-Policy", "geolocation=()")
+        if request.url.path.startswith("/api/"):
+            response.headers.setdefault("Cache-Control", "no-store")
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         logger.info("[app] %s %s from %s -> %s (%sms)", request.method, request.url.path, client_host, response.status_code, duration_ms)
         return response
@@ -578,15 +677,16 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/api/app/health")
-    async def health(shallow: bool = False) -> dict:
+    async def health(
+        shallow: bool = False,
+        authorization: Optional[str] = Header(default=None),
+    ) -> dict:
         config = get_live_config(_workspace_root() / "config.json")
         forced_app_server = os.getenv("EMPLOAI_DESKTOP_FORCE_APP_SERVER", "").strip().lower() in {"1", "true", "yes", "on"}
         current_runtime_home = runtime_home()
-        payload = {
+        payload: Dict[str, Any] = {
             "ok": True,
             "channel": "app",
-            "process_id": os.getpid(),
-            "runtime_home": str(current_runtime_home) if current_runtime_home is not None else None,
             "enabled": bool(forced_app_server or config.get("channels.app.enabled", False)),
             "steering_beta_enabled": bool(
                 os.getenv("EMPLO_APP_STEERING_BETA_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -594,18 +694,28 @@ def create_app() -> FastAPI:
             ),
             "startup_state": _APP_RUNTIME_STATUS["startup_state"],
             "startup_error": _APP_RUNTIME_STATUS["startup_error"],
-            "startup_error_detail": _APP_RUNTIME_STATUS["startup_error_detail"],
-            "last_runtime_error": _APP_RUNTIME_STATUS["last_runtime_error"],
-            "last_runtime_error_detail": _APP_RUNTIME_STATUS["last_runtime_error_detail"],
-            "last_runtime_error_at": _APP_RUNTIME_STATUS["last_runtime_error_at"],
             "readiness_scope": "app_api" if shallow else "full",
-            "remote_control_routing": remote_control_routing_status(),
             "standalone_desktop_enabled": standalone_desktop_enabled(),
             "cloud_backend_enabled": cloud_routes_enabled,
             "mobile_connection_enabled": mobile_routes_enabled,
         }
         if shallow:
             return payload
+        if not authorization:
+            payload["readiness_scope"] = "public"
+            return payload
+        _resolve_token(authorization)
+        payload.update(
+            {
+                "process_id": os.getpid(),
+                "runtime_home": str(current_runtime_home) if current_runtime_home is not None else None,
+                "startup_error_detail": _APP_RUNTIME_STATUS["startup_error_detail"],
+                "last_runtime_error": _APP_RUNTIME_STATUS["last_runtime_error"],
+                "last_runtime_error_detail": _APP_RUNTIME_STATUS["last_runtime_error_detail"],
+                "last_runtime_error_at": _APP_RUNTIME_STATUS["last_runtime_error_at"],
+                "remote_control_routing": remote_control_routing_status(),
+            }
+        )
         payload["dependency_status"] = _dependency_status()
         return payload
 
@@ -629,7 +739,7 @@ def start_embedded_app_server_if_enabled(*, force: bool = False) -> None:
     if not force and not bool(config.get("channels.app.enabled", False)):
         return
 
-    host = str(config.get("channels.app.host", "0.0.0.0"))
+    host = str(config.get("channels.app.host", "127.0.0.1"))
     port = int(config.get("channels.app.port", 8787))
     _set_startup_state("starting")
 

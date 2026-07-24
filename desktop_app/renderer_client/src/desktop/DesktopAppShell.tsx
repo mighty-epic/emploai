@@ -110,6 +110,9 @@ function normalizeDesktopTab(value: string | undefined): { mode: DesktopMode; su
   if (normalized === 'fleet') {
     return { mode: 'local', surface: 'fleet' };
   }
+  if (normalized === 'company') {
+    return { mode: 'local', surface: 'fleet' };
+  }
   if (normalized === 'jarvis' || normalized === 'agent') {
     return { mode: 'local', surface: 'jarvis' };
   }

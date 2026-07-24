@@ -82,3 +82,69 @@ def test_nonactivating_load_does_not_replace_in_memory_current_session(tmp_path:
     assert loaded.id == second.id
     assert manager.current_session is not None
     assert manager.current_session.id == first.id
+
+
+def test_explicit_company_migration_scopes_only_unscoped_sessions(
+    tmp_path: Path,
+):
+    manager = SessionManager(base_path=tmp_path)
+    legacy = manager.create_session(
+        name="Legacy chat",
+        workspace=tmp_path,
+        model="gpt-5.4",
+    )
+    other_company = manager.create_session(
+        name="Other Company",
+        workspace=tmp_path,
+        model="gpt-5.4",
+        company_id="company-other",
+    )
+    manager.load_session(legacy.id)
+
+    assert manager.preview_unscoped_sessions() == {
+        "unscoped_count": 1,
+        "scoped_count": 1,
+        "unreadable_count": 0,
+    }
+
+    report = manager.migrate_unscoped_sessions_to_company("company-root")
+
+    assert report["migrated_count"] == 1
+    assert report["session_ids"] == [legacy.id]
+    assert (
+        manager.load_session(legacy.id, set_current=False).company_id
+        == "company-root"
+    )
+    assert (
+        manager.load_session(other_company.id, set_current=False).company_id
+        == "company-other"
+    )
+    assert manager.current_session is not None
+    assert manager.current_session.company_id == "company-root"
+    assert (
+        manager.migrate_unscoped_sessions_to_company("company-root")[
+            "migrated_count"
+        ]
+        == 0
+    )
+
+
+def test_company_session_deletion_preserves_other_companies(tmp_path: Path):
+    manager = SessionManager(base_path=tmp_path)
+    company_a = manager.create_session(
+        name="Company A",
+        workspace=tmp_path,
+        company_id="company-a",
+    )
+    company_b = manager.create_session(
+        name="Company B",
+        workspace=tmp_path,
+        company_id="company-b",
+    )
+
+    report = manager.delete_company_sessions("company-a")
+
+    assert report["session_ids"] == [company_a.id]
+    assert not (manager.sessions_dir / f"{company_a.id}.json").exists()
+    assert manager.load_session(company_b.id, set_current=False).company_id == "company-b"
+    assert {item.id for item in manager.list_sessions()} == {company_b.id}

@@ -6,9 +6,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_connection_access_is_a_compact_safe_disclosure():
     machines = (ROOT / "desktop_app/renderer_client/src/desktop/DesktopFleetMachinesPanel.tsx").read_text(encoding="utf-8")
+    settings = (ROOT / "desktop_app/renderer_client/src/desktop/DesktopFleetComputerSettingsPage.tsx").read_text(encoding="utf-8")
     access = (ROOT / "desktop_app/renderer_client/src/desktop/DesktopFleetConnectionAccess.tsx").read_text(encoding="utf-8")
 
-    assert "<DesktopFleetConnectionAccess" in machines
+    assert "<DesktopFleetConnectionAccess" in settings
+    assert "<DesktopFleetConnectionAccess" not in machines
     assert "Request a permission change" not in machines
     assert "accessibilityState={{ expanded }}" in access
     assert "Connection access" in access

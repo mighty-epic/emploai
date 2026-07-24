@@ -38,15 +38,42 @@ function Get-RuleProgram($Rule) {
   return [string]$Filter.Program
 }
 
-function Test-AllowAddress($Rule) {
+function Test-RestrictedAddress($Rule) {
   foreach ($Filter in @($Rule | Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue)) {
     foreach ($RemoteAddress in @($Filter.RemoteAddress)) {
-      if ([string]$RemoteAddress -in @('Any', '200::/7')) {
+      if ([string]$RemoteAddress -eq '200::/7') {
         return $true
       }
     }
   }
   return $false
+}
+
+function Test-BroadAddress($Rule) {
+  foreach ($Filter in @($Rule | Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue)) {
+    foreach ($RemoteAddress in @($Filter.RemoteAddress)) {
+      if ([string]$RemoteAddress -eq 'Any') {
+        return $true
+      }
+    }
+  }
+  return $false
+}
+
+function Get-RelevantInboundRules([string]$Program) {
+  $ByName = @{}
+  $ProgramFilters = @(Get-NetFirewallApplicationFilter -PolicyStore ActiveStore -Program $Program -ErrorAction SilentlyContinue)
+  foreach ($Rule in @($ProgramFilters | Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction SilentlyContinue)) {
+    if ($Rule.Enabled -eq 'True' -and $Rule.Direction -eq 'Inbound' -and $Rule.PrimaryStatus -ne 'Inactive') {
+      $ByName[[string]$Rule.Name] = $Rule
+    }
+  }
+  foreach ($Rule in @(Get-NetFirewallRule -PolicyStore ActiveStore -DisplayName 'EmploAI*' -ErrorAction SilentlyContinue)) {
+    if ($Rule.Enabled -eq 'True' -and $Rule.Direction -eq 'Inbound' -and $Rule.PrimaryStatus -ne 'Inactive') {
+      $ByName[[string]$Rule.Name] = $Rule
+    }
+  }
+  return @($ByName.Values)
 }
 """
 
@@ -59,20 +86,45 @@ $Program = {_powershell_literal(str(program))}
 $Port = {int(port)}
 {_firewall_filter_functions()}
 $EnabledProfiles = @(Get-NetFirewallProfile -PolicyStore ActiveStore | Where-Object Enabled)
-$InboundRules = @(Get-NetFirewallRule -PolicyStore ActiveStore -Enabled True -Direction Inbound -ErrorAction Stop | Where-Object {{ $_.PrimaryStatus -ne 'Inactive' }})
-$BlockNames = @(
+$InboundRules = @(Get-RelevantInboundRules $Program)
+$ManagedBlockNames = @(
   foreach ($Rule in @($InboundRules | Where-Object Action -eq 'Block')) {{
     $RuleProgram = Get-RuleProgram $Rule
-    if ($RuleProgram -and $RuleProgram -ne 'Any' -and $RuleProgram -ieq $Program -and (Test-PortApplies $Rule $Port)) {{
+    if (($RuleProgram -ieq $Program) -and ([string]$Rule.DisplayName -like 'EmploAI*') -and (Test-PortApplies $Rule $Port)) {{
       [string]$Rule.Name
     }}
   }}
 )
-$AllowNames = @(
+$ExternalBlockNames = @(
+  foreach ($Rule in @($InboundRules | Where-Object Action -eq 'Block')) {{
+    $RuleProgram = Get-RuleProgram $Rule
+    if (($RuleProgram -ieq $Program) -and ([string]$Rule.DisplayName -notlike 'EmploAI*') -and (Test-PortApplies $Rule $Port)) {{
+      [string]$Rule.Name
+    }}
+  }}
+)
+$RestrictedAllowNames = @(
   foreach ($Rule in @($InboundRules | Where-Object Action -eq 'Allow')) {{
     $RuleProgram = Get-RuleProgram $Rule
-    $ProgramMatches = ($RuleProgram -ieq $Program) -or (($RuleProgram -eq 'Any' -or -not $RuleProgram) -and ([string]$Rule.DisplayName -like 'EmploAI*'))
-    if ($ProgramMatches -and (Test-PortApplies $Rule $Port) -and (Test-AllowAddress $Rule)) {{
+    if (($RuleProgram -ieq $Program) -and (Test-PortApplies $Rule $Port) -and (Test-RestrictedAddress $Rule)) {{
+      [string]$Rule.Name
+    }}
+  }}
+)
+$ManagedBroadAllowNames = @(
+  foreach ($Rule in @($InboundRules | Where-Object Action -eq 'Allow')) {{
+    $RuleProgram = Get-RuleProgram $Rule
+    $EmploAIRule = [string]$Rule.DisplayName -like 'EmploAI*'
+    $ProgramMatches = ($RuleProgram -ieq $Program) -or (($RuleProgram -eq 'Any' -or -not $RuleProgram) -and $EmploAIRule)
+    if ($EmploAIRule -and $ProgramMatches -and (Test-PortApplies $Rule $Port) -and (Test-BroadAddress $Rule)) {{
+      [string]$Rule.Name
+    }}
+  }}
+)
+$ExternalBroadAllowNames = @(
+  foreach ($Rule in @($InboundRules | Where-Object Action -eq 'Allow')) {{
+    $RuleProgram = Get-RuleProgram $Rule
+    if (($RuleProgram -ieq $Program) -and ([string]$Rule.DisplayName -notlike 'EmploAI*') -and (Test-PortApplies $Rule $Port) -and (Test-BroadAddress $Rule)) {{
       [string]$Rule.Name
     }}
   }}
@@ -80,11 +132,15 @@ $AllowNames = @(
 [pscustomobject]@{{
   applicable = $true
   firewallEnabled = ($EnabledProfiles.Count -gt 0)
-  configured = (($EnabledProfiles.Count -eq 0) -or ($BlockNames.Count -eq 0 -and $AllowNames.Count -gt 0))
+  configured = (($EnabledProfiles.Count -gt 0) -and ($ManagedBlockNames.Count -eq 0) -and ($ExternalBlockNames.Count -eq 0) -and ($RestrictedAllowNames.Count -gt 0) -and ($ManagedBroadAllowNames.Count -eq 0))
   port = $Port
   program = $Program
-  conflictingBlockRuleNames = $BlockNames
-  allowRuleNames = $AllowNames
+  conflictingBlockRuleNames = @($ManagedBlockNames + $ExternalBlockNames)
+  managedBlockRuleNames = $ManagedBlockNames
+  externalBlockRuleNames = $ExternalBlockNames
+  allowRuleNames = $RestrictedAllowNames
+  broadAllowRuleNames = $ManagedBroadAllowNames
+  externalBroadAllowRuleNames = $ExternalBroadAllowNames
 }} | ConvertTo-Json -Depth 5 -Compress
 """
 
@@ -101,10 +157,22 @@ $ResultPath = {_powershell_literal(str(result_path))}
 {_firewall_filter_functions()}
 try {{
   $Disabled = @()
-  $BlockRules = @(Get-NetFirewallRule -PolicyStore ActiveStore -Enabled True -Direction Inbound -Action Block -ErrorAction Stop)
+  $RelevantRules = @(Get-RelevantInboundRules $Program)
+  $BlockRules = @($RelevantRules | Where-Object Action -eq 'Block')
   foreach ($Rule in $BlockRules) {{
     $RuleProgram = Get-RuleProgram $Rule
-    if ($RuleProgram -and $RuleProgram -ne 'Any' -and $RuleProgram -ieq $Program -and (Test-PortApplies $Rule $Port)) {{
+    $EmploAIRule = [string]$Rule.DisplayName -like 'EmploAI*'
+    if ($EmploAIRule -and ($RuleProgram -ieq $Program) -and (Test-PortApplies $Rule $Port)) {{
+      Disable-NetFirewallRule -Name $Rule.Name -ErrorAction Stop | Out-Null
+      $Disabled += [string]$Rule.Name
+    }}
+  }}
+  $BroadAllowRules = @($RelevantRules | Where-Object Action -eq 'Allow')
+  foreach ($Rule in $BroadAllowRules) {{
+    $RuleProgram = Get-RuleProgram $Rule
+    $EmploAIRule = [string]$Rule.DisplayName -like 'EmploAI*'
+    $ProgramMatches = ($RuleProgram -ieq $Program) -or (($RuleProgram -eq 'Any' -or -not $RuleProgram) -and $EmploAIRule)
+    if ($EmploAIRule -and $ProgramMatches -and (Test-PortApplies $Rule $Port) -and (Test-BroadAddress $Rule)) {{
       Disable-NetFirewallRule -Name $Rule.Name -ErrorAction Stop | Out-Null
       $Disabled += [string]$Rule.Name
     }}
@@ -204,6 +272,16 @@ def ensure_windows_yggdrasil_firewall(
 
     checked_program = Path(program or sys.executable).expanduser().resolve()
     status = _run_powershell_json(_inspection_script(port=checked_port, program=checked_program))
+    if bool(status.get("applicable")) and not bool(status.get("firewallEnabled")):
+        raise RuntimeError(
+            "Windows Firewall is disabled. Enable it before exposing the EmploAI Fleet manager over Yggdrasil."
+        )
+    external_blocks = [str(name) for name in list(status.get("externalBlockRuleNames") or []) if str(name).strip()]
+    if external_blocks:
+        raise RuntimeError(
+            "Windows Firewall has a non-EmploAI rule blocking this Python runtime. "
+            "Review that rule manually before exposing the Fleet manager; EmploAI will not disable unrelated firewall rules."
+        )
     if not firewall_configuration_required(status):
         return {**status, "changed": False}
 

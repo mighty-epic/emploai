@@ -46,7 +46,9 @@ from app_backend.fleet_policy import (
     normalize_worker_enrollment_identity,
 )
 from app_backend.fleet_report_validation import normalize_worker_task_report
+from app_backend.fleet_presence import FLEET_OFFLINE_SECONDS, FLEET_STALE_SECONDS
 from shared.runtime_paths import auth_store_root
+from shared.private_paths import harden_private_path
 
 
 REMOTE_CONTROL_STORE_FILENAME = "remote_control_plane.json"
@@ -59,8 +61,6 @@ AUTH_OTP_RESEND_COOLDOWN_SECONDS = 60
 AUTH_OTP_MAX_ATTEMPTS = 5
 REMOTE_PAIRING_TTL_SECONDS = 60 * 10
 FLEET_ENROLLMENT_TTL_SECONDS = 60 * 30
-FLEET_STALE_SECONDS = 10
-FLEET_OFFLINE_SECONDS = 60
 SCHEMA_VERSION = 1
 SECRET_VAULT_KEY_ENV = "EMPLOAI_REMOTE_SECRETS_KEY"
 SECRET_VAULT_KEY_FILENAME = "remote_secrets.key"
@@ -152,15 +152,13 @@ def _decode_secret_vault_key(value: str) -> Optional[bytes]:
 
 
 def _secure_chmod(path: Path, mode: int) -> None:
-    try:
-        path.chmod(mode)
-    except Exception:
-        pass
+    harden_private_path(path, mode)
 
 
 from app_backend import remote_control_store_archive as _remote_control_store_archive
 from app_backend import remote_control_store_automations as _remote_control_store_automations
 from app_backend import remote_control_store_commands as _remote_control_store_commands
+from app_backend import remote_control_store_company_migration as _remote_control_store_company_migration
 from app_backend import remote_control_store_core as _remote_control_store_core
 from app_backend import remote_control_store_fleet_resources as _remote_control_store_fleet_resources
 from app_backend import remote_control_store_fleet_connections as _remote_control_store_fleet_connections
@@ -172,6 +170,7 @@ from app_backend import remote_control_store_views as _remote_control_store_view
 from app_backend.remote_control_store_archive import RemoteControlStoreArchiveMixin
 from app_backend.remote_control_store_automations import RemoteControlStoreAutomationMixin
 from app_backend.remote_control_store_commands import RemoteControlStoreCommandMixin
+from app_backend.remote_control_store_company_migration import RemoteControlStoreCompanyMigrationMixin
 from app_backend.remote_control_store_core import RemoteControlStoreCoreMixin
 from app_backend.remote_control_store_fleet_resources import RemoteControlStoreFleetResourceMixin
 from app_backend.remote_control_store_fleet_connections import RemoteControlStoreFleetConnectionMixin
@@ -186,6 +185,7 @@ _REMOTE_CONTROL_STORE_MIXIN_MODULES = (
     _remote_control_store_views,
     _remote_control_store_identity,
     _remote_control_store_commands,
+    _remote_control_store_company_migration,
     _remote_control_store_fleet_snapshot,
     _remote_control_store_fleet_workers,
     _remote_control_store_fleet_resources,
@@ -212,6 +212,7 @@ class RemoteControlPlaneStore(
     RemoteControlStoreViewMixin,
     RemoteControlStoreIdentityMixin,
     RemoteControlStoreCommandMixin,
+    RemoteControlStoreCompanyMigrationMixin,
     RemoteControlStoreFleetSnapshotMixin,
     RemoteControlStoreFleetWorkerMixin,
     RemoteControlStoreFleetResourceMixin,

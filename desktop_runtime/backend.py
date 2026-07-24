@@ -59,6 +59,7 @@ from desktop_runtime.config import (
     _voice_pack_setup_payload,
 )
 from shared.fleet_connection import fleet_connection_path
+from shared.atomic_io import atomic_write_json
 from shared.openai_codex_auth import (
     begin_codex_device_login,
     codex_auth_status,
@@ -165,7 +166,10 @@ class DesktopRuntimeConfig:
     def api_base_url(self) -> str:
         host = self.host.strip() or DEFAULT_DESKTOP_HOST
         if host in {"::", "[::]"}:
-            host = "[::1]"
+            # Chromium's CSP host-source parser does not reliably accept IPv6
+            # literals. localhost still resolves to ::1 here, while the ASGI
+            # network boundary rejects any non-loopback resolution.
+            host = "localhost"
         elif host in {"0.0.0.0"}:
             host = "127.0.0.1"
         return f"http://{host}:{self.port}"
@@ -858,7 +862,52 @@ def _fleet_yggdrasil_status() -> dict[str, Any]:
         "hostDetail": str(fleet_host.get("detail") or "").strip() or None,
         **connection_policy_view(connection),
     }
+    from shared.fleet_manager_connection import manager_connection_status
+
+    runtime_status = asdict(_get_runtime_status())
+    runtime_record = _read_pid_record(home) or {}
+    runtime_status["bind_host"] = str(runtime_record.get("host") or "").strip() or None
+    runtime_status["bind_port"] = int(runtime_record.get("port") or 0) or None
+    status["manager"] = manager_connection_status(
+        home,
+        yggdrasil=status,
+        runtime=runtime_status,
+    )
     return status
+
+
+def _fleet_yggdrasil_prepare_manager(*, enable: bool, launch_runtime: bool) -> dict[str, Any]:
+    _prepare_environment(apply_cloud_overlay=False)
+    _, home, _ = _runtime_paths()
+    from shared.fleet_manager_connection import reconcile_manager_connection_config
+    from shared.fleet_yggdrasil import bootstrap_yggdrasil, yggdrasil_status
+    from shared.windows_fleet_firewall import ensure_windows_yggdrasil_firewall
+
+    config_change = reconcile_manager_connection_config(home, enable=enable)
+    if not config_change.get("enabled"):
+        return _fleet_yggdrasil_status()
+    transport = bootstrap_yggdrasil(
+        home,
+        install=False,
+        start=True,
+        configure_default_peers=False,
+    )
+    current = yggdrasil_status(home)
+    if not current.get("available") or not current.get("running"):
+        raise RuntimeError(str((transport.get("warnings") or ["Yggdrasil is not running."])[0]))
+    config = _load_desktop_runtime_config()
+    firewall = ensure_windows_yggdrasil_firewall(port=int(config.port or DEFAULT_DESKTOP_PORT))
+    if config_change.get("bind_changed"):
+        _stop_runtime(home)
+    if launch_runtime:
+        _bootstrap_payload(force_launch=True, resolve_current_session=False)
+    return {
+        **_fleet_yggdrasil_status(),
+        "managerRefresh": {
+            "config": config_change,
+            "firewall": firewall,
+        },
+    }
 
 
 def _fleet_yggdrasil_permissions(
@@ -929,21 +978,15 @@ def _fleet_yggdrasil_device_identity(home: Path, *, device_name: str | None = No
         hostname = str(socket.gethostname() or "").strip()
         resolved_name = f"EmploAI Worker ({hostname})" if hostname else "EmploAI Worker"
     identity_path.parent.mkdir(parents=True, exist_ok=True)
-    identity_path.write_text(
-        json.dumps(
-            {
-                "deviceName": resolved_name,
-                "deviceKey": resolved_key,
-                "updatedAt": datetime.now(timezone.utc).isoformat(),
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
+    atomic_write_json(
+        identity_path,
+        {
+            "deviceName": resolved_name,
+            "deviceKey": resolved_key,
+            "updatedAt": datetime.now(timezone.utc).isoformat(),
+        },
+        private=True,
     )
-    try:
-        identity_path.chmod(0o600)
-    except OSError:
-        pass
     return {"device_name": resolved_name, "device_key": resolved_key}
 
 
@@ -953,23 +996,10 @@ def _desktop_runtime_bind_is_yggdrasil_reachable(config: DesktopRuntimeConfig) -
 
 
 def _configure_manager_yggdrasil_bind(home: Path) -> bool:
-    runtime_config = load_runtime_config(home)
-    channels = runtime_config.get("channels") if isinstance(runtime_config.get("channels"), dict) else {}
-    next_channels = dict(channels)
-    desktop = dict(next_channels.get("desktop") or {})
-    app = dict(next_channels.get("app") or {})
-    changed = False
-    if str(desktop.get("host") or "").strip() not in {"::", "[::]"}:
-        desktop["host"] = "::"
-        changed = True
-    if str(app.get("host") or "").strip() not in {"::", "[::]"}:
-        app["host"] = "::"
-        changed = True
-    next_channels["desktop"] = desktop
-    next_channels["app"] = app
-    runtime_config["channels"] = next_channels
+    from shared.fleet_manager_connection import reconcile_manager_connection_config
+
+    changed = bool(reconcile_manager_connection_config(home, enable=True).get("bind_changed"))
     if changed:
-        save_runtime_config(home, runtime_config)
         _stop_runtime(home)
     return changed
 
@@ -1005,8 +1035,11 @@ def _fleet_yggdrasil_create_pairing(
     if not _desktop_runtime_bind_is_yggdrasil_reachable(config):
         raise RuntimeError(
             "The manager backend is still bound to loopback only. "
-            "Run this command again with --configure-manager-bind so paired computers can reach it over Yggdrasil."
+            "Refresh this computer's Fleet connection before creating a pairing code."
         )
+    from shared.fleet_manager_connection import enable_manager_mode
+
+    enable_manager_mode(home)
 
     manager_firewall: dict[str, Any] | None = None
     if configure_manager_bind:
@@ -1325,6 +1358,14 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="bind the manager backend on IPv6 so paired computers can reach it",
     )
+    subparsers.add_parser(
+        "fleet-yggdrasil-manager-prepare",
+        help="restore the saved Fleet manager binding before the local runtime starts",
+    )
+    subparsers.add_parser(
+        "fleet-yggdrasil-manager-refresh",
+        help="check and repair this computer's Fleet manager connection",
+    )
 
     ygg_join_parser = subparsers.add_parser(
         "fleet-yggdrasil-join",
@@ -1502,6 +1543,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "yggdrasil-status":
         _prepare_environment(apply_cloud_overlay=False)
         return _json_print(_fleet_yggdrasil_status())
+
+    if args.command == "fleet-yggdrasil-manager-prepare":
+        try:
+            return _json_print(_fleet_yggdrasil_prepare_manager(enable=False, launch_runtime=False))
+        except Exception as exc:
+            return _json_error_print(exc)
+
+    if args.command == "fleet-yggdrasil-manager-refresh":
+        try:
+            return _json_print(_fleet_yggdrasil_prepare_manager(enable=True, launch_runtime=True))
+        except Exception as exc:
+            return _json_error_print(exc)
 
     if args.command == "fleet-update-run":
         os.environ["EMPLOAI_HOME"] = str(Path(args.home).expanduser().resolve())

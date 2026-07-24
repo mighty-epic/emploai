@@ -41,9 +41,10 @@ def normalize_fleet_selection(value: Any) -> Dict[str, Any]:
 
 def empty_fleet_state() -> Dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         **empty_fleet_selection(),
         "selection_by_desktop": {},
+        "selection_by_company": {},
     }
 
 
@@ -58,12 +59,37 @@ def normalize_fleet_state(value: Any) -> Dict[str, Any]:
         for desktop_id, selection in dict(raw_by_desktop if isinstance(raw_by_desktop, dict) else {}).items()
         if str(desktop_id or "").strip()
     }
+    raw_by_company = base.get("selection_by_company")
+    base["selection_by_company"] = {
+        str(desktop_id): {
+            str(company_id): normalize_fleet_selection(selection)
+            for company_id, selection in dict(company_selections).items()
+            if str(company_id or "").strip()
+        }
+        for desktop_id, company_selections in dict(
+            raw_by_company if isinstance(raw_by_company, dict) else {}
+        ).items()
+        if str(desktop_id or "").strip() and isinstance(company_selections, dict)
+    }
     return base
 
 
-def fleet_selection_for_desktop(value: Any, desktop_id: str | None) -> Dict[str, Any]:
+def fleet_selection_for_desktop(
+    value: Any,
+    desktop_id: str | None,
+    company_id: str | None = None,
+) -> Dict[str, Any]:
     fleet = normalize_fleet_state(value)
     clean_desktop_id = str(desktop_id or "").strip()
+    clean_company_id = str(company_id or "").strip()
+    if clean_desktop_id and clean_company_id:
+        stored = (
+            fleet.get("selection_by_company", {})
+            .get(clean_desktop_id, {})
+            .get(clean_company_id)
+        )
+        if stored is not None:
+            return normalize_fleet_selection(stored)
     if clean_desktop_id:
         stored = fleet["selection_by_desktop"].get(clean_desktop_id)
         if stored is not None:
@@ -75,10 +101,21 @@ def store_fleet_selection_for_desktop(
     value: Any,
     desktop_id: str | None,
     selection: Any,
+    company_id: str | None = None,
 ) -> Dict[str, Any]:
     fleet = normalize_fleet_state(value)
     normalized = normalize_fleet_selection(selection)
     clean_desktop_id = str(desktop_id or "").strip()
+    clean_company_id = str(company_id or "").strip()
+    if clean_desktop_id and clean_company_id:
+        by_company = {
+            key: dict(company_selections)
+            for key, company_selections in dict(fleet.get("selection_by_company") or {}).items()
+        }
+        desktop_companies = dict(by_company.get(clean_desktop_id) or {})
+        desktop_companies[clean_company_id] = normalized
+        by_company[clean_desktop_id] = desktop_companies
+        fleet["selection_by_company"] = by_company
     if clean_desktop_id:
         by_desktop = dict(fleet.get("selection_by_desktop") or {})
         by_desktop[clean_desktop_id] = normalized

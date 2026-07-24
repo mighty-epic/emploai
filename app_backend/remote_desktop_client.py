@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional
+from urllib.parse import quote_plus
 
 import httpx
 from websockets.asyncio.client import ClientConnection, connect as websocket_connect
@@ -18,7 +19,7 @@ from app_backend.local_runtime_server import bootstrap_context, start_runtime_co
 from app_backend.fleet_policy import FLEET_PREVIEW_MODE
 from app_backend.fleet_worker_report import extract_worker_report
 from shared.atomic_io import atomic_write_json
-from shared.fleet_connection import load_fleet_connection
+from shared.fleet_connection import load_fleet_connection, write_fleet_connection
 from shared.fleet_connection_policy import (
     connection_policy_view,
     load_connection_policy,
@@ -42,6 +43,7 @@ REMOTE_CONTROL_DESKTOP_NAME_ENV = "EMPLOAI_REMOTE_DESKTOP_NAME"
 REMOTE_CONTROL_DESKTOP_KEY_ENV = "EMPLOAI_REMOTE_DESKTOP_KEY"
 REMOTE_CONTROL_STATUS_PATH_ENV = "EMPLOAI_REMOTE_CONTROL_STATUS_PATH"
 FLEET_ACTIVE_TASK_SESSIONS: Dict[str, str] = {}
+FLEET_ACTIVE_TASK_COMPANIES: Dict[str, str] = {}
 FLEET_STOP_REQUESTED_TASKS: set[str] = set()
 CONNECTION_STATE_INTERVAL_SECONDS = 2.0
 CAPABILITY_STATE_INTERVAL_SECONDS = 15.0
@@ -58,6 +60,7 @@ HOST_NATIVE_COMMANDS = frozenset(
         "fleet_update_check",
         "fleet_update_start",
         "fleet_permission_request",
+        "fleet_company_membership_sync",
         "fleet_upstream_request_decision",
         "fleet_worker_preview",
     }
@@ -70,6 +73,9 @@ class RemoteDesktopConfig:
     desktop_id: str
     desktop_name: str
     device_key: str
+    company_id: Optional[str] = None
+    company_membership_id: Optional[str] = None
+    company_revision: int = 0
 
 
 @dataclass
@@ -192,6 +198,16 @@ def load_remote_desktop_config() -> RemoteDesktopConfig:
         or "Paired EmploAI Computer"
     ).strip()
     device_key = str(os.getenv(REMOTE_CONTROL_DESKTOP_KEY_ENV, "") or "").strip() or "desktop-default"
+    company_membership = (
+        session_payload.get("companyMembership")
+        if isinstance(session_payload.get("companyMembership"), dict)
+        else {}
+    )
+    company_payload = (
+        company_membership.get("payload")
+        if isinstance(company_membership.get("payload"), dict)
+        else {}
+    )
     if not remote_base_url:
         raise RuntimeError("A locally paired Yggdrasil Fleet manager is required")
     if not session_token or not desktop_id:
@@ -202,6 +218,15 @@ def load_remote_desktop_config() -> RemoteDesktopConfig:
         desktop_id=desktop_id,
         desktop_name=desktop_name,
         device_key=device_key,
+        company_id=str(company_payload.get("company_id") or "").strip() or None,
+        company_membership_id=str(
+            dict(company_payload.get("membership") or {}).get(
+                "membership_id"
+            )
+            or ""
+        ).strip()
+        or None,
+        company_revision=int(company_payload.get("company_revision") or 0),
     )
 
 
@@ -219,12 +244,17 @@ async def _request_json(
     url: str,
     token: str,
     json_body: Optional[Dict[str, Any]] = None,
+    company_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    headers = {"Authorization": f"Bearer {token}"}
+    clean_company_id = str(company_id or "").strip()
+    if clean_company_id:
+        headers["X-EmploAI-Company-Id"] = clean_company_id
     response = await client.request(
         method,
         url,
         json=json_body,
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
     )
     response.raise_for_status()
     payload = response.json()
@@ -236,6 +266,58 @@ async def _request_json(
 async def _send_json(ws: ClientConnection, send_lock: asyncio.Lock, payload: Dict[str, Any]) -> None:
     async with send_lock:
         await ws.send(json.dumps(payload))
+
+
+async def _stop_company_tasks_after_connection_loss(
+    credentials: Optional[LocalRuntimeCredentials],
+    *,
+    company_id: Optional[str],
+) -> None:
+    """Stop delegated runs whose live root-issued connection was lost."""
+
+    if credentials is None:
+        return
+    clean_company_id = str(company_id or "").strip()
+    affected = [
+        (task_id, session_id)
+        for task_id, session_id in list(FLEET_ACTIVE_TASK_SESSIONS.items())
+        if (
+            not clean_company_id
+            or str(FLEET_ACTIVE_TASK_COMPANIES.get(task_id) or "").strip()
+            == clean_company_id
+        )
+    ]
+    if not affected:
+        return
+    for task_id, _session_id in affected:
+        FLEET_STOP_REQUESTED_TASKS.add(task_id)
+
+    async def stop_sessions(api_base_url: str, access_token: str) -> None:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            for task_id, session_id in affected:
+                try:
+                    await _request_json(
+                        client,
+                        method="POST",
+                        url=(
+                            f"{api_base_url}/api/app/agent/control/stop"
+                            f"?session_id={quote_plus(str(session_id))}"
+                        ),
+                        token=access_token,
+                        company_id=(
+                            FLEET_ACTIVE_TASK_COMPANIES.get(task_id)
+                            or clean_company_id
+                            or None
+                        ),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed stopping delegated task %s after "
+                        "Company connection loss",
+                        task_id,
+                    )
+
+    await _with_local_runtime_credentials(credentials, stop_sessions)
 
 
 def _terminal_local_chat_event_error(data: Dict[str, Any]) -> Optional[str]:
@@ -268,10 +350,13 @@ async def _relay_local_chat_command(
     source_client_id: Optional[str],
     remote_ws: ClientConnection,
     send_lock: asyncio.Lock,
+    company_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     params = [f"token={local_token}", f"client_id={REMOTE_CLIENT_ID}"]
     if session_id:
         params.append(f"session_id={session_id}")
+    if str(company_id or "").strip():
+        params.append(f"company_id={quote_plus(str(company_id).strip())}")
     local_ws_url = _ws_url_from_base(local_api_base_url, f"ws/app/chat?{'&'.join(params)}")
     async with websocket_connect(local_ws_url, max_size=16 * 1024 * 1024) as local_ws:
         await local_ws.send(
@@ -342,6 +427,71 @@ async def _handle_command(
         from app_backend.fleet_host_control import fleet_host_status
 
         return await asyncio.to_thread(fleet_host_status)
+
+    if command_name == "fleet_company_membership_sync":
+        if not home:
+            raise RuntimeError("The local runtime home is unavailable")
+        from app_backend.company_store import CompanyStore
+
+        bundle = (
+            dict(payload.get("bundle") or {})
+            if isinstance(payload.get("bundle"), dict)
+            else {}
+        )
+        connection = load_fleet_connection(home)
+        current_bundle = (
+            dict(connection.get("companyMembership") or {})
+            if isinstance(connection.get("companyMembership"), dict)
+            else {}
+        )
+        current_payload = CompanyStore.verify_membership_bundle(
+            current_bundle
+        )
+        current_public_key = str(
+            current_bundle.get("public_key") or ""
+        ).strip()
+        next_payload = CompanyStore.verify_membership_bundle(
+            bundle,
+            expected_public_key=current_public_key,
+        )
+        current_membership = dict(
+            current_payload.get("membership") or {}
+        )
+        next_membership = dict(next_payload.get("membership") or {})
+        if (
+            str(next_payload.get("company_id") or "")
+            != str(current_payload.get("company_id") or "")
+            or str(next_membership.get("membership_id") or "")
+            != str(current_membership.get("membership_id") or "")
+        ):
+            raise PermissionError(
+                "The Company membership update does not match this paired connection"
+            )
+        current_revision = int(
+            current_payload.get("company_revision") or 0
+        )
+        next_revision = int(next_payload.get("company_revision") or 0)
+        if next_revision < current_revision:
+            raise PermissionError(
+                "The Company membership update is older than the local cache"
+            )
+        if (
+            next_revision == current_revision
+            and str(bundle.get("signature") or "")
+            == str(current_bundle.get("signature") or "")
+        ):
+            return {
+                "updated": False,
+                "company_id": str(next_payload.get("company_id") or ""),
+                "company_revision": current_revision,
+            }
+        connection["companyMembership"] = bundle
+        write_fleet_connection(home=home, payload=connection)
+        return {
+            "updated": True,
+            "company_id": str(next_payload.get("company_id") or ""),
+            "company_revision": next_revision,
+        }
 
     if command_name in {"fleet_start_runtime", "fleet_start_desktop"}:
         if not permissions.get("manage_runtime", False):
@@ -500,6 +650,7 @@ async def _handle_command(
             target_kind = str(payload.get("target_kind") or "manager").strip().lower()
             target_selector = str(payload.get("target_selector") or "").strip()
             delegation_metadata = dict(payload.get("metadata") or {})
+            company_id = str(delegation_metadata.get("company_id") or "").strip() or None
             if not delegation_id or not prompt:
                 raise ValueError("delegation_id and prompt are required")
             if target_kind not in {"manager", "worker"}:
@@ -534,6 +685,7 @@ async def _handle_command(
                     method="GET",
                     url=f"{local_api_base_url}/api/fleet/snapshot",
                     token=local_token,
+                    company_id=company_id,
                 )
                 identities = [item for item in list(local_fleet.get("identities") or []) if isinstance(item, dict)]
                 if target_kind == "manager":
@@ -600,9 +752,12 @@ async def _handle_command(
                 if not session_id and continuation_id and home:
                     session_id = incoming_delegation_private_session_id(home, continuation_id)
                 if not session_id:
+                    headers = {"Authorization": f"Bearer {local_token}"}
+                    if company_id:
+                        headers["X-EmploAI-Company-Id"] = company_id
                     response = await client.post(
                         f"{local_api_base_url}/api/app/sessions",
-                        headers={"Authorization": f"Bearer {local_token}"},
+                        headers=headers,
                         json={
                             "name": f"Delegation {delegation_id[-6:]}",
                             "workspace": remote_workspace,
@@ -616,6 +771,7 @@ async def _handle_command(
                             "fleet_worker_id": identity.get("worker_id"),
                             "fleet_task_mode": "delegated",
                             "fleet_task_id": delegation_id,
+                            "company_id": company_id,
                         },
                     )
                     response.raise_for_status()
@@ -625,6 +781,8 @@ async def _handle_command(
                 if not session_id:
                     raise RuntimeError("The local agent session could not be created")
                 FLEET_ACTIVE_TASK_SESSIONS[delegation_id] = session_id
+                if company_id:
+                    FLEET_ACTIVE_TASK_COMPANIES[delegation_id] = company_id
                 result = await _relay_local_chat_command(
                     local_api_base_url=local_api_base_url,
                     local_token=local_token,
@@ -633,6 +791,7 @@ async def _handle_command(
                     source_format="fleet_delegation",
                     interrupt_policy="none",
                     source_client_id=f"fleet-delegation:{delegation_id}",
+                    company_id=company_id,
                     remote_ws=remote_ws,
                     send_lock=send_lock,
                 )
@@ -704,6 +863,7 @@ async def _handle_command(
                 raise
             finally:
                 FLEET_ACTIVE_TASK_SESSIONS.pop(delegation_id, None)
+                FLEET_ACTIVE_TASK_COMPANIES.pop(delegation_id, None)
                 FLEET_STOP_REQUESTED_TASKS.discard(delegation_id)
 
         if command_name in {
@@ -731,6 +891,7 @@ async def _handle_command(
             worker_name = str(payload.get("worker_name") or "").strip() or "Worker"
             prompt = str(payload.get("prompt") or "").strip()
             task_metadata = dict(payload.get("metadata") or {})
+            company_id = str(task_metadata.get("company_id") or "").strip() or None
             if not task_id or not worker_id or not prompt:
                 raise ValueError("task_id, worker_id, and prompt are required")
 
@@ -750,9 +911,12 @@ async def _handle_command(
             try:
                 session_id = str(payload.get("target_session_id") or task_metadata.get("target_session_id") or "").strip() or None
                 if not session_id:
+                    headers = {"Authorization": f"Bearer {local_token}"}
+                    if company_id:
+                        headers["X-EmploAI-Company-Id"] = company_id
                     response = await client.post(
                         f"{local_api_base_url}/api/app/sessions",
-                        headers={"Authorization": f"Bearer {local_token}"},
+                        headers=headers,
                         json={
                             "name": f"{worker_name}: {task_id[-6:]}",
                             "workspace": payload.get("workspace"),
@@ -765,6 +929,7 @@ async def _handle_command(
                             "fleet_worker_id": worker_id,
                             "fleet_task_mode": "delegated",
                             "fleet_task_id": task_id,
+                            "company_id": company_id,
                         },
                     )
                     response.raise_for_status()
@@ -773,6 +938,8 @@ async def _handle_command(
                     session_id = str((session_payload or {}).get("id") or "").strip() or None
                 if session_id:
                     FLEET_ACTIVE_TASK_SESSIONS[task_id] = session_id
+                    if company_id:
+                        FLEET_ACTIVE_TASK_COMPANIES[task_id] = company_id
                 if task_id in FLEET_STOP_REQUESTED_TASKS:
                     stopped_summary = "Task stopped by manager before the worker turn started."
                     await _send_json(
@@ -813,6 +980,7 @@ async def _handle_command(
                     source_format="app_text",
                     interrupt_policy="none",
                     source_client_id=f"fleet:{task_id}",
+                    company_id=company_id,
                     remote_ws=remote_ws,
                     send_lock=send_lock,
                 )
@@ -918,6 +1086,7 @@ async def _handle_command(
                 raise
             finally:
                 FLEET_ACTIVE_TASK_SESSIONS.pop(task_id, None)
+                FLEET_ACTIVE_TASK_COMPANIES.pop(task_id, None)
                 FLEET_STOP_REQUESTED_TASKS.discard(task_id)
 
         if command_name == "fleet_worker_preview":
@@ -968,9 +1137,13 @@ async def _handle_command(
                     "task_id": task_id,
                     "detail": "Stop recorded; Fleet task is not active on this desktop yet.",
                 }
+            headers = {"Authorization": f"Bearer {local_token}"}
+            task_company_id = FLEET_ACTIVE_TASK_COMPANIES.get(task_id)
+            if task_company_id:
+                headers["X-EmploAI-Company-Id"] = task_company_id
             response = await client.post(
                 f"{local_api_base_url}/api/app/agent/control/stop?session_id={session_id}",
-                headers={"Authorization": f"Bearer {local_token}"},
+                headers=headers,
             )
             response.raise_for_status()
             return {"stopped": True, "task_id": task_id, "session_id": session_id}
@@ -993,6 +1166,7 @@ async def _handle_command(
                 source_format="fleet_redirect",
                 interrupt_policy="steer_now",
                 source_client_id=f"fleet-redirect:{task_id}",
+                company_id=FLEET_ACTIVE_TASK_COMPANIES.get(task_id),
                 remote_ws=remote_ws,
                 send_lock=send_lock,
             )
@@ -1006,7 +1180,13 @@ async def _handle_command(
         raise ValueError(f"Unsupported paired-computer command: {command_name or '<empty>'}")
 
 
-def _fleet_capability_view(snapshot: Dict[str, Any], permissions: Dict[str, bool]) -> Dict[str, Any]:
+def _fleet_capability_view(
+    snapshot: Dict[str, Any],
+    permissions: Dict[str, bool],
+    *,
+    company_id: Optional[str] = None,
+    company_membership_id: Optional[str] = None,
+) -> Dict[str, Any]:
     from app_backend.fleet_host_control import fleet_host_capabilities
 
     identities = [
@@ -1073,6 +1253,11 @@ def _fleet_capability_view(snapshot: Dict[str, Any], permissions: Dict[str, bool
         "can_configure_manager_tools": bool(permissions.get("configure_manager_tools", False)),
         "can_manage_runtime": bool(permissions.get("manage_runtime", False)),
         "can_manage_updates": bool(permissions.get("manage_updates", False)),
+        "company_id": str(company_id or "").strip() or None,
+        "company_membership_id": str(
+            company_membership_id or ""
+        ).strip()
+        or None,
         "targets": targets,
     }
 
@@ -1084,6 +1269,9 @@ async def _connection_state_loop(
     desktop_id: str,
     desktop_name: str,
     credentials: Optional[LocalRuntimeCredentials] = None,
+    company_id: Optional[str] = None,
+    company_membership_id: Optional[str] = None,
+    company_revision: int = 0,
 ) -> None:
     last_signature = ""
     last_heartbeat_at = 0.0
@@ -1109,8 +1297,14 @@ async def _connection_state_loop(
                             method="GET",
                             url=f"{current_credentials.api_base_url}/api/fleet/snapshot",
                             token=current_credentials.access_token,
+                            company_id=company_id,
                         )
-                        capabilities = _fleet_capability_view(dict(snapshot or {}), permissions)
+                        capabilities = _fleet_capability_view(
+                            dict(snapshot or {}),
+                            permissions,
+                            company_id=company_id,
+                            company_membership_id=company_membership_id,
+                        )
                     else:
                         capabilities = host_capabilities
                 except Exception:
@@ -1120,6 +1314,12 @@ async def _connection_state_loop(
             envelope = {
                 "desktop_id": desktop_id,
                 "desktop_name": desktop_name,
+                "company_id": str(company_id or "").strip() or None,
+                "company_membership_id": str(
+                    company_membership_id or ""
+                ).strip()
+                or None,
+                "company_revision": int(company_revision or 0),
                 **policy,
                 "capabilities": capabilities,
             }
@@ -1224,12 +1424,16 @@ async def _run_remote_desktop_client_until_cancelled() -> None:
 
     remote_ws_url = _ws_url_from_base(
         config.remote_base_url,
-        f"ws/remote/desktop?token={remote_token}&desktop_id={desktop_id}",
+        f"ws/remote/desktop?desktop_id={desktop_id}",
     )
 
     while True:
         try:
-            async with websocket_connect(remote_ws_url, max_size=REMOTE_WS_MAX_SIZE_BYTES) as ws:
+            async with websocket_connect(
+                remote_ws_url,
+                additional_headers={"Authorization": f"Bearer {remote_token}"},
+                max_size=REMOTE_WS_MAX_SIZE_BYTES,
+            ) as ws:
                 _write_remote_status(
                     state="running",
                     detail="Paired computer is connected directly to its Yggdrasil manager.",
@@ -1245,6 +1449,9 @@ async def _run_remote_desktop_client_until_cancelled() -> None:
                         desktop_id=desktop_id,
                         desktop_name=config.desktop_name,
                         credentials=credentials,
+                        company_id=config.company_id,
+                        company_membership_id=config.company_membership_id,
+                        company_revision=config.company_revision,
                     )
                 )
                 command_tasks: set[asyncio.Task[None]] = set()
@@ -1309,6 +1516,15 @@ async def _run_remote_desktop_client_until_cancelled() -> None:
                         task.add_done_callback(command_tasks.discard)
                 finally:
                     connection_state_task.cancel()
+                    try:
+                        await _stop_company_tasks_after_connection_loss(
+                            credentials,
+                            company_id=config.company_id,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed enforcing Company work-lease loss"
+                        )
                     for task in list(command_tasks):
                         task.cancel()
         except asyncio.CancelledError:

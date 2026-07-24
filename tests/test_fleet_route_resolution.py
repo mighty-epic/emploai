@@ -47,6 +47,14 @@ def test_child_coordination_routes_to_child_manager():
     assert route.identity_id == "child-manager"
 
 
+def test_published_child_identity_routes_without_requiring_computer_selector():
+    route = resolve_manager_delegation_route(_snapshot(), identity="child-worker")
+    assert route.scope == "child"
+    assert route.route_kind == "child_worker"
+    assert route.computer_id == "child-vps"
+    assert route.identity_id == "child-worker"
+
+
 def test_older_child_requires_update_for_automatic_worker_route():
     with pytest.raises(FleetRouteResolutionError) as error:
         resolve_manager_delegation_route(_snapshot(schema_version=2), computer="Windows VPS")

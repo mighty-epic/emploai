@@ -9,6 +9,7 @@ import {
   scoreJarvisWakeCandidate,
 } from './desktopJarvisWakeProfile';
 import { updateSessionModeState } from '@/lib/appApi';
+import { readActiveCompanyId } from '@/lib/activeCompanyContext';
 import { modelVariantDisplayLabel } from './modelProviders';
 import {
   chatReconnectDelayMs,
@@ -287,6 +288,10 @@ export function useDesktopConversationVoiceControls(scope: DesktopConversationSc
       client_id: appClientIdRef.current,
       session_id: normalizedTargetSessionId,
     });
+    const activeCompanyId = readActiveCompanyId();
+    if (activeCompanyId) {
+      params.set('company_id', activeCompanyId);
+    }
     if (options?.selected) {
       setSocketState('connecting');
       emitStartupState('warming', 'Connecting chat');
@@ -2082,6 +2087,10 @@ export function useDesktopConversationVoiceControls(scope: DesktopConversationSc
       });
       if (sessionIdRef.current) {
         params.set('session_id', sessionIdRef.current);
+      }
+      const activeCompanyId = readActiveCompanyId();
+      if (activeCompanyId) {
+        params.set('company_id', activeCompanyId);
       }
 
       setVoiceState('connecting');

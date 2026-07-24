@@ -334,7 +334,10 @@ type Props = {
   voiceStatus?: DesktopVoiceRuntimeStatus | null;
   onSelectVoiceEngine?: (engine: string) => Promise<boolean> | boolean;
   onStartupStateChange?: (state: StartupReadinessState, detail?: string) => void;
-  onOpenSetup?: (target?: { tab?: 'general' | 'packs'; packId?: string | null }) => void;
+  onOpenSetup?: (target?: {
+    tab?: 'general' | 'fleet_local' | 'onboarding' | 'chrome' | 'remote' | 'telegram' | 'voice' | 'packs' | 'recovery';
+    packId?: string | null;
+  }) => void;
   accountEmail?: string;
   updateAvailable?: boolean;
   remoteAuthBusy?: boolean;

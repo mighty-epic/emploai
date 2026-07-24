@@ -50,8 +50,7 @@ export function DesktopFleetLivePreview({
     <View style={styles.section}>
       <View style={styles.headingRow}>
         <View style={styles.headingCopy}>
-          <Text style={styles.eyebrow}>VIEW-ONLY PREVIEW</Text>
-          <Text style={styles.title}>Current screen</Text>
+          <Text style={styles.title}>Screen preview</Text>
         </View>
         <DesktopFleetInfoButton
           label="Live preview privacy"
@@ -138,13 +137,11 @@ export function DesktopFleetLivePreview({
 
 const styles = StyleSheet.create({
   section: {
-    flex: 1,
-    minWidth: 300,
-    padding: 14,
-    gap: 12,
+    width: "100%",
+    paddingVertical: 4,
+    gap: 9,
     borderWidth: 0,
-    borderRadius: UI.radius.panel,
-    backgroundColor: UI.color.surfaceMuted,
+    backgroundColor: "transparent",
   },
   headingRow: {
     position: "relative",
@@ -154,14 +151,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 10,
   },
-  headingCopy: { flex: 1, gap: 4 },
-  eyebrow: {
-    color: UI.color.accentStrong,
-    fontFamily: UI.type.mono,
-    fontSize: TYPE.eyebrow,
-    fontWeight: "900",
-    letterSpacing: 0.8,
-  },
+  headingCopy: { flex: 1 },
   title: {
     color: UI.color.text,
     fontSize: TYPE.sectionTitle,

@@ -22,6 +22,7 @@ from shared.model_availability import (
 from shared.model_defaults import default_model_pair_for_enabled_providers
 from shared.openai_codex_auth import codex_auth_status, is_codex_auth_configured
 from shared.fleet_connection import fleet_connection_configured
+from shared.atomic_io import atomic_write_json
 from shared.tesseract_runtime import resolve_tesseract_runtime
 
 try:
@@ -523,14 +524,15 @@ def load_runtime_config(home: Path) -> Dict[str, object]:
 
 def save_runtime_config(home: Path, payload: Mapping[str, object]) -> None:
     config_file = _config_path(home)
-    config_file.parent.mkdir(parents=True, exist_ok=True)
-    config_file.write_text(json.dumps(dict(payload), indent=2), encoding="utf-8")
+    atomic_write_json(config_file, dict(payload))
 
 
 def apply_installer_voice_pack_preferences(home: Path) -> Dict[str, object]:
     runtime_config = load_runtime_config(home)
+    original_config = deepcopy(runtime_config)
     _normalize_voice_config(runtime_config, installer_preferences=_read_installer_voice_pack_preferences())
-    save_runtime_config(home, runtime_config)
+    if runtime_config != original_config:
+        save_runtime_config(home, runtime_config)
     return runtime_config
 
 
@@ -697,7 +699,7 @@ def default_release_config(*, installer_preferences: Mapping[str, object] | None
             },
             "app": {
                 "enabled": True,
-                "host": "0.0.0.0",
+                "host": "127.0.0.1",
                 "port": 8787,
                 "auth_mode": "token",
                 "steering_beta": False,
@@ -802,10 +804,7 @@ def ensure_runtime_files(home: Path, source_root: Path) -> None:
     installer_voice_preferences = _read_installer_voice_pack_preferences()
     default_config = default_release_config(installer_preferences=installer_voice_preferences)
     if not config_file.exists():
-        config_file.write_text(
-            json.dumps(default_config, indent=2),
-            encoding="utf-8",
-        )
+        atomic_write_json(config_file, default_config)
     else:
         try:
             existing_config = json.loads(config_file.read_text(encoding="utf-8"))
@@ -827,10 +826,7 @@ def ensure_runtime_files(home: Path, source_root: Path) -> None:
             app_channel["enabled"] = True
 
         if existing_config != original_config:
-            config_file.write_text(
-                json.dumps(existing_config, indent=2),
-                encoding="utf-8",
-            )
+            atomic_write_json(config_file, existing_config)
 
     example_src = source_root / ".env.example"
     example_dst = home / ".env.example"

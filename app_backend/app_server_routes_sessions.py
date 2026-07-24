@@ -3,6 +3,11 @@ from __future__ import annotations
 # Split from app_server.py; dependencies are injected by the app_server facade.
 
 from shared.project_onboarding import ProjectOnboardingStore, merge_tool_packs
+from app_backend.company_runtime_context import (
+    company_record_matches,
+    resolve_local_company_runtime,
+    selected_company_scope,
+)
 
 
 def _project_onboarding_tool_packs(*, user_id: int, workspace: str, current_tool_packs: list[str] | None = None) -> list[str]:
@@ -16,6 +21,52 @@ def _project_onboarding_tool_packs(*, user_id: int, workspace: str, current_tool
 
 
 def register_session_routes(app):
+
+    def _company_scope(auth: Dict[str, Any]) -> tuple[Optional[str], bool]:
+        if _is_remote_session_auth(auth):
+            computer_id = str(auth.get("desktop_id") or "").strip()
+            company_id = (
+                _get_company_store().active_company_id(computer_id=computer_id)
+                if computer_id
+                else None
+            )
+            if not company_id:
+                return None, True
+            company = _get_company_store().get_company(company_id)
+        else:
+            fleet_store = _get_remote_control_store()
+            if not callable(
+                getattr(fleet_store, "ensure_standalone_manager_desktop", None)
+            ):
+                # Legacy/local bridge adapters predate Company membership. They
+                # remain unscoped and eligible for the default migration path.
+                return None, True
+            runtime = resolve_local_company_runtime(
+                auth=auth,
+                company_store=_get_company_store(),
+                fleet_store=fleet_store,
+            )
+            if not runtime:
+                return None, True
+            company_id = str(runtime["company_id"])
+            company = runtime["company"]
+        include_legacy = str((company.get("migration") or {}).get("state") or "") == "legacy_compatibility"
+        return str(company_id), include_legacy
+
+    def _require_session_company(
+        session: Any,
+        *,
+        company_id: Optional[str],
+        include_legacy: bool,
+    ) -> None:
+        raw_value = (
+            session.get("company_id")
+            if isinstance(session, dict)
+            else getattr(session, "company_id", None)
+        )
+        value = str(raw_value or "").strip()
+        if company_id and value != company_id and not (include_legacy and not value):
+            raise HTTPException(status_code=404, detail="Session not found in the selected company")
 
     @app.get("/api/app/sidebar-state", response_model=SidebarStateResponse)
 
@@ -86,8 +137,31 @@ def register_session_routes(app):
     async def create_session(request: CreateSessionRequest, authorization: Optional[str] = Header(default=None)) -> CreateSessionResponse:
 
         auth = _resolve_token(authorization)
+        company_id, _include_legacy = _company_scope(auth)
 
         if _is_remote_session_auth(auth):
+            if request.fleet_identity_id:
+                scope = selected_company_scope(
+                    auth=auth,
+                    company_store=_get_company_store(),
+                    fleet_store=_get_remote_control_store(),
+                )
+                snapshot = _get_remote_control_store().get_fleet_snapshot(
+                    user_id=int(auth["user_id"]),
+                    desktop_id=scope.get("computer_id"),
+                    company_id=scope.get("company_id"),
+                    company_computer_ids=scope.get("company_computer_ids"),
+                    include_unscoped_company_records=bool(scope.get("include_legacy")),
+                )
+                if not any(
+                    str(item.get("identity_id") or "")
+                    == str(request.fleet_identity_id)
+                    for item in list(snapshot.get("identities") or [])
+                ):
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Identity not found in the selected company",
+                    )
 
             before = _remote_shared_state(auth)
 
@@ -124,6 +198,7 @@ def register_session_routes(app):
                     "fleet_task_mode": request.fleet_task_mode,
 
                     "fleet_task_id": request.fleet_task_id,
+                    "company_id": company_id,
 
                 },
 
@@ -148,6 +223,8 @@ def register_session_routes(app):
                             chat_id=detail.id,
 
                             source=str(auth.get("actor_kind") or "app"),
+                            company_id=company_id,
+                            include_unscoped_company_records=_include_legacy,
 
                         )
 
@@ -192,6 +269,8 @@ def register_session_routes(app):
                         chat_id=detail.id,
 
                         source=str(auth.get("actor_kind") or "app"),
+                        company_id=company_id,
+                        include_unscoped_company_records=_include_legacy,
 
                     )
 
@@ -230,7 +309,25 @@ def register_session_routes(app):
 
             try:
 
-                fleet_snapshot = _get_remote_control_store().get_fleet_snapshot(user_id=user_id)
+                company_runtime = resolve_local_company_runtime(
+                    auth=auth,
+                    company_store=_get_company_store(),
+                    fleet_store=_get_remote_control_store(),
+                )
+                fleet_snapshot = _get_remote_control_store().get_fleet_snapshot(
+                    user_id=user_id,
+                    desktop_id=(company_runtime or {}).get("computer_id"),
+                    company_id=company_id,
+                    company_computer_ids=[
+                        str(item.get("computer_id") or "")
+                        for item in list(((company_runtime or {}).get("company") or {}).get("memberships") or [])
+                    ] if company_runtime else None,
+                    include_unscoped_company_records=bool(
+                        company_runtime
+                        and str((((company_runtime or {}).get("company") or {}).get("migration") or {}).get("state") or "")
+                        == "legacy_compatibility"
+                    ),
+                )
 
                 fleet_identity = next(
 
@@ -247,6 +344,11 @@ def register_session_routes(app):
                 )
 
                 fleet_identity_metadata = dict((fleet_identity or {}).get("metadata") or {})
+                if request.fleet_identity_id and fleet_identity is None:
+                    raise HTTPException(status_code=404, detail="Identity not found in the selected company")
+
+            except HTTPException:
+                raise
 
             except Exception:
 
@@ -281,6 +383,7 @@ def register_session_routes(app):
                 fleet_task_mode=request.fleet_task_mode,
 
                 fleet_task_id=request.fleet_task_id,
+                company_id=company_id,
 
                 fleet_identity_metadata=fleet_identity_metadata,
 
@@ -349,6 +452,8 @@ def register_session_routes(app):
                     chat_id=session.id,
 
                     source="app",
+                    company_id=company_id,
+                    include_unscoped_company_records=_include_legacy,
 
                 )
 
@@ -377,8 +482,14 @@ def register_session_routes(app):
     async def activate_session(session_id: str, authorization: Optional[str] = Header(default=None)) -> SessionDetailView:
 
         auth = _resolve_token(authorization)
+        company_id, include_legacy = _company_scope(auth)
 
         if _is_remote_session_auth(auth):
+            _require_session_company(
+                _remote_session_detail_view(auth, session_id),
+                company_id=company_id,
+                include_legacy=include_legacy,
+            )
 
             before = _remote_shared_state(auth)
 
@@ -397,6 +508,11 @@ def register_session_routes(app):
             if result:
 
                 detail = SessionDetailView.model_validate(result)
+                _require_session_company(
+                    detail,
+                    company_id=company_id,
+                    include_legacy=include_legacy,
+                )
 
                 if detail.fleet_identity_id:
 
@@ -411,6 +527,8 @@ def register_session_routes(app):
                             chat_id=detail.id,
 
                             source=str(auth.get("actor_kind") or "app"),
+                            company_id=company_id,
+                            include_unscoped_company_records=include_legacy,
 
                         )
 
@@ -441,6 +559,11 @@ def register_session_routes(app):
             )
 
             detail = _remote_session_detail_view(auth, session_id)
+            _require_session_company(
+                detail,
+                company_id=company_id,
+                include_legacy=include_legacy,
+            )
 
             if detail.fleet_identity_id:
 
@@ -455,6 +578,8 @@ def register_session_routes(app):
                         chat_id=detail.id,
 
                         source=str(auth.get("actor_kind") or "app"),
+                        company_id=company_id,
+                        include_unscoped_company_records=include_legacy,
 
                     )
 
@@ -483,6 +608,11 @@ def register_session_routes(app):
         previous = bridge.get_current_session()
 
         try:
+            _require_session_company(
+                bridge.get_session(session_id),
+                company_id=company_id,
+                include_legacy=include_legacy,
+            )
 
             session = bridge.activate_session(session_id)
 
@@ -521,6 +651,8 @@ def register_session_routes(app):
                     chat_id=session.id,
 
                     source="app",
+                    company_id=company_id,
+                    include_unscoped_company_records=include_legacy,
 
                 )
 
@@ -547,8 +679,14 @@ def register_session_routes(app):
     async def rename_session(session_id: str, request: RenameSessionRequest, authorization: Optional[str] = Header(default=None)) -> SessionDetailView:
 
         auth = _resolve_token(authorization)
+        company_id, include_legacy = _company_scope(auth)
 
         if _is_remote_session_auth(auth):
+            _require_session_company(
+                _remote_session_detail_view(auth, session_id),
+                company_id=company_id,
+                include_legacy=include_legacy,
+            )
 
             before = _remote_shared_state(auth)
 
@@ -567,8 +705,13 @@ def register_session_routes(app):
             detail_payload = result.get("session") if isinstance(result, dict) and isinstance(result.get("session"), dict) else result
 
             if isinstance(detail_payload, dict) and detail_payload.get("id"):
-
-                return SessionDetailView.model_validate(detail_payload)
+                detail = SessionDetailView.model_validate(detail_payload)
+                _require_session_company(
+                    detail,
+                    company_id=company_id,
+                    include_legacy=include_legacy,
+                )
+                return detail
 
             await _remote_wait_for_sync_version(
 
@@ -578,13 +721,24 @@ def register_session_routes(app):
 
             )
 
-            return _remote_session_detail_view(auth, session_id)
+            detail = _remote_session_detail_view(auth, session_id)
+            _require_session_company(
+                detail,
+                company_id=company_id,
+                include_legacy=include_legacy,
+            )
+            return detail
 
         user_id = int(auth["user_id"])
 
         bridge = _bridge_for_user(user_id)
 
         try:
+            _require_session_company(
+                bridge.get_session(session_id),
+                company_id=company_id,
+                include_legacy=include_legacy,
+            )
 
             session = bridge.rename_session(session_id, request.name)
 
@@ -625,8 +779,14 @@ def register_session_routes(app):
     async def delete_session(session_id: str, authorization: Optional[str] = Header(default=None)) -> DeleteSessionResponse:
 
         auth = _resolve_token(authorization)
+        company_id, include_legacy = _company_scope(auth)
 
         if _is_remote_session_auth(auth):
+            _require_session_company(
+                _remote_session_detail_view(auth, session_id),
+                company_id=company_id,
+                include_legacy=include_legacy,
+            )
 
             before = _remote_shared_state(auth)
 
@@ -679,6 +839,17 @@ def register_session_routes(app):
         user_id = int(auth["user_id"])
 
         bridge = _bridge_for_user(user_id)
+
+        try:
+            _require_session_company(
+                bridge.get_session(session_id),
+                company_id=company_id,
+                include_legacy=include_legacy,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail="Session not found") from exc
 
         previous = bridge.get_current_session()
 
@@ -872,6 +1043,7 @@ def register_session_routes(app):
     async def list_jobs(authorization: Optional[str] = Header(default=None)) -> list[ScheduledJobView]:
 
         auth = _resolve_token(authorization)
+        company_id, include_legacy = _company_scope(auth)
 
         user_id = int(auth["user_id"])
 
@@ -882,6 +1054,12 @@ def register_session_routes(app):
             items: list[ScheduledJobView] = []
 
             for raw in list(state.get("jobs") or []):
+                if not company_record_matches(
+                    raw,
+                    company_id=company_id,
+                    include_legacy=include_legacy,
+                ):
+                    continue
 
                 try:
 
@@ -892,6 +1070,12 @@ def register_session_routes(app):
                     continue
 
             for raw in _get_remote_control_store().list_automations(user_id=user_id):
+                if not company_record_matches(
+                    raw,
+                    company_id=company_id,
+                    include_legacy=include_legacy,
+                ):
+                    continue
 
                 if not any(item.id == raw.get("id") for item in items):
 
@@ -907,7 +1091,15 @@ def register_session_routes(app):
 
         bridge = _bridge_for_user(user_id)
 
-        durable_by_id = {str(item.get("id")): item for item in _get_remote_control_store().list_automations(user_id=user_id)}
+        durable_by_id = {
+            str(item.get("id")): item
+            for item in _get_remote_control_store().list_automations(user_id=user_id)
+            if company_record_matches(
+                item,
+                company_id=company_id,
+                include_legacy=include_legacy,
+            )
+        }
 
         merged: list[ScheduledJobView] = []
 
@@ -918,6 +1110,8 @@ def register_session_routes(app):
             job_id = str(job.get("id") or "")
 
             durable = dict(durable_by_id.get(job_id) or {})
+            if not durable and not include_legacy:
+                continue
 
             payload = {**durable, **job}
 

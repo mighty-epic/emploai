@@ -38,6 +38,24 @@ const gitUpdateCheckIntervalMs = 60 * 60 * 1000;
 const gitCommandTimeoutMs = 120000;
 const updateCommandTimeoutMs = 10 * 60 * 1000;
 const fleetHostStartupDelayMs = 750;
+const blockedOpenPathExtensions = new Set([
+  '.bat', '.cmd', '.com', '.cpl', '.exe', '.hta', '.jse', '.lnk', '.msi',
+  '.msp', '.ps1', '.scr', '.url', '.vbe', '.vbs', '.wsf', '.wsh',
+]);
+const rendererContentSecurityPolicy = [
+  "default-src 'self'",
+  "base-uri 'none'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'none'",
+  "script-src 'self' blob: 'wasm-unsafe-eval'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "media-src 'self' data: blob:",
+  "worker-src 'self' blob:",
+  "connect-src 'self' http://127.0.0.1:* http://localhost:* http://[::1]:* ws://127.0.0.1:* ws://localhost:* ws://[::1]:*",
+].join('; ');
 const automaticProjectParentName = 'EmploAI Chats';
 
 let mainWindow = null;
@@ -154,6 +172,15 @@ function fleetYggdrasilServices() {
     fleetYggdrasilService = createFleetYggdrasilServices({ runBackendJson });
   }
   return fleetYggdrasilService;
+}
+
+async function prepareFleetManagerForRuntime() {
+  try {
+    return await fleetYggdrasilServices().prepareManager();
+  } catch (error) {
+    console.warn('Fleet manager connection preparation failed; continuing with the local app:', error);
+    return null;
+  }
 }
 
 function schedulePairedFleetHostStart(delayMs = fleetHostStartupDelayMs) {
@@ -293,6 +320,20 @@ function resolveRendererAssetPath(rendererRoot, requestUrl) {
   }
 
   return fallbackPath;
+}
+
+async function secureRendererAssetResponse(targetFile) {
+  const response = await net.fetch(pathToFileURL(targetFile).toString());
+  const headers = new Headers(response.headers);
+  headers.set('Content-Security-Policy', rendererContentSecurityPolicy);
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('Referrer-Policy', 'no-referrer');
+  headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 function runBackendJson(args, options = {}) {
@@ -511,6 +552,9 @@ async function bootstrapRuntime(options = {}) {
   }
   const currentBootstrap = (async () => {
   emitRuntimeEvent({ type: 'bootstrap_start' });
+  if (options?.launchIfNeeded) {
+    await prepareFleetManagerForRuntime();
+  }
   const args = ['bootstrap'];
   if (options?.deferServices) {
     args.push('--defer-services');
@@ -546,6 +590,7 @@ async function startLocalRuntime(options = {}) {
   }
   startLocalRuntimePromise = (async () => {
   emitRuntimeEvent({ type: 'runtime_starting' });
+  await prepareFleetManagerForRuntime();
   const attachTimeoutSeconds = Number.isFinite(Number(options?.attachTimeoutSeconds))
     ? Math.max(2, Math.trunc(Number(options.attachTimeoutSeconds)))
     : null;
@@ -642,6 +687,10 @@ async function startCodexAuthDeviceLogin() {
   const result = await runBackendJson(['codex-auth-start-device']);
   const authUrl = String(result?.verificationUri || result?.verification_uri || '').trim();
   if (authUrl) {
+    const parsedAuthUrl = new URL(authUrl);
+    if (parsedAuthUrl.protocol !== 'https:' || parsedAuthUrl.hostname !== 'auth.openai.com') {
+      throw new Error('The authentication service returned an untrusted verification URL.');
+    }
     await shell.openExternal(authUrl);
   }
   return result;
@@ -1225,7 +1274,19 @@ async function openManagedPath(targetPath) {
   if (!value) {
     throw new Error('A path is required');
   }
-  return shell.openPath(value);
+  const looksLikeNonFileUrl = /^[a-z][a-z0-9+.-]*:/i.test(value) && !/^[a-z]:[\\/]/i.test(value);
+  if (value.startsWith('\\\\') || value.startsWith('//') || looksLikeNonFileUrl) {
+    throw new Error('Only local filesystem paths can be opened.');
+  }
+  const resolvedPath = path.resolve(value);
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error('That local path no longer exists.');
+  }
+  const state = fs.statSync(resolvedPath);
+  if (state.isFile() && blockedOpenPathExtensions.has(path.extname(resolvedPath).toLowerCase())) {
+    throw new Error('Executable and script files cannot be launched from the desktop renderer.');
+  }
+  return shell.openPath(resolvedPath);
 }
 
 function chromeCandidatePaths() {
@@ -2090,13 +2151,7 @@ async function loadRenderer(window) {
 
   const rendererIndex = resolveRendererIndex();
   if (!fs.existsSync(rendererIndex)) {
-    const html = [
-      '<html><body style="background:#0b1020;color:#fff;font-family:Segoe UI;padding:32px;">',
-      '<h2>Desktop renderer not built</h2>',
-      '<p>Run <code>npm --prefix desktop_app/renderer_client run export:web</code> before launching the desktop shell without a dev server.</p>',
-      '</body></html>',
-    ].join('');
-    await window.loadURL(`data:text/html,${encodeURIComponent(html)}`);
+    await window.loadURL(rendererMissingDataUrl());
     return;
   }
 
@@ -2122,6 +2177,7 @@ async function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -2167,10 +2223,27 @@ function showMainWindow(reason = 'activate') {
 function isAllowedRendererNavigation(rawUrl) {
   try {
     const parsed = new URL(String(rawUrl || ''));
-    return parsed.protocol === 'emploai:' || parsed.protocol === 'data:';
+    if (parsed.protocol === 'emploai:') {
+      return parsed.hostname === 'renderer';
+    }
+    if (String(rawUrl || '') === rendererMissingDataUrl()) {
+      return true;
+    }
+    const devUrl = String(process.env.EMPLOAI_DESKTOP_RENDERER_URL || '').trim();
+    return Boolean(devUrl) && parsed.origin === new URL(devUrl).origin;
   } catch (_error) {
     return false;
   }
+}
+
+function rendererMissingDataUrl() {
+  const html = [
+    '<html><body style="background:#0b1020;color:#fff;font-family:Segoe UI;padding:32px;">',
+    '<h2>Desktop renderer not built</h2>',
+    '<p>Run <code>npm --prefix desktop_app/renderer_client run export:web</code> before launching the desktop shell without a dev server.</p>',
+    '</body></html>',
+  ].join('');
+  return `data:text/html,${encodeURIComponent(html)}`;
 }
 
 function isAllowedRendererWindowOpen(rawUrl) {
@@ -2183,6 +2256,21 @@ function isAllowedRendererWindowOpen(rawUrl) {
 }
 
 function installRendererSecurityHandlers(window) {
+  const permissionSession = window.webContents.session;
+  const permissionAllowed = (webContents, permission, requestingUrl, details = {}) => {
+    if (webContents !== window.webContents || permission !== 'media' || !isAllowedRendererNavigation(requestingUrl)) {
+      return false;
+    }
+    const mediaTypes = Array.isArray(details.mediaTypes) ? details.mediaTypes : [];
+    return mediaTypes.length === 0 || mediaTypes.every((mediaType) => mediaType === 'audio');
+  };
+  permissionSession.setPermissionCheckHandler((webContents, permission, requestingOrigin) => (
+    permissionAllowed(webContents, permission, requestingOrigin)
+  ));
+  permissionSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    callback(permissionAllowed(webContents, permission, details?.requestingUrl || '', details || {}));
+  });
+
   window.webContents.on('before-input-event', (event, input) => {
     if (desktopDebugShortcutsEnabled()) {
       return;
@@ -2245,7 +2333,7 @@ app.whenReady().then(async () => {
   protocol.handle('emploai', (request) => {
     const rendererRoot = resolveRendererRoot();
     const targetFile = resolveRendererAssetPath(rendererRoot, new URL(request.url));
-    return net.fetch(pathToFileURL(targetFile).toString());
+    return secureRendererAssetResponse(targetFile);
   });
 
   ipcMain.handle('emploai:bootstrap', async (_event, payload) => {
@@ -2279,6 +2367,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('emploai:fleet:create-local-worker', async (_event, payload) => remoteControlServices().fleetCreateLocalWorker(payload || {}));
   ipcMain.handle('emploai:fleet:create-enrollment', async (_event, payload) => remoteControlServices().fleetCreateEnrollment(payload || {}));
   ipcMain.handle('emploai:fleet:yggdrasil-status', async () => fleetYggdrasilServices().status());
+  ipcMain.handle('emploai:fleet:yggdrasil-manager-refresh', async () => fleetYggdrasilServices().refreshManager());
   ipcMain.handle('emploai:fleet:yggdrasil-bootstrap', async () => fleetYggdrasilServices().bootstrap());
   ipcMain.handle('emploai:fleet:yggdrasil-create-pairing', async (_event, payload) => fleetYggdrasilServices().createPairing(payload || {}));
   ipcMain.handle('emploai:fleet:yggdrasil-join', async (_event, payload) => fleetYggdrasilServices().join(payload || {}));

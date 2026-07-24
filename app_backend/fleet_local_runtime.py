@@ -178,6 +178,11 @@ class LocalFleetRuntime:
         bridge: Any,
     ) -> tuple[str, Dict[str, Any]]:
         metadata = dict(task.get("metadata") or {})
+        company_id = str(
+            metadata.get("company_id")
+            or dict(worker.get("metadata") or {}).get("company_id")
+            or ""
+        ).strip() or None
         target_session_id = str(metadata.get("target_session_id") or "").strip()
         session = None
         if target_session_id:
@@ -185,7 +190,12 @@ class LocalFleetRuntime:
                 candidate = bridge.get_session(target_session_id)
                 candidate_worker_id = str(getattr(candidate, "fleet_worker_id", "") or "").strip()
                 candidate_role = str(getattr(candidate, "fleet_identity_role", "") or "").strip().lower()
-                if candidate_worker_id == str(worker.get("worker_id") or "").strip() and candidate_role == "worker":
+                candidate_company_id = str(getattr(candidate, "company_id", "") or "").strip()
+                if (
+                    candidate_worker_id == str(worker.get("worker_id") or "").strip()
+                    and candidate_role == "worker"
+                    and (not company_id or candidate_company_id == company_id)
+                ):
                     session = candidate
             except Exception:
                 session = None
@@ -206,6 +216,7 @@ class LocalFleetRuntime:
                 fleet_task_mode="delegated",
                 fleet_task_id=str(task.get("task_id") or "").strip() or None,
                 fleet_identity_metadata=dict(worker.get("metadata") or {}),
+                company_id=company_id,
                 activate=False,
             )
             target_session_id = str(session.id)
@@ -215,6 +226,8 @@ class LocalFleetRuntime:
                     identity_id=str(worker.get("instance_id") or ""),
                     chat_id=target_session_id,
                     source="local_runtime",
+                    company_id=company_id,
+                    include_unscoped_company_records=company_id is None,
                 )
             except Exception:
                 logger.exception("[fleet] failed selecting local worker chat")

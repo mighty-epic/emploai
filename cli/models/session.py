@@ -90,6 +90,7 @@ class SessionSummary:
     fleet_worker_id: Optional[str] = None
     fleet_task_mode: Optional[str] = None
     fleet_task_id: Optional[str] = None
+    company_id: Optional[str] = None
     account_user_id: Optional[int] = None
     account_email: Optional[str] = None
     plan_mode: Optional[Dict[str, Any]] = None
@@ -119,6 +120,7 @@ class SessionSummary:
             "fleet_worker_id": self.fleet_worker_id,
             "fleet_task_mode": self.fleet_task_mode,
             "fleet_task_id": self.fleet_task_id,
+            "company_id": self.company_id,
             "account_user_id": self.account_user_id,
             "account_email": self.account_email,
             "plan_mode": self.plan_mode,
@@ -150,6 +152,7 @@ class SessionSummary:
             fleet_worker_id=data.get("fleet_worker_id"),
             fleet_task_mode=data.get("fleet_task_mode"),
             fleet_task_id=data.get("fleet_task_id"),
+            company_id=data.get("company_id"),
             account_user_id=data.get("account_user_id"),
             account_email=data.get("account_email"),
             plan_mode=data.get("plan_mode") if isinstance(data.get("plan_mode"), dict) else None,
@@ -180,6 +183,7 @@ class Session:
     fleet_worker_id: Optional[str] = None
     fleet_task_mode: Optional[str] = None
     fleet_task_id: Optional[str] = None
+    company_id: Optional[str] = None
     account_user_id: Optional[int] = None
     account_email: Optional[str] = None
     plan_mode: Optional[Dict[str, Any]] = None
@@ -228,6 +232,7 @@ class Session:
             "fleet_worker_id": self.fleet_worker_id,
             "fleet_task_mode": self.fleet_task_mode,
             "fleet_task_id": self.fleet_task_id,
+            "company_id": self.company_id,
             "account_user_id": self.account_user_id,
             "account_email": self.account_email,
             "plan_mode": self.plan_mode,
@@ -266,6 +271,7 @@ class Session:
             fleet_worker_id=data.get("fleet_worker_id"),
             fleet_task_mode=data.get("fleet_task_mode"),
             fleet_task_id=data.get("fleet_task_id"),
+            company_id=data.get("company_id"),
             account_user_id=data.get("account_user_id"),
             account_email=data.get("account_email"),
             plan_mode=data.get("plan_mode") if isinstance(data.get("plan_mode"), dict) else None,
@@ -312,6 +318,7 @@ class Session:
             fleet_worker_id=self.fleet_worker_id,
             fleet_task_mode=self.fleet_task_mode,
             fleet_task_id=self.fleet_task_id,
+            company_id=self.company_id,
             account_user_id=self.account_user_id,
             account_email=self.account_email,
             plan_mode=self.plan_mode,

@@ -388,7 +388,7 @@ def _ensure_runtime(
 ) -> tuple[Any, str]:
     status = _get_runtime_status()
     if status.ok:
-        if not _attached_runtime_requires_restart_checked(status, home=home):
+        if not _attached_runtime_requires_restart_checked(status, home=home, config=config):
             return status, "attached"
 
         incompatible_pids = _managed_runtime_pids(home, config, status=status)
@@ -403,7 +403,7 @@ def _ensure_runtime(
                 break
             time.sleep(0.2)
         status = _get_runtime_status()
-        if status.ok and not _attached_runtime_requires_restart_checked(status, home=home):
+        if status.ok and not _attached_runtime_requires_restart_checked(status, home=home, config=config):
             return status, "reattached"
 
     if not config.enabled:
@@ -645,9 +645,10 @@ def _attached_runtime_requires_restart_checked(
     *,
     home: Path | None = None,
     root: Path | None = None,
+    config: "DesktopRuntimeConfig" | None = None,
 ) -> bool:
     try:
-        return _attached_runtime_requires_restart(status, home=home, root=root)
+        return _attached_runtime_requires_restart(status, home=home, root=root, config=config)
     except TypeError as exc:
         if "unexpected keyword" not in str(exc):
             raise
@@ -821,7 +822,20 @@ def _runtime_compatibility_issue(
     )
 
 
-def _attached_runtime_requires_restart(status: Any, *, home: Path | None = None, root: Path | None = None) -> bool:
+def _normalized_runtime_bind_host(value: Any) -> str:
+    host = str(value or "").strip().lower()
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    return host
+
+
+def _attached_runtime_requires_restart(
+    status: Any,
+    *,
+    home: Path | None = None,
+    root: Path | None = None,
+    config: "DesktopRuntimeConfig" | None = None,
+) -> bool:
     if not getattr(status, "ok", False):
         return False
     health_pid = _runtime_health_process_id(status)
@@ -830,6 +844,13 @@ def _attached_runtime_requires_restart(status: Any, *, home: Path | None = None,
     if home is not None:
         record = _read_pid_record(home)
         if record and int(record.get("pid") or 0) == health_pid:
+            if config is not None:
+                record_host = _normalized_runtime_bind_host(record.get("host"))
+                expected_host = _normalized_runtime_bind_host(config.host)
+                record_port = int(record.get("port") or 0)
+                expected_port = int(config.port or 0)
+                if record_host != expected_host or record_port != expected_port:
+                    return True
             expected_release = current_release_version(root or bundle_root())
             record_release = str(record.get("releaseVersion") or "").strip()
             if record_release and record_release != expected_release:

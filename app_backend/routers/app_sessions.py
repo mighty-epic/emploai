@@ -14,6 +14,7 @@ from app_backend.models import (
     SessionSummaryView,
     TimelineEventAppendRequest,
 )
+from app_backend.company_runtime_context import resolve_local_company_runtime
 from shared.channel_sync import get_channel_sync_hub
 
 
@@ -33,18 +34,77 @@ class AppSessionsRouterDeps:
     mirror_session_snapshot: Callable[..., None]
     check_rate_limit: Callable[..., None]
     rate_limit_max_attempts: int
+    get_company_store: Callable[[], Any]
+    get_fleet_store: Callable[[], Any]
 
 
 def create_app_sessions_router(deps: AppSessionsRouterDeps) -> APIRouter:
     router = APIRouter(tags=["app-sessions"])
 
+    def company_scope(auth: Dict[str, Any]) -> tuple[Optional[str], bool]:
+        if deps.is_remote_session_auth(auth):
+            computer_id = str(auth.get("desktop_id") or "").strip()
+            company_id = (
+                deps.get_company_store().active_company_id(computer_id=computer_id)
+                if computer_id
+                else None
+            )
+            if not company_id:
+                return None, True
+            company = deps.get_company_store().get_company(company_id)
+        else:
+            runtime = resolve_local_company_runtime(
+                auth=auth,
+                company_store=deps.get_company_store(),
+                fleet_store=deps.get_fleet_store(),
+            )
+            if not runtime:
+                return None, True
+            company_id = str(runtime["company_id"])
+            company = runtime["company"]
+        include_legacy = str((company.get("migration") or {}).get("state") or "") == "legacy_compatibility"
+        return str(company_id), include_legacy
+
+    def session_matches_company(session: Any, company_id: Optional[str], include_legacy: bool) -> bool:
+        if not company_id:
+            return True
+        value = str(
+            session.get("company_id") if isinstance(session, dict)
+            else getattr(session, "company_id", None)
+            or ""
+        ).strip()
+        return value == company_id or (include_legacy and not value)
+
+    def require_local_session_company(
+        bridge: Any,
+        session_id: str,
+        company_id: Optional[str],
+        include_legacy: bool,
+    ) -> Any:
+        try:
+            session = bridge.get_session(session_id)
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail="Session not found") from exc
+        if not session_matches_company(session, company_id, include_legacy):
+            raise HTTPException(status_code=404, detail="Session not found in the selected company")
+        return session
+
     @router.get("/api/app/sessions", response_model=list[SessionSummaryView])
     async def list_sessions(authorization: Optional[str] = Header(default=None)) -> list[SessionSummaryView]:
         auth = dict(deps.resolve_token(authorization))
+        company_id, include_legacy = company_scope(auth)
         if deps.is_remote_session_auth(auth):
-            return deps.remote_session_summary_views(auth)
+            return [
+                item
+                for item in deps.remote_session_summary_views(auth)
+                if session_matches_company(item.model_dump(), company_id, include_legacy)
+            ]
         bridge = deps.bridge_for_user(int(auth["user_id"]))
-        return [SessionSummaryView(**bridge.summarize_session_summary(s)) for s in bridge.list_session_summaries()]
+        return [
+            SessionSummaryView(**bridge.summarize_session_summary(s))
+            for s in bridge.list_session_summaries()
+            if session_matches_company(s, company_id, include_legacy)
+        ]
 
     @router.post("/api/app/sessions/search", response_model=SessionSearchResponse)
     async def search_sessions(
@@ -53,30 +113,52 @@ def create_app_sessions_router(deps: AppSessionsRouterDeps) -> APIRouter:
     ) -> SessionSearchResponse:
         auth = dict(deps.resolve_token(authorization))
         user_id = int(auth["user_id"])
+        company_id, include_legacy = company_scope(auth)
         if deps.is_remote_session_auth(auth):
             results = _search_remote_shared_sessions(
                 state=deps.remote_shared_state(auth),
                 query=request.query,
                 limit=request.limit,
             )
+            allowed_ids = {
+                item.id
+                for item in deps.remote_session_summary_views(auth)
+                if session_matches_company(item.model_dump(), company_id, include_legacy)
+            }
+            results = [item for item in results if str(item.get("session_id") or "") in allowed_ids]
             return SessionSearchResponse(results=[SessionSearchResultView(**item) for item in results])
 
         bridge = deps.bridge_for_user(user_id)
+        allowed_ids = {
+            summary.id
+            for summary in bridge.list_session_summaries()
+            if session_matches_company(summary, company_id, include_legacy)
+        }
         results = deps.search_sessions_in_manager(
             user_id=user_id,
             session_manager=bridge.session_manager,
             query=request.query,
             limit=request.limit,
         )
+        results = [item for item in results if str(item.get("session_id") or "") in allowed_ids]
         return SessionSearchResponse(results=[SessionSearchResultView(**item) for item in results])
 
     @router.get("/api/app/sessions/{session_id}", response_model=SessionDetailView)
     async def get_session(session_id: str, authorization: Optional[str] = Header(default=None)) -> SessionDetailView:
         auth = dict(deps.resolve_token(authorization))
+        company_id, include_legacy = company_scope(auth)
         if deps.is_remote_session_auth(auth):
-            return deps.remote_session_detail_view(auth, session_id)
+            detail = deps.remote_session_detail_view(auth, session_id)
+            if not session_matches_company(detail.model_dump(), company_id, include_legacy):
+                raise HTTPException(status_code=404, detail="Session not found in the selected company")
+            return detail
         bridge = deps.bridge_for_user(int(auth["user_id"]))
-        session = bridge.get_session(session_id)
+        session = require_local_session_company(
+            bridge,
+            session_id,
+            company_id,
+            include_legacy,
+        )
         return SessionDetailView(**bridge.detailed_session_view(session))
 
     @router.post("/api/app/sessions/{session_id}/timeline")
@@ -88,6 +170,7 @@ def create_app_sessions_router(deps: AppSessionsRouterDeps) -> APIRouter:
     ) -> dict:
         auth = _require_local_desktop_session_backend(deps, authorization)
         user_id = int(auth["user_id"])
+        company_id, include_legacy = company_scope(auth)
         deps.check_rate_limit(
             http_request,
             email=str(user_id),
@@ -95,6 +178,12 @@ def create_app_sessions_router(deps: AppSessionsRouterDeps) -> APIRouter:
             max_attempts=deps.rate_limit_max_attempts,
         )
         bridge = deps.bridge_for_user(user_id)
+        require_local_session_company(
+            bridge,
+            session_id,
+            company_id,
+            include_legacy,
+        )
         event = bridge.append_timeline_event(
             session_id=session_id,
             kind=request.kind,

@@ -72,6 +72,7 @@ class SessionManager:
         headless_eligible: bool = False,
         workspace_id: Optional[str] = None,
         workspace_binding_status: Optional[str] = None,
+        company_id: Optional[str] = None,
     ) -> Session:
         """Create a new session.
         
@@ -109,6 +110,7 @@ class SessionManager:
             headless_eligible=bool(headless_eligible),
             workspace_id=_stable_workspace_id(workspace or Path.cwd(), workspace_id),
             workspace_binding_status=_workspace_binding_status(workspace or Path.cwd(), workspace_binding_status),
+            company_id=str(company_id or "").strip() or None,
         )
         
         with _SESSION_IO_LOCK:
@@ -162,6 +164,125 @@ class SessionManager:
         except Exception:
             # Context inspection is optional and must never block chat persistence.
             pass
+
+    def migrate_unscoped_sessions_to_company(
+        self,
+        company_id: str,
+    ) -> Dict[str, Any]:
+        """Bind legacy local chats to one explicitly confirmed Company."""
+
+        clean_company_id = str(company_id or "").strip()
+        if not clean_company_id:
+            raise ValueError("A company ID is required for session migration.")
+        migrated_ids: List[str] = []
+        already_scoped = 0
+        with _SESSION_IO_LOCK:
+            for session_file in self._session_file_paths():
+                session_id = session_file.stem
+                try:
+                    session = self.load_session(
+                        session_id,
+                        set_current=False,
+                    )
+                except (OSError, ValueError):
+                    continue
+                existing_company_id = str(
+                    getattr(session, "company_id", None) or ""
+                ).strip()
+                if existing_company_id:
+                    if existing_company_id == clean_company_id:
+                        already_scoped += 1
+                    continue
+                session.company_id = clean_company_id
+                self._save_session(session)
+                self._update_index(session)
+                migrated_ids.append(session.id)
+            if (
+                self.current_session is not None
+                and not str(
+                    getattr(self.current_session, "company_id", None) or ""
+                ).strip()
+            ):
+                self.current_session.company_id = clean_company_id
+        return {
+            "company_id": clean_company_id,
+            "migrated_count": len(migrated_ids),
+            "already_scoped_count": already_scoped,
+            "session_ids": migrated_ids,
+        }
+
+    def preview_unscoped_sessions(self) -> Dict[str, int]:
+        unscoped = 0
+        scoped = 0
+        unreadable = 0
+        with _SESSION_IO_LOCK:
+            for session_file in self._session_file_paths():
+                try:
+                    payload = self._read_session_payload(session_file.stem)
+                except (OSError, ValueError):
+                    unreadable += 1
+                    continue
+                if str(payload.get("company_id") or "").strip():
+                    scoped += 1
+                else:
+                    unscoped += 1
+        return {
+            "unscoped_count": unscoped,
+            "scoped_count": scoped,
+            "unreadable_count": unreadable,
+        }
+
+    def delete_company_sessions(self, company_id: str) -> Dict[str, Any]:
+        """Delete persisted chats belonging to one deliberately deleted Company."""
+
+        clean_company_id = str(company_id or "").strip()
+        if not clean_company_id:
+            raise ValueError("A company ID is required for session deletion.")
+        deleted_ids: List[str] = []
+        with _SESSION_IO_LOCK:
+            for session_file in self._session_file_paths():
+                try:
+                    payload = self._read_session_payload(session_file.stem)
+                except (OSError, ValueError):
+                    continue
+                if (
+                    str(payload.get("company_id") or "").strip()
+                    != clean_company_id
+                ):
+                    continue
+                session_id = str(payload.get("id") or session_file.stem)
+                if session_file.exists():
+                    session_file.unlink()
+                backup_file = self._session_backup_file(session_id)
+                if backup_file.exists():
+                    backup_file.unlink()
+                deleted_ids.append(session_id)
+                if (
+                    self.current_session is not None
+                    and self.current_session.id == session_id
+                ):
+                    self.current_session = None
+            if deleted_ids:
+                sessions, current_session_id = self._synchronize_index_locked()
+                remaining = [
+                    summary for summary in sessions
+                    if summary.id not in set(deleted_ids)
+                ]
+                if current_session_id in deleted_ids:
+                    current_session_id = remaining[0].id if remaining else None
+                self._write_index_payload(
+                    {
+                        "sessions": [
+                            summary.to_dict() for summary in remaining
+                        ],
+                        "current_session_id": current_session_id,
+                    }
+                )
+        return {
+            "company_id": clean_company_id,
+            "deleted_count": len(deleted_ids),
+            "session_ids": deleted_ids,
+        }
 
     def _recovery_dir(self) -> Path:
         return self.sessions_dir / ".recovery"
@@ -272,6 +393,7 @@ class SessionManager:
                 fleet_worker_id=payload.get("fleet_worker_id"),
                 fleet_task_mode=payload.get("fleet_task_mode"),
                 fleet_task_id=payload.get("fleet_task_id"),
+                company_id=payload.get("company_id"),
                 account_user_id=payload.get("account_user_id"),
                 account_email=payload.get("account_email"),
             )

@@ -71,6 +71,9 @@ from shared.tool_packs import (
 
 STEERING_BETA_ENV = "EMPLO_APP_STEERING_BETA_ENABLED"
 FLEET_MANAGER_TOOL_CACHE_SECONDS = 8.0
+# Company authority and job changes must apply on the next turn. The request is
+# local-only, so correctness is preferable to retaining a stale prompt cache.
+COMPANY_IDENTITY_CONTEXT_CACHE_SECONDS = 0.0
 
 def _fleet_tool(
     name: str,
@@ -346,6 +349,7 @@ def _fleet_api_request(
     payload: Optional[Dict[str, Any]] = None,
     *,
     confirmation_id: Optional[str] = None,
+    company_id: Optional[str] = None,
     timeout_seconds: float = 10.0,
 ) -> Dict[str, Any]:
     config = _local_fleet_api_config()
@@ -355,6 +359,9 @@ def _fleet_api_request(
         bounded_timeout = max(1.0, float(timeout_seconds or 10.0))
         timeout = httpx.Timeout(bounded_timeout, connect=min(10.0, bounded_timeout), read=bounded_timeout, write=bounded_timeout)
         headers = {"Authorization": f"Bearer {config['token']}"}
+        clean_company_id = str(company_id or "").strip()
+        if clean_company_id:
+            headers["X-EmploAI-Company-Id"] = clean_company_id
         clean_confirmation_id = str(confirmation_id or "").strip()
         if clean_confirmation_id:
             headers["X-EmploAI-Confirmation-Id"] = clean_confirmation_id
@@ -380,8 +387,53 @@ def _fleet_api_request(
         return {"error": f"Fleet API request failed: {type(exc).__name__}: {exc}", "error_type": "fleet_api_unavailable"}
 
 
-def _fleet_snapshot_uncached() -> Dict[str, Any]:
+def _session_company_id(session: Any) -> Optional[str]:
+    persisted = getattr(session, "session", None)
+    return str(
+        getattr(session, "company_id", None)
+        or getattr(persisted, "company_id", None)
+        or ""
+    ).strip() or None
+
+
+def _fleet_api_request_for_session(
+    session: Any,
+    method: str,
+    path: str,
+    payload: Optional[Dict[str, Any]] = None,
+    *,
+    confirmation_id: Optional[str] = None,
+    timeout_seconds: float = 10.0,
+) -> Dict[str, Any]:
+    request_kwargs: Dict[str, Any] = {}
+    if float(timeout_seconds or 10.0) != 10.0:
+        request_kwargs["timeout_seconds"] = timeout_seconds
+    clean_confirmation_id = str(confirmation_id or "").strip()
+    if clean_confirmation_id:
+        request_kwargs["confirmation_id"] = clean_confirmation_id
+    company_id = _session_company_id(session)
+    if company_id:
+        request_kwargs["company_id"] = company_id
+    return _fleet_api_request(method, path, payload, **request_kwargs)
+
+
+def _fleet_snapshot_uncached(session: Any = None) -> Dict[str, Any]:
+    company_id = _session_company_id(session) if session is not None else None
+    if company_id:
+        return _fleet_api_request(
+            "GET",
+            "/api/fleet/snapshot",
+            company_id=company_id,
+        )
     return _fleet_api_request("GET", "/api/fleet/snapshot")
+
+
+def _fleet_snapshot_for_session(session: Any) -> Dict[str, Any]:
+    """Preserve unscoped Fleet adapters while Company-scoping known sessions."""
+
+    if _session_company_id(session):
+        return _fleet_snapshot_uncached(session=session)
+    return _fleet_snapshot_uncached()
 
 
 def _fleet_manager_tool_context(session: Any) -> Dict[str, Any]:
@@ -400,7 +452,7 @@ def _fleet_manager_tool_context(session: Any) -> Dict[str, Any]:
         return cached
 
     config = _local_fleet_api_config()
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     workers = list(snapshot.get("workers") or []) if isinstance(snapshot, dict) else []
     manager = snapshot.get("manager") if isinstance(snapshot, dict) and isinstance(snapshot.get("manager"), dict) else None
     is_primary_manager = bool(manager)
@@ -426,6 +478,341 @@ async def _resolve_fleet_manager_tool_context(session: Any) -> Dict[str, Any]:
     until the HTTP timeout expires.
     """
     return await asyncio.to_thread(_fleet_manager_tool_context, session)
+
+
+def _company_identity_context(session: Any) -> Dict[str, Any]:
+    company_id = _session_company_id(session)
+    if not company_id:
+        return {}
+    now = time.monotonic()
+    cached = getattr(session, "_company_identity_context", None)
+    if (
+        isinstance(cached, dict)
+        and now - float(cached.get("fetched_at") or 0.0)
+        < COMPANY_IDENTITY_CONTEXT_CACHE_SECONDS
+    ):
+        return cached
+    company = _fleet_api_request_for_session(
+        session,
+        "GET",
+        f"/api/companies/{quote(company_id, safe='')}",
+        timeout_seconds=5.0,
+    )
+    if company.get("error"):
+        return {}
+    identity_id = str(
+        getattr(session, "fleet_identity_id", None)
+        or getattr(getattr(session, "session", None), "fleet_identity_id", None)
+        or ""
+    ).strip()
+    employee = next(
+        (
+            item
+            for item in list(company.get("employees") or [])
+            if str(item.get("identity_id") or "") == identity_id
+        ),
+        {},
+    )
+    employee_id = str(employee.get("employee_id") or "")
+    position = next(
+        (
+            item
+            for item in list(company.get("positions") or [])
+            if str(item.get("employee_id") or "") == employee_id
+            or str(item.get("identity_id") or "") == identity_id
+            or str(item.get("occupant_identity_id") or "")
+            == identity_id
+        ),
+        {},
+    )
+    position_id = str(position.get("position_id") or "")
+    contract = next(
+        (
+            item
+            for item in list(company.get("job_contracts") or [])
+            if str(item.get("position_id") or "") == position_id
+            or (
+                employee_id
+                and str(item.get("employee_id") or "") == employee_id
+            )
+        ),
+        {},
+    )
+    department_id = str(position.get("department_id") or "")
+    department = next(
+        (
+            item
+            for item in list(company.get("departments") or [])
+            if str(item.get("department_id") or "") == department_id
+        ),
+        {},
+    )
+    context = {
+        "company_id": company_id,
+        "company_name": str(
+            (company.get("manifest") or {}).get("display_name")
+            or company.get("display_name")
+            or "this company"
+        ),
+        "manifest": dict(company.get("manifest") or {}),
+        "employee": dict(employee or {}),
+        "position": dict(position or {}),
+        "department": dict(department or {}),
+        "job_contract": dict(contract or {}),
+        "policies": [
+            dict(item)
+            for item in list(company.get("policies") or [])
+            if str(item.get("status") or "active") == "active"
+        ],
+        "knowledge": [
+            dict(item)
+            for item in list(company.get("knowledge") or [])
+            if str(item.get("status") or "active") == "active"
+        ],
+        "decisions": [
+            dict(item)
+            for item in list(company.get("decisions") or [])
+            if str(item.get("status") or "active") == "active"
+        ],
+        "fetched_at": now,
+    }
+    try:
+        setattr(session, "_company_identity_context", context)
+    except Exception:
+        pass
+    return context
+
+
+async def _resolve_company_identity_context(session: Any) -> Dict[str, Any]:
+    return await asyncio.to_thread(_company_identity_context, session)
+
+
+def _company_identity_contract(context: Dict[str, Any], *, role: str) -> Dict[str, str]:
+    company_name = str(context.get("company_name") or "this company")
+    manifest = dict(context.get("manifest") or {})
+    employee = dict(context.get("employee") or {})
+    position = dict(context.get("position") or {})
+    job_contract = dict(context.get("job_contract") or {})
+    company_role = str(employee.get("company_role") or "").strip() or (
+        "Manager" if role == "manager" else "Employee"
+    )
+    job_title = str(
+        position.get("title")
+        or position.get("display_name")
+        or job_contract.get("job_title")
+        or ""
+    ).strip()
+    purpose = str(
+        manifest.get("purpose")
+        or manifest.get("mission")
+        or manifest.get("company_purpose")
+        or ""
+    ).strip()
+    lines = [
+        "COMPANY MEMBERSHIP:",
+        f"- You are operating inside {company_name} as {company_role}.",
+        "- The human operator is the ultimate authority. Company roles never override Fleet pairing, tool grants, safety policy, permissions, or resource locks.",
+        "- Treat the user's stated objective and success criteria as authoritative. Optional improvements may be suggested or reported separately, but never silently turned into required work.",
+    ]
+    if job_title:
+        lines.append(f"- Your assigned job is {job_title}. Follow its contract only within your actual enabled tools and granted authority.")
+    contract_status = str(job_contract.get("status") or "").strip()
+    mission = str(job_contract.get("mission") or "").strip()
+    responsibilities = [
+        str(item).strip()
+        for item in list(job_contract.get("responsibilities") or [])
+        if str(item).strip()
+    ][:10]
+    non_responsibilities = [
+        str(item).strip()
+        for item in list(
+            job_contract.get("non_responsibilities") or []
+        )
+        if str(item).strip()
+    ][:8]
+    deliverables = [
+        str(item).strip()
+        for item in list(job_contract.get("deliverables") or [])
+        if str(item).strip()
+    ][:8]
+    quality_gates = [
+        str(item).strip()
+        for item in list(job_contract.get("quality_gates") or [])
+        if str(item).strip()
+    ][:8]
+    authority = dict(job_contract.get("authority") or {})
+    limitations = str(job_contract.get("limitations") or "").strip()
+    company_policies = [
+        item
+        for item in list(context.get("policies") or [])
+        if isinstance(item, dict)
+    ]
+    company_knowledge = [
+        item
+        for item in list(context.get("knowledge") or [])
+        if isinstance(item, dict)
+    ]
+    company_decisions = [
+        item
+        for item in list(context.get("decisions") or [])
+        if isinstance(item, dict)
+    ]
+    if contract_status:
+        lines.append(
+            f"- Job-contract readiness: {contract_status.replace('_', ' ')}."
+        )
+    if mission:
+        lines.append(f"- Job mission: {mission[:1600]}")
+    if responsibilities:
+        lines.append(
+            "- Responsibilities: "
+            + "; ".join(responsibilities)[:2400]
+        )
+    if non_responsibilities:
+        lines.append(
+            "- Outside this job: "
+            + "; ".join(non_responsibilities)[:1800]
+        )
+    if deliverables:
+        lines.append(
+            "- Expected deliverables: "
+            + "; ".join(deliverables)[:1800]
+        )
+    if quality_gates:
+        lines.append(
+            "- Quality gates: "
+            + "; ".join(quality_gates)[:1800]
+        )
+    if authority:
+        lines.append(
+            "- Contract authority: "
+            + "; ".join(
+                f"{key}={value}" for key, value in authority.items()
+            )[:1200]
+        )
+    if limitations:
+        lines.append(f"- Limited-mode restrictions: {limitations[:1600]}")
+    if contract_status in {"setup_incomplete", "blocked"}:
+        lines.append(
+            "- This specialist is not ready for ordinary Company assignments. "
+            "In direct chat, limit work to setup, readiness testing, and "
+            "operator-requested planning until the manager records readiness."
+        )
+    if purpose:
+        lines.append(f"- Published company purpose: {purpose[:1200]}")
+    operating_state = str(
+        manifest.get("operating_state") or "active"
+    ).strip().lower()
+    if operating_state == "paused":
+        lines.append(
+            "- COMPANY PAUSED BY THE ROOT OPERATOR: do not start, resume, or "
+            "delegate new Company work. Preserve state and only help with "
+            "recovery, review, or an explicit resume decision."
+        )
+    if bool(employee.get("assignment_paused")):
+        lines.append(
+            "- New Company assignments are paused for this employee. Do not "
+            "accept or begin new assigned work until the operator resumes it."
+        )
+    if bool(dict(context.get("department") or {}).get("assignment_paused")):
+        lines.append(
+            "- New Company assignments are paused for this department. Do not "
+            "accept or begin department work until the operator resumes it."
+        )
+    external_action_default = str(
+        manifest.get("external_action_default") or "draft_only"
+    ).strip()
+    lines.append(
+        "- Company external-action default: "
+        f"{external_action_default.replace('_', ' ')}. "
+        "Never treat a draft as permission to execute."
+    )
+    external_action_policies = dict(
+        manifest.get("external_action_policies") or {}
+    )
+    if external_action_policies:
+        lines.append(
+            "- External-action category boundaries "
+            "(the narrowest applicable grant controls): "
+            + "; ".join(
+                f"{str(category).replace('_', ' ')}="
+                f"{str(level).replace('_', ' ')}"
+                for category, level in sorted(
+                    external_action_policies.items()
+                )
+            )[:2400]
+        )
+        lines.append(
+            "- Disabled means do not prepare or execute that external action. "
+            "Draft only permits a private draft, approval required needs a "
+            "scoped approval immediately before execution, and autonomous "
+            "levels remain bounded by the job, assignment, recipient, budget, "
+            "tool grant, Fleet permission, and safety policy."
+        )
+    reserved_decisions = [
+        str(item).strip()
+        for item in list(manifest.get("reserved_decisions") or [])
+        if str(item).strip()
+    ][:12]
+    if reserved_decisions:
+        lines.append(
+            "- Decisions reserved to the human operator: "
+            + "; ".join(reserved_decisions)[:2400]
+        )
+    if company_policies:
+        lines.append("- Active Company policies:")
+        for policy in company_policies[:20]:
+            title = str(policy.get("title") or "Policy").strip()
+            rule = str(policy.get("rule") or "").strip()
+            if rule:
+                lines.append(f"  - {title}: {rule[:1200]}")
+    if company_decisions:
+        lines.append("- Active operator decisions:")
+        for decision in company_decisions[-12:]:
+            question = str(
+                decision.get("question") or "Recorded decision"
+            ).strip()
+            answer = str(decision.get("decision") or "").strip()
+            if answer:
+                lines.append(f"  - {question}: {answer[:1200]}")
+    if company_knowledge:
+        lines.append(
+            "- Explicitly published Company knowledge "
+            "(use as sourced context, not as permission):"
+        )
+        remaining = 6000
+        for item in company_knowledge[:8]:
+            if remaining <= 0:
+                break
+            title = str(item.get("title") or "Knowledge").strip()
+            content = str(item.get("content") or "").strip()
+            provenance = item.get("provenance")
+            source = str(
+                provenance.get("source")
+                if isinstance(provenance, dict)
+                else provenance or ""
+            ).strip()
+            entry = f"  - {title}: {content}"
+            if source:
+                entry += f" (source: {source})"
+            entry = entry[:remaining]
+            lines.append(entry)
+            remaining -= len(entry)
+    if role == "manager":
+        lines.extend(
+            [
+                "- Convert accepted objectives into clear assignments, route execution to eligible workers, and review evidence before business acceptance.",
+                "- Worker completion is never business acceptance. The assigning manager must review every non-CEO report.",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "- Execute only assigned work. Ask the owning manager for help, approval, or clarification rather than delegating directly to another worker.",
+                "- Report completion, evidence, artifacts, blockers, confidence, and suggested next action; the manager owns acceptance or rework.",
+            ]
+        )
+    return {"role": "system", "content": "\n".join(lines)}
 
 
 def _invalidate_fleet_manager_tool_context(session: Any) -> None:
@@ -456,7 +843,7 @@ def _fleet_tool_request_manager(session: Any, args: Dict[str, Any]) -> Dict[str,
         or getattr(persisted, "fleet_task_id", None)
         or ""
     ).strip() or None
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     local_task = next(
         (
             item
@@ -481,7 +868,8 @@ def _fleet_tool_request_manager(session: Any, args: Dict[str, Any]) -> Dict[str,
         )
         metadata["manager_requests"] = requests[-50:]
         target_status = "blocked" if request_kind == "blocked" else "needs_review"
-        updated = _fleet_api_request(
+        updated = _fleet_api_request_for_session(
+            session,
             "PUT",
             f"/api/fleet/tasks/{quote(task_id, safe='')}/status",
             {"status": target_status, "metadata": metadata},
@@ -631,7 +1019,8 @@ def _fleet_confirmation_required(
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     session_id = str(getattr(getattr(session, "session", None), "id", "") or "").strip() or None
-    created = _fleet_api_request(
+    created = _fleet_api_request_for_session(
+        session,
         "POST",
         "/api/app/confirmations",
         {
@@ -691,7 +1080,8 @@ def _fleet_confirmation_id_for_execution(
             "error": "The latest user message did not explicitly confirm this Fleet action.",
             "error_type": "confirmation_required",
         }
-    approved = _fleet_api_request(
+    approved = _fleet_api_request_for_session(
+        session,
         "POST",
         f"/api/app/confirmations/{quote(confirmation_id, safe='')}/approve",
         {"decided_by_surface": "manager_agent", "decided_by_actor": session_id_for_confirmation(session)},
@@ -821,7 +1211,7 @@ def _is_fleet_worker_session(session: Any) -> bool:
 
 
 def _fleet_tool_list_workers(session: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     if snapshot.get("error"):
         return snapshot
     _invalidate_fleet_manager_tool_context(session)
@@ -829,7 +1219,8 @@ def _fleet_tool_list_workers(session: Any, _args: Dict[str, Any]) -> Dict[str, A
 
 
 def _fleet_tool_create_local_worker(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "POST",
         "/api/fleet/workers/local",
         {
@@ -842,7 +1233,8 @@ def _fleet_tool_create_local_worker(session: Any, args: Dict[str, Any]) -> Dict[
 
 
 def _fleet_tool_create_enrollment(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "POST",
         "/api/fleet/enrollments",
         {
@@ -931,7 +1323,7 @@ def _fleet_compact_computer_view(snapshot: Dict[str, Any], computer: Dict[str, A
 
 
 def _fleet_tool_list_computers(session: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     if snapshot.get("error"):
         return snapshot
     _invalidate_fleet_manager_tool_context(session)
@@ -960,7 +1352,8 @@ def _fleet_tool_delegate(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
     prompt = str(args.get("prompt") or "").strip()
     if not prompt:
         return {"error": "prompt is required.", "error_type": "missing_prompt"}
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "POST",
         "/api/fleet/delegations/route",
         {
@@ -978,11 +1371,12 @@ def _fleet_tool_delegate(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def _fleet_tool_context_search(_session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+def _fleet_tool_context_search(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
     query = str(args.get("query") or "").strip()
     if not query:
         return {"error": "query is required.", "error_type": "missing_query"}
-    return _fleet_api_request(
+    return _fleet_api_request_for_session(
+        session,
         "POST",
         "/api/fleet/context/search",
         {
@@ -994,11 +1388,12 @@ def _fleet_tool_context_search(_session: Any, args: Dict[str, Any]) -> Dict[str,
     )
 
 
-def _fleet_tool_context_window(_session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+def _fleet_tool_context_window(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
     message_id = str(args.get("message_id") or "").strip()
     if not message_id:
         return {"error": "message_id is required.", "error_type": "missing_message_id"}
-    return _fleet_api_request(
+    return _fleet_api_request_for_session(
+        session,
         "POST",
         "/api/fleet/context/window",
         {
@@ -1011,7 +1406,7 @@ def _fleet_tool_context_window(_session: Any, args: Dict[str, Any]) -> Dict[str,
 
 
 def _fleet_tool_delegate_computer(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     if snapshot.get("error"):
         return snapshot
     computer = _fleet_find_computer(snapshot, str(args.get("computer") or ""))
@@ -1023,7 +1418,8 @@ def _fleet_tool_delegate_computer(session: Any, args: Dict[str, Any]) -> Dict[st
     target_kind = str(args.get("target_kind") or "worker").strip().lower()
     if target_kind not in {"manager", "worker"}:
         return {"error": "target_kind must be manager or worker.", "error_type": "invalid_target_kind"}
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "POST",
         "/api/fleet/delegations/route",
         {
@@ -1041,7 +1437,7 @@ def _fleet_tool_delegate_computer(session: Any, args: Dict[str, Any]) -> Dict[st
 
 
 def _fleet_tool_create_worker_on_computer(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     if snapshot.get("error"):
         return snapshot
     computer = _fleet_find_computer(snapshot, str(args.get("computer") or ""))
@@ -1050,7 +1446,8 @@ def _fleet_tool_create_worker_on_computer(session: Any, args: Dict[str, Any]) ->
     display_name = str(args.get("display_name") or "").strip()
     if not display_name:
         return {"error": "display_name is required.", "error_type": "missing_display_name"}
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "POST",
         f"/api/fleet/desktops/{quote(str(computer.get('desktop_id') or ''), safe='')}/workers",
         {"display_name": display_name},
@@ -1060,7 +1457,7 @@ def _fleet_tool_create_worker_on_computer(session: Any, args: Dict[str, Any]) ->
 
 
 def _fleet_tool_set_computer_manager_tools(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     if snapshot.get("error"):
         return snapshot
     computer = _fleet_find_computer(snapshot, str(args.get("computer") or ""))
@@ -1069,7 +1466,8 @@ def _fleet_tool_set_computer_manager_tools(session: Any, args: Dict[str, Any]) -
     enabled_tool_packs = args.get("enabled_tool_packs")
     if not isinstance(enabled_tool_packs, list):
         return {"error": "enabled_tool_packs must be a list.", "error_type": "invalid_tool_packs"}
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "PUT",
         f"/api/fleet/desktops/{quote(str(computer.get('desktop_id') or ''), safe='')}/manager/tool-packs",
         {"enabled_tool_packs": [str(item) for item in enabled_tool_packs]},
@@ -1084,7 +1482,7 @@ def _fleet_tool_computer_host_action(
     *,
     action: str,
 ) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     computer = _fleet_find_computer(snapshot, str(args.get("computer") or ""))
     if not computer:
         return {"error": "Paired computer not found or name is ambiguous.", "error_type": "computer_not_found"}
@@ -1097,7 +1495,8 @@ def _fleet_tool_computer_host_action(
         "update_status": "update",
         "update_check": "update/check",
     }[action]
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         method,
         f"/api/fleet/desktops/{desktop_id}/{suffix}",
         {} if method == "POST" else None,
@@ -1108,7 +1507,7 @@ def _fleet_tool_computer_host_action(
 
 
 def _fleet_tool_update_computer(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     computer = _fleet_find_computer(snapshot, str(args.get("computer") or ""))
     if not computer:
         return {"error": "Paired computer not found or name is ambiguous.", "error_type": "computer_not_found"}
@@ -1127,7 +1526,8 @@ def _fleet_tool_update_computer(session: Any, args: Dict[str, Any]) -> Dict[str,
     if confirmation_error:
         return confirmation_error
     desktop_id = quote(str(computer.get("desktop_id") or ""), safe="")
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "POST",
         f"/api/fleet/desktops/{desktop_id}/update/start",
         {"expected_commit": expected_commit},
@@ -1139,11 +1539,12 @@ def _fleet_tool_update_computer(session: Any, args: Dict[str, Any]) -> Dict[str,
 
 
 def _fleet_tool_rename_worker(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     worker = _fleet_find_worker(snapshot, str(args.get("worker") or ""))
     if not worker:
         return {"error": "Worker not found.", "error_type": "worker_not_found"}
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "PUT",
         f"/api/fleet/workers/{quote(str(worker.get('worker_id') or ''), safe='')}",
         {"display_name": str(args.get("display_name") or "").strip(), "metadata": {"renamed_by": "manager_agent"}},
@@ -1153,7 +1554,7 @@ def _fleet_tool_rename_worker(session: Any, args: Dict[str, Any]) -> Dict[str, A
 
 
 def _fleet_tool_reset_or_delete_worker(session: Any, args: Dict[str, Any], *, reset: bool) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     worker = _fleet_find_worker(snapshot, str(args.get("worker") or ""))
     if not worker:
         return {"error": "Worker not found.", "error_type": "worker_not_found"}
@@ -1177,7 +1578,8 @@ def _fleet_tool_reset_or_delete_worker(session: Any, args: Dict[str, Any], *, re
         if reset
         else f"/api/fleet/workers/{quote(str(worker.get('worker_id') or ''), safe='')}?wipe_state=true"
     )
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "POST" if reset else "DELETE",
         path,
         {"reason": str(args.get("reason") or action), "metadata": {"requested_by": "manager_agent"}} if reset else None,
@@ -1187,15 +1589,16 @@ def _fleet_tool_reset_or_delete_worker(session: Any, args: Dict[str, Any], *, re
     return result
 
 
-def _fleet_tool_list_groups(_session: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+def _fleet_tool_list_groups(session: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot = _fleet_snapshot_for_session(session)
     if snapshot.get("error"):
         return snapshot
     return {"groups": list(snapshot.get("groups") or []), "count": len(list(snapshot.get("groups") or []))}
 
 
 def _fleet_tool_create_group(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "POST",
         "/api/fleet/groups",
         {
@@ -1210,11 +1613,12 @@ def _fleet_tool_create_group(session: Any, args: Dict[str, Any]) -> Dict[str, An
 
 
 def _fleet_tool_update_group(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     group = _fleet_find_group(snapshot, str(args.get("group") or ""))
     if not group:
         return {"error": "Group not found.", "error_type": "group_not_found"}
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "PUT",
         f"/api/fleet/groups/{quote(str(group.get('group_id') or ''), safe='')}",
         {
@@ -1229,7 +1633,7 @@ def _fleet_tool_update_group(session: Any, args: Dict[str, Any]) -> Dict[str, An
 
 
 def _fleet_tool_delete_group(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     group = _fleet_find_group(snapshot, str(args.get("group") or ""))
     if not group:
         return {"error": "Group not found.", "error_type": "group_not_found"}
@@ -1247,7 +1651,8 @@ def _fleet_tool_delete_group(session: Any, args: Dict[str, Any]) -> Dict[str, An
     )
     if confirmation_error:
         return confirmation_error
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "DELETE",
         f"/api/fleet/groups/{quote(str(group.get('group_id') or ''), safe='')}",
         confirmation_id=confirmation_id,
@@ -1257,7 +1662,7 @@ def _fleet_tool_delete_group(session: Any, args: Dict[str, Any]) -> Dict[str, An
 
 
 def _fleet_tool_assign_task(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     if snapshot.get("error"):
         return snapshot
     worker = _fleet_find_worker(snapshot, str(args.get("worker") or ""))
@@ -1266,7 +1671,8 @@ def _fleet_tool_assign_task(session: Any, args: Dict[str, Any]) -> Dict[str, Any
     prompt = str(args.get("prompt") or "").strip()
     if not prompt:
         return {"error": "Task prompt is required.", "error_type": "missing_prompt"}
-    task = _fleet_api_request(
+    task = _fleet_api_request_for_session(
+        session,
         "POST",
         f"/api/fleet/workers/{quote(str(worker.get('worker_id') or ''), safe='')}/tasks",
         {"prompt": prompt, "source": "manager_agent", "metadata": {"assigned_by": "manager_agent", **dict(args.get("metadata") or {})}},
@@ -1286,7 +1692,7 @@ def _fleet_tool_assign_task(session: Any, args: Dict[str, Any]) -> Dict[str, Any
 
 
 def _fleet_tool_assign_group_task(session: Any, args: Dict[str, Any], *, message: bool = False) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     if snapshot.get("error"):
         return snapshot
     group = _fleet_find_group(snapshot, str(args.get("group") or ""))
@@ -1310,7 +1716,8 @@ def _fleet_tool_assign_group_task(session: Any, args: Dict[str, Any], *, message
     )
     if confirmation_error:
         return confirmation_error
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "POST",
         f"/api/fleet/groups/{quote(str(group.get('group_id') or ''), safe='')}/tasks",
         {
@@ -1340,7 +1747,7 @@ def _fleet_tool_send_worker_message(session: Any, args: Dict[str, Any]) -> Dict[
 
 
 def _fleet_tool_inspect_worker(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     if snapshot.get("error"):
         return snapshot
     _invalidate_fleet_manager_tool_context(session)
@@ -1362,8 +1769,8 @@ def _fleet_tool_inspect_worker(session: Any, args: Dict[str, Any]) -> Dict[str, 
     }
 
 
-def _fleet_tool_read_report(_session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+def _fleet_tool_read_report(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot = _fleet_snapshot_for_session(session)
     if snapshot.get("error"):
         return snapshot
     report = _fleet_find_report(snapshot, report_id=str(args.get("report_id") or ""), task_id=str(args.get("task_id") or ""))
@@ -1372,8 +1779,8 @@ def _fleet_tool_read_report(_session: Any, args: Dict[str, Any]) -> Dict[str, An
     return {"report": report, "next_valid_actions": ["fleet_continue_worker_queue", "fleet_open_worker_timeline"]}
 
 
-def _fleet_tool_inspect_evidence(_session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+def _fleet_tool_inspect_evidence(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot = _fleet_snapshot_for_session(session)
     if snapshot.get("error"):
         return snapshot
     report = _fleet_find_report(snapshot, report_id=str(args.get("report_id") or ""), task_id=str(args.get("task_id") or ""))
@@ -1398,8 +1805,8 @@ def _fleet_tool_inspect_evidence(_session: Any, args: Dict[str, Any]) -> Dict[st
     }
 
 
-def _fleet_tool_open_worker_timeline(_session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+def _fleet_tool_open_worker_timeline(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot = _fleet_snapshot_for_session(session)
     if snapshot.get("error"):
         return snapshot
     worker = _fleet_find_worker(snapshot, str(args.get("worker") or ""))
@@ -1411,18 +1818,23 @@ def _fleet_tool_open_worker_timeline(_session: Any, args: Dict[str, Any]) -> Dic
     return {"worker": _fleet_compact_worker_view(snapshot, worker), "tasks": tasks, "reports": reports}
 
 
-def _fleet_tool_request_worker_preview(_session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+def _fleet_tool_request_worker_preview(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot = _fleet_snapshot_for_session(session)
     if snapshot.get("error"):
         return snapshot
     worker = _fleet_find_worker(snapshot, str(args.get("worker") or ""))
     if not worker:
         return {"error": "Worker not found.", "error_type": "worker_not_found"}
-    return _fleet_api_request("POST", f"/api/fleet/workers/{quote(str(worker.get('worker_id') or ''), safe='')}/preview", {})
+    return _fleet_api_request_for_session(
+        session,
+        "POST",
+        f"/api/fleet/workers/{quote(str(worker.get('worker_id') or ''), safe='')}/preview",
+        {},
+    )
 
 
-def _fleet_tool_search_reports(_session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+def _fleet_tool_search_reports(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot = _fleet_snapshot_for_session(session)
     if snapshot.get("error"):
         return snapshot
     worker = None
@@ -1459,7 +1871,7 @@ def _fleet_tool_search_reports(_session: Any, args: Dict[str, Any]) -> Dict[str,
 
 
 def _fleet_tool_redirect_worker_task(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     if snapshot.get("error"):
         return snapshot
     task_id = str(args.get("task_id") or "").strip()
@@ -1470,7 +1882,8 @@ def _fleet_tool_redirect_worker_task(session: Any, args: Dict[str, Any]) -> Dict
         task_id = str(worker.get("active_task_id") or "").strip()
     if not task_id:
         return {"error": "No active task found to redirect.", "error_type": "task_not_found"}
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "POST",
         f"/api/fleet/tasks/{quote(task_id, safe='')}/redirect",
         {"direction": str(args.get("direction") or "").strip(), "source": "manager_agent", "metadata": {"redirected_by": "manager_agent"}},
@@ -1483,7 +1896,8 @@ def _fleet_tool_delete_queued_message(session: Any, args: Dict[str, Any]) -> Dic
     task_id = str(args.get("task_id") or "").strip()
     if not task_id:
         return {"error": "task_id is required.", "error_type": "missing_task_id"}
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "PUT",
         f"/api/fleet/tasks/{quote(task_id, safe='')}/status",
         {"status": "canceled", "metadata": {"canceled_by": "manager_agent", "reason": "queued message deleted"}},
@@ -1493,7 +1907,7 @@ def _fleet_tool_delete_queued_message(session: Any, args: Dict[str, Any]) -> Dic
 
 
 def _fleet_tool_steer_queued_message(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     if snapshot.get("error"):
         return snapshot
     queued = _fleet_find_task(snapshot, str(args.get("task_id") or ""))
@@ -1505,7 +1919,8 @@ def _fleet_tool_steer_queued_message(session: Any, args: Dict[str, Any]) -> Dict
     active_task_id = str((worker or {}).get("active_task_id") or "").strip()
     if not active_task_id:
         return {"error": "Worker has no active task to steer.", "error_type": "worker_idle"}
-    redirect = _fleet_api_request(
+    redirect = _fleet_api_request_for_session(
+        session,
         "POST",
         f"/api/fleet/tasks/{quote(active_task_id, safe='')}/redirect",
         {
@@ -1514,7 +1929,8 @@ def _fleet_tool_steer_queued_message(session: Any, args: Dict[str, Any]) -> Dict
             "metadata": {"steered_from_queued_task_id": queued.get("task_id")},
         },
     )
-    cancel = _fleet_api_request(
+    cancel = _fleet_api_request_for_session(
+        session,
         "PUT",
         f"/api/fleet/tasks/{quote(str(queued.get('task_id') or ''), safe='')}/status",
         {"status": "canceled", "metadata": {"canceled_by": "manager_agent", "steered_to_task_id": active_task_id}},
@@ -1524,11 +1940,12 @@ def _fleet_tool_steer_queued_message(session: Any, args: Dict[str, Any]) -> Dict
 
 
 def _fleet_tool_reorder_worker_queue(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     worker = _fleet_find_worker(snapshot, str(args.get("worker") or ""))
     if not worker:
         return {"error": "Worker not found.", "error_type": "worker_not_found"}
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "PUT",
         "/api/fleet/tasks/reorder",
         {"worker_id": worker.get("worker_id"), "task_ids": list(args.get("task_ids") or [])},
@@ -1538,11 +1955,12 @@ def _fleet_tool_reorder_worker_queue(session: Any, args: Dict[str, Any]) -> Dict
 
 
 def _fleet_tool_continue_worker_queue(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     worker = _fleet_find_worker(snapshot, str(args.get("worker") or ""))
     if not worker:
         return {"error": "Worker not found.", "error_type": "worker_not_found"}
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "POST",
         f"/api/fleet/workers/{quote(str(worker.get('worker_id') or ''), safe='')}/queue/continue",
         {
@@ -1556,11 +1974,12 @@ def _fleet_tool_continue_worker_queue(session: Any, args: Dict[str, Any]) -> Dic
 
 
 def _fleet_tool_stop_worker(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     worker = _fleet_find_worker(snapshot, str(args.get("worker") or ""))
     if not worker:
         return {"error": "Worker not found.", "error_type": "worker_not_found"}
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "POST",
         f"/api/fleet/workers/{quote(str(worker.get('worker_id') or ''), safe='')}/stop",
         {"reason": str(args.get("reason") or "Stopped by manager agent"), "metadata": {"stopped_by": "manager_agent"}},
@@ -1584,7 +2003,8 @@ def _fleet_tool_stop_all(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
     )
     if confirmation_error:
         return confirmation_error
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "POST",
         "/api/fleet/stop-all",
         {"reason": str(args.get("reason") or "Fleet stop all"), "metadata": {"stopped_by": "manager_agent"}},
@@ -1605,7 +2025,7 @@ def _fleet_tool_update_task(session: Any, args: Dict[str, Any]) -> Dict[str, Any
     if action not in status_by_action:
         return {"error": "Unsupported action. Use pause, resume, stop, or cancel.", "error_type": "invalid_action"}
 
-    snapshot = _fleet_snapshot_uncached()
+    snapshot = _fleet_snapshot_for_session(session)
     if snapshot.get("error"):
         return snapshot
     task_id = str(args.get("task_id") or "").strip()
@@ -1616,7 +2036,8 @@ def _fleet_tool_update_task(session: Any, args: Dict[str, Any]) -> Dict[str, Any
         task_id = str(worker.get("active_task_id") or "").strip()
     if not task_id:
         return {"error": "No active task was found to update.", "error_type": "task_not_found"}
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "PUT",
         f"/api/fleet/tasks/{quote(task_id, safe='')}/status",
         {"status": status_by_action[action], "metadata": {"reason": str(args.get("reason") or ""), "updated_by": "manager_agent"}},
@@ -1625,8 +2046,8 @@ def _fleet_tool_update_task(session: Any, args: Dict[str, Any]) -> Dict[str, Any
     return result
 
 
-def _fleet_tool_list_tool_grants(_session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+def _fleet_tool_list_tool_grants(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot = _fleet_snapshot_for_session(session)
     if snapshot.get("error"):
         return snapshot
     worker = _fleet_find_worker(snapshot, str(args.get("worker") or "")) if str(args.get("worker") or "").strip() else None
@@ -1647,7 +2068,8 @@ def _fleet_tool_decide_tool_grant(session: Any, args: Dict[str, Any]) -> Dict[st
         turns = max(1, min(10, int(approved_turns))) if approved_turns is not None else None
     except Exception:
         turns = None
-    result = _fleet_api_request(
+    result = _fleet_api_request_for_session(
+        session,
         "POST",
         f"/api/fleet/tool-grants/{quote(str(args.get('grant_id') or ''), safe='')}/decision",
         {"approved": bool(args.get("approved")), "approved_turns": turns, "approved_by": "manager_agent"},
@@ -1656,8 +2078,8 @@ def _fleet_tool_decide_tool_grant(session: Any, args: Dict[str, Any]) -> Dict[st
     return result
 
 
-def _fleet_tool_check_workspace_binding(_session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
-    snapshot = _fleet_snapshot_uncached()
+def _fleet_tool_check_workspace_binding(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot = _fleet_snapshot_for_session(session)
     if snapshot.get("error"):
         return snapshot
     workspace_id = str(args.get("workspace_id") or "").strip()
@@ -1673,7 +2095,7 @@ def _fleet_tool_check_workspace_binding(_session: Any, args: Dict[str, Any]) -> 
     return {"bindings": bindings, "can_write": bool(active), "status": "active" if active else "needs_reconnect"}
 
 
-def _fleet_tool_request_workspace_reconnect(_session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+def _fleet_tool_request_workspace_reconnect(session: Any, args: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "ok": True,
         "status": "needs_user_action",
@@ -2078,7 +2500,10 @@ async def run_app_chat_turn(
     screen_observation_turn = is_screen_observation_message(user_message)
     task_like_turn = screen_observation_turn or is_task_like_message(user_message)
     tool_evidence_turn = request_requires_tool_evidence(user_message)
-    fleet_tool_context = await _resolve_fleet_manager_tool_context(session)
+    fleet_tool_context, company_identity_context = await asyncio.gather(
+        _resolve_fleet_manager_tool_context(session),
+        _resolve_company_identity_context(session),
+    )
     active_tool_packs = list(
         getattr(session, "_active_tool_packs_for_current_run", None)
         or getattr(session, "enabled_tool_packs", [])
@@ -2110,6 +2535,17 @@ async def run_app_chat_turn(
         system_messages.append(_jarvis_voice_response_contract())
     if source_format == "app_visual_monitor":
         system_messages.append(_visual_monitor_wake_contract(surface_mode))
+    if company_identity_context:
+        system_messages.append(
+            _company_identity_contract(
+                company_identity_context,
+                role=(
+                    "worker"
+                    if _is_fleet_worker_session(session)
+                    else "manager"
+                ),
+            )
+        )
     if _is_fleet_worker_session(session):
         system_messages.append(_fleet_worker_contract(session))
     upstream_tool_enabled = _fleet_upstream_tool_enabled()

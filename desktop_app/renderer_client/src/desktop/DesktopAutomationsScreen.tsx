@@ -13,6 +13,7 @@ import {
   cancelAutomationEventRun,
   cancelProcessWait,
   createJob,
+  fetchAgentOverview,
   fetchAutomationEventRuns,
   fetchCronFeed,
   fetchFleetSnapshot,
@@ -26,6 +27,7 @@ import {
   updateJob,
   updatePlannerContractStatus,
   type AutomationEventRun,
+  type AgentOverview,
   type CronFeedItem,
   type FleetSnapshot,
   type PlannerContract,
@@ -110,10 +112,12 @@ export default function DesktopAutomationsScreen() {
   const stackedLayout = width < 760;
   const { confirm, confirmationDialog } = useConfirmation();
   const initialParamsAppliedRef = useRef(false);
+  const initialEmptyStateOpenedRef = useRef(false);
 
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [jobs, setJobs] = useState<ScheduledJob[]>([]);
   const [fleetSnapshot, setFleetSnapshot] = useState<FleetSnapshot | null>(null);
+  const [agentOverview, setAgentOverview] = useState<AgentOverview | null>(null);
   const [feed, setFeed] = useState<CronFeedItem[]>([]);
   const [eventRuns, setEventRuns] = useState<AutomationEventRun[]>([]);
   const [processWaits, setProcessWaits] = useState<ProcessWait[]>([]);
@@ -177,8 +181,9 @@ export default function DesktopAutomationsScreen() {
       fetchProcessWaits(baseUrl, accessToken),
       fetchPlannerContracts(baseUrl, accessToken),
       fetchFleetSnapshot(baseUrl, accessToken).catch(() => null),
+      fetchAgentOverview(baseUrl, accessToken).catch(() => null),
     ]);
-    const applyWorkspace = ([sessionList, jobList, feedItems, runItems, processItems, plannerItems, fleetData]: Awaited<ReturnType<typeof requestWorkspace>>) => {
+    const applyWorkspace = ([sessionList, jobList, feedItems, runItems, processItems, plannerItems, fleetData, overviewData]: Awaited<ReturnType<typeof requestWorkspace>>) => {
       const nextJobs = Array.isArray(jobList) ? jobList : [];
       setSessions(Array.isArray(sessionList) ? sessionList : []);
       setJobs(nextJobs);
@@ -187,6 +192,17 @@ export default function DesktopAutomationsScreen() {
       setProcessWaits(Array.isArray(processItems) ? processItems : []);
       setPlannerContracts(Array.isArray(plannerItems) ? plannerItems : []);
       setFleetSnapshot(fleetData);
+      setAgentOverview(overviewData);
+      if (!nextJobs.length && !initialEmptyStateOpenedRef.current && params.compose !== 'edit') {
+        initialEmptyStateOpenedRef.current = true;
+        const identityList = fleetData?.identities || [];
+        const draft = emptyAutomationDraft();
+        draft.targetKind = 'identity';
+        draft.targetIdentityId = fleetData?.active_identity_id || identityList[0]?.identity_id || '';
+        draft.model = overviewData?.current_model || '';
+        draft.variant = overviewData?.current_variant || 'medium';
+        setEditor((current) => current || { mode: 'create', draft, key: `new-${Date.now()}` });
+      }
       setSelectedJobId((current) => current && nextJobs.some((job) => job.id === current) ? current : nextJobs[0]?.id || null);
     };
     try {
@@ -225,6 +241,8 @@ export default function DesktopAutomationsScreen() {
   const selectedJob = jobs.find((job) => job.id === selectedJobId) || null;
   const identities = fleetSnapshot?.identities || [];
   const groups = fleetSnapshot?.groups || [];
+  const selectedJobIdentityLabel = selectedJob ? identities.find((identity) => identity.identity_id === selectedJob.target_identity_id)?.display_name || null : null;
+  const selectedJobChatLabel = selectedJob ? sessions.find((session) => session.id === selectedJob.target_chat_id)?.name || null : null;
 
   useEffect(() => {
     if (initialParamsAppliedRef.current || !jobs.length) return;
@@ -234,7 +252,7 @@ export default function DesktopAutomationsScreen() {
     if (params.compose === 'edit' && requestedJob) {
       setEditor({ mode: 'edit', jobId: requestedJob.id, draft: draftFromAutomation(requestedJob), key: `edit-${requestedJob.id}` });
     } else if (params.compose === 'new') {
-      setEditor({ mode: 'create', draft: emptyAutomationDraft(), key: `new-${Date.now()}` });
+      setEditor({ mode: 'create', draft: prepareCreateDraft(), key: `new-${Date.now()}` });
     }
   }, [jobs, params.automation, params.compose]);
 
@@ -251,8 +269,18 @@ export default function DesktopAutomationsScreen() {
     setRouteParams({ automation: job.id, view: 'overview', compose: undefined });
   };
 
-  const openCreate = (draft = emptyAutomationDraft()) => {
-    setEditor({ mode: 'create', draft, key: `new-${Date.now()}` });
+  function prepareCreateDraft(source?: AutomationEditorDraft) {
+    return {
+      ...(source || emptyAutomationDraft()),
+      targetKind: 'identity' as const,
+      targetIdentityId: source?.targetIdentityId || fleetSnapshot?.active_identity_id || identities[0]?.identity_id || '',
+      model: source?.model || agentOverview?.current_model || '',
+      variant: source?.variant || agentOverview?.current_variant || 'medium',
+    };
+  }
+
+  const openCreate = (draft?: AutomationEditorDraft) => {
+    setEditor({ mode: 'create', draft: prepareCreateDraft(draft), key: `new-${Date.now()}` });
     setRouteParams({ compose: 'new', automation: selectedJobId || undefined });
   };
 
@@ -436,9 +464,12 @@ export default function DesktopAutomationsScreen() {
               selectedJobId={selectedJobId}
               query={query}
               filter={filter}
+              suggestions={QUICK_TEMPLATES}
               onQueryChange={(value) => { setQuery(value); setRouteParams({ q: value || undefined }); }}
               onFilterChange={(value) => { setFilter(value); setRouteParams({ filter: value === 'all' ? undefined : value }); }}
               onSelect={selectJob}
+              onCreate={() => openCreate()}
+              onSelectSuggestion={(draft) => openCreate(draft)}
             />
           ) : null}
           <View style={styles.mainPane}>
@@ -450,6 +481,8 @@ export default function DesktopAutomationsScreen() {
                 identities={identities}
                 groups={groups}
                 sessions={sessions}
+                modelGroups={agentOverview?.model_groups || []}
+                variants={agentOverview?.available_variants || []}
                 busy={busyAction === 'save'}
                 onSave={saveEditor}
                 onRequestClose={closeEditor}
@@ -473,30 +506,17 @@ export default function DesktopAutomationsScreen() {
                 onRunAction={(run, action) => void handleRunAction(run, action)}
                 onProcessAction={(item, action) => void handleProcessAction(item, action)}
                 onPlannerSatisfied={(item) => void markPlannerSatisfied(item)}
+                identityLabel={selectedJobIdentityLabel}
+                chatLabel={selectedJobChatLabel}
               />
             ) : (
               <View style={styles.heroEmpty}>
                 <View style={styles.heroInner}>
-                  <Text style={styles.heroTitle}>Schedule work.</Text>
-                  <Text style={styles.heroCopy}>Runs locally with your chosen approval rules.</Text>
-                  <View style={styles.templateGrid}>
-                    {QUICK_TEMPLATES.map((template) => (
-                      <Pressable
-                        key={template.label}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Create from ${template.label} template`}
-                        style={({ hovered, pressed }: DesktopPressableState) => [styles.template, hovered ? styles.templateHover : null, pressed ? styles.buttonPressed : null]}
-                        onPress={() => openCreate(template.draft)}
-                      >
-                        <Text style={styles.templateTitle}>{template.label}</Text>
-                        <Text style={styles.templateCopy}>{template.description}</Text>
-                        <Text style={styles.templateSchedule}>{template.schedule}</Text>
-                      </Pressable>
-                    ))}
-                  </View>
+                  <Text style={styles.heroTitle}>Choose a scheduled task.</Text>
+                  <Text style={styles.heroCopy}>Select an automation from the list, or create a new one for any local manager or worker.</Text>
                   <View style={styles.inlineActions}>
                     <Pressable accessibilityRole="button" style={headerButtonStyle(true)} onPress={() => openCreate()}>
-                      <Text style={[styles.buttonText, styles.primaryButtonText]}>Start From Scratch</Text>
+                      <Text style={[styles.buttonText, styles.primaryButtonText]}>New automation</Text>
                     </Pressable>
                   </View>
                 </View>

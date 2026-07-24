@@ -5,7 +5,12 @@ import pytest
 
 from cli.models.session import Session
 from shared.context_loader import ContextLoader
-from shared.memory import MemoryManager
+from shared.memory import (
+    delete_company_memory,
+    MemoryManager,
+    get_memory_manager,
+    migrate_legacy_memory_to_company,
+)
 from local_agent_runtime.browser_tool import ARIA_SNAPSHOT_JS
 from telegram_bot.telegram_runtime_tools import _execute_update_memory
 
@@ -131,6 +136,76 @@ def test_memory_manager_uses_runtime_home_when_present(monkeypatch, tmp_path):
     assert manager.workspace == runtime_home.resolve()
     assert manager.memory_file == runtime_home.resolve() / "MEMORY.md"
     assert manager.memory_dir == runtime_home.resolve() / "memory"
+
+
+def test_company_identity_memory_is_isolated_and_legacy_memory_moves_once(
+    monkeypatch,
+    tmp_path,
+):
+    runtime_home = tmp_path / "runtime-home"
+    monkeypatch.setenv("EMPLOAI_HOME", str(runtime_home))
+    legacy = get_memory_manager(tmp_path / "workspace")
+    legacy.append_to_memory(
+        "Context",
+        "- Legacy direction belongs to the original Company manager.",
+    )
+    legacy.fact_store.add_fact(
+        "Legacy structured fact.",
+        category="company",
+    )
+
+    report = migrate_legacy_memory_to_company(
+        runtime_home,
+        company_id="company-a",
+        identity_id="manager-a",
+    )
+    manager_a = get_memory_manager(
+        runtime_home,
+        company_id="company-a",
+        identity_id="manager-a",
+    )
+    worker_a = get_memory_manager(
+        runtime_home,
+        company_id="company-a",
+        identity_id="worker-a",
+    )
+    manager_b = get_memory_manager(
+        runtime_home,
+        company_id="company-b",
+        identity_id="manager-b",
+    )
+
+    assert report["migrated"] is True
+    assert "Legacy direction" in manager_a.read_memory()
+    assert manager_a.search_memory("structured fact")
+    assert "Legacy direction" not in worker_a.read_memory()
+    assert "Legacy direction" not in manager_b.read_memory()
+
+    manager_a.append_to_memory("Context", "- Company A private memory.")
+    assert "Company A private memory" not in worker_a.read_memory()
+    assert "Company A private memory" not in manager_b.read_memory()
+    assert (
+        migrate_legacy_memory_to_company(
+            runtime_home,
+            company_id="company-b",
+            identity_id="manager-b",
+        )["reason"]
+        == "already_migrated"
+    )
+
+    cleanup = delete_company_memory(
+        runtime_home,
+        company_id="company-a",
+    )
+    assert cleanup["deleted"] is True
+    recreated = get_memory_manager(
+        runtime_home,
+        company_id="company-a",
+        identity_id="manager-a",
+    )
+    assert "Company A private memory" not in recreated.read_memory()
+    assert "Legacy direction" not in recreated.read_memory()
+    assert "Legacy direction" not in manager_b.read_memory()
 
 
 def test_context_loader_includes_local_tools_file(monkeypatch, tmp_path):

@@ -449,6 +449,8 @@ class AppSessionBridge:
         name: Optional[str] = None,
         workspace: Optional[Path] = None,
         *,
+        model: Optional[str] = None,
+        variant: Optional[str] = None,
         telegram_bot_config_id: Optional[str] = None,
         enabled_tool_packs: Optional[List[str]] = None,
         security_permission_mode: Optional[str] = None,
@@ -460,6 +462,7 @@ class AppSessionBridge:
         fleet_worker_id: Optional[str] = None,
         fleet_task_mode: Optional[str] = None,
         fleet_task_id: Optional[str] = None,
+        company_id: Optional[str] = None,
         fleet_identity_metadata: Optional[Dict[str, Any]] = None,
         activate: bool = True,
     ) -> Session:
@@ -490,8 +493,8 @@ class AppSessionBridge:
         create_kwargs = {
             "name": name,
             "workspace": target_workspace,
-            "model": defaults["model"],
-            "variant": defaults["variant"],
+            "model": str(model or "").strip() or defaults["model"],
+            "variant": str(variant or "").strip() or defaults["variant"],
             "agent_mode": defaults["agent_mode"],
             "planner_model": defaults["planner_model"],
             "enabled_tool_packs": resolved_tool_packs,
@@ -499,6 +502,9 @@ class AppSessionBridge:
             "telegram_bot_config_id": telegram_bot_config_id if telegram_bot_config_id is not None else defaults["telegram_bot_config_id"],
             "headless_eligible": bool(headless_eligible if headless_eligible is not None else defaults["headless_eligible"]),
         }
+        clean_company_id = str(company_id or "").strip() or None
+        if clean_company_id:
+            create_kwargs["company_id"] = clean_company_id
         if workspace_id is not None:
             create_kwargs["workspace_id"] = workspace_id
         if workspace_binding_status is not None:
@@ -513,7 +519,8 @@ class AppSessionBridge:
         session.fleet_worker_id = str(fleet_worker_id or "").strip() or None
         session.fleet_task_mode = str(fleet_task_mode or "").strip().lower() or ("direct" if clean_identity_role == "worker" else None)
         session.fleet_task_id = str(fleet_task_id or "").strip() or None
-        if session.account_user_id is not None or session.fleet_identity_id or session.fleet_identity_role or session.fleet_worker_id or session.fleet_task_mode or session.fleet_task_id:
+        session.company_id = clean_company_id
+        if session.account_user_id is not None or session.fleet_identity_id or session.fleet_identity_role or session.fleet_worker_id or session.fleet_task_mode or session.fleet_task_id or session.company_id:
             self.session_manager.save_session(session)
 
         if activate:
@@ -522,6 +529,34 @@ class AppSessionBridge:
                 runtime.load_session_by_id(session.id)
                 return runtime.session
         return self._load_session(session.id, set_current=False)
+
+    def update_session_model_config(
+        self,
+        session_id: str,
+        *,
+        model: str,
+        variant: Optional[str] = None,
+    ) -> Session:
+        clean_model = str(model or "").strip()
+        if not clean_model:
+            raise ValueError("model is required")
+        runtime = self._runtime()
+        current_id = self.session_manager.get_current_session_id()
+        if runtime and str(current_id or "") == str(session_id):
+            if getattr(runtime, "is_processing", False):
+                raise RuntimeError("The automation chat is currently processing another message")
+            runtime.current_model = clean_model
+            if str(variant or "").strip():
+                runtime.current_variant = str(variant).strip()
+            runtime.save_session()
+            return runtime.session
+
+        session = self._load_session(session_id, set_current=False)
+        session.model = clean_model
+        if str(variant or "").strip():
+            session.variant = str(variant).strip()
+        self.session_manager.save_session(session)
+        return self._load_session(session_id, set_current=False)
 
     def activate_session(self, session_id: str) -> Session:
         session = self._load_session(session_id, set_current=False)
@@ -707,6 +742,7 @@ class AppSessionBridge:
             "fleet_worker_id": getattr(session, "fleet_worker_id", None),
             "fleet_task_mode": getattr(session, "fleet_task_mode", None),
             "fleet_task_id": getattr(session, "fleet_task_id", None),
+            "company_id": getattr(session, "company_id", None),
             "account_user_id": getattr(session, "account_user_id", None),
             "account_email": getattr(session, "account_email", None),
             "plan_mode": getattr(session, "plan_mode", None),
@@ -735,6 +771,7 @@ class AppSessionBridge:
             "fleet_worker_id": getattr(session, "fleet_worker_id", None),
             "fleet_task_mode": getattr(session, "fleet_task_mode", None),
             "fleet_task_id": getattr(session, "fleet_task_id", None),
+            "company_id": getattr(session, "company_id", None),
             "account_user_id": getattr(session, "account_user_id", None),
             "account_email": getattr(session, "account_email", None),
             "plan_mode": getattr(session, "plan_mode", None),
@@ -779,6 +816,7 @@ class AppSessionBridge:
             "fleet_worker_id": getattr(session, "fleet_worker_id", None),
             "fleet_task_mode": getattr(session, "fleet_task_mode", None),
             "fleet_task_id": getattr(session, "fleet_task_id", None),
+            "company_id": getattr(session, "company_id", None),
             "account_user_id": getattr(session, "account_user_id", None),
             "account_email": getattr(session, "account_email", None),
             "plan_mode": getattr(session, "plan_mode", None),
@@ -1045,6 +1083,7 @@ class AppSessionBridge:
                 "origin_telegram_bot_config_id": getattr(job, "origin_telegram_bot_config_id", None),
                 "origin_workspace": getattr(job, "origin_workspace", None),
                 "origin_model": getattr(job, "origin_model", None),
+                "origin_variant": getattr(job, "origin_variant", None),
                 "origin_enabled_tool_packs": list(getattr(job, "origin_enabled_tool_packs", []) or []),
                 "one_time": bool(getattr(job, "one_time", False)),
             })

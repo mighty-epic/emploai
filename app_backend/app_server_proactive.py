@@ -21,6 +21,32 @@ def _install_proactive_event_store_callback() -> None:
         metadata = dict(payload.get("metadata") or {})
 
         store = _get_remote_control_store()
+        if not str(metadata.get("company_id") or "").strip():
+            automation_id = str(payload.get("automation_id") or "").strip()
+            if automation_id:
+                try:
+                    automation = store.get_automation(
+                        user_id=user_id,
+                        automation_id=automation_id,
+                    )
+                    metadata["company_id"] = dict(
+                        automation.get("metadata") or {}
+                    ).get("company_id")
+                except Exception:
+                    pass
+        if not str(metadata.get("company_id") or "").strip():
+            session_id = str(
+                payload.get("session_id")
+                or metadata.get("session_id")
+                or metadata.get("target_chat_id")
+                or ""
+            ).strip()
+            if session_id:
+                try:
+                    session = _bridge_for_user(user_id).get_session(session_id)
+                    metadata["company_id"] = getattr(session, "company_id", None)
+                except Exception:
+                    pass
 
         event_source = str(payload.get("event_source") or "").strip()
 
@@ -613,6 +639,8 @@ def _restore_scheduler_job_from_durable(*, user_id: int, automation_id: str) -> 
             origin_workspace=metadata.get("origin_workspace"),
 
             origin_model=metadata.get("origin_model"),
+
+            origin_variant=metadata.get("origin_variant"),
 
             origin_enabled_tool_packs=list(metadata.get("origin_enabled_tool_packs") or durable.get("tool_packs") or []),
 

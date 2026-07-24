@@ -8,6 +8,7 @@ import { DesktopSetupOnboardingSection } from './DesktopSetupOnboardingSection';
 import { DesktopSetupSharedSettingsSection } from './DesktopSetupSharedSettingsSection';
 import { DesktopSetupVoiceSection } from './DesktopSetupVoiceSection';
 import { DesktopSetupRuntimePacksSection } from './DesktopSetupRuntimePacksSection';
+import { DesktopFleetManagerSettings } from './DesktopFleetManagerSettings';
 import { VOICE_ENGINE_ENGLISH, VOICE_ENGINE_HEBREW, VOICE_ENGINE_NONE } from './desktopVoicePolicy';
 import { configuredProviderChipLabels, normalizeDesktopSetupValues } from './setupValues';
 import { buildOnboardingSuggestion, type OnboardingSuggestion } from './desktopOnboardingStatus';
@@ -122,10 +123,11 @@ type Props = {
   focusPackId?: string | null;
 };
 
-export type SettingsTabKey = 'general' | 'onboarding' | 'chrome' | 'remote' | 'telegram' | 'voice' | 'packs' | 'recovery';
+export type SettingsTabKey = 'general' | 'fleet_local' | 'onboarding' | 'chrome' | 'remote' | 'telegram' | 'voice' | 'packs' | 'recovery';
 
 const SETTINGS_TABS: Array<{ key: SettingsTabKey; label: string; description: string }> = [
   { key: 'general', label: 'General', description: 'Models, keys, workspace, memory' },
+  { key: 'fleet_local', label: 'This Computer’s Manager', description: 'Local manager tools and delegation' },
   { key: 'onboarding', label: 'Onboarding', description: 'Project identity, tools, and workflows' },
   { key: 'chrome', label: 'Chrome Extension', description: 'Browser helper and screen reading' },
   { key: 'remote', label: 'Devices', description: 'Sign-in, phone pairing, other computers' },
@@ -349,8 +351,8 @@ export function DesktopSetupPanel({
   }, [localIntelligenceApi?.apiBaseUrl, localIntelligenceApi?.token, setupState.values.DEFAULT_WORKSPACE, setupState.releaseVersion]);
 
   useEffect(() => {
-    setActiveTab('general');
-  }, [setupState.required, setupState.releaseVersion]);
+    setActiveTab(initialTab);
+  }, [setupState.required, setupState.releaseVersion, initialTab]);
 
   useEffect(() => {
     setRemotePairingToken('');
@@ -1497,6 +1499,13 @@ export function DesktopSetupPanel({
                   />
                 </View>
               </>
+            ) : null}
+
+            {activeTab === 'fleet_local' ? (
+              <DesktopFleetManagerSettings
+                apiBaseUrl={localIntelligenceApi?.apiBaseUrl}
+                token={localIntelligenceApi?.token}
+              />
             ) : null}
 
             {activeTab === 'onboarding' ? (

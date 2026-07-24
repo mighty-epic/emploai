@@ -102,6 +102,7 @@ class SessionSummaryView(BaseModel):
     fleet_worker_id: Optional[str] = None
     fleet_task_mode: Optional[str] = None
     fleet_task_id: Optional[str] = None
+    company_id: Optional[str] = None
     account_user_id: Optional[int] = None
     account_email: Optional[str] = None
     plan_mode: Optional[Dict[str, Any]] = None
@@ -140,6 +141,7 @@ class SessionDetailView(BaseModel):
     fleet_worker_id: Optional[str] = None
     fleet_task_mode: Optional[str] = None
     fleet_task_id: Optional[str] = None
+    company_id: Optional[str] = None
     account_user_id: Optional[int] = None
     account_email: Optional[str] = None
     plan_mode: Optional[Dict[str, Any]] = None
@@ -281,6 +283,8 @@ class JobCreateRequest(BaseModel):
     target_group_id: Optional[str] = None
     target_chat_id: Optional[str] = None
     chat_target: Optional[str] = None
+    model: Optional[str] = None
+    variant: Optional[str] = None
     permission_mode: Optional[str] = None
     tool_packs: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
@@ -290,6 +294,7 @@ class JobCreateRequest(BaseModel):
 
 class JobDetailView(BaseModel):
     id: str
+    company_id: Optional[str] = None
     automation_id: Optional[str] = None
     name: str
     prompt: str
@@ -307,6 +312,8 @@ class JobDetailView(BaseModel):
     target_group_id: Optional[str] = None
     target_chat_id: Optional[str] = None
     chat_target: Optional[str] = None
+    origin_model: Optional[str] = None
+    origin_variant: Optional[str] = None
     permission_mode: Optional[str] = None
     tool_packs: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
@@ -322,6 +329,7 @@ class VoiceCommitRequest(BaseModel):
 
 class ScheduledJobView(BaseModel):
     id: str
+    company_id: Optional[str] = None
     automation_id: Optional[str] = None
     name: str
     prompt: str
@@ -352,11 +360,13 @@ class ScheduledJobView(BaseModel):
     origin_telegram_bot_config_id: Optional[str] = None
     origin_workspace: Optional[str] = None
     origin_model: Optional[str] = None
+    origin_variant: Optional[str] = None
     origin_enabled_tool_packs: List[str] = Field(default_factory=list)
 
 
 class CronFeedItemView(BaseModel):
     id: str
+    company_id: Optional[str] = None
     timestamp: Optional[str] = None
     kind: str
     content: str
@@ -381,6 +391,7 @@ class CronFeedItemView(BaseModel):
 
 class AutomationEventRunView(BaseModel):
     event_run_id: str
+    company_id: Optional[str] = None
     user_id: int
     event_id: Optional[str] = None
     automation_id: Optional[str] = None
@@ -1308,6 +1319,7 @@ class FleetCompleteEnrollmentResponse(BaseModel):
     user_id: int
     desktop: RemoteDesktopView
     worker: Optional[FleetWorkerView] = None
+    company_membership: Optional[Dict[str, Any]] = None
 
 
 class FleetComputerDelegationRequest(BaseModel):

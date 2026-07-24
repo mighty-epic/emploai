@@ -9,6 +9,7 @@ import type {
 
 export type AutomationScheduleMode = 'interval' | 'daily' | 'delay' | 'advanced';
 export type AutomationTargetKind = 'active_identity' | 'manager' | 'identity' | 'group';
+export type AutomationChatMode = 'new' | 'existing';
 export type AutomationPermissionMode = 'standard' | 'low' | 'full_permissions';
 export type AutomationDetailTab = 'overview' | 'activity' | 'advanced';
 export type AutomationListFilter = 'all' | 'active' | 'paused' | 'attention';
@@ -27,6 +28,9 @@ export type AutomationEditorDraft = {
   targetIdentityId: string;
   targetGroupId: string;
   targetChatId: string;
+  chatMode: AutomationChatMode;
+  model: string;
+  variant: string;
   permissionMode: AutomationPermissionMode;
   toolPacksText: string;
 };
@@ -50,6 +54,9 @@ export function emptyAutomationDraft(): AutomationEditorDraft {
     targetIdentityId: '',
     targetGroupId: '',
     targetChatId: '',
+    chatMode: 'new',
+    model: '',
+    variant: 'medium',
     permissionMode: 'standard',
     toolPacksText: '',
   };
@@ -113,6 +120,15 @@ export function validateAutomationDraft(draft: AutomationEditorDraft): Automatio
   if (draft.targetKind === 'group' && !draft.targetGroupId) {
     errors.targetGroupId = 'Choose a Fleet group.';
   }
+  if (!draft.targetIdentityId) {
+    errors.targetIdentityId = 'Choose the entity that owns this automation.';
+  }
+  if (draft.chatMode === 'existing' && !draft.targetChatId) {
+    errors.targetChatId = 'Choose an existing chat.';
+  }
+  if (draft.chatMode === 'new' && !draft.model) {
+    errors.model = 'Choose a model for the new chat.';
+  }
   return errors;
 }
 
@@ -133,17 +149,21 @@ export function automationPayloadFromDraft(draft: AutomationEditorDraft): JobCre
     name: draft.name.trim(),
     prompt: draft.prompt.trim(),
     schedule: buildAutomationSchedule(draft),
-    target_kind: draft.targetKind,
-    target_identity_id: draft.targetKind === 'identity' ? draft.targetIdentityId : null,
-    target_group_id: draft.targetKind === 'group' ? draft.targetGroupId : null,
+    session_id: draft.targetChatId || null,
+    target_kind: 'identity',
+    target_identity_id: draft.targetIdentityId || null,
+    target_group_id: null,
     target_chat_id: draft.targetChatId || null,
-    chat_target: draft.targetChatId ? 'existing' : 'existing_or_new',
+    chat_target: draft.chatMode,
+    model: draft.chatMode === 'new' ? draft.model : null,
+    variant: draft.chatMode === 'new' ? draft.variant : null,
     permission_mode: draft.permissionMode,
     tool_packs: splitAutomationToolPacks(draft.toolPacksText),
     metadata: {
       created_from: 'desktop_automations',
       schedule_mode: draft.scheduleMode,
       catch_up_policy: 'latest_only',
+      automation_chat_mode: draft.chatMode,
     },
   };
 }
@@ -181,6 +201,9 @@ export function draftFromAutomation(job: ScheduledJob): AutomationEditorDraft {
     targetIdentityId: job.target_identity_id || '',
     targetGroupId: job.target_group_id || '',
     targetChatId: job.target_chat_id || '',
+    chatMode: job.chat_target === 'new' ? 'new' : job.target_chat_id ? 'existing' : 'new',
+    model: job.origin_model || String(job.metadata?.origin_model || ''),
+    variant: job.origin_variant || String(job.metadata?.origin_variant || 'medium'),
     permissionMode: (job.permission_mode as AutomationPermissionMode) || 'standard',
     toolPacksText: (job.tool_packs || []).join(', '),
   };

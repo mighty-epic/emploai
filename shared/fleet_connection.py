@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
+from shared.atomic_io import atomic_write_json
+
 
 FLEET_CONNECTION_FILENAME = "fleet-connection.json"
 LEGACY_ACCOUNT_SESSION_FILENAME = "remote-account-session.json"
@@ -74,9 +76,5 @@ def write_fleet_connection(*, home: Path, payload: Mapping[str, Any]) -> Path:
 
     path = fleet_connection_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(normalized, indent=2), encoding="utf-8")
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+    atomic_write_json(path, normalized, private=True)
     return path

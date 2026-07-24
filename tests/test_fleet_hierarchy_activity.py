@@ -181,7 +181,7 @@ def test_local_agent_can_queue_a_narrow_request_to_its_manager(tmp_path: Path, m
     monkeypatch.setattr(
         runtime,
         "_fleet_snapshot_uncached",
-        lambda: {"identities": [{"identity_id": "worker-1", "display_name": "Research"}]},
+        lambda _session=None: {"identities": [{"identity_id": "worker-1", "display_name": "Research"}]},
     )
     session = SimpleNamespace(fleet_identity_id="worker-1", fleet_worker_id=None, fleet_task_id="delegation-1")
 
@@ -204,7 +204,7 @@ def test_local_delegated_worker_request_is_attached_to_its_manager_task(monkeypa
         "metadata": {"origin_manager_session_id": "manager-chat"},
     }
     calls = []
-    monkeypatch.setattr(runtime, "_fleet_snapshot_uncached", lambda: {"tasks": [task], "identities": []})
+    monkeypatch.setattr(runtime, "_fleet_snapshot_uncached", lambda _session=None: {"tasks": [task], "identities": []})
     monkeypatch.setattr(
         runtime,
         "_fleet_api_request",

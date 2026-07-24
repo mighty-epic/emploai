@@ -42,6 +42,23 @@ def test_replacement_manager_keeps_manager_sessions_but_never_worker_sessions():
     ) == "manager-chat"
 
 
+def test_manager_session_from_another_company_is_never_reused():
+    identity = {
+        **MANAGER,
+        "metadata": {"company_id": "company-b"},
+    }
+    other_company_session = SimpleNamespace(
+        id="company-a-manager-chat",
+        company_id="company-a",
+        fleet_identity_id="manager-company-a",
+        fleet_identity_role="manager",
+        fleet_worker_id=None,
+    )
+
+    assert session_belongs_to_fleet_identity(other_company_session, identity) is False
+    assert session_id_for_fleet_identity([other_company_session], identity) is None
+
+
 class _Store:
     def __init__(self, snapshot):
         self.snapshot = snapshot
@@ -180,7 +197,7 @@ def test_legacy_local_sessions_are_migrated_to_role_locked_profiles_idempotently
 
     assert reconcile_local_identity_session_profiles(bridge=bridge, snapshot=snapshot) == 2
     assert manager_session.fleet_identity_id == "manager-current"
-    assert manager_session.enabled_tool_packs == MANAGER_TOOL_PACKS
+    assert manager_session.enabled_tool_packs == [*MANAGER_TOOL_PACKS, PACK_WEB_RESEARCH]
     assert worker_session.enabled_tool_packs == DEFAULT_WORKER_TOOL_PACKS
     assert worker_session.fleet_task_mode == "direct"
     assert bridge.session_manager.saved == ["manager-chat", "worker-chat"]

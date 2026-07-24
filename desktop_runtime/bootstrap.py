@@ -37,7 +37,7 @@ def _bootstrap_payload(
 
     phase_started_at = time.perf_counter()
     status = _get_runtime_status()
-    if _attached_runtime_requires_restart_checked(status, home=home, root=root):
+    if _attached_runtime_requires_restart_checked(status, home=home, root=root, config=config):
         try:
             status.detail = (
                 "Restarting the packaged local runtime so the desktop app uses the current installed build."

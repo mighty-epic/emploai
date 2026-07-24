@@ -109,15 +109,52 @@ def test_manager_tool_pack_menu_keeps_core_but_allows_optional_packs():
 
 def test_connected_manager_tools_have_a_compact_permissioned_editor():
     machines = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopFleetMachinesPanel.tsx").read_text(encoding="utf-8")
+    settings = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopFleetComputerSettingsPage.tsx").read_text(encoding="utf-8")
     manager_tools = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopFleetManagerTools.tsx").read_text(encoding="utf-8")
     access = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopFleetConnectionAccess.tsx").read_text(encoding="utf-8")
 
-    assert "<DesktopFleetManagerTools" in machines
-    assert "setDesktopFleetManagerToolPacksOnComputer" in machines
+    assert "Open settings for ${machine.name}" in machines
+    assert "<DesktopFleetManagerTools" in settings
+    assert "setDesktopFleetManagerToolPacksOnComputer" in settings
+    assert "From this computer" in settings
+    assert "Tools on {machine.name}" in settings
     assert "Configure manager tools" in access
     assert "Manager Core" in manager_tools
     assert "Remote configuration blocked" in manager_tools
     assert "Save tools" in manager_tools
+
+
+def test_connected_computer_settings_are_a_dedicated_fleet_page():
+    setup = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopSetupPanel.tsx").read_text(encoding="utf-8")
+    machines = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopFleetMachinesPanel.tsx").read_text(encoding="utf-8")
+    workspace = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopFleetWorkspace.tsx").read_text(encoding="utf-8")
+    tail = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopConversationDerivedTail.tsx").read_text(encoding="utf-8")
+
+    assert "This Computer’s Manager" in setup
+    assert "Child Computer Managers" not in setup
+    assert "fleet_children" not in setup
+    assert "onOpenComputerSettings(machine.id)" in machines
+    assert "<DesktopFleetComputerSettingsPage" in workspace
+    assert "onOpenComputerSettings={setSettingsDesktopId}" in workspace
+    assert "fleet_children" not in tail
+
+
+def test_fleet_activity_summaries_auto_open_and_collapse_without_stretched_cards():
+    activity = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopFleetComputerActivity.tsx").read_text(encoding="utf-8")
+    requests = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopFleetRequestsPanel.tsx").read_text(encoding="utf-8")
+    disclosure = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "useFleetAutoDisclosure.ts").read_text(encoding="utf-8")
+    machines = (ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopFleetMachinesPanel.tsx").read_text(encoding="utf-8")
+
+    assert "30 * 60 * 1000" in disclosure
+    assert "setExpanded(true)" in disclosure
+    assert "useFleetAutoDisclosure" in activity
+    assert "useFleetAutoDisclosure" in requests
+    assert "alignItems: 'flex-start'" in machines
+    assert "signalRow:" in machines
+    assert "workRow:" in machines
+    assert "<DesktopFleetReportsPanel" in machines
+    assert "detailColumns:" not in machines
+    assert "drawerColumns:" not in machines
 
 
 def test_fleet_identity_snapshots_cannot_roll_selection_back():

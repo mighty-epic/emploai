@@ -8,6 +8,364 @@ export type AppProfile = {
   device_platform?: string | null;
 };
 
+export type CompanySummary = {
+  company_id: string;
+  display_name: string;
+  ownership: 'root' | 'member';
+  membership_role: 'root_controller' | 'worker_node';
+  local_computer_id: string;
+  status: 'active' | 'unavailable' | 'revoked' | 'deleting' | string;
+  onboarding_status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CompanyEmployee = {
+  employee_id: string;
+  identity_id: string;
+  display_name: string;
+  system_role: 'manager' | 'worker';
+  company_role: string;
+  protected: boolean;
+  is_default: boolean;
+  home_membership_id: string;
+  status: string;
+  job_contract_status: string;
+  position_id?: string | null;
+  job_contract_id?: string | null;
+  published_upstream?: boolean | null;
+  assignment_paused?: boolean;
+  assignment_pause_reason?: string | null;
+};
+
+export type CompanyMembership = {
+  membership_id: string;
+  company_id: string;
+  computer_id: string;
+  computer_name?: string | null;
+  upstream_computer_id?: string | null;
+  membership_role: 'root_controller' | 'worker_node';
+  parent_membership_id?: string | null;
+  manager_identity_id?: string | null;
+  default_worker_identity_id?: string | null;
+  published_identity_ids?: string[];
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CompanyDetail = {
+  company_id: string;
+  schema_version: number;
+  revision: number;
+  manifest: Record<string, unknown>;
+  memberships: CompanyMembership[];
+  employees: CompanyEmployee[];
+  departments: Array<Record<string, unknown>>;
+  positions: CompanyPosition[];
+  job_contracts: CompanyJobContract[];
+  objectives: CompanyObjective[];
+  initiatives: CompanyInitiative[];
+  runbooks: CompanyRunbook[];
+  recurring_operations: CompanyRecurringOperation[];
+  assignments: Array<Record<string, unknown>>;
+  handoffs: Array<Record<string, unknown>>;
+  approvals: Array<Record<string, unknown>>;
+  reports: Array<Record<string, unknown>>;
+  objective_reviews: CompanyObjectiveReview[];
+  policies: CompanyPolicy[];
+  decisions: Array<Record<string, unknown>>;
+  knowledge: Array<Record<string, unknown>>;
+  metrics: Array<Record<string, unknown>>;
+  financial_entries: Array<Record<string, unknown>>;
+  backup_history: Array<Record<string, unknown>>;
+  company_audit_events: Array<Record<string, unknown>>;
+  migration: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CompanyContext = {
+  schema_version: number;
+  active_company_id?: string | null;
+  active_company?: CompanyDetail | null;
+  companies: CompanySummary[];
+  chooser_required: boolean;
+  selection_reason?: string | null;
+  local_computer_id: string;
+  local_computer_name: string;
+};
+
+export type CompanyMigrationPreview = {
+  company_id: string;
+  state: string;
+  requires_confirmation: boolean;
+  counts: Record<string, number>;
+  mappings: Record<string, string>;
+  warnings: string[];
+  backup_required: boolean;
+  recovery_note: string;
+};
+
+export type CompanyDeletionPreview = {
+  company_id: string;
+  company_name: string;
+  root_computer_id: string;
+  active_assignment_count: number;
+  active_objective_count: number;
+  membership_count: number;
+  remote_membership_count: number;
+  verified_backup?: Record<string, unknown> | null;
+  will_revoke_memberships: Array<{
+    membership_id: string;
+    computer_name: string;
+    status: string;
+  }>;
+  requires_active_work_action: boolean;
+  confirmation_text: string;
+  version_one_result: string;
+};
+
+export type CompanyJobTemplate = {
+  template_id: string;
+  title: string;
+  division: string;
+  division_label: string;
+  version: string;
+  source_commit: string;
+  review_status: 'experimental' | 'reviewed' | string;
+  availability_status: 'available' | string;
+  purpose: string;
+  mission: string[];
+  responsibilities: string[];
+  deliverables: string[];
+  success_measures: string[];
+  source_metadata: Record<string, unknown>;
+};
+
+export type CompanyJobCatalog = {
+  schema_version: number;
+  source: {
+    repository?: string;
+    commit?: string;
+    license?: string;
+    imported_at?: string;
+  };
+  divisions: Array<{
+    division: string;
+    label: string;
+    color?: string;
+    icon?: string;
+  }>;
+  template_count: number;
+  items: CompanyJobTemplate[];
+};
+
+export type CompanyPosition = {
+  position_id: string;
+  title: string;
+  department_id?: string | null;
+  manager_identity_id?: string | null;
+  occupant_identity_id?: string | null;
+  status: string;
+  mission?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CompanyJobContract = {
+  job_contract_id: string;
+  position_id: string;
+  version: number;
+  status: string;
+  template_ref: {
+    template_id?: string | null;
+    version?: string | null;
+    source_commit?: string | null;
+    review_status?: string | null;
+  };
+  mission?: string;
+  responsibilities: string[];
+  non_responsibilities: string[];
+  deliverables: string[];
+  inputs: string[];
+  quality_gates: string[];
+  success_measures: string[];
+  reporting_cadence?: string | null;
+  escalation_route?: string | null;
+  approved_tool_packs: string[];
+  approved_workspace_ids: string[];
+  authority: Record<string, unknown>;
+  memory_policy?: Record<string, unknown>;
+  resource_policy?: Record<string, unknown>;
+  missing_requirements?: Array<Record<string, unknown>>;
+  limited_mode?: boolean;
+  limitations?: string | null;
+  readiness_reviews?: Array<{
+    readiness_review_id: string;
+    status: string;
+    checks: Record<string, boolean>;
+    evidence: Array<Record<string, unknown>>;
+    missing_requirements: Array<Record<string, unknown>>;
+    limitations?: string | null;
+    created_at: string;
+  }>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CompanyObjective = {
+  objective_id: string;
+  outcome: string;
+  success_criteria: string;
+  user_directive: {
+    outcome: string;
+    success_criteria: string;
+  };
+  optional_proposals: Array<Record<string, unknown>>;
+  owner_identity_id?: string | null;
+  department_id?: string | null;
+  priority: string;
+  due_at?: string | null;
+  status: string;
+  low_risk_auto_accept: boolean;
+  linked_task_ids: string[];
+  linked_report_ids: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type CompanyInitiative = {
+  initiative_id: string;
+  title: string;
+  outcome: string;
+  owner_identity_id?: string | null;
+  objective_ids: string[];
+  plan: string[];
+  risks: string[];
+  due_at?: string | null;
+  status: string;
+  status_reason?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CompanyRunbook = {
+  runbook_id: string;
+  title: string;
+  trigger: string;
+  steps: Array<Record<string, unknown>>;
+  required_roles: string[];
+  approval_gates: Array<Record<string, unknown>>;
+  evidence_requirements: string[];
+  status: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CompanyRecurringOperation = {
+  operation_id: string;
+  title: string;
+  trigger: string;
+  owner_identity_id?: string | null;
+  runbook_id: string;
+  automation_id?: string | null;
+  schedule: string;
+  inputs: string[];
+  expected_output: string;
+  quality_gate: string;
+  escalation_minutes: number;
+  status: string;
+  status_reason?: string | null;
+  status_history: Array<Record<string, unknown>>;
+  run_history: Array<Record<string, unknown>>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CompanyObjectiveReview = {
+  review_id: string;
+  report_id: string;
+  objective_id?: string | null;
+  reviewer_identity_id?: string | null;
+  decision: string;
+  rationale: string;
+  rework_instructions?: string | null;
+  created_at: string;
+};
+
+export type CompanyAssignment = {
+  assignment_id: string;
+  objective_id: string;
+  issuing_manager_identity_id?: string | null;
+  assignee_identity_id: string;
+  prompt: string;
+  task_id?: string | null;
+  delegation_id?: string | null;
+  route: Record<string, unknown>;
+  status: string;
+  report_id?: string | null;
+  review_status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CompanyReport = {
+  report_id: string;
+  objective_id: string;
+  assignment_id?: string | null;
+  assignee_identity_id?: string | null;
+  task_id?: string | null;
+  delegation_id?: string | null;
+  worker_id?: string | null;
+  execution_status: string;
+  summary: string;
+  evidence: unknown[];
+  artifacts: unknown[];
+  blockers: unknown[];
+  confidence?: string | null;
+  next_suggested_action?: string | null;
+  review_status: string;
+  review_id?: string | null;
+  submitted_at: string;
+  updated_at: string;
+};
+
+export type CompanyPolicy = {
+  policy_id: string;
+  title: string;
+  rule: string;
+  scope: string;
+  enforcement: string;
+  status: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CompanyOperatingModel = {
+  company_id: string;
+  revision: number;
+  departments: Array<Record<string, unknown>>;
+  positions: CompanyPosition[];
+  job_contracts: CompanyJobContract[];
+  objectives: CompanyObjective[];
+  initiatives: CompanyInitiative[];
+  runbooks: CompanyRunbook[];
+  recurring_operations: CompanyRecurringOperation[];
+  assignments: CompanyAssignment[];
+  handoffs: Array<Record<string, unknown>>;
+  approvals: Array<Record<string, unknown>>;
+  knowledge: Array<Record<string, unknown>>;
+  metrics: Array<Record<string, unknown>>;
+  financial_entries: Array<Record<string, unknown>>;
+  reports: CompanyReport[];
+  objective_reviews: CompanyObjectiveReview[];
+  policies: CompanyPolicy[];
+  company_audit_events: Array<Record<string, unknown>>;
+};
+
 export type RemoteUser = {
   user_id: number;
   email: string;
@@ -179,6 +537,7 @@ export type RemotePairCompleteResult = {
 
 export type SessionSummary = {
   id: string;
+  company_id?: string | null;
   name: string;
   created_at: string;
   updated_at: string;
@@ -237,6 +596,7 @@ export type SessionTimelineEvent = {
 
 export type SessionDetail = {
   id: string;
+  company_id?: string | null;
   name: string;
   created_at: string;
   updated_at: string;
@@ -454,6 +814,7 @@ export type SessionSearchResult = {
 
 export type ScheduledJob = {
   id: string;
+  company_id?: string | null;
   automation_id?: string | null;
   name: string;
   prompt: string;
@@ -484,6 +845,7 @@ export type ScheduledJob = {
   origin_telegram_bot_config_id?: string | null;
   origin_workspace?: string | null;
   origin_model?: string | null;
+  origin_variant?: string | null;
   origin_enabled_tool_packs: string[];
 };
 
@@ -497,6 +859,8 @@ export type JobCreatePayload = {
   target_group_id?: string | null;
   target_chat_id?: string | null;
   chat_target?: string | null;
+  model?: string | null;
+  variant?: string | null;
   permission_mode?: string | null;
   tool_packs?: string[];
   metadata?: Record<string, unknown>;
@@ -506,6 +870,7 @@ export type JobCreatePayload = {
 
 export type CronFeedItem = {
   id: string;
+  company_id?: string | null;
   timestamp?: string | null;
   kind: string;
   content: string;
@@ -530,6 +895,7 @@ export type CronFeedItem = {
 
 export type AutomationEventRun = {
   event_run_id: string;
+  company_id?: string | null;
   event_id?: string | null;
   automation_id?: string | null;
   status: string;

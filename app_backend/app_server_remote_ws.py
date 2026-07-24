@@ -93,6 +93,7 @@ async def _handle_remote_desktop_ws(websocket: WebSocket, auth: Dict[str, Any]) 
         )
 
     )
+    last_company_membership_sync_revision = 0
 
     try:
 
@@ -145,6 +146,101 @@ async def _handle_remote_desktop_ws(websocket: WebSocket, auth: Dict[str, Any]) 
                         source="paired_desktop",
 
                     )
+
+                    capability_payload = dict(
+                        dict(message.payload or {}).get("capabilities") or {}
+                    )
+
+                    company_id = str(
+                        (message.payload or {}).get("company_id")
+                        or capability_payload.get("company_id")
+                        or ""
+                    ).strip()
+
+                    if company_id:
+
+                        try:
+
+                            _get_company_store().sync_published_membership_identities(
+
+                                company_id=company_id,
+
+                                child_computer_id=desktop_id,
+
+                                membership_id=str(
+                                    (message.payload or {}).get(
+                                        "company_membership_id"
+                                    )
+                                    or capability_payload.get(
+                                        "company_membership_id"
+                                    )
+                                    or ""
+                                ).strip()
+                                or None,
+
+                                identities=[
+
+                                    dict(item)
+
+                                    for item in list(
+                                        capability_payload.get("targets") or []
+                                    )
+
+                                    if isinstance(item, dict)
+
+                                ],
+
+                            )
+
+                        except Exception:
+
+                            logger.exception(
+
+                                "[company] failed syncing child identity directory"
+
+                            )
+                        try:
+                            bundle = (
+                                _get_company_store().issue_child_membership_bundle(
+                                    company_id=company_id,
+                                    child_computer_id=desktop_id,
+                                )
+                            )
+                            bundle_revision = int(
+                                dict(bundle.get("payload") or {}).get(
+                                    "company_revision"
+                                )
+                                or 0
+                            )
+                            reported_revision = int(
+                                (message.payload or {}).get(
+                                    "company_revision"
+                                )
+                                or capability_payload.get(
+                                    "company_revision"
+                                )
+                                or 0
+                            )
+                            if (
+                                bundle_revision > reported_revision
+                                and bundle_revision
+                                > last_company_membership_sync_revision
+                            ):
+                                await manager.send_command(
+                                    desktop_id=desktop_id,
+                                    user_id=user_id,
+                                    command_type=(
+                                        "fleet_company_membership_sync"
+                                    ),
+                                    payload={"bundle": bundle},
+                                )
+                                last_company_membership_sync_revision = (
+                                    bundle_revision
+                                )
+                        except Exception:
+                            logger.exception(
+                                "[company] failed refreshing child membership cache"
+                            )
 
                     _publish_fleet_delta(
 
@@ -271,6 +367,59 @@ async def _handle_remote_desktop_ws(websocket: WebSocket, auth: Dict[str, Any]) 
                             desktop_id=desktop_id,
 
                         )
+
+                        try:
+
+                            from app_backend.company_runtime_reports import (
+                                record_linked_company_report,
+                            )
+
+                            delegation_metadata = dict(
+                                delegation.get("metadata") or {}
+                            )
+
+                            company_id = str(
+                                delegation_metadata.get("company_id") or ""
+                            ).strip()
+
+                            company = (
+                                _get_company_store().get_company(company_id)
+                                if company_id
+                                else {}
+                            )
+
+                            root_computer_id = str(
+                                dict(company.get("manifest") or {}).get(
+                                    "root_computer_id"
+                                )
+                                or ""
+                            ).strip()
+
+                            record_linked_company_report(
+
+                                company_store=_get_company_store(),
+
+                                company_id=company_id,
+
+                                computer_id=root_computer_id,
+
+                                report=payload,
+
+                                route_metadata=delegation_metadata,
+
+                                delegation_id=delegation_id,
+
+                            )
+
+                        except Exception:
+
+                            logger.exception(
+
+                                "[company] failed linking remote delegation report %s",
+
+                                delegation_id,
+
+                            )
 
                         _publish_fleet_delta(
 

@@ -623,6 +623,7 @@ def write_remote_worker_session(
         "userId": int(completed.get("user_id") or 0),
         "desktop": completed.get("desktop") or {},
         "worker": completed.get("worker") or {},
+        "companyMembership": completed.get("company_membership") or None,
         "transport": {
             "kind": "yggdrasil",
             "managerYggdrasilIp": pairing_payload.get("manager_yggdrasil_ip"),

@@ -1,383 +1,492 @@
 import { useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
-import type { FleetGroup, FleetIdentity, SessionSummary } from '@/lib/appApi';
+import type { FleetGroup, FleetIdentity, ModelProviderGroup, SessionSummary } from '@/lib/appApi';
 import type { DesktopPressableState } from '@/lib/pressableState';
 import { automationStyles as styles } from './DesktopAutomations.styles';
 import {
   AUTOMATION_SCHEDULE_UNITS,
-  automationPermissionLabel,
   buildAutomationSchedule,
-  emptyAutomationDraft,
   previewAutomationNextRun,
   validateAutomationDraft,
-  type AutomationFieldErrors,
   type AutomationEditorDraft,
+  type AutomationFieldErrors,
   type AutomationPermissionMode,
   type AutomationScheduleMode,
-  type AutomationTargetKind,
 } from './desktopAutomations';
 
 type Props = {
   mode: 'create' | 'edit';
   initialDraft: AutomationEditorDraft;
   identities: FleetIdentity[];
-  groups: FleetGroup[];
+  groups?: FleetGroup[];
   sessions: SessionSummary[];
+  modelGroups: ModelProviderGroup[];
+  variants: string[];
   busy: boolean;
   onSave: (draft: AutomationEditorDraft) => void | Promise<void>;
   onRequestClose: (dirty: boolean) => void | Promise<void>;
 };
 
-const SCHEDULE_OPTIONS: Array<{ key: AutomationScheduleMode; label: string; description: string }> = [
-  { key: 'interval', label: 'Repeating', description: 'Run after the same amount of time.' },
-  { key: 'daily', label: 'Daily', description: 'Run at a specific local time every day.' },
-  { key: 'delay', label: 'One Time', description: 'Run once after a short delay.' },
-  { key: 'advanced', label: 'Advanced', description: 'Use a supported schedule phrase.' },
+type SelectOption = { value: string; label: string; detail?: string };
+
+const REPEAT_OPTIONS: SelectOption[] = [
+  { value: 'daily', label: 'Daily', detail: 'At a local time each day' },
+  { value: 'interval', label: 'Repeating', detail: 'After a fixed interval' },
+  { value: 'delay', label: 'One time', detail: 'Run once after a delay' },
+  { value: 'advanced', label: 'Advanced', detail: 'Use a schedule phrase' },
 ];
 
-const TARGET_OPTIONS: Array<{ key: AutomationTargetKind; label: string; description: string }> = [
-  { key: 'active_identity', label: 'Current Identity', description: 'Use whichever local identity is active when the automation runs.' },
-  { key: 'manager', label: 'Manager', description: 'Always route this automation through the local manager.' },
-  { key: 'identity', label: 'Specific Identity', description: 'Choose one manager or Fleet worker.' },
-  { key: 'group', label: 'Fleet Group', description: 'Route the work to a saved Fleet group.' },
+const CHAT_OPTIONS: SelectOption[] = [
+  { value: 'new', label: 'New chat', detail: 'Create a dedicated chat for this automation' },
+  { value: 'existing', label: 'Existing chat', detail: 'Use that chat’s complete configuration' },
 ];
 
-const PERMISSION_OPTIONS: Array<{ key: AutomationPermissionMode; label: string; description: string }> = [
-  { key: 'standard', label: 'Confirm Risky Actions', description: 'Runs normally but pauses for destructive or sensitive actions. Recommended.' },
-  { key: 'low', label: 'Ask Before Acting', description: 'Pauses before tools make changes. Best for new automations.' },
-  { key: 'full_permissions', label: 'Full Access', description: 'Allows configured tools to act without an additional approval prompt.' },
+const PERMISSION_OPTIONS: SelectOption[] = [
+  { value: 'standard', label: 'Confirm risky actions' },
+  { value: 'low', label: 'Ask before acting' },
+  { value: 'full_permissions', label: 'Full access' },
 ];
 
-function controlStyle({ hovered, pressed }: DesktopPressableState) {
+function buttonStyle({ hovered, pressed }: DesktopPressableState) {
   return [styles.button, hovered ? styles.buttonHover : null, pressed ? styles.buttonPressed : null];
 }
 
-function ChoiceButton({
+function selectedLabel(options: SelectOption[], value: string, fallback: string) {
+  return options.find((option) => option.value === value)?.label || fallback;
+}
+
+function SelectRow({
+  id,
   label,
-  selected,
-  onPress,
+  value,
+  hint,
+  options,
+  open,
+  error,
+  onToggle,
+  onSelect,
+  last = false,
 }: {
+  id: string;
   label: string;
-  selected: boolean;
-  onPress: () => void;
+  value: string;
+  hint?: string;
+  options: SelectOption[];
+  open: boolean;
+  error?: string;
+  onToggle: () => void;
+  onSelect: (value: string) => void;
+  last?: boolean;
 }) {
   return (
-    <Pressable
-      accessibilityRole="radio"
-      accessibilityState={{ checked: selected }}
-      style={({ hovered, pressed }: DesktopPressableState) => [
-        styles.choice,
-        selected ? styles.choiceSelected : null,
-        hovered ? styles.buttonHover : null,
-        pressed ? styles.buttonPressed : null,
-      ]}
-      onPress={onPress}
-    >
-      <Text style={[styles.choiceText, selected ? styles.choiceTextSelected : null]}>{label}</Text>
-    </Pressable>
+    <View style={[styles.settingsRowWrap, last ? styles.settingsRowWrapLast : null]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${label}: ${value}`}
+        accessibilityState={{ expanded: open }}
+        style={({ hovered, pressed }: DesktopPressableState) => [
+          styles.settingsRow,
+          last ? styles.settingsRowLast : null,
+          hovered ? styles.settingsRowHover : null,
+          pressed ? styles.buttonPressed : null,
+        ]}
+        onPress={onToggle}
+      >
+        <View style={styles.settingsLabelGroup}>
+          <Text style={styles.settingsLabel}>{label}</Text>
+          {hint ? <Text numberOfLines={1} style={styles.settingsHint}>{hint}</Text> : null}
+        </View>
+        <View style={styles.settingsValueGroup}>
+          <Text numberOfLines={1} style={styles.settingsValue}>{value}</Text>
+          <Text style={styles.chevron}>{open ? '⌃' : '⌄'}</Text>
+        </View>
+      </Pressable>
+      {open ? (
+        <View accessibilityRole="radiogroup" accessibilityLabel={`${label} options`} style={styles.selectMenu}>
+          <ScrollView style={styles.selectMenuScroll} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+            {options.map((option) => {
+              const selected = option.value === id;
+              return (
+                <Pressable
+                  key={option.value}
+                  accessibilityRole="radio"
+                  accessibilityState={{ checked: selected }}
+                  style={({ hovered, pressed }: DesktopPressableState) => [
+                    styles.selectOption,
+                    selected ? styles.selectOptionSelected : null,
+                    hovered ? styles.selectOptionHover : null,
+                    pressed ? styles.buttonPressed : null,
+                  ]}
+                  onPress={() => onSelect(option.value)}
+                >
+                  <View style={styles.selectOptionCopy}>
+                    <Text style={styles.selectOptionLabel}>{option.label}</Text>
+                    {option.detail ? <Text style={styles.selectOptionDetail}>{option.detail}</Text> : null}
+                  </View>
+                  {selected ? <Text style={styles.selectCheck}>✓</Text> : null}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      ) : null}
+      {error ? <Text accessibilityLiveRegion="polite" style={styles.rowError}>{error}</Text> : null}
+    </View>
   );
 }
 
-function OptionCard({
-  label,
-  description,
-  selected,
-  onPress,
-}: {
-  label: string;
-  description: string;
-  selected: boolean;
-  onPress: () => void;
-}) {
+function ReadOnlyRow({ label, value, hint, last = false }: { label: string; value: string; hint?: string; last?: boolean }) {
   return (
-    <Pressable
-      accessibilityRole="radio"
-      accessibilityLabel={`${label}. ${description}`}
-      accessibilityState={{ checked: selected }}
-      style={({ hovered, pressed }: DesktopPressableState) => [
-        styles.optionCard,
-        selected ? styles.optionCardSelected : null,
-        hovered ? styles.buttonHover : null,
-        pressed ? styles.buttonPressed : null,
-      ]}
-      onPress={onPress}
-    >
-      <Text style={styles.optionTitle}>{label}</Text>
-      <Text style={styles.optionCopy}>{description}</Text>
-    </Pressable>
+    <View style={[styles.settingsRow, styles.settingsRowReadOnly, last ? styles.settingsRowLast : null]}>
+      <View style={styles.settingsLabelGroup}>
+        <Text style={styles.settingsLabel}>{label}</Text>
+        {hint ? <Text numberOfLines={1} style={styles.settingsHint}>{hint}</Text> : null}
+      </View>
+      <Text numberOfLines={1} style={styles.settingsValue}>{value}</Text>
+    </View>
   );
 }
 
-export function DesktopAutomationEditor({ mode, initialDraft, identities, groups, sessions, busy, onSave, onRequestClose }: Props) {
+export function DesktopAutomationEditor({
+  mode,
+  initialDraft,
+  identities,
+  sessions,
+  modelGroups,
+  variants,
+  busy,
+  onSave,
+  onRequestClose,
+}: Props) {
   const [draft, setDraft] = useState(initialDraft);
   const [errors, setErrors] = useState<AutomationFieldErrors>({});
-  const [advancedOpen, setAdvancedOpen] = useState(Boolean(initialDraft.targetChatId || initialDraft.toolPacksText));
+  const [openSelect, setOpenSelect] = useState<string | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const baselineRef = useRef(JSON.stringify(initialDraft));
   const nameRef = useRef<TextInput | null>(null);
   const promptRef = useRef<TextInput | null>(null);
-  const scheduleRef = useRef<TextInput | null>(null);
 
   const dirty = JSON.stringify(draft) !== baselineRef.current;
+  const identityOptions = useMemo<SelectOption[]>(() => identities.map((identity) => ({
+    value: identity.identity_id,
+    label: identity.display_name,
+    detail: `${identity.role === 'manager' ? 'Manager' : identity.is_default ? 'Default worker' : 'Worker'} · ${identity.status || 'available'}`,
+  })), [identities]);
+  const selectedIdentity = identities.find((identity) => identity.identity_id === draft.targetIdentityId) || null;
+  const entitySessions = useMemo(() => sessions.filter((session) => (
+    session.fleet_identity_id === draft.targetIdentityId
+    || (!session.fleet_identity_id && selectedIdentity?.role === 'manager')
+  )), [draft.targetIdentityId, selectedIdentity?.role, sessions]);
+  const sessionOptions = useMemo<SelectOption[]>(() => entitySessions.map((session) => ({
+    value: session.id,
+    label: session.name || 'Untitled chat',
+    detail: `${session.model}${session.workspace ? ` · ${session.workspace}` : ''}`,
+  })), [entitySessions]);
+  const selectedSession = entitySessions.find((session) => session.id === draft.targetChatId) || null;
+  const modelOptions = useMemo<SelectOption[]>(() => {
+    const seen = new Set<string>();
+    return modelGroups.flatMap((group) => group.models.map((model) => ({
+      value: model,
+      label: model,
+      detail: group.provider,
+    }))).filter((option) => {
+      if (seen.has(option.value)) return false;
+      seen.add(option.value);
+      return true;
+    });
+  }, [modelGroups]);
+  const variantOptions = useMemo<SelectOption[]>(() => (variants.length ? variants : ['low', 'medium', 'high', 'xhigh']).map((variant) => ({
+    value: variant,
+    label: variant.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()),
+  })), [variants]);
   const schedule = buildAutomationSchedule(draft);
   const nextRun = useMemo(() => previewAutomationNextRun(draft), [draft]);
-  const timezone = useMemo(() => {
-    try {
-      return Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time';
-    } catch {
-      return 'local time';
-    }
-  }, []);
   const nextRunLabel = nextRun
     ? new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(nextRun)
-    : 'Fix the schedule to preview the next run';
+    : 'Complete the schedule to preview the next run';
 
   const update = <K extends keyof AutomationEditorDraft>(key: K, value: AutomationEditorDraft[K]) => {
     setDraft((current) => ({ ...current, [key]: value }));
     setErrors((current) => ({ ...current, [key]: undefined, schedule: undefined }));
   };
 
+  const choose = <K extends keyof AutomationEditorDraft>(key: K, value: AutomationEditorDraft[K]) => {
+    update(key, value);
+    setOpenSelect(null);
+  };
+
+  const chooseIdentity = (identityId: string) => {
+    const currentChat = sessions.find((session) => session.id === draft.targetChatId);
+    setDraft((current) => ({
+      ...current,
+      targetKind: 'identity',
+      targetIdentityId: identityId,
+      targetChatId: currentChat?.fleet_identity_id === identityId ? current.targetChatId : '',
+    }));
+    setErrors((current) => ({ ...current, targetIdentityId: undefined, targetChatId: undefined }));
+    setOpenSelect(null);
+  };
+
   const submit = () => {
     const nextErrors = validateAutomationDraft(draft);
     setErrors(nextErrors);
-    const firstError = Object.keys(nextErrors)[0];
-    if (firstError) {
-      if (firstError === 'name') nameRef.current?.focus();
-      else if (firstError === 'prompt') promptRef.current?.focus();
-      else scheduleRef.current?.focus();
-      return;
-    }
+    if (nextErrors.name) nameRef.current?.focus();
+    else if (nextErrors.prompt) promptRef.current?.focus();
+    if (Object.keys(nextErrors).length) return;
     void onSave(draft);
-  };
-
-  const reset = () => {
-    const next = mode === 'edit' ? initialDraft : emptyAutomationDraft();
-    setDraft(next);
-    setErrors({});
   };
 
   return (
     <View style={styles.editor}>
-      <View style={styles.editorHeader}>
-        <Text style={styles.detailTitle}>{mode === 'edit' ? `Update ${initialDraft.name}` : 'New automation'}</Text>
+      <View style={styles.editorTopbar}>
+        <View style={styles.editorTopbarCopy}>
+          <Text style={styles.editorKicker}>{mode === 'edit' ? 'Edit automation' : 'New automation'}</Text>
+          <Text numberOfLines={1} style={styles.editorStatus}>{dirty ? 'Unsaved changes' : 'Ready to schedule'}</Text>
+        </View>
+        <Pressable accessibilityRole="button" accessibilityLabel="Close automation editor" style={buttonStyle} onPress={() => void onRequestClose(dirty)}>
+          <Text style={styles.buttonText}>Close</Text>
+        </Pressable>
       </View>
-      <ScrollView style={styles.detailScroll} contentContainerStyle={styles.editorBody} keyboardShouldPersistTaps="handled">
-        <View style={styles.editorSection}>
-          <Text style={styles.editorSectionTitle}>Task</Text>
-          <View style={styles.field}>
-            <Text style={styles.fieldLabel}>Name <Text style={styles.required}>*</Text></Text>
-            <TextInput
-              ref={nameRef}
-              accessibilityLabel="Automation name"
-              autoComplete="off"
-              value={draft.name}
-              onChangeText={(value) => update('name', value)}
-              placeholder="Example: Morning project brief…"
-              placeholderTextColor="#748194"
-              style={[styles.input, errors.name ? styles.inputError : null]}
-            />
-            {errors.name ? <Text accessibilityLiveRegion="polite" style={styles.fieldError}>{errors.name}</Text> : null}
-          </View>
-          <View style={styles.field}>
-            <Text style={styles.fieldLabel}>Task <Text style={styles.required}>*</Text></Text>
-            <TextInput
-              ref={promptRef}
-              accessibilityLabel="Automation task"
-              autoComplete="off"
-              value={draft.prompt}
-              onChangeText={(value) => update('prompt', value)}
-              multiline
-              placeholder="Describe the result you want and what should be checked…"
-              placeholderTextColor="#748194"
-              style={[styles.input, styles.textArea, errors.prompt ? styles.inputError : null]}
-            />
-            {errors.prompt ? <Text accessibilityLiveRegion="polite" style={styles.fieldError}>{errors.prompt}</Text> : null}
-          </View>
+
+      <ScrollView style={styles.detailScroll} contentContainerStyle={styles.formContent} keyboardShouldPersistTaps="handled">
+        <View style={styles.titleField}>
+          <Text style={styles.formSectionLabel}>Scheduled task title</Text>
+          <TextInput
+            ref={nameRef}
+            accessibilityLabel="Automation name"
+            autoComplete="off"
+            value={draft.name}
+            onChangeText={(value) => update('name', value)}
+            placeholder="Name this automation"
+            placeholderTextColor="#697586"
+            style={[styles.titleInput, errors.name ? styles.inputError : null]}
+          />
+          {errors.name ? <Text accessibilityLiveRegion="polite" style={styles.fieldError}>{errors.name}</Text> : null}
         </View>
 
-        <View style={styles.editorSection}>
-          <Text style={styles.editorSectionTitle}>Schedule</Text>
-          <Text style={styles.editorSectionCopy}>Daily schedules use this computer’s timezone: {timezone}.</Text>
-          <View accessibilityRole="radiogroup" accessibilityLabel="Schedule type" style={styles.optionStack}>
-            {SCHEDULE_OPTIONS.map((option) => (
-              <OptionCard
-                key={option.key}
-                label={option.label}
-                description={option.description}
-                selected={draft.scheduleMode === option.key}
-                onPress={() => update('scheduleMode', option.key)}
-              />
-            ))}
-          </View>
-          {draft.scheduleMode === 'interval' || draft.scheduleMode === 'delay' ? (
-            <View style={styles.fieldRow}>
-              <View style={styles.fieldHalf}>
-                <Text style={styles.fieldLabel}>Amount</Text>
-                <TextInput
-                  ref={scheduleRef}
-                  accessibilityLabel={`${draft.scheduleMode === 'delay' ? 'Delay' : 'Interval'} amount`}
-                  autoComplete="off"
-                  inputMode="numeric"
-                  value={draft.scheduleMode === 'delay' ? draft.delayAmount : draft.intervalAmount}
-                  onChangeText={(value) => update(draft.scheduleMode === 'delay' ? 'delayAmount' : 'intervalAmount', value)}
-                  placeholder="1…"
-                  placeholderTextColor="#748194"
-                  style={[styles.input, errors.delayAmount || errors.intervalAmount ? styles.inputError : null]}
+        <View style={styles.field}>
+          <TextInput
+            ref={promptRef}
+            accessibilityLabel="Automation task"
+            autoComplete="off"
+            value={draft.prompt}
+            onChangeText={(value) => update('prompt', value)}
+            multiline
+            placeholder="Describe what EmploAI should do"
+            placeholderTextColor="#697586"
+            style={[styles.taskInput, errors.prompt ? styles.inputError : null]}
+          />
+          {errors.prompt ? <Text accessibilityLiveRegion="polite" style={styles.fieldError}>{errors.prompt}</Text> : null}
+        </View>
+
+        <View style={styles.formSection}>
+          <Text style={styles.formSectionLabel}>Details</Text>
+          <View style={styles.settingsCard}>
+            <SelectRow
+              id={draft.targetIdentityId}
+              label="Entity"
+              value={selectedLabel(identityOptions, draft.targetIdentityId, 'Choose entity')}
+              hint="The manager or worker that owns this automation"
+              options={identityOptions}
+              open={openSelect === 'entity'}
+              error={errors.targetIdentityId}
+              onToggle={() => setOpenSelect((value) => value === 'entity' ? null : 'entity')}
+              onSelect={chooseIdentity}
+            />
+            <SelectRow
+              id={draft.chatMode}
+              label="Runs in"
+              value={selectedLabel(CHAT_OPTIONS, draft.chatMode, 'Choose chat mode')}
+              options={CHAT_OPTIONS}
+              open={openSelect === 'chatMode'}
+              onToggle={() => setOpenSelect((value) => value === 'chatMode' ? null : 'chatMode')}
+              onSelect={(value) => {
+                setDraft((current) => {
+                  const canReuseManagedChat = mode === 'edit'
+                    && initialDraft.chatMode === 'new'
+                    && current.targetChatId === initialDraft.targetChatId;
+                  return {
+                    ...current,
+                    chatMode: value as AutomationEditorDraft['chatMode'],
+                    targetChatId: value === 'existing' || canReuseManagedChat ? current.targetChatId : '',
+                  };
+                });
+                setErrors((current) => ({ ...current, targetChatId: undefined, model: undefined }));
+                setOpenSelect(null);
+              }}
+            />
+            {draft.chatMode === 'existing' ? (
+              <>
+                <SelectRow
+                  id={draft.targetChatId}
+                  label="Chat"
+                  value={selectedLabel(sessionOptions, draft.targetChatId, entitySessions.length ? 'Choose an existing chat' : 'No chats for this entity')}
+                  hint="Only chats owned by the selected entity are shown"
+                  options={sessionOptions}
+                  open={openSelect === 'chat'}
+                  error={errors.targetChatId}
+                  onToggle={() => setOpenSelect((value) => value === 'chat' ? null : 'chat')}
+                  onSelect={(value) => choose('targetChatId', value)}
                 />
-                {errors.delayAmount || errors.intervalAmount ? <Text accessibilityLiveRegion="polite" style={styles.fieldError}>{errors.delayAmount || errors.intervalAmount}</Text> : null}
+                <ReadOnlyRow label="Model" value={selectedSession?.model || 'Inherited from chat'} hint="Uses the chat’s live configuration" />
+                <ReadOnlyRow label="Reasoning" value={selectedSession?.variant || 'Inherited from chat'} />
+                <ReadOnlyRow
+                  label="Tools & approvals"
+                  value={selectedSession ? `${selectedSession.enabled_tool_packs.length} packs · ${selectedSession.security_permission_mode || 'standard'}` : 'Inherited from chat'}
+                  last
+                />
+              </>
+            ) : (
+              <>
+                <SelectRow
+                  id={draft.model}
+                  label="Model"
+                  value={selectedLabel(modelOptions, draft.model, draft.model || 'Choose model')}
+                  options={modelOptions}
+                  open={openSelect === 'model'}
+                  error={errors.model}
+                  onToggle={() => setOpenSelect((value) => value === 'model' ? null : 'model')}
+                  onSelect={(value) => choose('model', value)}
+                />
+                <SelectRow
+                  id={draft.variant}
+                  label="Reasoning"
+                  value={selectedLabel(variantOptions, draft.variant, draft.variant || 'Default')}
+                  options={variantOptions}
+                  open={openSelect === 'variant'}
+                  onToggle={() => setOpenSelect((value) => value === 'variant' ? null : 'variant')}
+                  onSelect={(value) => choose('variant', value)}
+                  last
+                />
+              </>
+            )}
+          </View>
+          {draft.chatMode === 'existing' ? (
+            <View style={styles.inheritanceNote}>
+              <Text style={styles.inheritanceMark}>↳</Text>
+              <Text style={styles.inheritanceText}>This automation will use the selected chat’s model, reasoning, workspace, tools, and approval mode.</Text>
+            </View>
+          ) : null}
+        </View>
+
+        <View style={styles.formSection}>
+          <Text style={styles.formSectionLabel}>Frequency</Text>
+          <View style={styles.settingsCard}>
+            <SelectRow
+              id={draft.scheduleMode}
+              label="Repeat"
+              value={selectedLabel(REPEAT_OPTIONS, draft.scheduleMode, 'Choose frequency')}
+              options={REPEAT_OPTIONS}
+              open={openSelect === 'repeat'}
+              onToggle={() => setOpenSelect((value) => value === 'repeat' ? null : 'repeat')}
+              onSelect={(value) => choose('scheduleMode', value as AutomationScheduleMode)}
+            />
+            {draft.scheduleMode === 'daily' ? (
+              <View style={[styles.settingsRow, styles.settingsRowLast]}>
+                <Text style={styles.settingsLabel}>At</Text>
+                <TextInput
+                  accessibilityLabel="Daily run time"
+                  value={draft.dailyTime}
+                  onChangeText={(value) => update('dailyTime', value)}
+                  placeholder="09:00"
+                  placeholderTextColor="#697586"
+                  style={[styles.compactInput, errors.dailyTime ? styles.inputError : null]}
+                />
               </View>
-              <View style={styles.fieldHalf}>
-                <Text style={styles.fieldLabel}>Unit</Text>
-                <View accessibilityRole="radiogroup" accessibilityLabel="Schedule unit" style={styles.choiceRow}>
-                  {AUTOMATION_SCHEDULE_UNITS.map((unit) => {
-                    const current = draft.scheduleMode === 'delay' ? draft.delayUnit : draft.intervalUnit;
-                    return <ChoiceButton key={unit} label={unit} selected={current === unit} onPress={() => update(draft.scheduleMode === 'delay' ? 'delayUnit' : 'intervalUnit', unit)} />;
-                  })}
+            ) : null}
+            {draft.scheduleMode === 'interval' || draft.scheduleMode === 'delay' ? (
+              <View style={[styles.settingsRow, styles.settingsRowLast]}>
+                <Text style={styles.settingsLabel}>{draft.scheduleMode === 'delay' ? 'After' : 'Every'}</Text>
+                <View style={styles.frequencyControls}>
+                  <TextInput
+                    accessibilityLabel={`${draft.scheduleMode === 'delay' ? 'Delay' : 'Interval'} amount`}
+                    inputMode="numeric"
+                    value={draft.scheduleMode === 'delay' ? draft.delayAmount : draft.intervalAmount}
+                    onChangeText={(value) => update(draft.scheduleMode === 'delay' ? 'delayAmount' : 'intervalAmount', value)}
+                    style={[styles.compactInput, styles.amountInput]}
+                  />
+                  <View style={styles.unitChoices}>
+                    {AUTOMATION_SCHEDULE_UNITS.map((unit) => {
+                      const current = draft.scheduleMode === 'delay' ? draft.delayUnit : draft.intervalUnit;
+                      return (
+                        <Pressable
+                          key={unit}
+                          accessibilityRole="radio"
+                          accessibilityState={{ checked: current === unit }}
+                          style={({ hovered, pressed }: DesktopPressableState) => [styles.unitChoice, current === unit ? styles.unitChoiceSelected : null, hovered ? styles.buttonHover : null, pressed ? styles.buttonPressed : null]}
+                          onPress={() => update(draft.scheduleMode === 'delay' ? 'delayUnit' : 'intervalUnit', unit)}
+                        >
+                          <Text style={[styles.unitChoiceText, current === unit ? styles.unitChoiceTextSelected : null]}>{unit}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
                 </View>
               </View>
-            </View>
-          ) : null}
-          {draft.scheduleMode === 'daily' ? (
-            <View style={styles.field}>
-              <Text style={styles.fieldLabel}>Local Time</Text>
-              <TextInput
-                ref={scheduleRef}
-                accessibilityLabel="Daily run time"
-                autoComplete="off"
-                value={draft.dailyTime}
-                onChangeText={(value) => update('dailyTime', value)}
-                placeholder="08:00…"
-                placeholderTextColor="#748194"
-                style={[styles.input, errors.dailyTime ? styles.inputError : null]}
-              />
-              {errors.dailyTime ? <Text accessibilityLiveRegion="polite" style={styles.fieldError}>{errors.dailyTime}</Text> : null}
-            </View>
-          ) : null}
-          {draft.scheduleMode === 'advanced' ? (
-            <View style={styles.field}>
-              <Text style={styles.fieldLabel}>Schedule Phrase</Text>
-              <TextInput
-                ref={scheduleRef}
-                accessibilityLabel="Advanced schedule phrase"
-                autoComplete="off"
-                value={draft.advancedSchedule}
-                onChangeText={(value) => update('advancedSchedule', value)}
-                placeholder="Example: every day at 08:00…"
-                placeholderTextColor="#748194"
-                style={[styles.input, errors.advancedSchedule ? styles.inputError : null]}
-              />
-              {errors.advancedSchedule ? <Text accessibilityLiveRegion="polite" style={styles.fieldError}>{errors.advancedSchedule}</Text> : null}
-            </View>
-          ) : null}
-          <View style={styles.reviewStrip}>
-            <Text style={styles.reviewTitle}>{schedule || 'Add a schedule'}</Text>
-            <Text style={styles.reviewCopy}>Next run: {nextRunLabel}</Text>
+            ) : null}
+            {draft.scheduleMode === 'advanced' ? (
+              <View style={[styles.settingsRow, styles.settingsRowLast]}>
+                <Text style={styles.settingsLabel}>Schedule</Text>
+                <TextInput
+                  accessibilityLabel="Advanced schedule phrase"
+                  value={draft.advancedSchedule}
+                  onChangeText={(value) => update('advancedSchedule', value)}
+                  placeholder="every day at 09:00"
+                  placeholderTextColor="#697586"
+                  style={[styles.compactInput, styles.advancedInput]}
+                />
+              </View>
+            ) : null}
           </View>
+          {errors.dailyTime || errors.intervalAmount || errors.delayAmount || errors.advancedSchedule ? (
+            <Text accessibilityLiveRegion="polite" style={styles.fieldError}>{errors.dailyTime || errors.intervalAmount || errors.delayAmount || errors.advancedSchedule}</Text>
+          ) : null}
+          <Text style={styles.nextRunText}>{schedule} · Next run {nextRunLabel}</Text>
         </View>
 
-        <View style={styles.editorSection}>
-          <Text style={styles.editorSectionTitle}>Destination</Text>
-          <View accessibilityRole="radiogroup" accessibilityLabel="Automation target" style={styles.optionStack}>
-            {TARGET_OPTIONS.map((option) => (
-              <OptionCard key={option.key} label={option.label} description={option.description} selected={draft.targetKind === option.key} onPress={() => update('targetKind', option.key)} />
-            ))}
-          </View>
-          {draft.targetKind === 'identity' ? (
-            <View style={styles.field}>
-              <Text style={styles.fieldLabel}>Identity</Text>
-              {identities.length ? (
-                <View accessibilityRole="radiogroup" accessibilityLabel="Fleet identity" style={styles.choiceRow}>
-                  {identities.map((identity) => <ChoiceButton key={identity.identity_id} label={identity.display_name} selected={draft.targetIdentityId === identity.identity_id} onPress={() => update('targetIdentityId', identity.identity_id)} />)}
-                </View>
-              ) : <Text style={styles.fieldError}>Create or enroll a Fleet identity before using this destination.</Text>}
-              {errors.targetIdentityId ? <Text accessibilityLiveRegion="polite" style={styles.fieldError}>{errors.targetIdentityId}</Text> : null}
-            </View>
-          ) : null}
-          {draft.targetKind === 'group' ? (
-            <View style={styles.field}>
-              <Text style={styles.fieldLabel}>Fleet Group</Text>
-              {groups.length ? (
-                <View accessibilityRole="radiogroup" accessibilityLabel="Fleet group" style={styles.choiceRow}>
-                  {groups.map((group) => <ChoiceButton key={group.group_id} label={group.display_name} selected={draft.targetGroupId === group.group_id} onPress={() => update('targetGroupId', group.group_id)} />)}
-                </View>
-              ) : <Text style={styles.fieldError}>Create a Fleet group before using this destination.</Text>}
-              {errors.targetGroupId ? <Text accessibilityLiveRegion="polite" style={styles.fieldError}>{errors.targetGroupId}</Text> : null}
-            </View>
-          ) : null}
-        </View>
-
-        <View style={styles.editorSection}>
-          <Text style={styles.editorSectionTitle}>Safety</Text>
-          <View accessibilityRole="radiogroup" accessibilityLabel="Automation permission level" style={styles.optionStack}>
-            {PERMISSION_OPTIONS.map((option) => (
-              <OptionCard key={option.key} label={option.label} description={option.description} selected={draft.permissionMode === option.key} onPress={() => update('permissionMode', option.key)} />
-            ))}
-          </View>
-          {draft.permissionMode === 'full_permissions' ? (
-            <View accessibilityRole="alert" style={styles.warningPanel}>
-              <Text style={styles.warningTitle}>Full Access removes an important pause.</Text>
-              <Text style={styles.warningCopy}>Use it only for a narrow, trusted task with tools you have already reviewed.</Text>
-            </View>
-          ) : null}
-        </View>
-
-        <View style={styles.editorSection}>
-          <Pressable accessibilityRole="button" accessibilityState={{ expanded: advancedOpen }} style={controlStyle} onPress={() => setAdvancedOpen((value) => !value)}>
-            <Text style={styles.buttonText}>{advancedOpen ? 'Hide Advanced Routing' : 'Show Advanced Routing'}</Text>
+        <View style={styles.formSection}>
+          <Pressable accessibilityRole="button" accessibilityState={{ expanded: advancedOpen }} style={styles.advancedToggle} onPress={() => setAdvancedOpen((value) => !value)}>
+            <Text style={styles.advancedToggleText}>{advancedOpen ? 'Hide advanced settings' : 'Advanced settings'}</Text>
+            <Text style={styles.chevron}>{advancedOpen ? '⌃' : '⌄'}</Text>
           </Pressable>
           {advancedOpen ? (
-            <>
-              <View style={styles.field}>
-                <Text style={styles.fieldLabel}>Specific Chat</Text>
-                <View accessibilityRole="radiogroup" accessibilityLabel="Specific chat" style={styles.choiceRow}>
-                  <ChoiceButton label="Choose Automatically" selected={!draft.targetChatId} onPress={() => update('targetChatId', '')} />
-                  {sessions.slice(0, 20).map((session) => <ChoiceButton key={session.id} label={session.name || session.id} selected={draft.targetChatId === session.id} onPress={() => update('targetChatId', session.id)} />)}
-                </View>
-              </View>
-              <View style={styles.field}>
-                <Text style={styles.fieldLabel}>Additional Tool Packs</Text>
-                <TextInput
-                  accessibilityLabel="Additional tool packs"
-                  autoComplete="off"
-                  value={draft.toolPacksText}
-                  onChangeText={(value) => update('toolPacksText', value)}
-                  placeholder="Example: browser_isolated, scheduler…"
-                  placeholderTextColor="#748194"
-                  style={styles.input}
+            <View style={styles.settingsCard}>
+              {draft.chatMode === 'new' ? (
+                <SelectRow
+                  id={draft.permissionMode}
+                  label="Approvals"
+                  value={selectedLabel(PERMISSION_OPTIONS, draft.permissionMode, 'Confirm risky actions')}
+                  options={PERMISSION_OPTIONS}
+                  open={openSelect === 'permissions'}
+                  onToggle={() => setOpenSelect((value) => value === 'permissions' ? null : 'permissions')}
+                  onSelect={(value) => choose('permissionMode', value as AutomationPermissionMode)}
+                  last
                 />
-                <Text style={styles.editorSectionCopy}>Optional local tool-pack IDs, separated with commas.</Text>
-              </View>
-            </>
+              ) : (
+                <ReadOnlyRow label="Approvals" value={selectedSession?.security_permission_mode || 'Inherited from chat'} last />
+              )}
+            </View>
           ) : null}
         </View>
 
-        <View style={styles.reviewStrip}>
-          <Text style={styles.reviewTitle}>Review</Text>
-          <Text style={styles.reviewCopy}>{draft.name.trim() || 'Untitled automation'} · {schedule || 'No schedule'} · {automationPermissionLabel(draft.permissionMode)}</Text>
-          <Text style={styles.reviewCopy}>Next run: {nextRunLabel}</Text>
-        </View>
-
-        <View style={styles.editorFooter}>
-          <Text style={styles.editorSectionCopy}>{dirty ? 'Unsaved changes' : 'No unsaved changes'}</Text>
+        <View style={styles.saveBar}>
+          <View style={styles.saveSummary}>
+            <Text style={styles.saveSummaryTitle}>{draft.name.trim() || 'Untitled automation'}</Text>
+            <Text numberOfLines={1} style={styles.saveSummaryCopy}>{selectedIdentity?.display_name || 'No entity'} · {draft.chatMode === 'existing' ? selectedSession?.name || 'Choose chat' : draft.model || 'Choose model'}</Text>
+          </View>
           <View style={styles.editorFooterActions}>
-            <Pressable accessibilityRole="button" disabled={busy} style={controlStyle} onPress={reset}>
-              <Text style={styles.buttonText}>{mode === 'edit' ? 'Revert Changes' : 'Clear Form'}</Text>
-            </Pressable>
-            <Pressable accessibilityRole="button" disabled={busy} style={controlStyle} onPress={() => void onRequestClose(dirty)}>
-              <Text style={styles.buttonText}>Cancel</Text>
+            <Pressable accessibilityRole="button" disabled={busy} style={buttonStyle} onPress={() => { setDraft(initialDraft); setErrors({}); }}>
+              <Text style={styles.buttonText}>Reset</Text>
             </Pressable>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={mode === 'edit' ? 'Save automation changes' : 'Create automation'}
               disabled={busy}
-              style={(state: DesktopPressableState) => [
-                ...controlStyle(state),
-                styles.primaryButton,
-                busy ? styles.disabled : null,
-              ]}
+              style={(state: DesktopPressableState) => [...buttonStyle(state), styles.primaryButton, busy ? styles.disabled : null]}
               onPress={submit}
             >
-              <Text style={[styles.buttonText, styles.primaryButtonText]}>{busy ? 'Saving…' : mode === 'edit' ? 'Save Changes' : 'Create Automation'}</Text>
+              <Text style={[styles.buttonText, styles.primaryButtonText]}>{busy ? 'Saving…' : mode === 'edit' ? 'Save changes' : 'Create automation'}</Text>
             </Pressable>
           </View>
         </View>

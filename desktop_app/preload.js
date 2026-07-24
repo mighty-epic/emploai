@@ -56,6 +56,7 @@ contextBridge.exposeInMainWorld('emploaiDesktop', {
     createLocalWorker: (payload) => ipcRenderer.invoke('emploai:fleet:create-local-worker', payload),
     createEnrollment: (payload) => ipcRenderer.invoke('emploai:fleet:create-enrollment', payload),
     yggdrasilStatus: () => ipcRenderer.invoke('emploai:fleet:yggdrasil-status'),
+    yggdrasilManagerRefresh: () => ipcRenderer.invoke('emploai:fleet:yggdrasil-manager-refresh'),
     yggdrasilBootstrap: () => ipcRenderer.invoke('emploai:fleet:yggdrasil-bootstrap'),
     yggdrasilCreatePairing: (payload) => ipcRenderer.invoke('emploai:fleet:yggdrasil-create-pairing', payload),
     yggdrasilJoin: (payload) => ipcRenderer.invoke('emploai:fleet:yggdrasil-join', payload),

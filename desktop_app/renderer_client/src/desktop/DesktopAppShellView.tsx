@@ -16,13 +16,18 @@ import {
 import { passwordRequirementStatus } from '@/lib/remoteAuthPasswordPolicy';
 import type { DesktopPressableState } from '../lib/pressableState';
 import { shortStatusText, userFacingError } from '../../lib/diagnostics';
-import { DesktopConversationView, type DesktopConversationHeaderControls } from './DesktopConversationView';
-import { DesktopSetupPanel } from './DesktopSetupPanel';
+import {
+  DesktopConversationView,
+  type ConversationSurfaceMode,
+  type DesktopConversationHeaderControls,
+} from './DesktopConversationView';
+import { DesktopSetupPanel, type SettingsTabKey } from './DesktopSetupPanel';
 import { DesktopConversationSkeleton, DesktopStatusBanner, StartupGlyph } from './DesktopAppShellStartup';
 import { styles } from './DesktopAppShell.styles';
 import { DesktopMenuBar } from './DesktopMenuBar';
 import { DesktopExitDialog } from './DesktopExitDialog';
 import { DesktopUpdateOverlay, desktopUpdatePhaseForMessage } from './DesktopUpdateOverlay';
+import { DesktopCompanySwitcher } from './DesktopCompanySwitcher';
 
 const webBackdropBlurStyle =
   Platform.OS === 'web'
@@ -44,7 +49,7 @@ type DesktopAppShellViewProps = {
 const CONVERSATION_HEADER_TABS = [
   { tab: 'chat', mode: 'chat', label: 'Chat' },
   { tab: 'jarvis', mode: 'jarvis', label: 'Jarvis' },
-  { tab: 'fleet', mode: 'fleet', label: 'Fleet' },
+  { tab: 'company', mode: 'fleet', label: 'Company' },
 ] as const;
 
 export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
@@ -252,24 +257,31 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
   const [pendingSurfaceMode, setPendingSurfaceMode] = useState(requestedSurfaceMode);
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
   const [exitBusy, setExitBusy] = useState(false);
-  const [setupTarget, setSetupTarget] = useState<{ tab: 'general' | 'packs'; packId?: string | null }>({ tab: 'general' });
+  const [setupTarget, setSetupTarget] = useState<{
+    tab: SettingsTabKey;
+    packId?: string | null;
+  }>({ tab: 'general' });
   const [exitError, setExitError] = useState<string | null>(null);
   const [startupSkeletonExpired, setStartupSkeletonExpired] = useState(false);
   const remoteAuthPasswordRequirements = passwordRequirementStatus(String(remoteAuthPassword || ''));
 
   useEffect(() => {
-    if (String(requestedTab || '').trim().toLowerCase() !== 'remote') return;
+    if (!['remote', 'fleet'].includes(String(requestedTab || '').trim().toLowerCase())) return;
     setPendingSurfaceMode('fleet');
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
     const nextUrl = new URL(window.location.href);
-    nextUrl.searchParams.set('tab', 'fleet');
-    window.history.replaceState({ ...window.history.state, desktopTab: 'fleet' }, '', nextUrl.toString());
+    nextUrl.searchParams.set('tab', 'company');
+    window.history.replaceState({ ...window.history.state, desktopTab: 'company' }, '', nextUrl.toString());
   }, [requestedTab]);
 
-  const activateDesktopSurface = (tab: 'chat' | 'jarvis' | 'fleet', pushHistory = true) => {
+  const activateDesktopSurface = (tab: 'chat' | 'jarvis' | 'company', pushHistory = true) => {
+    const mode = tab === 'company' ? 'fleet' : tab;
     setActiveTab('local');
-    setPendingSurfaceMode(tab);
-    conversationHeaderControls?.setMode(tab);
+    const activateConversationMode = (tab: ConversationSurfaceMode) => {
+      setPendingSurfaceMode(tab);
+      conversationHeaderControls?.setMode(tab);
+    };
+    activateConversationMode(mode);
     if (pushHistory && Platform.OS === 'web' && typeof window !== 'undefined') {
       const nextUrl = new URL(window.location.href);
       nextUrl.searchParams.set('tab', tab);
@@ -282,7 +294,7 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
     const restoreSurfaceFromHistory = () => {
       const tab = String(new URL(window.location.href).searchParams.get('tab') || 'chat').toLowerCase();
       activateDesktopSurface(
-        tab === 'remote' || tab === 'fleet' ? 'fleet' : tab === 'jarvis' ? 'jarvis' : 'chat',
+        tab === 'remote' || tab === 'fleet' || tab === 'company' ? 'company' : tab === 'jarvis' ? 'jarvis' : 'chat',
         false,
       );
     };
@@ -938,6 +950,11 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
           <DesktopMenuBar menus={desktopMenus} />
         </View>
         <View style={[styles.windowChromeRight, webWindowNoDragStyle]}>
+          <DesktopCompanySwitcher
+            apiBaseUrl={bootstrap?.apiBaseUrl}
+            token={bootstrap?.accessToken}
+            confirmAction={confirmAction}
+          />
           <View accessibilityRole="tablist" style={styles.headerSurfaceTabs}>
               {CONVERSATION_HEADER_TABS.map((item) => {
                 const selected = activeTab === 'local' && (conversationHeaderControls?.mode || pendingSurfaceMode) === item.mode;
@@ -1069,7 +1086,10 @@ export function DesktopAppShellView({ scope }: DesktopAppShellViewProps) {
                 onSelectVoiceEngine={(engine) => selectVoiceEngine(engine)}
                 onStartupStateChange={handleConversationStartupState}
                 onOpenSetup={(target) => {
-                  setSetupTarget({ tab: target?.tab === 'packs' ? 'packs' : 'general', packId: target?.packId || null });
+                  setSetupTarget({
+                    tab: target?.tab || 'general',
+                    packId: target?.packId || null,
+                  });
                   setShowSetup(true);
                 }}
                 accountEmail={accountEmail}

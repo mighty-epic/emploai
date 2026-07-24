@@ -10,6 +10,55 @@ REMOTE_PAIRING_TTL_SECONDS = 60 * 10
 FLEET_ENROLLMENT_TTL_SECONDS = 60 * 30
 
 class RemoteControlStoreIdentityMixin:
+    def ensure_company_membership_identities(
+        self,
+        *,
+        user_id: int,
+        desktop_id: str,
+        company_id: str,
+        company_name: Optional[str] = None,
+        membership_role: str = "worker_node",
+        adopt_unscoped: bool = False,
+    ) -> Dict[str, Any]:
+        """Reconcile the protected manager/default-worker pair for one membership."""
+
+        clean_company_id = str(company_id or "").strip()
+        if not clean_company_id:
+            raise ValueError("A company ID is required.")
+        with self._lock:
+            manager_name = str(company_name or "EmploAI Desktop").strip()[:MAX_DISPLAY_NAME_CHARS] or "EmploAI Desktop"
+            manager = self._ensure_manager_instance_locked(
+                user_id=int(user_id),
+                desktop_id=str(desktop_id or "").strip(),
+                display_name=manager_name,
+                company_id=clean_company_id,
+                membership_role=membership_role,
+                adopt_unscoped=adopt_unscoped,
+            )
+            worker = self._ensure_default_worker_locked(
+                user_id=int(user_id),
+                desktop_id=str(desktop_id or "").strip(),
+                display_name=DEFAULT_WORKER_DISPLAY_NAME,
+                company_id=clean_company_id,
+                membership_role=membership_role,
+                adopt_unscoped=adopt_unscoped,
+            )
+            worker_identity_row = self._conn.execute(
+                "SELECT * FROM fleet_instances WHERE instance_id = ?",
+                (worker["instance_id"],),
+            ).fetchone()
+            self._conn.commit()
+            self._secure_db_files()
+            return {
+                "manager_identity": self._identity_view(
+                    self._conn.execute(
+                        "SELECT * FROM fleet_instances WHERE instance_id = ?",
+                        (manager["instance_id"],),
+                    ).fetchone()
+                ),
+                "default_worker_identity": self._identity_view(worker_identity_row),
+            }
+
     def ensure_standalone_manager_desktop(
         self,
         *,

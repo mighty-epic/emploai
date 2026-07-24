@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 # Split from app_server.py; dependencies are injected by the app_server facade.
+from app_backend.company_runtime_context import (
+    company_record_matches,
+    resolve_local_company_runtime,
+)
 
 def register_voice_ws_routes(app):
 
@@ -51,12 +55,67 @@ def register_voice_ws_routes(app):
                 return
 
             bridge = _bridge_for_user(int(auth["user_id"]))
+            requested_company_id = str(
+                websocket.query_params.get("company_id") or ""
+            ).strip() or None
+            company_runtime = resolve_local_company_runtime(
+                auth=auth,
+                company_store=_get_company_store(),
+                fleet_store=_get_remote_control_store(),
+                company_id=requested_company_id,
+            )
+            if not company_runtime:
+                await websocket.close(code=4403)
+                return
+            company_id = str(company_runtime.get("company_id") or "")
+            include_legacy = (
+                str(
+                    (
+                        (company_runtime.get("company") or {}).get("migration")
+                        or {}
+                    ).get("state")
+                    or ""
+                )
+                == "legacy_compatibility"
+            )
+
+            def company_session_available(session_id: Optional[str]) -> bool:
+                clean_session_id = str(session_id or "").strip()
+                if not clean_session_id:
+                    return False
+                getter = getattr(bridge, "get_session", None)
+                if not callable(getter):
+                    # Pre-Company local voice adapters did not expose session
+                    # lookup. They are eligible only inside the default
+                    # migration Company; current bridges are always checked.
+                    return include_legacy
+                try:
+                    session = getter(clean_session_id)
+                except Exception:
+                    return False
+                return company_record_matches(
+                    session,
+                    company_id=company_id,
+                    include_legacy=include_legacy,
+                )
 
             client_id = str(websocket.query_params.get("client_id") or secrets.token_hex(8))
 
             draft = _new_voice_draft_state()
 
             socket_session_id = str(websocket.query_params.get("session_id") or "").strip()
+            if socket_session_id and not company_session_available(socket_session_id):
+                await send_model(
+                    RealtimeServerEvent(
+                        type="error",
+                        session_id=socket_session_id,
+                        payload={
+                            "message": "Voice chat is not available in the selected company",
+                            "code": "session_unavailable",
+                        },
+                    )
+                )
+                return
 
             active_session_id = socket_session_id or None
 
@@ -118,6 +177,17 @@ def register_voice_ws_routes(app):
 
                 if not turn_text:
 
+                    return
+                if not company_session_available(turn_session_id):
+                    await send_voice_event(
+                        "error",
+                        {
+                            "message": "Voice turn cannot target a chat from another company",
+                            "code": "invalid_session_target",
+                            "turn_id": turn_id,
+                        },
+                        session_id=turn_session_id,
+                    )
                     return
 
                 await send_voice_event(
@@ -1556,6 +1626,17 @@ def register_voice_ws_routes(app):
 
                     )
 
+                    continue
+
+                if event_session_id and not company_session_available(event_session_id):
+                    await send_voice_event(
+                        "error",
+                        {
+                            "message": "Voice event cannot target a chat from another company",
+                            "code": "invalid_session_target",
+                        },
+                        session_id=socket_session_id or active_session_id,
+                    )
                     continue
 
                 event_utterance_id = str(event.utterance_id or "").strip()

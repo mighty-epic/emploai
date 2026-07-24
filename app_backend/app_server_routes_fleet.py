@@ -5,6 +5,12 @@ from app_backend.fleet_identity_creation import validate_local_worker_creation
 from app_backend.fleet_queue_policy import resolve_manual_queue_review_report_id
 from app_backend.fleet_route_resolution import FleetRouteResolutionError, resolve_manager_delegation_route
 from app_backend.fleet_session_routing import reconcile_local_identity_session_profiles, reconcile_local_manager_chat_selection
+from app_backend.company_work_eligibility import (
+    company_assignment_blocker,
+    company_employee_can_accept_work,
+    company_employee_work_blocker,
+)
+from app_backend.request_company_context import requested_company_id
 
 def register_fleet_routes(app):
 
@@ -113,12 +119,191 @@ def register_fleet_routes(app):
 
         return desktop_id or None
 
+    def _company_scope_for_auth(auth: Dict[str, Any]) -> Dict[str, Any]:
+        desktop_id = _fleet_snapshot_desktop_id(auth)
+        if not desktop_id:
+            return {}
+        company_store = _get_company_store()
+        explicit_company_id = requested_company_id()
+        company_id = explicit_company_id or company_store.active_company_id(
+            computer_id=desktop_id
+        )
+        if not company_id:
+            return {}
+        try:
+            company = company_store.get_company(company_id)
+        except Exception:
+            if explicit_company_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="The requested company is not available on this computer",
+                )
+            return {}
+        if not any(
+            str(item.get("computer_id") or "") == str(desktop_id)
+            and str(item.get("status") or "active") == "active"
+            for item in list(company.get("memberships") or [])
+        ):
+            if explicit_company_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="This computer is not an active member of the requested company",
+                )
+            return {}
+        migration_state = str((company.get("migration") or {}).get("state") or "")
+        include_legacy = migration_state == "legacy_compatibility"
+        computer_ids = None if include_legacy else [
+            str(item.get("computer_id") or "")
+            for item in list(company.get("memberships") or [])
+            if str(item.get("status") or "active") == "active"
+        ]
+        return {
+            "company_id": company_id,
+            "company_computer_ids": computer_ids,
+            "include_unscoped_company_records": include_legacy,
+        }
+
+    def _fleet_snapshot_for_auth(auth: Dict[str, Any], *, desktop_id: Optional[str] = None) -> Dict[str, Any]:
+        return _get_remote_control_store().get_fleet_snapshot(
+            user_id=int(auth["user_id"]),
+            desktop_id=desktop_id if desktop_id is not None else _fleet_snapshot_desktop_id(auth),
+            **_company_scope_for_auth(auth),
+        )
+
+    def _active_company_id_for_auth(auth: Dict[str, Any]) -> Optional[str]:
+        return str(_company_scope_for_auth(auth).get("company_id") or "").strip() or None
+
+    def _require_ready_company_assignment_target(
+        auth: Dict[str, Any],
+        *,
+        company_id: str,
+        objective_id: str,
+        identity_id: Optional[str],
+    ) -> Dict[str, Any]:
+        active_company_id = _active_company_id_for_auth(auth)
+        if not active_company_id or active_company_id != str(company_id or ""):
+            raise HTTPException(
+                status_code=403,
+                detail="The objective is not in the selected company.",
+            )
+        company = _get_company_store().get_company(active_company_id)
+        if not any(
+            str(item.get("objective_id") or "") == str(objective_id or "")
+            for item in list(company.get("objectives") or [])
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail="Unknown objective in the selected company.",
+            )
+        employee = next(
+            (
+                item
+                for item in list(company.get("employees") or [])
+                if str(item.get("identity_id") or "")
+                == str(identity_id or "")
+            ),
+            None,
+        )
+        if not employee:
+            raise HTTPException(
+                status_code=404,
+                detail="The assignment target is not a Company employee.",
+            )
+        assignment_blocker = company_assignment_blocker(company, employee)
+        if assignment_blocker:
+            raise HTTPException(
+                status_code=409,
+                detail=assignment_blocker,
+            )
+        return employee
+
+    def _require_company_identity(auth: Dict[str, Any], identity_id: str) -> Dict[str, Any]:
+        identity = next(
+            (
+                item
+                for item in list(_fleet_snapshot_for_auth(auth).get("identities") or [])
+                if str(item.get("identity_id") or "") == str(identity_id or "")
+            ),
+            None,
+        )
+        if not identity:
+            raise HTTPException(status_code=404, detail="Unknown identity in the selected company")
+        return identity
+
+    def _require_company_worker(auth: Dict[str, Any], worker_id: str) -> Dict[str, Any]:
+        worker = next(
+            (
+                item
+                for item in list(_fleet_snapshot_for_auth(auth).get("workers") or [])
+                if str(item.get("worker_id") or "") == str(worker_id or "")
+            ),
+            None,
+        )
+        if not worker:
+            raise HTTPException(status_code=404, detail="Unknown worker in the selected company")
+        return worker
+
+    def _require_company_task(auth: Dict[str, Any], task_id: str) -> Dict[str, Any]:
+        task = next(
+            (
+                item
+                for item in list(_fleet_snapshot_for_auth(auth).get("tasks") or [])
+                if str(item.get("task_id") or "") == str(task_id or "")
+            ),
+            None,
+        )
+        if not task:
+            raise HTTPException(status_code=404, detail="Unknown task in the selected company")
+        return task
+
+    def _require_company_group(auth: Dict[str, Any], group_id: str) -> Dict[str, Any]:
+        group = next(
+            (
+                item
+                for item in list(_fleet_snapshot_for_auth(auth).get("groups") or [])
+                if str(item.get("group_id") or "") == str(group_id or "")
+            ),
+            None,
+        )
+        if not group:
+            raise HTTPException(status_code=404, detail="Unknown group in the selected company")
+        return group
+
+    def _require_company_delegation(auth: Dict[str, Any], delegation_id: str) -> Dict[str, Any]:
+        delegation = next(
+            (
+                item
+                for item in list(_fleet_snapshot_for_auth(auth).get("delegations") or [])
+                if str(item.get("delegation_id") or "") == str(delegation_id or "")
+            ),
+            None,
+        )
+        if not delegation:
+            raise HTTPException(
+                status_code=404,
+                detail="Unknown delegation in the selected company",
+            )
+        return delegation
+
+    def _require_company_tool_grant(auth: Dict[str, Any], grant_id: str) -> Dict[str, Any]:
+        grant = next(
+            (
+                item
+                for item in list(_fleet_snapshot_for_auth(auth).get("tool_grants") or [])
+                if str(item.get("grant_id") or "") == str(grant_id or "")
+            ),
+            None,
+        )
+        if not grant:
+            raise HTTPException(
+                status_code=404,
+                detail="Unknown tool grant in the selected company",
+            )
+        return grant
+
     def _paired_desktop_for_action(auth: Dict[str, Any], desktop_id: str) -> Dict[str, Any]:
         clean_desktop_id = str(desktop_id or "").strip()
-        snapshot = _get_remote_control_store().get_fleet_snapshot(
-            user_id=int(auth["user_id"]),
-            desktop_id=_fleet_snapshot_desktop_id(auth),
-        )
+        snapshot = _fleet_snapshot_for_auth(auth)
         desktop = next(
             (
                 item for item in list(snapshot.get("desktops") or [])
@@ -227,6 +412,10 @@ def register_fleet_routes(app):
 
                 get_store=_get_remote_control_store,
 
+                get_company_store=_get_company_store,
+
+                company_scope_for_auth=_company_scope_for_auth,
+
                 publish_fleet_delta=_publish_fleet_delta,
 
                 check_rate_limit=_check_remote_auth_rate_limit,
@@ -257,19 +446,21 @@ def register_fleet_routes(app):
 
         desktop_id = _fleet_snapshot_desktop_id(auth)
 
-        snapshot = store.get_fleet_snapshot(
-
-            user_id=int(auth["user_id"]),
-
-            desktop_id=desktop_id,
-
-        )
+        snapshot = _fleet_snapshot_for_auth(auth, desktop_id=desktop_id)
 
         if not is_remote_session and desktop_id:
 
             bridge = _bridge_for_user(int(auth["user_id"]))
+            company_scope = _company_scope_for_auth(auth)
 
-            reconcile_local_identity_session_profiles(bridge=bridge, snapshot=snapshot)
+            reconcile_local_identity_session_profiles(
+                bridge=bridge,
+                snapshot=snapshot,
+                company_id=company_scope.get("company_id"),
+                include_legacy=bool(
+                    company_scope.get("include_unscoped_company_records")
+                ),
+            )
 
             snapshot = reconcile_local_manager_chat_selection(
 
@@ -282,6 +473,11 @@ def register_fleet_routes(app):
                 snapshot=snapshot,
 
                 sessions=bridge.list_session_summaries(),
+                company_id=company_scope.get("company_id"),
+                include_legacy=bool(
+                    company_scope.get("include_unscoped_company_records")
+                ),
+                company_computer_ids=company_scope.get("company_computer_ids"),
 
             )
 
@@ -297,13 +493,7 @@ def register_fleet_routes(app):
 
             auth = _standalone_manager_auth(auth)
 
-        snapshot = _get_remote_control_store().get_fleet_snapshot(
-
-            user_id=int(auth["user_id"]),
-
-            desktop_id=_fleet_snapshot_desktop_id(auth),
-
-        )
+        snapshot = _fleet_snapshot_for_auth(auth)
 
         return [FleetIdentityView.model_validate(item) for item in list(snapshot.get("identities") or [])]
 
@@ -325,8 +515,9 @@ def register_fleet_routes(app):
 
         auth = _require_fleet_manager_auth(authorization)
         store = _get_remote_control_store()
-        snapshot = store.get_fleet_snapshot(
-            user_id=int(auth["user_id"]), desktop_id=str(auth.get("desktop_id") or "")
+        snapshot = _fleet_snapshot_for_auth(
+            auth,
+            desktop_id=str(auth.get("desktop_id") or ""),
         )
         manager = dict(snapshot.get("manager") or {})
         setting = set_context_inspection_enabled(
@@ -363,8 +554,9 @@ def register_fleet_routes(app):
         from app_backend.context_inspection import search_context_index
 
         auth = _require_fleet_manager_auth(authorization)
-        snapshot = _get_remote_control_store().get_fleet_snapshot(
-            user_id=int(auth["user_id"]), desktop_id=str(auth.get("desktop_id") or "")
+        snapshot = _fleet_snapshot_for_auth(
+            auth,
+            desktop_id=str(auth.get("desktop_id") or ""),
         )
         results: list[Dict[str, Any]] = []
         failures: list[Dict[str, Any]] = []
@@ -447,8 +639,9 @@ def register_fleet_routes(app):
                 # The source index stays on the descendant computer. Walk only
                 # direct children and let each child repeat the lookup through
                 # its own hierarchy rather than copying context to this node.
-                snapshot = _get_remote_control_store().get_fleet_snapshot(
-                    user_id=int(auth["user_id"]), desktop_id=str(auth.get("desktop_id") or "")
+                snapshot = _fleet_snapshot_for_auth(
+                    auth,
+                    desktop_id=str(auth.get("desktop_id") or ""),
                 )
                 for child in list(snapshot.get("connection_permissions") or []):
                     if str(child.get("source") or "") != "paired_desktop":
@@ -471,8 +664,9 @@ def register_fleet_routes(app):
                     except Exception:
                         continue
                 raise HTTPException(status_code=404, detail="Indexed message was not found on this computer or its descendants")
-        snapshot = _get_remote_control_store().get_fleet_snapshot(
-            user_id=int(auth["user_id"]), desktop_id=str(auth.get("desktop_id") or "")
+        snapshot = _fleet_snapshot_for_auth(
+            auth,
+            desktop_id=str(auth.get("desktop_id") or ""),
         )
         needle = request.computer.strip().casefold()
         names = {
@@ -600,8 +794,8 @@ def register_fleet_routes(app):
     ) -> FleetRoutedTaskResponse:
         auth = _require_fleet_manager_auth(authorization)
         store = _get_remote_control_store()
-        snapshot = store.get_fleet_snapshot(
-            user_id=int(auth["user_id"]),
+        snapshot = _fleet_snapshot_for_auth(
+            auth,
             desktop_id=str(auth.get("desktop_id") or ""),
         )
         try:
@@ -616,14 +810,32 @@ def register_fleet_routes(app):
             status_code = 409 if exc.code in {"child_update_required", "default_worker_missing"} else 400
             raise HTTPException(status_code=status_code, detail={"code": exc.code, "message": str(exc)}) from exc
 
+        request_metadata = dict(request.metadata or {})
+        objective_id = str(
+            request_metadata.get("objective_id") or ""
+        ).strip()
+        if objective_id:
+            _require_ready_company_assignment_target(
+                auth,
+                company_id=str(
+                    request_metadata.get("company_id")
+                    or _active_company_id_for_auth(auth)
+                    or ""
+                ),
+                objective_id=objective_id,
+                identity_id=route.identity_id,
+            )
+
         origin = {
             "manager_session_id": request.origin_manager_session_id,
             "manager_message_id": request.origin_manager_message_id,
             "run_id": request.origin_run_id,
         }
         route_payload = route.to_dict()
+        active_company_id = _active_company_id_for_auth(auth)
         base_metadata = {
             **dict(request.metadata or {}),
+            **({"company_id": active_company_id} if active_company_id else {}),
             "routed_task": True,
             "route": route_payload,
             "origin_manager_session_id": request.origin_manager_session_id,
@@ -635,7 +847,7 @@ def register_fleet_routes(app):
             "security_permission_mode": request.security_permission_mode,
         }
         if route.route_kind == "local_worker":
-            worker = store.get_worker(user_id=int(auth["user_id"]), worker_id=str(route.worker_id or ""))
+            worker = _require_company_worker(auth, str(route.worker_id or ""))
             target_session_id = None
             if request.continuation_task_id:
                 previous_task = store.get_worker_task(
@@ -693,6 +905,22 @@ def register_fleet_routes(app):
             )
             if not previous:
                 raise HTTPException(status_code=404, detail="The continuation delegation was not found")
+            if str(previous.get("desktop_id") or "") != desktop_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="A continuation must stay on its original child computer",
+                )
+            previous_metadata = dict(previous.get("metadata") or {})
+            target_session_id = str(
+                previous_metadata.get("target_session_id") or ""
+            ).strip() or None
+            if not target_session_id:
+                previous_report = dict(previous.get("report") or {})
+                target_session_id = str(
+                    previous_report.get("target_session_id")
+                    or previous_report.get("session_id")
+                    or ""
+                ).strip() or None
         delegation = store.create_computer_delegation(
             user_id=int(auth["user_id"]),
             desktop_id=desktop_id,
@@ -750,12 +978,7 @@ def register_fleet_routes(app):
     ) -> Dict[str, Any]:
         auth = _require_fleet_manager_auth(authorization)
         store = _get_remote_control_store()
-        try:
-            delegation = store.get_computer_delegation(
-                user_id=int(auth["user_id"]), delegation_id=delegation_id
-            )
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        delegation = _require_company_delegation(auth, delegation_id)
         if str(delegation.get("status") or "") in {"completed", "failed", "stopped", "canceled"}:
             return delegation
         await _request_paired_computer_command(
@@ -791,12 +1014,7 @@ def register_fleet_routes(app):
     ) -> Dict[str, Any]:
         auth = _require_fleet_manager_auth(authorization)
         store = _get_remote_control_store()
-        try:
-            delegation = store.get_computer_delegation(
-                user_id=int(auth["user_id"]), delegation_id=delegation_id
-            )
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        delegation = _require_company_delegation(auth, delegation_id)
         await _request_paired_computer_command(
             auth,
             desktop_id=str(delegation.get("desktop_id") or ""),
@@ -1084,6 +1302,9 @@ def register_fleet_routes(app):
 
             auth = _standalone_manager_auth(auth)
 
+        _require_company_identity(auth, request.identity_id)
+        company_scope = _company_scope_for_auth(auth)
+
         try:
 
             result = _get_remote_control_store().set_active_fleet_identity(
@@ -1097,6 +1318,10 @@ def register_fleet_routes(app):
                 source=request.source or str(auth.get("actor_kind") or "app"),
 
                 desktop_id=_fleet_snapshot_desktop_id(auth),
+                company_id=company_scope.get("company_id"),
+                include_unscoped_company_records=bool(
+                    company_scope.get("include_unscoped_company_records")
+                ),
 
             )
 
@@ -1136,6 +1361,9 @@ def register_fleet_routes(app):
 
             auth = _standalone_manager_auth(auth)
 
+        _require_company_identity(auth, identity_id)
+        company_scope = _company_scope_for_auth(auth)
+
         try:
 
             result = _get_remote_control_store().set_active_chat_for_fleet_identity(
@@ -1149,6 +1377,10 @@ def register_fleet_routes(app):
                 source=request.source or str(auth.get("actor_kind") or "app"),
 
                 desktop_id=_fleet_snapshot_desktop_id(auth),
+                company_id=company_scope.get("company_id"),
+                include_unscoped_company_records=bool(
+                    company_scope.get("include_unscoped_company_records")
+                ),
 
             )
 
@@ -1183,6 +1415,7 @@ def register_fleet_routes(app):
     ) -> FleetIdentityView:
 
         auth = _require_fleet_manager_auth(authorization)
+        _require_company_identity(auth, identity_id)
 
         try:
 
@@ -1221,6 +1454,7 @@ def register_fleet_routes(app):
         authorization: Optional[str] = Header(default=None),
     ) -> FleetIdentityView:
         auth = _require_fleet_manager_auth(authorization)
+        _require_company_identity(auth, identity_id)
         store = _get_remote_control_store()
         try:
             identity = store.set_manager_identity_tool_packs(
@@ -1235,8 +1469,8 @@ def register_fleet_routes(app):
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
         bridge = _bridge_for_user(int(auth["user_id"]))
-        snapshot = store.get_fleet_snapshot(
-            user_id=int(auth["user_id"]),
+        snapshot = _fleet_snapshot_for_auth(
+            auth,
             desktop_id=str(identity.get("desktop_id") or "").strip() or _fleet_snapshot_desktop_id(auth),
         )
         reconcile_local_identity_session_profiles(bridge=bridge, snapshot=snapshot)
@@ -1259,6 +1493,9 @@ def register_fleet_routes(app):
     ) -> dict:
 
         auth = _require_fleet_manager_auth(authorization)
+        company_id = _active_company_id_for_auth(auth)
+        for worker_id in request.worker_ids:
+            _require_company_worker(auth, worker_id)
 
         try:
 
@@ -1307,6 +1544,10 @@ def register_fleet_routes(app):
     ) -> dict:
 
         auth = _require_fleet_manager_auth(authorization)
+        _require_company_group(auth, group_id)
+        company_id = _active_company_id_for_auth(auth)
+        for worker_id in request.worker_ids:
+            _require_company_worker(auth, worker_id)
 
         try:
 
@@ -1357,6 +1598,9 @@ def register_fleet_routes(app):
     ) -> dict:
 
         auth = _require_fleet_manager_auth(authorization)
+        _require_company_group(auth, group_id)
+        for worker_id in request.worker_ids:
+            _require_company_worker(auth, worker_id)
 
         try:
 
@@ -1401,6 +1645,7 @@ def register_fleet_routes(app):
     ) -> dict:
 
         auth = _require_fleet_manager_auth(authorization)
+        _require_company_group(auth, group_id)
 
         _consume_approved_confirmation(
 
@@ -1449,6 +1694,7 @@ def register_fleet_routes(app):
     ) -> FleetWorkerView:
 
         auth = _require_fleet_manager_auth(authorization)
+        company_id = _active_company_id_for_auth(auth)
 
         try:
 
@@ -1456,9 +1702,14 @@ def register_fleet_routes(app):
 
                 display_name=request.display_name,
 
-                metadata=request.metadata,
+                metadata={
+                    **dict(request.metadata or {}),
+                    **({"company_id": company_id} if company_id else {}),
+                },
 
             )
+            if company_id:
+                metadata = {**dict(metadata or {}), "company_id": company_id}
 
         except ValueError as exc:
 
@@ -1513,6 +1764,7 @@ def register_fleet_routes(app):
     ) -> FleetWorkerView:
 
         auth = _require_fleet_manager_auth(authorization)
+        _require_company_worker(auth, worker_id)
 
         if not request.display_name and request.queue_policy is None:
 
@@ -1601,6 +1853,7 @@ def register_fleet_routes(app):
     ) -> dict:
 
         auth = _require_fleet_manager_auth(authorization)
+        _require_company_worker(auth, worker_id)
 
         try:
 
@@ -1641,14 +1894,7 @@ def register_fleet_routes(app):
         auth = _require_fleet_manager_auth(authorization)
 
         store = _get_remote_control_store()
-
-        try:
-
-            worker = store.get_worker(user_id=int(auth["user_id"]), worker_id=worker_id)
-
-        except KeyError as exc:
-
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        worker = _require_company_worker(auth, worker_id)
 
         payload = await request_fleet_worker_preview(
 
@@ -1691,6 +1937,7 @@ def register_fleet_routes(app):
     async def fleet_request_desktop_preview(desktop_id: str, authorization: Optional[str] = Header(default=None)) -> dict:
 
         auth = _require_fleet_manager_auth(authorization)
+        _paired_desktop_for_action(auth, desktop_id)
 
         store = _get_remote_control_store()
 
@@ -1761,12 +2008,9 @@ def register_fleet_routes(app):
 
         )
 
-        snapshot = _get_remote_control_store().get_fleet_snapshot(
-
-            user_id=int(auth["user_id"]),
-
+        snapshot = _fleet_snapshot_for_auth(
+            auth,
             desktop_id=str(auth.get("desktop_id") or "").strip() or None,
-
         )
 
         results = []
@@ -1842,6 +2086,7 @@ def register_fleet_routes(app):
     ) -> FleetDeleteWorkerResponse:
 
         auth = _require_fleet_manager_auth(authorization)
+        _require_company_worker(auth, worker_id)
 
         _consume_approved_confirmation(
 
@@ -1914,6 +2159,7 @@ def register_fleet_routes(app):
     ) -> FleetDeleteWorkerResponse:
 
         auth = _require_fleet_manager_auth(authorization)
+        _require_company_worker(auth, worker_id)
 
         _consume_approved_confirmation(
 
@@ -1989,9 +2235,12 @@ def register_fleet_routes(app):
 
         try:
 
-            worker = store.get_worker(user_id=int(auth["user_id"]), worker_id=worker_id)
+            worker = _require_company_worker(auth, worker_id)
 
-            snapshot = store.get_fleet_snapshot(user_id=int(auth["user_id"]), desktop_id=str(auth.get("desktop_id") or ""))
+            snapshot = _fleet_snapshot_for_auth(
+                auth,
+                desktop_id=str(auth.get("desktop_id") or ""),
+            )
 
             target_session_id = _fleet_task_target_session_id(
 
@@ -2017,7 +2266,10 @@ def register_fleet_routes(app):
 
                 target_mode=request.target_mode,
 
-                metadata=request.metadata,
+                metadata={
+                    **dict(request.metadata or {}),
+                    **({"company_id": _active_company_id_for_auth(auth)} if _active_company_id_for_auth(auth) else {}),
+                },
 
             )
 
@@ -2106,10 +2358,14 @@ def register_fleet_routes(app):
     ) -> list[FleetTaskView]:
 
         auth = _require_fleet_manager_auth(authorization)
+        company_id = _active_company_id_for_auth(auth)
 
         store = _get_remote_control_store()
 
-        snapshot = store.get_fleet_snapshot(user_id=int(auth["user_id"]), desktop_id=str(auth.get("desktop_id") or ""))
+        snapshot = _fleet_snapshot_for_auth(
+            auth,
+            desktop_id=str(auth.get("desktop_id") or ""),
+        )
 
         group = next((item for item in list(snapshot.get("groups") or []) if str(item.get("group_id") or "") == str(group_id)), None)
 
@@ -2188,6 +2444,7 @@ def register_fleet_routes(app):
                     "group_id": group_id,
 
                     "bulk_dispatch_confirmed": bool((request.metadata or {}).get("bulk_dispatch_confirmed")),
+                    **({"company_id": company_id} if company_id else {}),
 
                 },
 
@@ -2222,6 +2479,7 @@ def register_fleet_routes(app):
                         "workspace_binding_blocker": blocker,
 
                         "blocked_before_dispatch": True,
+                        **({"company_id": company_id} if company_id else {}),
 
                     },
 
@@ -2266,6 +2524,14 @@ def register_fleet_routes(app):
     ) -> list[FleetTaskView]:
 
         auth = _require_fleet_manager_auth(authorization)
+        _require_company_worker(auth, request.worker_id)
+        for task_id in request.task_ids:
+            task = _require_company_task(auth, task_id)
+            if str(task.get("worker_id") or "") != str(request.worker_id or ""):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Every reordered task must belong to the selected worker",
+                )
 
         try:
 
@@ -2316,25 +2582,15 @@ def register_fleet_routes(app):
         auth = _require_fleet_manager_auth(authorization)
 
         store = _get_remote_control_store()
-
-        try:
-
-            worker = store.get_worker(user_id=int(auth["user_id"]), worker_id=worker_id)
-
-        except KeyError as exc:
-
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        worker = _require_company_worker(auth, worker_id)
 
         if str(worker.get("active_task_id") or "").strip():
 
             raise HTTPException(status_code=409, detail="Worker still has an active task; stop, redirect, or wait before continuing the queue")
 
-        snapshot = store.get_fleet_snapshot(
-
-            user_id=int(auth["user_id"]),
-
+        snapshot = _fleet_snapshot_for_auth(
+            auth,
             desktop_id=str(auth.get("desktop_id") or "").strip() or None,
-
         )
 
         latest_report = next(
@@ -2441,6 +2697,8 @@ def register_fleet_routes(app):
     ) -> FleetTaskView:
 
         auth = _require_fleet_manager_auth(authorization)
+        _require_company_task(auth, task_id)
+        company_id = _active_company_id_for_auth(auth)
 
         try:
 
@@ -2454,7 +2712,10 @@ def register_fleet_routes(app):
 
                 source=request.source,
 
-                metadata=request.metadata,
+                metadata={
+                    **dict(request.metadata or {}),
+                    **({"company_id": company_id} if company_id else {}),
+                },
 
             )
 
@@ -2493,6 +2754,7 @@ def register_fleet_routes(app):
     ) -> FleetTaskView:
 
         auth = _require_fleet_manager_auth(authorization)
+        _require_company_task(auth, task_id)
 
         try:
 
@@ -2565,6 +2827,7 @@ def register_fleet_routes(app):
     ) -> FleetReportView:
 
         auth = _require_fleet_manager_auth(authorization)
+        task = _require_company_task(auth, task_id)
 
         try:
 
@@ -2599,6 +2862,25 @@ def register_fleet_routes(app):
         except ValueError as exc:
 
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        try:
+            from app_backend.company_runtime_reports import (
+                record_linked_company_report,
+            )
+
+            record_linked_company_report(
+                company_store=_get_company_store(),
+                company_id=_active_company_id_for_auth(auth),
+                computer_id=str(auth.get("desktop_id") or ""),
+                report=report,
+                route_metadata=dict(task.get("metadata") or {}),
+                task_id=task_id,
+            )
+        except Exception:
+            logger.exception(
+                "[company] failed linking Fleet report %s to its objective",
+                report.get("report_id"),
+            )
 
         _publish_fleet_delta(
 
@@ -2648,21 +2930,52 @@ def register_fleet_routes(app):
 
             auth = _standalone_manager_auth(auth)
 
+        snapshot = _fleet_snapshot_for_auth(auth)
+        scoped_reports = {
+            str(item.get("report_id") or ""): item
+            for item in list(snapshot.get("reports") or [])
+        }
+        worker_selector = str(request.worker or "").strip()
+        scoped_worker_id = None
+        if worker_selector:
+            scoped_worker = next(
+                (
+                    item
+                    for item in list(snapshot.get("workers") or [])
+                    if str(item.get("worker_id") or "") == worker_selector
+                    or str(item.get("display_name") or "").casefold()
+                    == worker_selector.casefold()
+                ),
+                None,
+            )
+            if not scoped_worker:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Unknown worker in the selected company",
+                )
+            scoped_worker_id = str(scoped_worker.get("worker_id") or "")
+
         try:
 
-            return _get_remote_control_store().search_fleet_reports(
+            result = _get_remote_control_store().search_fleet_reports(
 
                 user_id=int(auth["user_id"]),
 
                 query=request.query,
 
-                worker=request.worker,
+                worker=scoped_worker_id,
 
                 status=request.status,
 
                 limit=request.limit,
 
             )
+            reports = [
+                item
+                for item in list(result.get("reports") or [])
+                if str(item.get("report_id") or "") in scoped_reports
+            ]
+            return {"reports": reports, "count": len(reports)}
 
         except KeyError as exc:
 
@@ -2679,6 +2992,20 @@ def register_fleet_routes(app):
     ) -> FleetWorkspaceBindingView:
 
         auth = _require_fleet_manager_auth(authorization)
+        company_scope = _company_scope_for_auth(auth)
+        allowed_computers = {
+            str(item or "")
+            for item in list(company_scope.get("company_computer_ids") or [])
+            if str(item or "")
+        }
+        if (
+            allowed_computers
+            and str(request.machine_id or "") not in allowed_computers
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail="Unknown computer in the selected company",
+            )
 
         try:
 
@@ -2696,7 +3023,14 @@ def register_fleet_routes(app):
 
                 status=request.status,
 
-                metadata=request.metadata,
+                metadata={
+                    **dict(request.metadata or {}),
+                    **(
+                        {"company_id": company_scope.get("company_id")}
+                        if company_scope.get("company_id")
+                        else {}
+                    ),
+                },
 
             )
 
@@ -2729,6 +3063,17 @@ def register_fleet_routes(app):
     ) -> FleetToolGrantView:
 
         auth = _require_fleet_manager_auth(authorization)
+        if request.target_kind == "worker":
+            _require_company_worker(auth, request.target_id)
+        elif request.target_kind in {"identity", "manager"}:
+            _require_company_identity(auth, request.target_id)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Tool grants must target a worker or manager identity",
+            )
+        if request.task_id:
+            _require_company_task(auth, request.task_id)
 
         grant = _get_remote_control_store().request_tool_grant(
 
@@ -2777,6 +3122,7 @@ def register_fleet_routes(app):
     ) -> FleetToolGrantView:
 
         auth = _require_fleet_manager_auth(authorization)
+        _require_company_tool_grant(auth, grant_id)
 
         try:
 

@@ -580,7 +580,24 @@ class TelegramSession:
             raise RuntimeError("Cannot change workspace while a task is still running")
 
         self.workspace = resolved
-        self.memory_manager = get_memory_manager(resolved)
+        persisted_session = getattr(self, "session", None)
+        company_id = str(
+            getattr(persisted_session, "company_id", None) or ""
+        ).strip()
+        identity_id = str(
+            getattr(persisted_session, "fleet_identity_id", None)
+            or getattr(persisted_session, "id", None)
+            or ""
+        ).strip()
+        self.memory_manager = (
+            get_memory_manager(
+                resolved,
+                company_id=company_id,
+                identity_id=identity_id or None,
+            )
+            if company_id
+            else get_memory_manager(resolved)
+        )
         self.context_loader = get_context_loader(resolved)
         self.live_config = LiveConfig(resolved / "config.json")
         self.live_config.import_from_env()

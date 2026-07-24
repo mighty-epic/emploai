@@ -66,9 +66,10 @@ export function remoteRuntimesFromFleetSnapshot(
       .sort()
       .at(-1) || '';
     const lastSeenAt = text(desktop?.last_heartbeat_at || desktop?.last_seen_at) || workerLastSeenAt;
-    const connected = text(desktop?.status).toLowerCase() === 'connected'
-      || text(desktop?.status).toLowerCase() === 'online'
-      || machineWorkers.some((worker) => !['offline', 'disconnected'].includes(text(worker.status).toLowerCase()));
+    const desktopStatus = text(desktop?.status).toLowerCase();
+    const connected = desktop
+      ? desktopStatus === 'connected' || desktopStatus === 'online'
+      : machineWorkers.some((worker) => !['offline', 'disconnected', 'stale'].includes(text(worker.status).toLowerCase()));
 
     return {
       id: desktopId,

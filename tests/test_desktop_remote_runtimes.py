@@ -16,9 +16,12 @@ def test_remote_surface_is_derived_from_local_fleet_without_account_gate():
     assert "label: 'Remote'" not in shell_view
     assert "worker.machine_desktop_id" in helper
     assert "fleetDirectChildDesktopIds(fleet)" in helper
+    assert "const connected = desktop" in helper
+    assert "machine.hostLabel" in machine_panel
     assert "permission.source" in snapshot_helper
     assert "paired_desktop" in snapshot_helper
     assert "remoteAuthStatus" not in snapshot_helper
     assert "Connected computers could not be read" in workspace
     assert "Reconnect Fleet" in workspace
+    assert "DesktopFleetManagerConnectionPanel" in workspace
     assert "name: isManager" not in helper

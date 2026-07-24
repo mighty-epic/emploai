@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from shared.runtime_paths import auth_store_root
+from shared.private_paths import harden_private_path
 
 
 AUTH_STORE_FILENAME = "app_auth_store.json"
@@ -21,11 +22,7 @@ MAX_ACTIVE_TOKENS_PER_DEVICE = 20
 
 
 def _secure_chmod(path: Path, mode: int) -> None:
-    try:
-        if path.exists():
-            os.chmod(path, mode)
-    except Exception:
-        pass
+    harden_private_path(path, mode)
 
 
 def _utc_iso(timestamp: Optional[float]) -> Optional[str]:

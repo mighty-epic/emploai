@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app_backend.fleet_identity_profiles import identity_public_metadata, manager_identity_metadata
+from app_backend.fleet_presence import desktop_presence_status
 
 from app_backend.fleet_policy import FLEET_PREVIEW_MODE
 
@@ -90,12 +91,17 @@ class RemoteControlStoreViewMixin:
         }
 
     def _desktop_view(self, desktop: sqlite3.Row | Dict[str, Any]) -> Dict[str, Any]:
+        persisted_status = str(desktop["status"] or "offline")
+        status = desktop_presence_status(persisted_status, desktop["last_heartbeat_at"])
+        detail = desktop["detail"]
+        if status == "offline" and persisted_status.lower() in {"connected", "online"}:
+            detail = "No Fleet heartbeat received in the last minute"
         return {
             "desktop_id": desktop["desktop_id"],
             "device_key": desktop["device_key"],
             "display_name": desktop["display_name"],
-            "status": desktop["status"] or "offline",
-            "detail": desktop["detail"],
+            "status": status,
+            "detail": detail,
             "created_at": _utc_iso(desktop["created_at"]),
             "last_seen_at": _utc_iso(desktop["last_seen_at"]),
             "last_heartbeat_at": _utc_iso(desktop["last_heartbeat_at"]),
@@ -294,8 +300,10 @@ class RemoteControlStoreViewMixin:
         }
 
     def _automation_view(self, row: sqlite3.Row | Dict[str, Any]) -> Dict[str, Any]:
+        metadata = _json_loads(row["metadata"], {})
         return {
             "id": row["automation_id"],
+            "company_id": metadata.get("company_id"),
             "automation_id": row["automation_id"],
             "user_id": int(row["user_id"]),
             "name": row["name"],
@@ -311,7 +319,7 @@ class RemoteControlStoreViewMixin:
             "chat_target": row["chat_target"],
             "permission_mode": row["permission_mode"],
             "tool_packs": list(_json_loads(row["tool_packs"], [])),
-            "metadata": _json_loads(row["metadata"], {}),
+            "metadata": metadata,
             "created_at": _utc_iso(row["created_at"]),
             "updated_at": _utc_iso(row["updated_at"]),
             "next_run_at": _utc_iso(row["next_run_at"]),
@@ -328,6 +336,7 @@ class RemoteControlStoreViewMixin:
         metadata = _json_loads(row["metadata"], {})
         return {
             "id": row["event_id"],
+            "company_id": metadata.get("company_id"),
             "event_id": row["event_id"],
             "user_id": int(row["user_id"]),
             "automation_id": row["automation_id"],
@@ -354,8 +363,10 @@ class RemoteControlStoreViewMixin:
         }
 
     def _automation_event_run_view(self, row: sqlite3.Row | Dict[str, Any]) -> Dict[str, Any]:
+        metadata = _json_loads(row["metadata"], {})
         return {
             "event_run_id": row["event_run_id"],
+            "company_id": metadata.get("company_id"),
             "user_id": int(row["user_id"]),
             "event_id": row["event_id"],
             "automation_id": row["automation_id"],
@@ -369,7 +380,7 @@ class RemoteControlStoreViewMixin:
             "completed_at": _utc_iso(row["completed_at"]),
             "error": row["error"],
             "result": row["result"],
-            "metadata": _json_loads(row["metadata"], {}),
+            "metadata": metadata,
             "created_at": _utc_iso(row["created_at"]),
             "updated_at": _utc_iso(row["updated_at"]),
         }
@@ -453,15 +464,42 @@ class RemoteControlStoreViewMixin:
         user_id: int,
         desktop_id: str,
         display_name: Optional[str] = None,
+        company_id: Optional[str] = None,
+        membership_role: Optional[str] = None,
+        adopt_unscoped: bool = False,
     ) -> Dict[str, Any]:
-        existing_rows = self._conn.execute(
+        all_rows = self._conn.execute(
             "SELECT * FROM fleet_instances WHERE user_id = ? AND role = 'manager' AND desktop_id = ? AND reset_at IS NULL ORDER BY created_at ASC",
             (int(user_id), desktop_id),
         ).fetchall()
+        clean_company_id = str(company_id or "").strip()
+        scoped_rows = [
+            row
+            for row in all_rows
+            if str(_json_loads(row["metadata"], {}).get("company_id") or "").strip() == clean_company_id
+        ] if clean_company_id else [
+            row
+            for row in all_rows
+            if not str(_json_loads(row["metadata"], {}).get("company_id") or "").strip()
+        ]
+        if clean_company_id and not scoped_rows and adopt_unscoped:
+            scoped_rows = [
+                row
+                for row in all_rows
+                if not str(_json_loads(row["metadata"], {}).get("company_id") or "").strip()
+            ][:1]
+        if not clean_company_id and not scoped_rows and all_rows:
+            # Once company migration has bound the bootstrap manager, opening the
+            # device shell must reuse it rather than recreate a global identity.
+            scoped_rows = list(all_rows[:1])
+        existing_rows = scoped_rows
         existing = existing_rows[0] if existing_rows else None
         now = time.time()
         if existing:
             metadata = manager_identity_metadata(_json_loads(existing["metadata"], {}))
+            if clean_company_id:
+                metadata["company_id"] = clean_company_id
+                metadata["company_membership_role"] = str(membership_role or "worker_node")
             self._conn.execute(
                 "UPDATE fleet_instances SET display_name = COALESCE(?, display_name), status = 'active', metadata = ?, updated_at = ? WHERE instance_id = ?",
                 ((display_name or "").strip()[:MAX_DISPLAY_NAME_CHARS] or None, _json_dumps(metadata), now, existing["instance_id"]),
@@ -475,6 +513,12 @@ class RemoteControlStoreViewMixin:
             return self._instance_view(refreshed)
 
         instance_id = f"mgr_{secrets.token_hex(8)}"
+        metadata = manager_identity_metadata(
+            {
+                "company_id": clean_company_id,
+                "company_membership_role": str(membership_role or "worker_node"),
+            } if clean_company_id else None
+        )
         self._conn.execute(
             """
             INSERT INTO fleet_instances(
@@ -486,7 +530,7 @@ class RemoteControlStoreViewMixin:
                 int(user_id),
                 desktop_id,
                 (display_name or "Manager")[:MAX_DISPLAY_NAME_CHARS],
-                _json_dumps(manager_identity_metadata()),
+                _json_dumps(metadata),
                 now,
                 now,
             ),
@@ -498,6 +542,7 @@ class RemoteControlStoreViewMixin:
             actor_id=desktop_id,
             target_kind="manager",
             target_id=instance_id,
+            metadata={"company_id": clean_company_id or None},
         )
         return self._instance_view(self._conn.execute("SELECT * FROM fleet_instances WHERE instance_id = ?", (instance_id,)).fetchone())
 
@@ -640,13 +685,27 @@ class RemoteControlStoreViewMixin:
         state: Dict[str, Any],
         preferred_identity_id: Optional[str] = None,
         desktop_id: Optional[str] = None,
+        company_id: Optional[str] = None,
+        include_unscoped_company_records: bool = False,
     ) -> Dict[str, Any]:
         fleet_state = _normalize_fleet_state(state.get("fleet"))
-        fleet = _fleet_selection_for_desktop(fleet_state, desktop_id)
+        fleet = _fleet_selection_for_desktop(fleet_state, desktop_id, company_id)
         identities = self._scope_fleet_identities_to_desktop(
             self._fleet_identities_locked(int(user_id)),
             desktop_id,
         )
+        clean_company_id = str(company_id or "").strip()
+        if clean_company_id:
+            identities = [
+                item
+                for item in identities
+                if str(dict(item.get("metadata") or {}).get("company_id") or "").strip()
+                == clean_company_id
+                or (
+                    include_unscoped_company_records
+                    and not str(dict(item.get("metadata") or {}).get("company_id") or "").strip()
+                )
+            ]
         identity_ids = {str(item.get("identity_id") or "") for item in identities}
         selected = str(preferred_identity_id or fleet.get("active_identity_id") or "").strip()
         if not selected or selected not in identity_ids:
@@ -655,7 +714,7 @@ class RemoteControlStoreViewMixin:
         fleet["active_identity_id"] = selected or None
         selected_by_identity = dict(fleet.get("selected_chat_by_identity") or {})
         selected_by_identity = {key: value for key, value in selected_by_identity.items() if key in identity_ids}
-        if selected and not selected_by_identity.get(selected):
+        if selected and not selected_by_identity.get(selected) and not clean_company_id:
             current_session_id = str(state.get("current_session_id") or "").strip()
             if current_session_id:
                 selected_by_identity[selected] = current_session_id
@@ -669,15 +728,24 @@ class RemoteControlStoreViewMixin:
         *,
         fleet: Optional[Dict[str, Any]] = None,
         desktop_id: Optional[str] = None,
+        company_id: Optional[str] = None,
+        include_unscoped_company_records: bool = False,
     ) -> Dict[str, Any]:
         fleet = dict(fleet or self._ensure_fleet_selection_locked(
             user_id=int(user_id),
             state=state,
             desktop_id=desktop_id,
+            company_id=company_id,
+            include_unscoped_company_records=include_unscoped_company_records,
         ))
         fleet["active_identity_version"] = int(fleet.get("active_identity_version") or 0) + 1
         fleet["active_identity_updated_at"] = time.time()
-        state["fleet"] = _store_fleet_selection_for_desktop(state.get("fleet"), desktop_id, fleet)
+        state["fleet"] = _store_fleet_selection_for_desktop(
+            state.get("fleet"),
+            desktop_id,
+            fleet,
+            company_id,
+        )
         return fleet
 
     def _next_worker_name_locked(self, user_id: int) -> str:

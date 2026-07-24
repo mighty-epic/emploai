@@ -1,4 +1,7 @@
-import { StyleSheet, Text, View } from "react-native";
+import { useMemo } from "react";
+import ChevronDown from "lucide-react-native/icons/chevron-down";
+import ChevronUp from "lucide-react-native/icons/chevron-up";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import type {
   DesktopFleetRemoteTarget,
@@ -8,6 +11,7 @@ import type {
 import { fleetReportSummary } from "./desktopFleetWorkerState";
 import { FLEET_TYPE as TYPE } from "./desktopFleetUi";
 import { DESKTOP_UI as UI } from "./desktopUiTokens";
+import { useFleetAutoDisclosure } from "./useFleetAutoDisclosure";
 
 type ActivityRow = {
   id: string;
@@ -122,18 +126,68 @@ export function DesktopFleetComputerActivity({
       )
       .map((target) => targetActivity(snapshot, desktopId, target)),
   ];
+  const activitySignature = useMemo(() => {
+    const workerIdsForComputer = new Set(
+      (snapshot?.workers || [])
+        .filter((worker) => worker.machine_desktop_id === desktopId)
+        .map((worker) => worker.worker_id),
+    );
+    return JSON.stringify({
+      tasks: (snapshot?.tasks || [])
+        .filter((task) => workerIdsForComputer.has(task.worker_id))
+        .map((task) => [task.task_id, task.status, task.updated_at || task.created_at || ""]),
+      reports: (snapshot?.reports || [])
+        .filter((report) => workerIdsForComputer.has(report.worker_id))
+        .map((report) => [report.report_id, report.status, report.created_at || "", report.summary]),
+      delegations: (snapshot?.delegations || [])
+        .filter((delegation) => delegation.desktop_id === desktopId)
+        .map((delegation) => [
+          delegation.delegation_id,
+          delegation.status,
+          delegation.updated_at || delegation.completed_at || delegation.created_at || "",
+          delegation.report || {},
+        ]),
+    });
+  }, [snapshot?.tasks, snapshot?.reports, snapshot?.delegations, snapshot?.workers, desktopId]);
+  const hasLiveActivity = (snapshot?.tasks || []).some((task) => (
+    workerIds.has(task.worker_id) && ["running", "queued"].includes(String(task.status || "").toLowerCase())
+  )) || (snapshot?.delegations || []).some((delegation) => (
+    delegation.desktop_id === desktopId && ["running", "queued"].includes(String(delegation.status || "").toLowerCase())
+  ));
+  const { expanded, toggle } = useFleetAutoDisclosure({
+    scopeKey: desktopId,
+    activitySignature,
+    hasLiveActivity,
+  });
+  const activeCount = rows.filter((row) => ["running", "queued"].includes(row.status.toLowerCase())).length;
+  const summary = activeCount
+    ? `${activeCount} in progress`
+    : rows.length
+      ? `${rows.length} identities · no current work`
+      : "No activity reported";
 
   return (
     <View style={styles.section}>
-      <View style={styles.headingRow}>
-        <View>
-          <Text style={styles.eyebrow}>WORKER ACTIVITY</Text>
-          <Text style={styles.title}>Latest on this computer</Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        accessibilityLabel={`Latest activity on this computer. ${summary}`}
+        onPress={toggle}
+        style={styles.headingRow}
+      >
+        <View style={styles.headingCopy}>
+          <Text style={styles.title}>Activity</Text>
+          <Text style={styles.summary}>{summary}</Text>
         </View>
-        <Text style={styles.count}>{rows.length}</Text>
-      </View>
+        <View style={styles.headingAction}>
+          <Text style={styles.disclosureText}>{expanded ? "Hide" : "Show"}</Text>
+          {expanded
+            ? <ChevronUp size={16} color={UI.color.accentStrong} strokeWidth={2} />
+            : <ChevronDown size={16} color={UI.color.accentStrong} strokeWidth={2} />}
+        </View>
+      </Pressable>
 
-      {rows.length ? (
+      {expanded && rows.length ? (
         rows.map((row) => (
           <View key={row.id} style={styles.row}>
             <View style={styles.rowHeader}>
@@ -149,7 +203,7 @@ export function DesktopFleetComputerActivity({
             <Text style={styles.meta}>{row.meta}</Text>
           </View>
         ))
-      ) : (
+      ) : expanded ? (
         <View style={styles.empty}>
           <Text style={styles.emptyTitle}>No workers exposed yet</Text>
           <Text style={styles.emptyText}>
@@ -157,52 +211,41 @@ export function DesktopFleetComputerActivity({
             or reported activity.
           </Text>
         </View>
-      )}
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   section: {
-    flex: 1,
-    minWidth: 300,
-    padding: 14,
-    gap: 10,
+    width: "100%",
+    overflow: "hidden",
     borderWidth: 0,
-    borderRadius: UI.radius.panel,
+    borderRadius: UI.radius.control,
     backgroundColor: UI.color.surfaceMuted,
   },
   headingRow: {
+    minHeight: 62,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     justifyContent: "space-between",
     gap: 10,
   },
-  eyebrow: {
-    color: UI.color.accentStrong,
-    fontFamily: UI.type.mono,
-    fontSize: TYPE.eyebrow,
-    fontWeight: "900",
-    letterSpacing: 0.8,
-  },
+  headingCopy: { flex: 1, minWidth: 0 },
+  headingAction: { flexDirection: "row", alignItems: "center", gap: 6 },
   title: {
-    marginTop: 4,
     color: UI.color.text,
     fontSize: TYPE.sectionTitle,
     fontWeight: "900",
   },
-  count: {
-    minWidth: 30,
-    color: UI.color.accentStrong,
-    fontSize: TYPE.sectionTitle,
-    fontWeight: "900",
-    textAlign: "right",
-  },
+  summary: { marginTop: 3, color: UI.color.textSubtle, fontSize: TYPE.meta },
+  disclosureText: { color: UI.color.accentStrong, fontSize: TYPE.meta, fontWeight: "800" },
   row: {
-    paddingVertical: 11,
+    marginHorizontal: 14,
+    paddingVertical: 10,
     gap: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: UI.color.border,
     backgroundColor: 'transparent',
   },
   rowHeader: {

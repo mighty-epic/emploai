@@ -9,7 +9,15 @@ REMOTE_PAIRING_TTL_SECONDS = 60 * 10
 FLEET_ENROLLMENT_TTL_SECONDS = 60 * 30
 
 class RemoteControlStoreFleetSnapshotMixin:
-    def get_fleet_snapshot(self, *, user_id: int, desktop_id: Optional[str] = None) -> Dict[str, Any]:
+    def get_fleet_snapshot(
+        self,
+        *,
+        user_id: int,
+        desktop_id: Optional[str] = None,
+        company_id: Optional[str] = None,
+        company_computer_ids: Optional[List[str]] = None,
+        include_unscoped_company_records: bool = False,
+    ) -> Dict[str, Any]:
         with self._lock:
             clean_desktop_id = str(desktop_id or "").strip()
             scoped_desktop_id = None
@@ -61,6 +69,8 @@ class RemoteControlStoreFleetSnapshotMixin:
                 user_id=int(user_id),
                 state=state,
                 desktop_id=scoped_desktop_id,
+                company_id=company_id,
+                include_unscoped_company_records=include_unscoped_company_records,
             )
             active_identity_id = str(fleet_state.get("active_identity_id") or "").strip() or None
             active_identity = next((item for item in identities if item.get("identity_id") == active_identity_id), None)
@@ -70,7 +80,13 @@ class RemoteControlStoreFleetSnapshotMixin:
                 selected_by_identity = dict(fleet_state.get("selected_chat_by_identity") or {})
                 current_session_id = str(state.get("current_session_id") or "").strip()
                 current_desktop_id = str(state.get("current_desktop_id") or "").strip()
-                if active_identity_id and scoped_desktop_id and current_desktop_id == scoped_desktop_id and current_session_id:
+                if (
+                    not str(company_id or "").strip()
+                    and active_identity_id
+                    and scoped_desktop_id
+                    and current_desktop_id == scoped_desktop_id
+                    and current_session_id
+                ):
                     selected_by_identity.setdefault(active_identity_id, current_session_id)
                 fleet_state["active_identity_id"] = active_identity_id
                 fleet_state["selected_chat_by_identity"] = selected_by_identity
@@ -97,7 +113,7 @@ class RemoteControlStoreFleetSnapshotMixin:
                 for key, value in dict(fleet_state.get("selected_chat_by_identity") or {}).items()
                 if key in visible_identity_ids
             }
-            return {
+            snapshot = {
                 "schema_version": 1,
                 "user_id": int(user_id),
                 "identities": identities,
@@ -193,6 +209,173 @@ class RemoteControlStoreFleetSnapshotMixin:
                 ],
                 "feature_gated": True,
             }
+            if company_id:
+                snapshot = self._scope_fleet_snapshot_to_company(
+                    snapshot,
+                    company_id=str(company_id),
+                    company_computer_ids=company_computer_ids,
+                    include_unscoped=bool(include_unscoped_company_records),
+                )
+            return snapshot
+
+    def _scope_fleet_snapshot_to_company(
+        self,
+        snapshot: Dict[str, Any],
+        *,
+        company_id: str,
+        company_computer_ids: Optional[List[str]],
+        include_unscoped: bool,
+    ) -> Dict[str, Any]:
+        """Project legacy Fleet records through a fail-closed company boundary."""
+
+        clean_company_id = str(company_id or "").strip()
+        allowed_computers = {
+            str(item or "").strip()
+            for item in list(company_computer_ids or [])
+            if str(item or "").strip()
+        }
+
+        def company_match(item: Dict[str, Any]) -> bool:
+            value = str(dict(item.get("metadata") or {}).get("company_id") or "").strip()
+            return value == clean_company_id or (include_unscoped and not value)
+
+        scoped = dict(snapshot)
+        scoped["company_id"] = clean_company_id
+        scoped["instances"] = [
+            item for item in list(snapshot.get("instances") or []) if company_match(item)
+        ]
+        scoped["identities"] = [
+            item for item in list(snapshot.get("identities") or []) if company_match(item)
+        ]
+        scoped["workers"] = [
+            item for item in list(snapshot.get("workers") or []) if company_match(item)
+        ]
+        identity_ids = {
+            str(item.get("identity_id") or "") for item in scoped["identities"]
+        }
+        worker_ids = {
+            str(item.get("worker_id") or "") for item in scoped["workers"]
+        }
+        scoped["tasks"] = [
+            item
+            for item in list(snapshot.get("tasks") or [])
+            if company_match(item) or str(item.get("worker_id") or "") in worker_ids
+        ]
+        task_ids = {
+            str(item.get("task_id") or "") for item in scoped["tasks"]
+        }
+        scoped["reports"] = [
+            item
+            for item in list(snapshot.get("reports") or [])
+            if str(item.get("worker_id") or "") in worker_ids
+            or str(item.get("task_id") or "") in task_ids
+        ]
+        scoped["groups"] = [
+            item
+            for item in list(snapshot.get("groups") or [])
+            if company_match(item)
+            or any(str(worker_id) in worker_ids for worker_id in list(item.get("worker_ids") or []))
+        ]
+
+        if allowed_computers:
+            scoped["desktops"] = [
+                item
+                for item in list(snapshot.get("desktops") or [])
+                if str(item.get("desktop_id") or "") in allowed_computers
+            ]
+            scoped["connection_permissions"] = [
+                item
+                for item in list(snapshot.get("connection_permissions") or [])
+                if str(item.get("desktop_id") or "") in allowed_computers
+            ]
+        elif not include_unscoped:
+            scoped["desktops"] = []
+            scoped["connection_permissions"] = []
+
+        def company_or_computer(item: Dict[str, Any]) -> bool:
+            item_company_id = str(
+                dict(item.get("metadata") or {}).get("company_id") or ""
+            ).strip()
+            if item_company_id:
+                return item_company_id == clean_company_id
+            if not include_unscoped:
+                return False
+            return bool(
+                allowed_computers
+                and str(item.get("desktop_id") or item.get("machine_id") or "")
+                in allowed_computers
+            )
+
+        scoped["delegations"] = [
+            item for item in list(snapshot.get("delegations") or []) if company_or_computer(item)
+        ]
+        scoped["upstream_requests"] = [
+            item
+            for item in list(snapshot.get("upstream_requests") or [])
+            if company_or_computer(item)
+            or str(item.get("identity_id") or "") in identity_ids
+            or str(item.get("task_id") or "") in task_ids
+        ]
+        scoped["workspace_bindings"] = [
+            item for item in list(snapshot.get("workspace_bindings") or []) if company_or_computer(item)
+        ]
+        scoped["tool_grants"] = [
+            item
+            for item in list(snapshot.get("tool_grants") or [])
+            if (
+                str(item.get("target_kind") or "") == "worker"
+                and str(item.get("target_id") or "") in worker_ids
+            )
+            or (
+                str(item.get("target_kind") or "") in {"identity", "manager"}
+                and str(item.get("target_id") or "") in identity_ids
+            )
+            or str(item.get("task_id") or "") in task_ids
+        ]
+        related_ids = identity_ids | worker_ids | task_ids
+        scoped["audit_events"] = [
+            item
+            for item in list(snapshot.get("audit_events") or [])
+            if company_match(item)
+            or str(item.get("target_id") or "") in related_ids
+            or str(item.get("actor_id") or "") in identity_ids
+        ]
+        scoped["locks"] = [
+            item
+            for item in list(snapshot.get("locks") or [])
+            if company_match(item)
+            or str(item.get("owner_id") or "") in identity_ids | worker_ids
+            or str(item.get("task_id") or "") in task_ids
+        ]
+
+        active_identity_id = str(snapshot.get("active_identity_id") or "")
+        active_identity = next(
+            (
+                item
+                for item in scoped["identities"]
+                if str(item.get("identity_id") or "") == active_identity_id
+            ),
+            None,
+        )
+        if not active_identity:
+            active_identity = next(
+                (item for item in scoped["identities"] if str(item.get("role") or "") == "manager"),
+                None,
+            ) or (scoped["identities"][0] if scoped["identities"] else None)
+        scoped["active_identity"] = active_identity
+        scoped["active_identity_id"] = (
+            str((active_identity or {}).get("identity_id") or "").strip() or None
+        )
+        scoped["selected_chat_by_identity"] = {
+            key: value
+            for key, value in dict(snapshot.get("selected_chat_by_identity") or {}).items()
+            if key in identity_ids
+        }
+        scoped["manager"] = next(
+            (item for item in scoped["instances"] if str(item.get("role") or "") == "manager"),
+            None,
+        )
+        return scoped
 
     def get_worker(self, *, user_id: int, worker_id: str) -> Dict[str, Any]:
         with self._lock:
@@ -215,11 +398,18 @@ class RemoteControlStoreFleetSnapshotMixin:
         selected_chat_id: Optional[str] = None,
         source: Optional[str] = None,
         desktop_id: Optional[str] = None,
+        company_id: Optional[str] = None,
+        include_unscoped_company_records: bool = False,
     ) -> Dict[str, Any]:
         with self._lock:
             identity = self._resolve_scoped_fleet_identity_locked(int(user_id), identity_id, desktop_id)
             if not identity:
                 raise KeyError("Unknown fleet identity")
+            identity_company_id = str(dict(identity.get("metadata") or {}).get("company_id") or "").strip()
+            clean_company_id = str(company_id or "").strip()
+            if clean_company_id and identity_company_id != clean_company_id:
+                if not (include_unscoped_company_records and not identity_company_id):
+                    raise KeyError("Unknown fleet identity")
             effective_desktop_id = str(desktop_id or identity.get("desktop_id") or "").strip() or None
             state = self._ensure_shared_state_locked(int(user_id))
             fleet = self._ensure_fleet_selection_locked(
@@ -227,6 +417,8 @@ class RemoteControlStoreFleetSnapshotMixin:
                 state=state,
                 preferred_identity_id=str(identity["identity_id"]),
                 desktop_id=effective_desktop_id,
+                company_id=clean_company_id or None,
+                include_unscoped_company_records=include_unscoped_company_records,
             )
             fleet["active_identity_id"] = str(identity["identity_id"])
             selected_by_identity = dict(fleet.get("selected_chat_by_identity") or {})
@@ -234,12 +426,15 @@ class RemoteControlStoreFleetSnapshotMixin:
             if clean_chat_id:
                 selected_by_identity[str(identity["identity_id"])] = clean_chat_id
             fleet["selected_chat_by_identity"] = selected_by_identity
-            state["current_session_id"] = selected_by_identity.get(str(identity["identity_id"])) or None
+            if not clean_company_id:
+                state["current_session_id"] = selected_by_identity.get(str(identity["identity_id"])) or None
             fleet = self._bump_fleet_selection_locked(
                 int(user_id),
                 state,
                 fleet=fleet,
                 desktop_id=effective_desktop_id,
+                company_id=clean_company_id or None,
+                include_unscoped_company_records=include_unscoped_company_records,
             )
             self._audit_locked(
                 user_id=int(user_id),
@@ -268,17 +463,26 @@ class RemoteControlStoreFleetSnapshotMixin:
         chat_id: Optional[str],
         source: Optional[str] = None,
         desktop_id: Optional[str] = None,
+        company_id: Optional[str] = None,
+        include_unscoped_company_records: bool = False,
     ) -> Dict[str, Any]:
         with self._lock:
             identity = self._resolve_scoped_fleet_identity_locked(int(user_id), identity_id, desktop_id)
             if not identity:
                 raise KeyError("Unknown fleet identity")
+            identity_company_id = str(dict(identity.get("metadata") or {}).get("company_id") or "").strip()
+            clean_company_id = str(company_id or "").strip()
+            if clean_company_id and identity_company_id != clean_company_id:
+                if not (include_unscoped_company_records and not identity_company_id):
+                    raise KeyError("Unknown fleet identity")
             effective_desktop_id = str(desktop_id or identity.get("desktop_id") or "").strip() or None
             state = self._ensure_shared_state_locked(int(user_id))
             fleet = self._ensure_fleet_selection_locked(
                 user_id=int(user_id),
                 state=state,
                 desktop_id=effective_desktop_id,
+                company_id=clean_company_id or None,
+                include_unscoped_company_records=include_unscoped_company_records,
             )
             selected_by_identity = dict(fleet.get("selected_chat_by_identity") or {})
             clean_chat_id = str(chat_id or "").strip()
@@ -287,13 +491,19 @@ class RemoteControlStoreFleetSnapshotMixin:
             else:
                 selected_by_identity.pop(str(identity["identity_id"]), None)
             fleet["selected_chat_by_identity"] = selected_by_identity
-            if str(fleet.get("active_identity_id") or "") == str(identity["identity_id"]):
+            if (
+                not clean_company_id
+                and str(fleet.get("active_identity_id") or "")
+                == str(identity["identity_id"])
+            ):
                 state["current_session_id"] = clean_chat_id or None
             fleet = self._bump_fleet_selection_locked(
                 int(user_id),
                 state,
                 fleet=fleet,
                 desktop_id=effective_desktop_id,
+                company_id=clean_company_id or None,
+                include_unscoped_company_records=include_unscoped_company_records,
             )
             self._audit_locked(
                 user_id=int(user_id),

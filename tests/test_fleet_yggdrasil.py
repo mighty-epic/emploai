@@ -156,6 +156,16 @@ def test_complete_worker_enrollment_writes_local_fleet_connection(tmp_path, monk
             "user_id": 1,
             "desktop": {"desktop_id": "dsk_worker"},
             "worker": {"worker_id": "wrk_worker"},
+            "company_membership": {
+                "schema_version": 1,
+                "algorithm": "Ed25519",
+                "public_key": "public-key",
+                "payload": {
+                    "company_id": "company-a",
+                    "membership": {"membership_id": "membership-a"},
+                },
+                "signature": "signature",
+            },
         }
 
     monkeypatch.setattr(fleet_yggdrasil, "request_json", fake_request_json)
@@ -175,3 +185,7 @@ def test_complete_worker_enrollment_writes_local_fleet_connection(tmp_path, monk
     assert session["apiBaseUrl"] == manager_url
     assert session["sessionToken"] == "session-token"
     assert session["transport"]["kind"] == "yggdrasil"
+    assert (
+        session["companyMembership"]["payload"]["company_id"]
+        == "company-a"
+    )

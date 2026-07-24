@@ -111,6 +111,9 @@ class RemoteControlStoreFleetWorkerMixin:
         user_id: int,
         desktop_id: str,
         display_name: str = DEFAULT_WORKER_DISPLAY_NAME,
+        company_id: Optional[str] = None,
+        membership_role: Optional[str] = None,
+        adopt_unscoped: bool = False,
     ) -> Dict[str, Any]:
         """Reconcile the protected execution identity owned by one computer.
 
@@ -118,10 +121,34 @@ class RemoteControlStoreFleetWorkerMixin:
         worker creation validator. Public worker creation remains explicit-only.
         """
 
-        rows = self._conn.execute(
+        all_rows = self._conn.execute(
             "SELECT * FROM fleet_workers WHERE user_id = ? AND kind = 'local' AND machine_desktop_id = ? ORDER BY created_at ASC",
             (int(user_id), str(desktop_id or "").strip()),
         ).fetchall()
+        clean_company_id = str(company_id or "").strip()
+        rows = [
+            row
+            for row in all_rows
+            if str(_json_loads(row["metadata"], {}).get("company_id") or "").strip() == clean_company_id
+        ] if clean_company_id else [
+            row
+            for row in all_rows
+            if not str(_json_loads(row["metadata"], {}).get("company_id") or "").strip()
+        ]
+        if clean_company_id and not rows and adopt_unscoped:
+            rows = [
+                row
+                for row in all_rows
+                if not str(_json_loads(row["metadata"], {}).get("company_id") or "").strip()
+            ]
+        if not clean_company_id and not rows and all_rows:
+            # Reuse a company-bound bootstrap worker in the device shell.
+            company_defaults = [
+                row
+                for row in all_rows
+                if bool(_json_loads(row["metadata"], {}).get("is_default"))
+            ]
+            rows = list((company_defaults or all_rows)[:1])
         defaults = [row for row in rows if bool(_json_loads(row["metadata"], {}).get("is_default"))]
         now = time.time()
         for row in rows:
@@ -139,6 +166,9 @@ class RemoteControlStoreFleetWorkerMixin:
         if defaults:
             worker = defaults[0]
             metadata = default_worker_metadata(_json_loads(worker["metadata"], {}))
+            if clean_company_id:
+                metadata["company_id"] = clean_company_id
+                metadata["company_membership_role"] = str(membership_role or "worker_node")
             self._conn.execute(
                 "UPDATE fleet_workers SET metadata = ?, updated_at = ? WHERE worker_id = ?",
                 (_json_dumps(metadata), now, worker["worker_id"]),
@@ -164,7 +194,12 @@ class RemoteControlStoreFleetWorkerMixin:
         worker_id = f"wrk_{secrets.token_hex(8)}"
         instance_id = f"win_{secrets.token_hex(8)}"
         name = str(display_name or DEFAULT_WORKER_DISPLAY_NAME).strip()[:MAX_DISPLAY_NAME_CHARS] or DEFAULT_WORKER_DISPLAY_NAME
-        metadata = default_worker_metadata()
+        metadata = default_worker_metadata(
+            {
+                "company_id": clean_company_id,
+                "company_membership_role": str(membership_role or "worker_node"),
+            } if clean_company_id else None
+        )
         self._conn.execute(
             """
             INSERT INTO fleet_workers(
@@ -189,7 +224,7 @@ class RemoteControlStoreFleetWorkerMixin:
             actor_id=desktop_id,
             target_kind="worker",
             target_id=worker_id,
-            metadata={"is_default": True, "protected": True},
+            metadata={"is_default": True, "protected": True, "company_id": clean_company_id or None},
         )
         return self._worker_view(
             self._conn.execute("SELECT * FROM fleet_workers WHERE worker_id = ?", (worker_id,)).fetchone()
@@ -645,6 +680,13 @@ class RemoteControlStoreFleetWorkerMixin:
             return {
                 **session,
                 "worker": created_worker,
+                "enrollment": {
+                    "enrollment_id": str(enrollment["enrollment_id"]),
+                    "created_by_desktop_id": str(
+                        enrollment["created_by_desktop_id"] or ""
+                    ),
+                    "metadata": enrollment_metadata,
+                },
             }
 
     def _remove_worker_from_fleet_selection_locked(self, *, user_id: int, worker_id: str) -> None:

@@ -37,6 +37,7 @@ class CronJob:
     origin_telegram_bot_config_id: Optional[str] = None
     origin_workspace: Optional[str] = None
     origin_model: Optional[str] = None
+    origin_variant: Optional[str] = None
     origin_enabled_tool_packs: List[str] = field(default_factory=list)
     one_time: bool = False
     
@@ -259,6 +260,7 @@ class CronScheduler:
         origin_telegram_bot_config_id: Optional[str] = None,
         origin_workspace: Optional[str] = None,
         origin_model: Optional[str] = None,
+        origin_variant: Optional[str] = None,
         origin_enabled_tool_packs: Optional[List[str]] = None,
         job_id: Optional[str] = None,
     ) -> str:
@@ -301,6 +303,7 @@ class CronScheduler:
             origin_telegram_bot_config_id=origin_telegram_bot_config_id,
             origin_workspace=origin_workspace,
             origin_model=origin_model,
+            origin_variant=origin_variant,
             origin_enabled_tool_packs=list(origin_enabled_tool_packs or []),
             one_time=one_time,
         )
@@ -357,6 +360,12 @@ class CronScheduler:
         interval_seconds: Optional[int] = None,
         enabled: Optional[bool] = None,
         timezone_offset_hours: Optional[int] = None,
+        origin_session_id: Optional[str] = None,
+        origin_telegram_bot_config_id: Optional[str] = None,
+        origin_workspace: Optional[str] = None,
+        origin_model: Optional[str] = None,
+        origin_variant: Optional[str] = None,
+        origin_enabled_tool_packs: Optional[List[str]] = None,
         reset_next_run: bool = True,
     ) -> bool:
         """Update a job in place."""
@@ -375,6 +384,18 @@ class CronScheduler:
             job.interval_seconds = interval_seconds
         if timezone_offset_hours is not None:
             job.timezone_offset_hours = timezone_offset_hours
+        if origin_session_id is not None:
+            job.origin_session_id = origin_session_id
+        if origin_telegram_bot_config_id is not None:
+            job.origin_telegram_bot_config_id = origin_telegram_bot_config_id
+        if origin_workspace is not None:
+            job.origin_workspace = origin_workspace
+        if origin_model is not None:
+            job.origin_model = origin_model
+        if origin_variant is not None:
+            job.origin_variant = origin_variant
+        if origin_enabled_tool_packs is not None:
+            job.origin_enabled_tool_packs = list(origin_enabled_tool_packs)
         if reset_next_run and (schedule_text is not None or interval_seconds is not None or timezone_offset_hours is not None):
             now_ts = time.time()
             job.next_run = compute_next_run(

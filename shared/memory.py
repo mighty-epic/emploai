@@ -5,6 +5,8 @@ Similar to Moltbot's MEMORY.md + daily logs architecture
 
 import json
 import os
+import hashlib
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Any, List, Dict, Optional, Tuple
@@ -23,17 +25,61 @@ from shared.memory_safety import (
 logger = logging.getLogger(__name__)
 
 
-def resolve_memory_root(workspace: Path) -> Path:
+_DEFAULT_MEMORY_TEMPLATE = """# MEMORY.md - Long-Term Memory
+
+## User Preferences
+
+*(Add user preferences here)*
+
+## Key Events
+
+*(Important events and decisions)*
+
+## Lessons Learned
+
+*(Things to remember for future interactions)*
+
+## Context
+
+*(General context about the user, projects, etc.)*
+"""
+
+
+def _scope_token(prefix: str, value: str) -> str:
+    digest = hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:32]
+    return f"{prefix}_{digest}"
+
+
+def resolve_memory_root(
+    workspace: Path,
+    *,
+    company_id: Optional[str] = None,
+    identity_id: Optional[str] = None,
+) -> Path:
     """Resolve the durable memory store root.
 
     Desktop/runtime builds set EMPLOAI_HOME to a packaged runtime home. When
     present, memory should live there instead of following an arbitrary file
-    workspace or repo checkout.
+    workspace or repo checkout. Company sessions are additionally isolated by
+    immutable Company and identity IDs so one employee cannot recall another
+    Company's or another employee's private durable memory.
     """
     configured = os.getenv("EMPLOAI_HOME", "").strip()
     if configured:
-        return Path(configured).expanduser().resolve()
-    return Path(workspace).expanduser().resolve()
+        root = Path(configured).expanduser().resolve()
+    else:
+        root = Path(workspace).expanduser().resolve()
+    clean_company_id = str(company_id or "").strip()
+    if not clean_company_id:
+        return root
+    clean_identity_id = str(identity_id or "").strip() or "unassigned"
+    return (
+        root
+        / "company_agent_memory"
+        / _scope_token("company", clean_company_id)
+        / "identities"
+        / _scope_token("identity", clean_identity_id)
+    )
 
 
 @dataclass
@@ -58,8 +104,20 @@ class MemoryManager:
     - Semantic search capability
     """
     
-    def __init__(self, workspace: Path):
-        self.workspace = resolve_memory_root(Path(workspace))
+    def __init__(
+        self,
+        workspace: Path,
+        *,
+        company_id: Optional[str] = None,
+        identity_id: Optional[str] = None,
+    ):
+        self.company_id = str(company_id or "").strip() or None
+        self.identity_id = str(identity_id or "").strip() or None
+        self.workspace = resolve_memory_root(
+            Path(workspace),
+            company_id=self.company_id,
+            identity_id=self.identity_id,
+        )
         self.memory_dir = self.workspace / "memory"
         self.memory_file = self.workspace / "MEMORY.md"
         self.backup_dir = self.memory_dir / "backups"
@@ -74,25 +132,7 @@ class MemoryManager:
     
     def _init_memory_file(self):
         """Create initial MEMORY.md structure."""
-        template = """# MEMORY.md - Long-Term Memory
-
-## User Preferences
-
-*(Add user preferences here)*
-
-## Key Events
-
-*(Important events and decisions)*
-
-## Lessons Learned
-
-*(Things to remember for future interactions)*
-
-## Context
-
-*(General context about the user, projects, etc.)*
-"""
-        atomic_write_text(self.memory_file, template)
+        atomic_write_text(self.memory_file, _DEFAULT_MEMORY_TEMPLATE)
         logger.info(f"Initialized MEMORY.md at {self.memory_file}")
     
     def get_daily_log_path(self, date: Optional[datetime] = None) -> Path:
@@ -444,9 +484,163 @@ class MemoryManager:
 _memory_managers: Dict[str, MemoryManager] = {}
 
 
-def get_memory_manager(workspace: Path) -> MemoryManager:
+def get_memory_manager(
+    workspace: Path,
+    *,
+    company_id: Optional[str] = None,
+    identity_id: Optional[str] = None,
+) -> MemoryManager:
     """Get or create a memory manager for a workspace."""
-    key = str(resolve_memory_root(Path(workspace)))
+    key = str(
+        resolve_memory_root(
+            Path(workspace),
+            company_id=company_id,
+            identity_id=identity_id,
+        )
+    )
     if key not in _memory_managers:
-        _memory_managers[key] = MemoryManager(workspace)
+        _memory_managers[key] = MemoryManager(
+            workspace,
+            company_id=company_id,
+            identity_id=identity_id,
+        )
     return _memory_managers[key]
+
+
+def migrate_legacy_memory_to_company(
+    workspace: Path,
+    *,
+    company_id: str,
+    identity_id: str,
+) -> Dict[str, Any]:
+    """Copy the one pre-Company memory store to its confirmed manager once.
+
+    The operation is intentionally one-way and idempotent. It never copies
+    memory to a worker or to a second Company, and it leaves the legacy source
+    intact until the user has completed the broader Company migration.
+    """
+
+    clean_company_id = str(company_id or "").strip()
+    clean_identity_id = str(identity_id or "").strip()
+    if not clean_company_id or not clean_identity_id:
+        raise ValueError("Company and identity IDs are required for memory migration.")
+
+    legacy_root = resolve_memory_root(Path(workspace))
+    marker_path = legacy_root / "memory" / "company-memory-migration.json"
+    if marker_path.exists():
+        try:
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            marker = {}
+        return {
+            "migrated": False,
+            "reason": "already_migrated",
+            "company_id": str(marker.get("company_id") or ""),
+            "identity_id": str(marker.get("identity_id") or ""),
+        }
+
+    target = get_memory_manager(
+        workspace,
+        company_id=clean_company_id,
+        identity_id=clean_identity_id,
+    )
+    copied: List[str] = []
+    legacy_memory_file = legacy_root / "MEMORY.md"
+    if legacy_memory_file.exists():
+        try:
+            source_text = legacy_memory_file.read_text(encoding="utf-8")
+            target_text = target.read_memory()
+        except OSError:
+            source_text = ""
+            target_text = ""
+        if source_text.strip() and (
+            not target_text.strip()
+            or target_text.strip() == _DEFAULT_MEMORY_TEMPLATE.strip()
+        ):
+            target.update_memory(source_text)
+            copied.append("MEMORY.md")
+
+    legacy_memory_dir = legacy_root / "memory"
+    if legacy_memory_dir.is_dir():
+        for log_path in sorted(legacy_memory_dir.glob("*.md")):
+            destination = target.memory_dir / log_path.name
+            if destination.exists():
+                continue
+            try:
+                atomic_write_text(
+                    destination,
+                    log_path.read_text(encoding="utf-8"),
+                )
+            except OSError:
+                continue
+            copied.append(f"memory/{log_path.name}")
+
+    legacy_facts = LocalFactStore(legacy_memory_dir / "facts.sqlite")
+    for fact in legacy_facts.list_facts(limit=10_000):
+        target.fact_store.add_fact(
+            str(fact.get("content") or ""),
+            category=str(fact.get("category") or "general"),
+            tags=list(fact.get("tags") or []),
+            trust=float(fact.get("trust") or 0.7),
+            source=str(fact.get("source") or "legacy_memory"),
+        )
+    fact_count = len(legacy_facts.list_facts(limit=10_000))
+    if fact_count:
+        copied.append(f"{fact_count} structured fact(s)")
+
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(
+        marker_path,
+        json.dumps(
+            {
+                "company_id": clean_company_id,
+                "identity_id": clean_identity_id,
+                "migrated_at": datetime.now().astimezone().isoformat(),
+                "copied": copied,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+    )
+    return {
+        "migrated": True,
+        "company_id": clean_company_id,
+        "identity_id": clean_identity_id,
+        "copied": copied,
+    }
+
+
+def delete_company_memory(
+    workspace: Path,
+    *,
+    company_id: str,
+) -> Dict[str, Any]:
+    """Remove one deleted Company's identity-memory subtree only."""
+
+    clean_company_id = str(company_id or "").strip()
+    if not clean_company_id:
+        raise ValueError("A company ID is required for memory deletion.")
+    base_root = resolve_memory_root(Path(workspace))
+    company_root = (
+        base_root
+        / "company_agent_memory"
+        / _scope_token("company", clean_company_id)
+    ).resolve()
+    allowed_root = (base_root / "company_agent_memory").resolve()
+    if allowed_root not in company_root.parents:
+        raise ValueError("The Company memory path failed its deletion safety check.")
+    existed = company_root.exists()
+    if existed:
+        shutil.rmtree(company_root)
+    prefix = str(company_root)
+    for key in list(_memory_managers):
+        try:
+            cached_path = str(Path(key).resolve())
+        except OSError:
+            cached_path = str(key)
+        if cached_path == prefix or cached_path.startswith(prefix + os.sep):
+            _memory_managers.pop(key, None)
+    return {
+        "company_id": clean_company_id,
+        "deleted": existed,
+    }

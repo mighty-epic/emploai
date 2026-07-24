@@ -6,11 +6,12 @@ import { DesktopFleetInfoButton } from './DesktopFleetInfoButton';
 import { DesktopLocalIdentitySelector } from './DesktopLocalIdentitySelector';
 import { fleetReportSummary, fleetWorkerStatusLabel } from './desktopFleetWorkerState';
 import { sessionBelongsToFleetIdentity } from './desktopSidebarState';
-import { useEffect } from 'react'; type NativeSyntheticEvent<T = any> = any; type ActiveCommandPanel = any; type ActivityItem = any; type AgentOverview = any; type ArtifactDetail = any; type ArtifactSummary = any; type ComposerInputOrigin = any; type ConversationSurfaceMode = any; type DesktopFleetEnrollment = any; type DesktopFleetIdentity = any; type DesktopFleetSnapshot = any; type DesktopFleetTask = any; type DesktopFleetWorker = any; type DesktopGitRepoState = any; type DesktopMessage = any; type DesktopPathStatus = any; type DesktopRuntimeStatus = any; type DesktopSidebarProjectActivity = any; type DesktopSidebarState = any; type DesktopVoicePackState = any; type DesktopVoiceRuntimeStatus = any; type InterruptPolicy = any; type JarvisSttBackend = any; type JarvisTtsBackend = any; type LayoutChangeEvent = any; type MessageSourceFormat = any; type ModelProviderGroup = any; type NativeScrollEvent = any; type PendingSearchJump = any; type QueuedComposerMessage = any; type QueuedMessage = any; type RealtimeChannel = any; type RealtimeEvent = any; type ReferenceEntry = any; type RuntimeOrchestratorStatus = any; type ScheduledJob = any; type SearchResultTarget = any; type SecurityPermissionMode = any; type SessionDetail = any; type SessionMessage = any; type SessionSearchResult = any; type SessionSummary = any; type SessionTimelineEvent = any; type SidebarChatTooltipState = any; type SidebarDragState = any; type SidebarDraftChat = any; type SidebarProjectGroup = any; type StartupReadinessState = any; type TaskBoard = any; type TelegramBotConfig = any; type TextInputContentSizeChangeEventData = any; type ToolPackInfoPopupState = any; type VoiceCaptureMode = any; type VoiceGateState = any;
+import { useEffect, useState } from 'react'; type NativeSyntheticEvent<T = any> = any; type ActiveCommandPanel = any; type ActivityItem = any; type AgentOverview = any; type ArtifactDetail = any; type ArtifactSummary = any; type ComposerInputOrigin = any; type ConversationSurfaceMode = any; type DesktopFleetEnrollment = any; type DesktopFleetIdentity = any; type DesktopFleetSnapshot = any; type DesktopFleetTask = any; type DesktopFleetWorker = any; type DesktopGitRepoState = any; type DesktopMessage = any; type DesktopPathStatus = any; type DesktopRuntimeStatus = any; type DesktopSidebarProjectActivity = any; type DesktopSidebarState = any; type DesktopVoicePackState = any; type DesktopVoiceRuntimeStatus = any; type InterruptPolicy = any; type JarvisSttBackend = any; type JarvisTtsBackend = any; type LayoutChangeEvent = any; type MessageSourceFormat = any; type ModelProviderGroup = any; type NativeScrollEvent = any; type PendingSearchJump = any; type QueuedComposerMessage = any; type QueuedMessage = any; type RealtimeChannel = any; type RealtimeEvent = any; type ReferenceEntry = any; type RuntimeOrchestratorStatus = any; type ScheduledJob = any; type SearchResultTarget = any; type SecurityPermissionMode = any; type SessionDetail = any; type SessionMessage = any; type SessionSearchResult = any; type SessionSummary = any; type SessionTimelineEvent = any; type SidebarChatTooltipState = any; type SidebarDragState = any; type SidebarDraftChat = any; type SidebarProjectGroup = any; type StartupReadinessState = any; type TaskBoard = any; type TelegramBotConfig = any; type TextInputContentSizeChangeEventData = any; type ToolPackInfoPopupState = any; type VoiceCaptureMode = any; type VoiceGateState = any;
 import { useReducedMotion } from './useReducedMotion';
 
 export function useDesktopConversationDerivedTail(scope: DesktopConversationScope) {
   const reducedMotion = useReducedMotion();
+  const [companyEmergencyMenuOpen, setCompanyEmergencyMenuOpen] = useState(false);
   const { Animated, DESKTOP_COMMAND_SUGGESTIONS, Easing, JARVIS_ENGLISH_VOICE_PATH_ERROR, MAX_COMMAND_SUGGESTIONS, MonoIcon, Platform, Pressable, ScrollView, TOOL_PACK_DEFINITIONS, Text, TextInput, VOICE_ENGINE_ENGLISH, View, activeCommandPanel, activeFleetIdentity, activeToolPackInfo, activeToolPackInfoAvailable, activeToolPackInfoConfiguredEnabled, activeToolPackInfoDisabledReason, activeToolPackInfoId, activity, agentRunActive, alwaysOnEnabled, alwaysOnEnabledRef, apiBaseUrl, apiVoiceInputActive, artifacts, assignFleetGroupTask, assignFleetTask, assistantDraft, attachmentUploadInFlight, beginNewChat, chooseDraftBranch, chooseDraftProject, chooseDraftProjectFolder, chooseDraftTelegramBot, chooseModel, choosePlannerModel, chooseVariant, closeSidebarSearchModal, commandSuggestionMenuRef, composerTextRegionRef, continueFleetQueue, conversationMode, copyFleetEnrollmentToken, createFleetEnrollment, createFleetGroupFromFirstWorker, createFleetLocalWorker, currentAvailableToolPacks, currentDisabledPackReasons, currentEnabledToolPacks, currentHeadlessBlockReason, currentJarvisSttLabel, currentModelLabel, currentPlannerLabel, currentVariant, currentVariantHasControls, currentVariantLabel, currentVariantOptions, deleteFleetGroup, describeError, dismissedCommandSuggestionInput, draftBranchSearch, draftBranchTriggerRef, draftChat, draftGitRepoLoading, draftGitRepoState, draftModelGroups, draftProjectSearch, draftProjectTriggerRef, draftTelegramBotConfigId, draftTelegramTriggerRef, dragState, englishVoicePack, expandedModelProviders, expandedPlannerProviders, externalSidebarToggleSignalRef, fetchSessionArtifactBlob, fetchSessionArtifactDetail, fetchSessionArtifacts, filteredDraftBranchChoices, filteredDraftProjects, fleetChatPanelWidth, fleetDashboardCollapsed, fleetEnrollment, fleetError, fleetGroupNameDraft, fleetGroupTaskDrafts, fleetLoading, fleetRenameDrafts, fleetSnapshot, fleetStatus, fleetTaskDrafts, fleetWorkerNameDraft, floatingPanelRef, formatAbsoluteTime, formatToolPackLockReason, getCommandSuggestionQuery, handleComposerInputChange, handleComposerKeyPress, handleVoiceEngineSelection, hideToolPackInfoPopup, input, isJarvisMode, jarvisHoldToTalkMode, jarvisLatestSpokenText, jarvisLatestTranscript, jarvisMuted, jarvisPulseProgress, jarvisPushToTalkActiveRef, jarvisSpaceHotkeyActiveRef, jarvisTtsBackendLabel, jarvisWarmRequestedRef, labelForMessage, lastAssistantOutputAt, liveVoiceStatus, modelTriggerRef, moveProjectOrder, moveSessionOrder, normalizeWorkspacePath, openComposerAttachmentPicker, openFleetWorkerMenuId, openProjectMenuPath, openSession, openSessionMenuId, permissionsTriggerRef, pinnedToolPackInfoId, plannerModelGroups, projectMenuRefs, projectMenuTriggerRefs, queueMessage, queuedComposerMessages, queuedComposerMessagesDisplay, referenceAutoOpenKeyRef, referenceDismissedKeyRef, referenceEntries, referenceRailKey, renameFleetWorker, requestFleetPreview, resetFleetWorker, resetFleetWorkerIdentity, revealProjectInSidebar, runControl, scheduleHideToolPackInfoPopup, selectFleetIdentity, selectedArtifactId, selectedVoiceEngine, selectedVoiceEngineState, sendButtonGlyph, sendButtonMode, sendQueuedComposerSlice, sendText, sessionId, sessionIdRef, sessionMenuRefs, sessionMenuTriggerRefs, sessions, setActiveCommandPanel, setArtifactDetailLoading, setArtifactError, setArtifacts, setArtifactsLoading, setDismissedCommandSuggestionInput, setDraftBranchSearch, setDraftProjectSearch, setDragState, setExpandedModelProviders, setExpandedPlannerProviders, setFleetChatPanelCollapsed, setFleetDashboardCollapsed, setFleetGroupNameDraft, setFleetGroupTaskDrafts, setFleetRenameDrafts, setFleetTaskDrafts, setFleetWorkerNameDraft, setHoveredToolPackInfoId, setJarvisHoldToTalkMode, setJarvisMuted, setJarvisStatusDrawerOpen, setJarvisVoiceSettingsOpen, setOpenFleetWorkerMenuId, setOpenProjectMenuPath, setOpenSessionMenuId, setPinnedToolPackInfoId, setQueuedComposerMessages, setSelectedArtifactDetail, setSelectedArtifactId, setShowArtifactRail, setShowReferenceRail, setShowVoicePanel, setSidebarExpanded, setSidebarSearchModalOpen, setStatus, setToolPackInfoButtonRef, setVoiceError, setVoiceMode, setVoicePanelHidden, setVoiceState, shortStatusText, shouldShowThinkingIndicator, showArtifactRail, showToolPackInfoPopup, sidebarExpanded, sidebarSearchLauncherRef, sidebarSearchModalOpen, sidebarSearchModalRef, sidebarToggleSignal, startAlwaysOnVoice, startJarvisPushToTalk, status, stopAllFleetWorkers, stopAlwaysOnVoice, stopFleetWorker, stopJarvisPushToTalk, styles, telegramBotConfigs, thinkingShineProgress, timelineEntries, toggleCurrentSessionToolPack, token, toolPackMutationInFlight, toolsTriggerRef, transcriptEntries, unavailableEnabledToolPackReason, useEffect, userFacingError, voiceDraft, voiceEngineChanging, voiceRecording, voiceRecordingRef, voiceRunning, voiceRunningRef, voiceState, warmSelectedVoicePath } = scope;
   const jarvisWakeProfileReady = Boolean(scope.jarvisWakeProfileReady);
   const setJarvisWakeEnrollmentOpen = scope.setJarvisWakeEnrollmentOpen as ((value: boolean) => void) | undefined;
@@ -1062,7 +1063,7 @@ useEffect(() => {
         busy={fleetLoading}
         compact
         title="Identity"
-        hint="Chat and the Fleet workspace follow the selected local identity"
+        hint="Chat and the Company workspace follow the selected local identity"
         trailingControl={(
           <Pressable
             style={styles.panelCollapseButton}
@@ -1136,7 +1137,7 @@ useEffect(() => {
             <Text style={styles.fleetManagerEmptyText}>
               {fleetWorkerMode
                 ? `Work directly as ${fleetManagerIdentityName}. This worker cannot delegate or manage connected computers.`
-                : 'Ask the manager, delegate work, or inspect the Fleet from this sidebar.'}
+            : 'Ask the manager, delegate work, or inspect Company operations from this sidebar.'}
             </Text>
           </View>
         ) : null}
@@ -1365,33 +1366,65 @@ useEffect(() => {
     <View style={styles.fleetSidebarPanel}>
       <View style={styles.fleetPanelHeader}>
         <DesktopFleetInfoButton
-          label={fleetWorkerMode ? `${fleetManagerIdentityName} worker console` : 'Fleet Dashboard'}
+          label={fleetWorkerMode ? `${fleetManagerIdentityName} worker console` : 'Company Operations'}
           text={fleetWorkerMode
             ? 'Inspect this worker’s execution profile, current work, queue, and reports. Connected-computer management remains available only to the manager identity.'
-            : 'Manage connected computers, local worker identities, queues, reports, and private device enrollment from this workspace.'}
+            : 'Manage company work, workers, reports, and private connected computers from this workspace.'}
         />
         <Pressable
           style={styles.panelCollapseButton}
           accessibilityRole="button"
-          accessibilityLabel={fleetDashboardCollapsed ? 'Expand Fleet dashboard' : 'Collapse Fleet dashboard'}
+          accessibilityLabel={fleetDashboardCollapsed ? 'Expand Company operations' : 'Collapse Company operations'}
           onPress={() => setFleetDashboardCollapsed((current: any) => !current)}
         >
           <Text style={styles.panelCollapseButtonText}>{fleetDashboardCollapsed ? '›' : '‹'}</Text>
         </Pressable>
         {!fleetWorkerMode ? (
           <Pressable
-            style={[styles.fleetSmallDangerAction, (fleetLoading || !hasActiveFleetTask) ? styles.fleetActionDisabled : null]}
-            disabled={fleetLoading || !hasActiveFleetTask}
-            onPress={() => void stopAllFleetWorkers()}
+            accessibilityRole="button"
+            accessibilityLabel="Open Company emergency controls"
+            accessibilityState={{ expanded: companyEmergencyMenuOpen }}
+            style={[
+              styles.fleetWorkerMenuButton,
+              companyEmergencyMenuOpen ? styles.fleetWorkerMenuButtonActive : null,
+            ]}
+            onPress={() => setCompanyEmergencyMenuOpen((current) => !current)}
           >
-            <Text style={styles.fleetSmallDangerActionText}>Stop All</Text>
+            <Text style={styles.fleetWorkerMenuIcon}>⋯</Text>
           </Pressable>
         ) : null}
       </View>
+      {!fleetWorkerMode && companyEmergencyMenuOpen ? (
+        <View
+          accessibilityRole="menu"
+          style={styles.fleetWorkerMenu}
+        >
+          <Text style={styles.fleetSectionTitle}>Emergency controls</Text>
+          <Text style={styles.fleetPanelText}>
+            Stop every reachable active worker run in this Company. You will review the full scope before it proceeds.
+          </Text>
+          <Pressable
+            accessibilityRole="menuitem"
+            style={[
+              styles.fleetSmallDangerAction,
+              (fleetLoading || !hasActiveFleetTask) ? styles.fleetActionDisabled : null,
+            ]}
+            disabled={fleetLoading || !hasActiveFleetTask}
+            onPress={() => {
+              setCompanyEmergencyMenuOpen(false);
+              void stopAllFleetWorkers();
+            }}
+          >
+            <Text style={styles.fleetSmallDangerActionText}>
+              {hasActiveFleetTask ? 'Stop all active work…' : 'No active work to stop'}
+            </Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       {fleetError ? (
         <View style={styles.fleetStatusCard}>
-          <Text style={styles.fleetStatusLabel}>Fleet unavailable</Text>
+          <Text style={styles.fleetStatusLabel}>Company computers unavailable</Text>
           <Text style={styles.fleetStatusError}>{fleetError}</Text>
         </View>
       ) : null}
@@ -1631,10 +1664,6 @@ useEffect(() => {
         )}
       </View>
 
-          </>
-        )}
-      />
-
       <View style={styles.fleetCreateCard}>
         <Text style={styles.fleetSectionTitle}>Groups</Text>
         <View style={styles.fleetActionRow}>
@@ -1698,6 +1727,9 @@ useEffect(() => {
           <Text style={styles.emptyText}>No groups yet.</Text>
         )}
       </View>
+          </>
+        )}
+      />
         </>
       )}
         </>

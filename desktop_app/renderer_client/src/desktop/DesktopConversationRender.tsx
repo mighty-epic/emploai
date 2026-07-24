@@ -17,6 +17,7 @@ import { DesktopProviderAvailabilityBanner } from './DesktopProviderAvailability
 import { DesktopArchiveUndoToast } from './DesktopArchiveUndoToast';
 import { DesktopLocalIdentitySelector } from './DesktopLocalIdentitySelector';
 import { DesktopManagerTaskCards } from './DesktopManagerTaskCards';
+import { DesktopCompanyWorkspace } from './DesktopCompanyWorkspace';
 import type { DesktopConversationScope } from './DesktopConversationScope';
 import { extractProposedPlan, planQuestionFromMessage, visiblePlanText, modeStatusLabel } from './desktopChatModes';
 
@@ -160,7 +161,14 @@ export function DesktopConversationRender({ scope }: DesktopConversationRenderPr
               style={styles.fleetMainScroll}
               contentContainerStyle={styles.fleetMainContent}
             >
-              {fleetSidebarPanel}
+              <DesktopCompanyWorkspace
+                apiBaseUrl={scope.apiBaseUrl}
+                token={scope.token}
+                activeIdentity={activeFleetIdentity}
+                fleetSnapshot={scope.fleetSnapshot}
+                computersContent={fleetSidebarPanel}
+                confirmAction={scope.confirmAction}
+              />
             </ScrollView>
             {fleetChatPanelCollapsed ? (
               <View style={styles.fleetCollapsedRail}>

@@ -30,6 +30,8 @@ type Props = {
   onRunAction: (run: AutomationEventRun, action: 'cancel' | 'retry') => void;
   onProcessAction: (item: ProcessWait, action: 'cancel' | 'stop' | 'persist' | 'unpersist') => void;
   onPlannerSatisfied: (item: PlannerContract) => void;
+  identityLabel?: string | null;
+  chatLabel?: string | null;
 };
 
 const TABS: Array<{ key: AutomationDetailTab; label: string }> = [
@@ -89,6 +91,8 @@ export function DesktopAutomationDetail({
   onRunAction,
   onProcessAction,
   onPlannerSatisfied,
+  identityLabel,
+  chatLabel,
 }: Props) {
   const attention = automationNeedsAttention(job);
   const statusLabel = attention ? 'Needs Attention' : job.enabled ? 'Active' : 'Paused';
@@ -161,8 +165,10 @@ export function DesktopAutomationDetail({
           ) : null}
           <View style={styles.contentGrid}>
             <InfoBlock label="Task" value={job.prompt || 'No task description'} wide />
-            <InfoBlock label="Destination" value={automationTargetLabel(job)} />
-            <InfoBlock label="Chat" value={job.target_chat_id ? 'Specific Chat' : 'Choose Automatically'} />
+            <InfoBlock label="Entity" value={identityLabel || automationTargetLabel(job)} />
+            <InfoBlock label="Chat" value={chatLabel || (job.chat_target === 'new' ? 'Dedicated automation chat' : job.target_chat_id ? 'Existing chat' : 'Choose automatically')} />
+            <InfoBlock label="Model" value={job.origin_model || String(job.metadata?.origin_model || 'Inherited from chat')} />
+            <InfoBlock label="Reasoning" value={job.origin_variant || String(job.metadata?.origin_variant || 'Inherited from chat')} />
             <InfoBlock label="Safety" value={automationPermissionLabel(job.permission_mode)} />
             <InfoBlock label="Tool Packs" value={(job.tool_packs || []).join(', ') || 'Use the destination’s configured tools'} />
           </View>

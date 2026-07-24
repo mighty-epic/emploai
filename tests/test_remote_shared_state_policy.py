@@ -38,6 +38,7 @@ def test_normalize_fleet_state_preserves_known_fields_and_sanitizes_selection_ma
         "active_identity_version": 7,
         "active_identity_updated_at": 123.4,
         "selection_by_desktop": {},
+        "selection_by_company": {},
     }
 
 
@@ -66,6 +67,36 @@ def test_fleet_identity_selection_is_scoped_per_desktop():
     assert fleet_selection_for_desktop(state, "desktop-a")["active_identity_version"] == 3
     assert fleet_selection_for_desktop(state, "desktop-b")["active_identity_id"] == "worker-b"
     assert fleet_selection_for_desktop(state, "desktop-b")["active_identity_version"] == 8
+
+
+def test_fleet_identity_selection_is_scoped_per_company_on_one_desktop():
+    state = empty_fleet_state()
+    state = store_fleet_selection_for_desktop(
+        state,
+        "desktop-a",
+        {
+            "active_identity_id": "manager-company-a",
+            "selected_chat_by_identity": {"manager-company-a": "chat-a"},
+        },
+        "company-a",
+    )
+    state = store_fleet_selection_for_desktop(
+        state,
+        "desktop-a",
+        {
+            "active_identity_id": "worker-company-b",
+            "selected_chat_by_identity": {"worker-company-b": "chat-b"},
+        },
+        "company-b",
+    )
+
+    company_a = fleet_selection_for_desktop(state, "desktop-a", "company-a")
+    company_b = fleet_selection_for_desktop(state, "desktop-a", "company-b")
+
+    assert company_a["active_identity_id"] == "manager-company-a"
+    assert company_a["selected_chat_by_identity"] == {"manager-company-a": "chat-a"}
+    assert company_b["active_identity_id"] == "worker-company-b"
+    assert company_b["selected_chat_by_identity"] == {"worker-company-b": "chat-b"}
 
 
 def test_empty_state_helpers_return_independent_mutable_defaults():

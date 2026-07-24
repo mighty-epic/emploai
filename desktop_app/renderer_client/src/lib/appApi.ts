@@ -1,4 +1,5 @@
 import { requestJson } from '../../lib/appHttp';
+import { readActiveCompanyId } from './activeCompanyContext';
 
 function isTransientSessionCreateError(error: unknown) {
   const message = error instanceof Error
@@ -17,14 +18,18 @@ function wait(ms: number) {
     setTimeout(resolve, ms);
   });
 }
-import type { AppProfile, SessionSummary, SessionMessage, SessionTimelineEvent, SessionDetail, FleetIdentity, FleetWorker, FleetTask, FleetReport, FleetGroup, FleetToolGrant, FleetWorkspaceBinding, FleetSnapshot, ArtifactSummary, ArtifactDetail, DeleteSessionResult, SessionSearchResult, ScheduledJob, JobCreatePayload, CronFeedItem, AutomationEventRun, ProcessWait, PlannerContract, RecoveryArchiveItem, RecoveryListResponse, PendingConfirmation, ConfirmationCreatePayload, WorkspaceRestoreResponse, ModelProviderGroup, AgentHistoryItem, PendingFile, UploadResponse, ContextCompaction, ContextUsage, TaskBoardSubGoal, TaskBoard, HeartbeatStatus, MemorySummary, AnalyticsSummary, SecuritySummary, ConfigEntry, AgentOverview, TelegramBotConfig, RuntimeWorkerStatus, RuntimeOrchestratorStatus, WorkspaceGitState, SidebarProjectState, SidebarSessionState, SidebarState, SidebarStateResult, VoiceRuntimeStatus, TaskBoardArmResult, AgentConfigurePayload, ToolPackUpdatePayload, SessionBotAssignmentPayload, SessionHeadlessEligibilityPayload, SessionSecurityPermissionPayload, HeadlessConfigurePayload, AgentAction, BridgeStatus, SkillSummary, SkillDetail, SkillLearnResult, SkillValidation, SubAgentTask, SubAgentStatus, MemorySearchResult, MemoryOperation, MemoryOperationResult, MemoryFact } from './appApiTypes';
-export type { AppProfile, SessionSummary, SessionMessage, SessionTimelineEvent, SessionDetail, FleetIdentity, FleetWorker, FleetTask, FleetReport, FleetGroup, FleetToolGrant, FleetWorkspaceBinding, FleetSnapshot, ArtifactSummary, ArtifactDetail, DeleteSessionResult, SessionSearchResult, ScheduledJob, JobCreatePayload, CronFeedItem, AutomationEventRun, ProcessWait, PlannerContract, RecoveryArchiveItem, RecoveryListResponse, PendingConfirmation, ConfirmationCreatePayload, WorkspaceRestoreResponse, ModelProviderGroup, AgentHistoryItem, PendingFile, UploadResponse, ContextCompaction, ContextUsage, TaskBoardSubGoal, TaskBoard, HeartbeatStatus, MemorySummary, AnalyticsSummary, SecuritySummary, ConfigEntry, AgentOverview, TelegramBotConfig, RuntimeWorkerStatus, RuntimeOrchestratorStatus, WorkspaceGitState, SidebarProjectState, SidebarSessionState, SidebarState, SidebarStateResult, VoiceRuntimeStatus, TaskBoardArmResult, AgentConfigurePayload, ToolPackUpdatePayload, SessionBotAssignmentPayload, SessionHeadlessEligibilityPayload, SessionSecurityPermissionPayload, HeadlessConfigurePayload, AgentAction, BridgeStatus, SkillSummary, SkillDetail, SkillLearnResult, SkillValidation, SubAgentTask, SubAgentStatus, MemorySearchResult, MemoryOperation, MemoryOperationResult, MemoryFact } from './appApiTypes';
+import type { AppProfile, CompanyContext, CompanyMigrationPreview, CompanyDeletionPreview, CompanyJobCatalog, CompanyJobTemplate, CompanyJobContract, CompanyObjective, CompanyObjectiveReview, CompanyOperatingModel, CompanyPolicy, CompanyPosition, CompanyInitiative, CompanyRunbook, CompanyRecurringOperation, SessionSummary, SessionMessage, SessionTimelineEvent, SessionDetail, FleetIdentity, FleetWorker, FleetTask, FleetReport, FleetGroup, FleetToolGrant, FleetWorkspaceBinding, FleetSnapshot, ArtifactSummary, ArtifactDetail, DeleteSessionResult, SessionSearchResult, ScheduledJob, JobCreatePayload, CronFeedItem, AutomationEventRun, ProcessWait, PlannerContract, RecoveryArchiveItem, RecoveryListResponse, PendingConfirmation, ConfirmationCreatePayload, WorkspaceRestoreResponse, ModelProviderGroup, AgentHistoryItem, PendingFile, UploadResponse, ContextCompaction, ContextUsage, TaskBoardSubGoal, TaskBoard, HeartbeatStatus, MemorySummary, AnalyticsSummary, SecuritySummary, ConfigEntry, AgentOverview, TelegramBotConfig, RuntimeWorkerStatus, RuntimeOrchestratorStatus, WorkspaceGitState, SidebarProjectState, SidebarSessionState, SidebarState, SidebarStateResult, VoiceRuntimeStatus, TaskBoardArmResult, AgentConfigurePayload, ToolPackUpdatePayload, SessionBotAssignmentPayload, SessionHeadlessEligibilityPayload, SessionSecurityPermissionPayload, HeadlessConfigurePayload, AgentAction, BridgeStatus, SkillSummary, SkillDetail, SkillLearnResult, SkillValidation, SubAgentTask, SubAgentStatus, MemorySearchResult, MemoryOperation, MemoryOperationResult, MemoryFact } from './appApiTypes';
+export type { AppProfile, CompanyContext, CompanySummary, CompanyDetail, CompanyEmployee, CompanyMembership, CompanyMigrationPreview, CompanyDeletionPreview, CompanyJobCatalog, CompanyJobTemplate, CompanyPosition, CompanyJobContract, CompanyObjective, CompanyInitiative, CompanyRunbook, CompanyRecurringOperation, CompanyAssignment, CompanyReport, CompanyObjectiveReview, CompanyPolicy, CompanyOperatingModel, SessionSummary, SessionMessage, SessionTimelineEvent, SessionDetail, FleetIdentity, FleetWorker, FleetTask, FleetReport, FleetGroup, FleetToolGrant, FleetWorkspaceBinding, FleetSnapshot, ArtifactSummary, ArtifactDetail, DeleteSessionResult, SessionSearchResult, ScheduledJob, JobCreatePayload, CronFeedItem, AutomationEventRun, ProcessWait, PlannerContract, RecoveryArchiveItem, RecoveryListResponse, PendingConfirmation, ConfirmationCreatePayload, WorkspaceRestoreResponse, ModelProviderGroup, AgentHistoryItem, PendingFile, UploadResponse, ContextCompaction, ContextUsage, TaskBoardSubGoal, TaskBoard, HeartbeatStatus, MemorySummary, AnalyticsSummary, SecuritySummary, ConfigEntry, AgentOverview, TelegramBotConfig, RuntimeWorkerStatus, RuntimeOrchestratorStatus, WorkspaceGitState, SidebarProjectState, SidebarSessionState, SidebarState, SidebarStateResult, VoiceRuntimeStatus, TaskBoardArmResult, ToolPackUpdatePayload, AgentConfigurePayload, SessionBotAssignmentPayload, SessionHeadlessEligibilityPayload, SessionSecurityPermissionPayload, HeadlessConfigurePayload, AgentAction, BridgeStatus, SkillSummary, SkillDetail, SkillLearnResult, SkillValidation, SubAgentTask, SubAgentStatus, MemorySearchResult, MemoryOperation, MemoryOperationResult, MemoryFact } from './appApiTypes';
 import type { ProjectOnboardingProfile, ProjectOnboardingGuideMessage, ProjectOnboardingToolRequirement, ProjectOnboardingSavePayload, ProjectOnboardingSummarizePayload, ProjectOnboardingResponse } from './appApiTypes';
 export type { ProjectOnboardingProfile, ProjectOnboardingGuideMessage, ProjectOnboardingToolRequirement, ProjectOnboardingSavePayload, ProjectOnboardingSummarizePayload, ProjectOnboardingResponse } from './appApiTypes';
 
 
 function authHeaders(token: string): Record<string, string> {
-  return { Authorization: `Bearer ${token}` };
+  const companyId = readActiveCompanyId();
+  return {
+    Authorization: `Bearer ${token}`,
+    ...(companyId ? { 'X-EmploAI-Company-Id': companyId } : {}),
+  };
 }
 
 function confirmationHeaders(confirmationId?: string | null): Record<string, string> {
@@ -36,6 +41,812 @@ export async function fetchProfile(apiBaseUrl: string, token: string) {
     scope: 'profile.me',
     url: `${apiBaseUrl}/api/app/me`,
     init: { headers: authHeaders(token) },
+  });
+}
+
+export async function fetchCompanyContext(apiBaseUrl: string, token: string) {
+  return requestJson<CompanyContext>({
+    scope: 'company.context',
+    url: `${apiBaseUrl}/api/companies/context`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function selectCompanyContext(apiBaseUrl: string, token: string, companyId: string) {
+  return requestJson<CompanyContext>({
+    scope: 'company.select',
+    url: `${apiBaseUrl}/api/companies/active`,
+    init: {
+      method: 'PUT',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ company_id: companyId }),
+    },
+  });
+}
+
+export async function updateCompany(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  payload: {
+    display_name?: string;
+    onboarding_status?: string;
+    manifest?: Record<string, unknown>;
+  },
+) {
+  return requestJson<CompanyContext['active_company']>({
+    scope: 'company.update',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}`,
+    init: {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function fetchCompanyMigrationPreview(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+) {
+  return requestJson<CompanyMigrationPreview>({
+    scope: 'company.migration.preview',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/migration-preview`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function completeCompanyMigration(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  verifiedBackupId: string,
+) {
+  return requestJson<Record<string, unknown>>({
+    scope: 'company.migration.complete',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/migration-complete`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ verified_backup_id: verifiedBackupId }),
+    },
+  });
+}
+
+export async function fetchCompanyDeletionPreview(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+) {
+  return requestJson<CompanyDeletionPreview>({
+    scope: 'company.deletion.preview',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/deletion-preview`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function deleteCompany(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  payload: {
+    company_name_confirmation: string;
+    active_work_action: 'cancel';
+    final_backup_id?: string | null;
+  },
+  confirmationId: string,
+) {
+  return requestJson<Record<string, unknown>>({
+    scope: 'company.delete',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}`,
+    init: {
+      method: 'DELETE',
+      headers: {
+        ...authHeaders(token),
+        ...confirmationHeaders(confirmationId),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function fetchCompanyOperatingModel(apiBaseUrl: string, token: string, companyId: string) {
+  return requestJson<CompanyOperatingModel>({
+    scope: 'company.operating_model',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/operating-model`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function fetchCompanyEligibleIdentities(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+) {
+  return requestJson<{ company_id: string; items: FleetIdentity[] }>({
+    scope: 'company.eligible_identities',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/eligible-identities`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function changeCompanyPositionOccupant(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  positionId: string,
+  payload: {
+    identity_id?: string | null;
+    move_from_position_id?: string | null;
+    reason: string;
+  },
+) {
+  return requestJson<Record<string, unknown>>({
+    scope: 'company.position.occupant.change',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/positions/${encodeURIComponent(positionId)}/occupant`,
+    init: {
+      method: 'PUT',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function fetchCompanyJobCatalog(
+  apiBaseUrl: string,
+  token: string,
+  options?: { query?: string; division?: string; limit?: number },
+) {
+  const params = new URLSearchParams();
+  if (options?.query) params.set('query', options.query);
+  if (options?.division) params.set('division', options.division);
+  params.set('limit', String(options?.limit || 245));
+  const query = params.toString();
+  return requestJson<CompanyJobCatalog>({
+    scope: 'company.job_catalog',
+    url: `${apiBaseUrl}/api/company/job-catalog${query ? `?${query}` : ''}`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function fetchCompanyJobTemplate(
+  apiBaseUrl: string,
+  token: string,
+  templateId: string,
+) {
+  return requestJson<CompanyJobTemplate>({
+    scope: 'company.job_template',
+    url: `${apiBaseUrl}/api/company/job-catalog/${encodeURIComponent(templateId)}`,
+    init: { headers: authHeaders(token) },
+  });
+}
+
+export async function createCompanyPosition(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  payload: {
+    title: string;
+    template_id?: string | null;
+    manager_identity_id?: string | null;
+    department_id?: string | null;
+    identity_id?: string | null;
+    overlay?: Record<string, unknown>;
+  },
+) {
+  return requestJson<{ position: CompanyPosition; job_contract: Record<string, unknown> }>({
+    scope: 'company.position.create',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/positions`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function createCompanyDepartment(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  payload: {
+    name: string;
+    mandate: string;
+    manager_identity_id?: string | null;
+  },
+) {
+  return requestJson<Record<string, unknown>>({
+    scope: 'company.department.create',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/departments`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function updateCompanyJobContract(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  jobContractId: string,
+  payload: {
+    mission?: string | null;
+    responsibilities?: string[];
+    non_responsibilities?: string[];
+    deliverables?: string[];
+    inputs?: string[];
+    quality_gates?: string[];
+    success_measures?: string[];
+    reporting_cadence?: string | null;
+    escalation_route?: string | null;
+    approved_tool_packs?: string[];
+    approved_workspace_ids?: string[];
+    authority?: Record<string, unknown>;
+    memory_policy?: Record<string, unknown>;
+    resource_policy?: Record<string, unknown>;
+    missing_requirements?: Array<Record<string, unknown>>;
+  },
+) {
+  return requestJson<CompanyJobContract>({
+    scope: 'company.job_contract.update',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/job-contracts/${encodeURIComponent(jobContractId)}`,
+    init: {
+      method: 'PUT',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function reviewCompanyJobReadiness(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  jobContractId: string,
+  payload: {
+    reviewer_identity_id?: string | null;
+    checks: Record<string, boolean>;
+    evidence: Array<Record<string, unknown>>;
+    missing_requirements: Array<Record<string, unknown>>;
+    limited_mode: boolean;
+    limitations?: string | null;
+  },
+) {
+  return requestJson<{
+    readiness_review_id: string;
+    status: string;
+    checks: Record<string, boolean>;
+    evidence: Array<Record<string, unknown>>;
+    missing_requirements: Array<Record<string, unknown>>;
+    limitations?: string | null;
+  }>({
+    scope: 'company.job_contract.readiness',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/job-contracts/${encodeURIComponent(jobContractId)}/readiness`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function createCompanyObjective(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  payload: {
+    outcome: string;
+    success_criteria: string;
+    owner_identity_id?: string | null;
+    priority?: string;
+    due_at?: string | null;
+    low_risk_auto_accept?: boolean;
+    optional_proposals?: Array<Record<string, unknown>>;
+  },
+) {
+  return requestJson<CompanyObjective>({
+    scope: 'company.objective.create',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/objectives`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function updateCompanyObjectiveStatus(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  objectiveId: string,
+  payload: { status: string; reason?: string | null },
+) {
+  return requestJson<CompanyObjective>({
+    scope: 'company.objective.status',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/objectives/${encodeURIComponent(objectiveId)}/status`,
+    init: {
+      method: 'PUT',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function createCompanyInitiative(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  payload: {
+    title: string;
+    outcome: string;
+    owner_identity_id?: string | null;
+    objective_ids: string[];
+    plan: string[];
+    risks: string[];
+    due_at?: string | null;
+  },
+) {
+  return requestJson<CompanyInitiative>({
+    scope: 'company.initiative.create',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/initiatives`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function updateCompanyInitiativeStatus(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  initiativeId: string,
+  status: string,
+) {
+  return requestJson<CompanyInitiative>({
+    scope: 'company.initiative.status',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/initiatives/${encodeURIComponent(initiativeId)}/status`,
+    init: {
+      method: 'PUT',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    },
+  });
+}
+
+export async function createCompanyRunbook(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  payload: {
+    title: string;
+    trigger: string;
+    steps: Array<Record<string, unknown>>;
+    required_roles: string[];
+    approval_gates: Array<Record<string, unknown>>;
+    evidence_requirements: string[];
+  },
+) {
+  return requestJson<CompanyRunbook>({
+    scope: 'company.runbook.create',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/runbooks`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function updateCompanyRunbookStatus(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  runbookId: string,
+  status: 'active' | 'archived',
+  reviewNote: string,
+) {
+  return requestJson<CompanyRunbook>({
+    scope: 'company.runbook.status',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/runbooks/${encodeURIComponent(runbookId)}/status`,
+    init: {
+      method: 'PUT',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status, review_note: reviewNote }),
+    },
+  });
+}
+
+export async function createCompanyRecurringOperation(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  payload: {
+    title: string;
+    trigger: string;
+    owner_identity_id?: string | null;
+    runbook_id: string;
+    automation_id?: string | null;
+    schedule: string;
+    inputs: string[];
+    expected_output: string;
+    quality_gate: string;
+    escalation_minutes: number;
+  },
+) {
+  return requestJson<CompanyRecurringOperation>({
+    scope: 'company.recurring_operation.create',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/recurring-operations`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function applyCompanyEmergencyControl(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  payload: {
+    scope: 'company' | 'assignment' | 'employee' | 'department' | 'runbook' | 'recurring_operation';
+    target_id?: string | null;
+    action: 'pause' | 'resume';
+    reason: string;
+  },
+) {
+  return requestJson<Record<string, unknown>>({
+    scope: 'company.emergency_control',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/emergency-control`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function updateCompanyRecurringOperationStatus(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  operationId: string,
+  status: 'active' | 'paused' | 'archived',
+  reason: string,
+) {
+  return requestJson<CompanyRecurringOperation>({
+    scope: 'company.recurring_operation.status',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/recurring-operations/${encodeURIComponent(operationId)}/status`,
+    init: {
+      method: 'PUT',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status, reason }),
+    },
+  });
+}
+
+export async function createCompanyHandoff(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  payload: {
+    from_identity_id: string;
+    to_identity_id: string;
+    deliverable: string;
+    acceptance_criteria: string;
+    objective_id?: string | null;
+    assignment_id?: string | null;
+    evidence?: Array<Record<string, unknown>>;
+    open_questions?: string[];
+  },
+) {
+  return requestJson<Record<string, unknown>>({
+    scope: 'company.handoff.create',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/handoffs`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function reviewCompanyHandoff(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  handoffId: string,
+  payload: {
+    reviewer_identity_id?: string | null;
+    decision: 'accepted' | 'rework_requested';
+    rationale: string;
+    rework_instructions?: string | null;
+  },
+) {
+  return requestJson<Record<string, unknown>>({
+    scope: 'company.handoff.review',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/handoffs/${encodeURIComponent(handoffId)}/review`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function publishCompanyKnowledge(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  payload: {
+    title: string;
+    content: string;
+    provenance: Record<string, unknown>;
+    sensitivity?: string;
+    review_due_at?: string | null;
+  },
+) {
+  return requestJson<Record<string, unknown>>({
+    scope: 'company.knowledge.publish',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/knowledge`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function reviewCompanyKnowledge(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  knowledgeId: string,
+  nextReviewDueAt?: string | null,
+) {
+  return requestJson<Record<string, unknown>>({
+    scope: 'company.knowledge.review',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/knowledge/${encodeURIComponent(knowledgeId)}/review`,
+    init: {
+      method: 'PUT',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        next_review_due_at: nextReviewDueAt || null,
+        review_note: 'The local root operator reviewed this published Company knowledge.',
+      }),
+    },
+  });
+}
+
+export async function createCompanyMetric(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  payload: {
+    name: string;
+    definition: string;
+    formula: string;
+    unit: string;
+    source: string;
+    cadence?: string;
+    owner_identity_id?: string | null;
+    guardrails?: string[];
+  },
+) {
+  return requestJson<Record<string, unknown>>({
+    scope: 'company.metric.create',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/metrics`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function recordCompanyMetricObservation(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  metricId: string,
+  payload: {
+    value: unknown;
+    period_start?: string | null;
+    period_end?: string | null;
+    confidence?: string;
+    evidence?: Array<Record<string, unknown>>;
+    note?: string | null;
+  },
+) {
+  return requestJson<Record<string, unknown>>({
+    scope: 'company.metric.observe',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/metrics/${encodeURIComponent(metricId)}/observations`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function recordCompanyFinancialEntry(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  payload: {
+    entry_type: 'revenue' | 'cost';
+    amount: number;
+    currency: string;
+    description: string;
+    recognized_at: string;
+    source: string;
+    evidence?: Array<Record<string, unknown>>;
+  },
+) {
+  return requestJson<Record<string, unknown>>({
+    scope: 'company.financial_entry.create',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/financial-entries`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function routeCompanyObjectiveAssignment(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  objective: CompanyObjective,
+  assigneeIdentityId: string,
+  assignmentPrompt: string,
+  options?: {
+    continuationTaskId?: string | null;
+    reworkForReportId?: string | null;
+  },
+) {
+  const prompt = [
+    `Company objective: ${objective.outcome}`,
+    `Success criteria: ${objective.success_criteria}`,
+    `Your assignment: ${assignmentPrompt}`,
+    'Complete only the assigned scope. Treat any improvement beyond the operator objective as an optional proposal.',
+    'Return a structured report with evidence, artifacts, blockers, and confidence for manager review.',
+  ].join('\n\n');
+  const routed = await requestJson<{
+    route: Record<string, unknown>;
+    state: string;
+    task_id?: string | null;
+    delegation_id?: string | null;
+  }>({
+    scope: 'company.objective.route_assignment',
+    url: `${apiBaseUrl}/api/fleet/delegations/route`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scope: 'auto',
+        identity: assigneeIdentityId,
+        target_role: 'auto',
+        prompt,
+        continuation_task_id: options?.continuationTaskId || null,
+        metadata: {
+          company_id: companyId,
+          objective_id: objective.objective_id,
+          objective_outcome: objective.outcome,
+          objective_success_criteria: objective.success_criteria,
+          rework_for_report_id: options?.reworkForReportId || null,
+        },
+      }),
+    },
+  });
+  const assignment = await requestJson<Record<string, unknown>>({
+    scope: 'company.objective.link_assignment',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/objectives/${encodeURIComponent(objective.objective_id)}/assignments`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        assignee_identity_id: assigneeIdentityId,
+        prompt: assignmentPrompt,
+        task_id: routed.task_id || null,
+        delegation_id: routed.delegation_id || null,
+        route: routed.route || {},
+        state: routed.state || 'queued',
+      }),
+    },
+  });
+  return { routed, assignment };
+}
+
+export async function reviewCompanyReport(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  payload: {
+    report_id: string;
+    objective_id?: string | null;
+    reviewer_identity_id?: string | null;
+    decision: string;
+    rationale: string;
+    rework_instructions?: string | null;
+  },
+) {
+  return requestJson<CompanyObjectiveReview>({
+    scope: 'company.report.review',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/report-reviews`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function createCompanyPolicy(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  payload: { title: string; rule: string; scope?: string; enforcement?: string },
+) {
+  return requestJson<CompanyPolicy>({
+    scope: 'company.policy.create',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/policies`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function recordCompanyDecision(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  payload: {
+    question: string;
+    decision: string;
+    rationale: string;
+    scope?: string;
+    related_record_ids?: string[];
+  },
+) {
+  return requestJson<Record<string, unknown>>({
+    scope: 'company.decision.record',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/decisions`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  });
+}
+
+export async function exportCompanyBackup(
+  apiBaseUrl: string,
+  token: string,
+  companyId: string,
+  passphrase: string,
+) {
+  return requestJson<{
+    backup: Record<string, unknown>;
+    recovery_key: string;
+  }>({
+    scope: 'company.backup.export',
+    url: `${apiBaseUrl}/api/companies/${encodeURIComponent(companyId)}/backup/export`,
+    init: {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ passphrase }),
+    },
   });
 }
 
@@ -1690,6 +2501,23 @@ export async function controlAgentRun(
       headers: authHeaders(token),
     },
     timeoutMs: 30000,
+  });
+}
+
+export async function setFleetIdentityToolPacks(
+  apiBaseUrl: string,
+  token: string,
+  identityId: string,
+  enabledToolPacks: string[],
+) {
+  return requestJson<FleetIdentity>({
+    scope: 'fleet.identity.tool_packs',
+    url: `${apiBaseUrl}/api/fleet/identities/${encodeURIComponent(identityId)}/tool-packs`,
+    init: {
+      method: 'PUT',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled_tool_packs: enabledToolPacks }),
+    },
   });
 }
 

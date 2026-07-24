@@ -3,6 +3,11 @@ from __future__ import annotations
 # Split from app_server.py; dependencies are injected by the app_server facade.
 from shared.provider_failures import get_failed_turn
 from shared.provider_availability import active_provider_block, provider_failure_from_block
+from app_backend.company_runtime_context import (
+    company_record_matches,
+    resolve_local_company_runtime,
+)
+from app_backend.fleet_session_routing import session_belongs_to_fleet_identity
 
 def register_screen_ws_routes(app):
 
@@ -332,6 +337,168 @@ def register_screen_ws_routes(app):
 
             bridge = _bridge_for_user(int(auth["user_id"]))
 
+            def bridge_session(target_session_id: str):
+                getter = getattr(bridge, "get_session", None)
+                if callable(getter):
+                    return getter(target_session_id)
+                # Keep compatibility with lightweight/local bridge adapters that
+                # expose sessions only through the runtime loader.
+                loaded_runtime = _load_runtime_session_or_409(
+                    bridge,
+                    target_session_id,
+                )
+                return getattr(loaded_runtime, "session", None)
+
+            requested_company_id = str(
+                websocket.query_params.get("company_id") or ""
+            ).strip() or None
+            company_runtime = resolve_local_company_runtime(
+                auth=auth,
+                company_store=_get_company_store(),
+                fleet_store=_get_remote_control_store(),
+                company_id=requested_company_id,
+            )
+            if not company_runtime:
+                await websocket.close(code=4403)
+                return
+            company_id = str(company_runtime.get("company_id") or "")
+            include_legacy = bool(
+                str(
+                    (
+                        (company_runtime.get("company") or {}).get("migration")
+                        or {}
+                    ).get("state")
+                    or ""
+                )
+                == "legacy_compatibility"
+            )
+            if requested_session_id:
+                try:
+                    requested_session = bridge_session(requested_session_id)
+                except Exception:
+                    requested_session = None
+                if not requested_session or not company_record_matches(
+                    requested_session,
+                    company_id=company_id,
+                    include_legacy=include_legacy,
+                ):
+                    await send_model(
+                        RealtimeServerEvent(
+                            type="error",
+                            session_id=requested_session_id,
+                            payload={
+                                "message": "Session not found in the selected company",
+                                "code": "session_unavailable",
+                            },
+                        )
+                    )
+                    return
+            else:
+                company = company_runtime.get("company") or {}
+                fleet_snapshot = _get_remote_control_store().get_fleet_snapshot(
+                    user_id=int(auth["user_id"]),
+                    desktop_id=company_runtime.get("computer_id"),
+                    company_id=company_id,
+                    company_computer_ids=[
+                        str(item.get("computer_id") or "")
+                        for item in list(company.get("memberships") or [])
+                    ],
+                    include_unscoped_company_records=include_legacy,
+                )
+                active_identity = fleet_snapshot.get("active_identity") or {}
+                active_identity_id = str(
+                    active_identity.get("identity_id") or ""
+                ).strip()
+                selected_chat_id = str(
+                    (fleet_snapshot.get("selected_chat_by_identity") or {}).get(
+                        active_identity_id
+                    )
+                    or ""
+                ).strip()
+                candidate_sessions = [
+                    item
+                    for item in bridge.list_sessions()
+                    if company_record_matches(
+                        item,
+                        company_id=company_id,
+                        include_legacy=include_legacy,
+                    )
+                ]
+                selected_session = next(
+                    (
+                        item
+                        for item in candidate_sessions
+                        if str(getattr(item, "id", "") or "") == selected_chat_id
+                        and session_belongs_to_fleet_identity(
+                            item,
+                            active_identity,
+                        )
+                    ),
+                    None,
+                )
+                if selected_session is None:
+                    selected_session = next(
+                        (
+                            item
+                            for item in candidate_sessions
+                            if session_belongs_to_fleet_identity(
+                                item,
+                                active_identity,
+                            )
+                        ),
+                        None,
+                    )
+                if selected_session is None and active_identity_id:
+                    identity_metadata = {
+                        **dict(active_identity.get("metadata") or {}),
+                        "enabled_tool_packs": list(
+                            active_identity.get("enabled_tool_packs") or []
+                        ),
+                        "tool_profile": active_identity.get("tool_profile"),
+                        "is_default": bool(active_identity.get("is_default")),
+                    }
+                    selected_session = bridge.create_session(
+                        "New chat",
+                        enabled_tool_packs=list(
+                            active_identity.get("enabled_tool_packs") or []
+                        ),
+                        fleet_identity_id=active_identity_id,
+                        fleet_identity_role=active_identity.get("role"),
+                        fleet_worker_id=active_identity.get("worker_id"),
+                        company_id=company_id,
+                        fleet_identity_metadata=identity_metadata,
+                        activate=True,
+                    )
+                    try:
+                        _get_remote_control_store().set_active_chat_for_fleet_identity(
+                            user_id=int(auth["user_id"]),
+                            identity_id=active_identity_id,
+                            chat_id=str(selected_session.id),
+                            source="chat_websocket",
+                            desktop_id=company_runtime.get("computer_id"),
+                            company_id=company_id,
+                            include_unscoped_company_records=include_legacy,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "[company] failed remembering the initial identity chat"
+                        )
+                requested_session_id = (
+                    str(getattr(selected_session, "id", "") or "").strip()
+                    or None
+                )
+                if not requested_session_id:
+                    await send_model(
+                        RealtimeServerEvent(
+                            type="error",
+                            payload={
+                                "message": "No local identity is available in the selected company",
+                                "code": "session_unavailable",
+                            },
+                        )
+                    )
+                    return
+
             client_id = str(websocket.query_params.get("client_id") or secrets.token_hex(8))
 
             last_session_signature: Optional[tuple[int, int]] = None
@@ -347,12 +514,40 @@ def register_screen_ws_routes(app):
                     return
 
                 try:
-
+                    target_session = bridge_session(target_session_id)
+                    if not company_record_matches(
+                        target_session,
+                        company_id=company_id,
+                        include_legacy=include_legacy,
+                    ):
+                        return
                     payload = bridge.build_session_sync_payload(target_session_id)
 
                 except Exception:
 
                     return
+                payload["company_id"] = company_id
+                payload["sessions"] = [
+                    item
+                    for item in list(payload.get("sessions") or [])
+                    if company_record_matches(
+                        item,
+                        company_id=company_id,
+                        include_legacy=include_legacy,
+                    )
+                ]
+                current_session_id = str(payload.get("current_session_id") or "").strip()
+                if current_session_id:
+                    try:
+                        current_session = bridge_session(current_session_id)
+                    except Exception:
+                        current_session = None
+                    if not current_session or not company_record_matches(
+                        current_session,
+                        company_id=company_id,
+                        include_legacy=include_legacy,
+                    ):
+                        payload["current_session_id"] = target_session_id
 
                 payload["reason"] = reason
 
@@ -453,6 +648,16 @@ def register_screen_ws_routes(app):
                     next_session_id = event_session_id or str((event.get("payload") or {}).get("current_session_id") or "").strip()
 
                     if next_session_id and next_session_id != effective_session_id:
+                        try:
+                            next_session = bridge.get_session(next_session_id)
+                        except Exception:
+                            next_session = None
+                        if not next_session or not company_record_matches(
+                            next_session,
+                            company_id=company_id,
+                            include_legacy=include_legacy,
+                        ):
+                            return
 
                         effective_session_id = next_session_id
 
