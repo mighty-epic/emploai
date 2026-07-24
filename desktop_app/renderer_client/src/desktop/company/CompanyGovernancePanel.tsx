@@ -178,21 +178,21 @@ export function CompanyGovernancePanel({
           <Text style={styles.title}>Governance</Text>
         </View>
         <View style={styles.headerActions}>
-          <Pressable style={styles.secondaryAction} onPress={() => {
+          <Pressable accessibilityRole="button" style={styles.secondaryAction} onPress={() => {
             setSettingsOpen((value) => !value);
             setDecisionOpen(false);
             setEditing(false);
           }}>
             <Text style={styles.secondaryActionText}>{settingsOpen ? 'Close' : 'Boundaries'}</Text>
           </Pressable>
-          <Pressable style={styles.secondaryAction} onPress={() => {
+          <Pressable accessibilityRole="button" style={styles.secondaryAction} onPress={() => {
             setDecisionOpen((value) => !value);
             setEditing(false);
             setSettingsOpen(false);
           }}>
             <Text style={styles.secondaryActionText}>{decisionOpen ? 'Close' : 'Record decision'}</Text>
           </Pressable>
-          <Pressable style={styles.primaryAction} onPress={() => {
+          <Pressable accessibilityRole="button" style={styles.primaryAction} onPress={() => {
             setEditing((value) => !value);
             setDecisionOpen(false);
             setSettingsOpen(false);
@@ -279,6 +279,8 @@ export function CompanyGovernancePanel({
           <View style={styles.footer}>
             <Text style={styles.hint}>Draft only remains the default for any new or unspecified external-action category.</Text>
             <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: saving }}
               disabled={saving}
               style={[styles.saveAction, saving ? styles.disabled : null]}
               onPress={() => void saveOperatingBoundaries()}
@@ -316,6 +318,8 @@ export function CompanyGovernancePanel({
           <View style={styles.footer}>
             <Text style={styles.hint}>Version 1 · company scope · manager enforced</Text>
             <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: saving || !title.trim() || !rule.trim() }}
               disabled={saving || !title.trim() || !rule.trim()}
               style={[styles.saveAction, saving || !title.trim() || !rule.trim() ? styles.disabled : null]}
               onPress={() => void submit()}
@@ -358,6 +362,8 @@ export function CompanyGovernancePanel({
           />
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: saving || !decisionQuestion.trim() || !decisionText.trim() || !decisionRationale.trim() }}
             disabled={saving || !decisionQuestion.trim() || !decisionText.trim() || !decisionRationale.trim()}
             style={[styles.saveAction, saving || !decisionQuestion.trim() || !decisionText.trim() || !decisionRationale.trim() ? styles.disabled : null]}
             onPress={() => void submitDecision()}

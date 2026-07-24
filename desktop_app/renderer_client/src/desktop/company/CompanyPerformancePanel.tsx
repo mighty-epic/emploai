@@ -196,7 +196,7 @@ export function CompanyPerformancePanel({
         <>
           <View style={styles.toolbar}>
             <Text style={styles.count}>{metrics.length} defined</Text>
-            <Pressable style={styles.action} onPress={() => { setForm(form === 'metric' ? null : 'metric'); setError(null); }}>
+            <Pressable accessibilityRole="button" style={styles.action} onPress={() => { setForm(form === 'metric' ? null : 'metric'); setError(null); }}>
               <Text style={styles.actionText}>{form === 'metric' ? 'Close' : 'Define metric'}</Text>
             </Pressable>
           </View>
@@ -212,6 +212,8 @@ export function CompanyPerformancePanel({
               <TextInput accessibilityLabel="Metric source" style={styles.input} value={source} placeholder="Authoritative source" placeholderTextColor="#60768b" onChangeText={setSource} />
               {error ? <Text style={styles.error}>{error}</Text> : null}
               <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: saving || !name.trim() || !definition.trim() || !formula.trim() || !unit.trim() || !source.trim() }}
                 disabled={saving || !name.trim() || !definition.trim() || !formula.trim() || !unit.trim() || !source.trim()}
                 style={[styles.save, saving || !name.trim() || !definition.trim() || !formula.trim() || !unit.trim() || !source.trim() ? styles.disabled : null]}
                 onPress={() => void saveMetric()}
@@ -232,8 +234,8 @@ export function CompanyPerformancePanel({
               <TextInput accessibilityLabel="Observation note" style={styles.input} value={note} placeholder="Note · optional" placeholderTextColor="#60768b" onChangeText={setNote} />
               {error ? <Text style={styles.error}>{error}</Text> : null}
               <View style={styles.editorActions}>
-                <Pressable style={styles.secondary} onPress={resetForm}><Text style={styles.secondaryText}>Cancel</Text></Pressable>
-                <Pressable disabled={saving || !value.trim()} style={[styles.save, saving || !value.trim() ? styles.disabled : null]} onPress={() => void saveObservation()}>
+                <Pressable accessibilityRole="button" style={styles.secondary} onPress={resetForm}><Text style={styles.secondaryText}>Cancel</Text></Pressable>
+                <Pressable accessibilityRole="button" accessibilityState={{ disabled: saving || !value.trim() }} disabled={saving || !value.trim()} style={[styles.save, saving || !value.trim() ? styles.disabled : null]} onPress={() => void saveObservation()}>
                   <Text style={styles.saveText}>{saving ? 'Saving…' : 'Record'}</Text>
                 </Pressable>
               </View>
@@ -254,6 +256,7 @@ export function CompanyPerformancePanel({
                       </Text>
                     </View>
                     <Pressable
+                      accessibilityRole="button"
                       style={styles.recordAction}
                       onPress={() => {
                         setSelectedMetricId(text(metric.metric_id));
@@ -274,7 +277,7 @@ export function CompanyPerformancePanel({
         <>
           <View style={styles.toolbar}>
             <Text style={styles.count}>{financialEntries.length} sourced entries</Text>
-            <Pressable style={styles.action} onPress={() => { setForm(form === 'financial' ? null : 'financial'); setError(null); }}>
+            <Pressable accessibilityRole="button" style={styles.action} onPress={() => { setForm(form === 'financial' ? null : 'financial'); setError(null); }}>
               <Text style={styles.actionText}>{form === 'financial' ? 'Close' : 'Add fact'}</Text>
             </Pressable>
           </View>
@@ -304,6 +307,8 @@ export function CompanyPerformancePanel({
               <TextInput accessibilityLabel="Financial source" style={styles.input} value={source} placeholder="Invoice, ledger, or exact source" placeholderTextColor="#60768b" onChangeText={setSource} />
               {error ? <Text style={styles.error}>{error}</Text> : null}
               <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: saving || numberValue(amount) === null || !currency.trim() || !description.trim() || !recognizedAt.trim() || !source.trim() }}
                 disabled={saving || numberValue(amount) === null || !currency.trim() || !description.trim() || !recognizedAt.trim() || !source.trim()}
                 style={[styles.save, saving || numberValue(amount) === null || !currency.trim() || !description.trim() || !recognizedAt.trim() || !source.trim() ? styles.disabled : null]}
                 onPress={() => void saveFinancialEntry()}
@@ -338,7 +343,7 @@ export function CompanyPerformancePanel({
 
 function Tab({ label, selected, onPress }: { label: string; selected: boolean; onPress: () => void }) {
   return (
-    <Pressable style={[styles.tab, selected ? styles.tabSelected : null]} onPress={onPress}>
+    <Pressable accessibilityRole="tab" accessibilityState={{ selected }} style={[styles.tab, selected ? styles.tabSelected : null]} onPress={onPress}>
       <Text style={[styles.tabText, selected ? styles.tabTextSelected : null]}>{label}</Text>
     </Pressable>
   );

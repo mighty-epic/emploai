@@ -66,3 +66,18 @@ def test_empty_chat_folder_choice_is_not_rendered_twice():
     assert ">Choose folder</Text>" not in render
     assert "Automatic folder" in render
     assert "Choose location" in render
+
+
+def test_ready_runtime_poll_uses_loopback_health_without_repeated_python_helpers():
+    main = (ROOT / "desktop_app" / "main.js").read_text(encoding="utf-8")
+    shell = (
+        ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopAppShell.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert "await probeCachedRuntimeStatus() || await runBackendJson(['status'])" in main
+    assert "payload?.setupState?.remoteControlConfigured" in main
+    assert "syncPairedFleetHostStartup(payload);" in main
+    assert "if (telegramStatus.state !== 'starting')" in shell
+    assert "const refreshedStatus = await loadDesktopRuntimeStatus();" in shell
+    assert "bootstrap.deviceId || 'local-device'" in shell
+    assert "const refreshKey = `${bootstrap.apiBaseUrl}|${bootstrap.accessToken}" not in shell

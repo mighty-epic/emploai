@@ -49,6 +49,14 @@ def test_each_company_membership_gets_a_distinct_protected_identity_pair(tmp_pat
         membership_role="worker_node",
         adopt_unscoped=False,
     )
+    repeated_company_a = store.ensure_company_membership_identities(
+        user_id=0,
+        desktop_id=desktop_id,
+        company_id="company-a",
+        company_name="Owner PC",
+        membership_role="root_controller",
+        adopt_unscoped=True,
+    )
 
     assert company_a["manager_identity"]["identity_id"] != company_b["manager_identity"]["identity_id"]
     assert company_a["default_worker_identity"]["identity_id"] != company_b["default_worker_identity"]["identity_id"]
@@ -58,6 +66,11 @@ def test_each_company_membership_gets_a_distinct_protected_identity_pair(tmp_pat
     assert company_b["default_worker_identity"]["is_default"] is True
     assert company_a["default_worker_identity"]["protected"] is True
     assert company_b["default_worker_identity"]["protected"] is True
+    assert repeated_company_a["manager_identity"]["identity_id"] == company_a["manager_identity"]["identity_id"]
+    assert (
+        repeated_company_a["default_worker_identity"]["identity_id"]
+        == company_a["default_worker_identity"]["identity_id"]
+    )
 
     # Reopening the device shell must not recreate a global pair or demote a
     # different company's protected default worker.

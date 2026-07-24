@@ -755,9 +755,9 @@ export function DesktopAppShell() {
     void (async () => {
       try {
         await delay(500);
-        const refreshed = await loadDesktopBootstrap({ force: true });
-        if (refreshed?.accessToken && refreshed.runtimeStatus?.ok && !refreshed.setupState?.required) {
-          applyBootstrap(refreshed, { keepSetupClosed: true, preserveLoadingState: true });
+        const refreshedStatus = await loadDesktopRuntimeStatus();
+        if (refreshedStatus?.ok) {
+          setRuntimeStatusWithRef(refreshedStatus);
           return;
         }
         setRuntimeStatusWithRef(nextStatus);
@@ -1709,7 +1709,7 @@ export function DesktopAppShell() {
       return;
     }
 
-    const refreshKey = `${bootstrap.apiBaseUrl}|${bootstrap.accessToken}|${bootstrap.releaseVersion || 'dev'}`;
+    const refreshKey = `${bootstrap.apiBaseUrl}|${bootstrap.deviceId || 'local-device'}|${bootstrap.releaseVersion || 'dev'}`;
     if (postStartupRefreshKeyRef.current === refreshKey) {
       return;
     }
@@ -1759,6 +1759,7 @@ export function DesktopAppShell() {
   }, [
     bootstrap?.accessToken,
     bootstrap?.apiBaseUrl,
+    bootstrap?.deviceId,
     bootstrap?.releaseVersion,
     localRuntimeReady,
     startupPhase,
@@ -2020,7 +2021,7 @@ export function DesktopAppShell() {
     if (!localRuntimeReady || !telegramStatus?.enabled || !telegramStatus.configured) {
       return;
     }
-    if (telegramStatus.state === 'running' || telegramStatus.state === 'disabled' || telegramStatus.state === 'not_configured') {
+    if (telegramStatus.state !== 'starting') {
       return;
     }
 

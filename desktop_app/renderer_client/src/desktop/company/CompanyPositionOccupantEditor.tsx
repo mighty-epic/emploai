@@ -158,7 +158,7 @@ export function CompanyPositionOccupantEditor({
           <Text style={styles.title}>{position.title}</Text>
           <Text style={styles.meta}>Change the position assignment without merging identity memory or history.</Text>
         </View>
-        <Pressable style={styles.secondaryAction} onPress={onClose}>
+        <Pressable accessibilityRole="button" style={styles.secondaryAction} onPress={onClose}>
           <Text style={styles.secondaryActionText}>Close</Text>
         </Pressable>
       </View>
@@ -206,6 +206,10 @@ export function CompanyPositionOccupantEditor({
       />
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <Pressable
+        accessibilityRole="button"
+        accessibilityState={{
+          disabled: !reason.trim() || saving || selectedIdentityId === currentEmployee?.identity_id,
+        }}
         disabled={!reason.trim() || saving || selectedIdentityId === currentEmployee?.identity_id}
         style={[
           styles.primaryAction,

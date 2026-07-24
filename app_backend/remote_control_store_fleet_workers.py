@@ -178,7 +178,60 @@ class RemoteControlStoreFleetWorkerMixin:
                 (_json_dumps(metadata), now, worker["instance_id"]),
             )
             for duplicate in defaults[1:]:
-                duplicate_metadata = additional_worker_metadata(_json_loads(duplicate["metadata"], {}))
+                duplicate_metadata = _json_loads(duplicate["metadata"], {})
+                duplicate_worker_id = str(duplicate["worker_id"] or "").strip()
+                has_history = bool(duplicate["active_task_id"]) or bool(
+                    self._conn.execute(
+                        "SELECT 1 FROM fleet_tasks WHERE user_id = ? AND worker_id = ? LIMIT 1",
+                        (int(user_id), duplicate_worker_id),
+                    ).fetchone()
+                ) or bool(
+                    self._conn.execute(
+                        "SELECT 1 FROM fleet_reports WHERE user_id = ? AND worker_id = ? LIMIT 1",
+                        (int(user_id), duplicate_worker_id),
+                    ).fetchone()
+                )
+                is_reconciler_record = (
+                    str(duplicate_metadata.get("created_by") or "").strip()
+                    == "system_identity_reconciler"
+                )
+                if is_reconciler_record and not has_history:
+                    self._remove_worker_from_fleet_selection_locked(
+                        user_id=int(user_id),
+                        worker_id=duplicate_worker_id,
+                    )
+                    self._conn.execute(
+                        "DELETE FROM fleet_instances WHERE user_id = ? AND worker_id = ?",
+                        (int(user_id), duplicate_worker_id),
+                    )
+                    self._conn.execute(
+                        "DELETE FROM fleet_workers WHERE user_id = ? AND worker_id = ?",
+                        (int(user_id), duplicate_worker_id),
+                    )
+                    self._audit_locked(
+                        user_id=int(user_id),
+                        event_type="duplicate_default_worker_removed",
+                        actor_kind="desktop",
+                        actor_id=str(desktop_id or "").strip() or None,
+                        target_kind="worker",
+                        target_id=duplicate_worker_id,
+                        metadata={
+                            "company_id": clean_company_id or None,
+                            "reason": "idle_system_duplicate",
+                        },
+                    )
+                    continue
+                # Preserve a duplicate that has real work history, but make it an
+                # ordinary removable worker. It must not remain protected after
+                # losing default-worker authority.
+                duplicate_metadata["protected"] = False
+                duplicate_metadata["published_upstream"] = False
+                duplicate_metadata["created_by"] = (
+                    "recovered_default_worker"
+                    if is_reconciler_record
+                    else duplicate_metadata.get("created_by")
+                )
+                duplicate_metadata = additional_worker_metadata(duplicate_metadata)
                 self._conn.execute(
                     "UPDATE fleet_workers SET metadata = ?, updated_at = ? WHERE worker_id = ?",
                     (_json_dumps(duplicate_metadata), now, duplicate["worker_id"]),

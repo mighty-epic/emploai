@@ -356,6 +356,92 @@ def test_remote_worker_creation_is_local_only_and_never_returns_an_identity(monk
     assert "private-worker-id" not in json.dumps(result)
 
 
+def test_remote_worker_delete_rejects_protected_and_removes_an_ordinary_worker(
+    monkeypatch,
+    tmp_path: Path,
+):
+    _write_connection(tmp_path)
+    set_connection_permissions(
+        tmp_path,
+        {"delegate_manager": True, "delegate_workers": True, "create_workers": True},
+    )
+    requests = []
+    deleted = []
+
+    async def fake_request_json(
+        _client,
+        *,
+        method,
+        url,
+        token,
+        json_body=None,
+        company_id=None,
+    ):
+        requests.append((method, url, token, json_body, company_id))
+        if url.endswith("/api/fleet/snapshot"):
+            return {
+                "identities": [
+                    {
+                        "identity_id": "worker-ordinary",
+                        "worker_id": "wrk-ordinary",
+                        "display_name": "Build worker",
+                        "role": "worker",
+                        "protected": False,
+                        "is_default": False,
+                    }
+                ]
+            }
+        if url.endswith("/api/app/confirmations"):
+            return {"confirmation_id": "confirmation-child"}
+        return {"confirmation_id": "confirmation-child"}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+    class FakeAsyncClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def delete(self, url, **kwargs):
+            deleted.append((url, kwargs))
+            return FakeResponse()
+
+    monkeypatch.setattr(remote_desktop_client, "_request_json", fake_request_json)
+    monkeypatch.setattr(remote_desktop_client.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(remote_desktop_client, "runtime_home", lambda: tmp_path)
+
+    result = asyncio.run(
+        remote_desktop_client._handle_command(
+            command_name="fleet_delete_local_worker",
+            payload={
+                "identity_id": "worker-ordinary",
+                "company_id": "company-one",
+                "parent_confirmation_id": "confirmation-parent",
+            },
+            local_api_base_url="http://127.0.0.1:8787",
+            local_token="local-token",
+            remote_ws=None,
+            send_lock=asyncio.Lock(),
+        )
+    )
+
+    assert result["deleted"] is True
+    assert result["display_name"] == "Build worker"
+    assert requests[0][-1] == "company-one"
+    assert deleted[0][0].endswith("/api/fleet/workers/wrk-ordinary")
+    assert (
+        deleted[0][1]["headers"]["X-EmploAI-Confirmation-Id"]
+        == "confirmation-child"
+    )
+
+
 def test_fleet_ui_explains_multi_computer_private_connection_contract():
     connection_panel = (ROOT / "desktop_app/renderer_client/src/desktop/DesktopFleetConnectionPanel.tsx").read_text(encoding="utf-8")
     machines_panel = (ROOT / "desktop_app/renderer_client/src/desktop/DesktopFleetMachinesPanel.tsx").read_text(encoding="utf-8")
@@ -367,6 +453,8 @@ def test_fleet_ui_explains_multi_computer_private_connection_contract():
     assert "chats, agents, settings, files, and provider state stay local" in connection_panel
     assert "No remote identities are copied" in machines_panel
     assert "The worker is created and stored there only" in machines_panel
+    assert "fleet_remote_worker_delete" in machines_panel
+    assert "PROTECTED" in machines_panel
     assert "permissionState?.source === 'paired_desktop'" in machines_panel
     assert "UPDATE REQUIRED" in machines_panel
     assert "connected with an older Fleet protocol" in routes

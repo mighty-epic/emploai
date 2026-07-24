@@ -293,7 +293,9 @@ def test_desktop_has_one_fleet_surface_and_redirects_legacy_remote_links():
     assert "yggdrasilManagerRefresh" in preload
     assert "yggdrasilJoin" in preload
     assert "fleetYggdrasilServices().prepareManager()" in main
-    assert main.count("schedulePairedFleetHostStart();") >= 2
+    assert main.count("schedulePairedFleetHostStart();") == 1
+    assert main.count("syncPairedFleetHostStartup(payload);") >= 2
+    assert "payload?.setupState?.remoteControlConfigured" in main
     assert "fleetYggdrasilServices().startHost()" in main
     assert "checkComputerUpdate" in preload
     assert "startComputerUpdate" in preload

@@ -288,7 +288,12 @@ function HandoffReviewRow({
 
 function InboxTab({ label, selected, onPress }: { label: string; selected: boolean; onPress: () => void }) {
   return (
-    <Pressable style={[styles.tab, selected ? styles.tabSelected : null]} onPress={onPress}>
+    <Pressable
+      accessibilityRole="tab"
+      accessibilityState={{ selected }}
+      style={[styles.tab, selected ? styles.tabSelected : null]}
+      onPress={onPress}
+    >
       <Text style={[styles.tabText, selected ? styles.tabTextSelected : null]}>{label}</Text>
     </Pressable>
   );

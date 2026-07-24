@@ -208,7 +208,7 @@ export function CompanyWorkforcePanel({
           <Text style={styles.fieldLabel}>OPTIONAL DEPARTMENTS · {departments.length}</Text>
           <Text style={styles.rowMeta}>Flat responsibility groups only; computers and manager routes do not change.</Text>
         </View>
-        <Pressable style={styles.reviewAction} onPress={() => setDepartmentEditorOpen((value) => !value)}>
+        <Pressable accessibilityRole="button" style={styles.reviewAction} onPress={() => setDepartmentEditorOpen((value) => !value)}>
           <Text style={styles.reviewActionText}>{departmentEditorOpen ? 'Close' : 'Add department'}</Text>
         </Pressable>
       </View>
@@ -231,6 +231,8 @@ export function CompanyWorkforcePanel({
             onChangeText={setDepartmentMandate}
           />
           <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: saving || !departmentName.trim() || !departmentMandate.trim() }}
             disabled={saving || !departmentName.trim() || !departmentMandate.trim()}
             style={[styles.saveAction, saving || !departmentName.trim() || !departmentMandate.trim() ? styles.disabled : null]}
             onPress={() => void submitDepartment()}
@@ -433,6 +435,7 @@ export function CompanyWorkforcePanel({
                   {contract ? (
                     <>
                       <Pressable
+                        accessibilityRole="button"
                         style={styles.reviewAction}
                         onPress={() => {
                           setEditingContractId((current) => (
@@ -446,6 +449,7 @@ export function CompanyWorkforcePanel({
                         </Text>
                       </Pressable>
                       <Pressable
+                        accessibilityRole="button"
                         style={styles.reviewAction}
                         onPress={() => {
                           setReviewingContractId((current) => (
@@ -462,6 +466,7 @@ export function CompanyWorkforcePanel({
                   ) : null}
                   {position ? (
                     <Pressable
+                      accessibilityRole="button"
                       style={styles.reviewAction}
                       onPress={() => {
                         setChangingPositionId((current) => (
@@ -509,6 +514,7 @@ export function CompanyWorkforcePanel({
         ) : null}
         {visibleEmployees.length > pagedEmployees.length ? (
           <Pressable
+            accessibilityRole="button"
             style={styles.moreAction}
             onPress={() => setVisibleEmployeeLimit((current) => current + 50)}
           >
@@ -544,6 +550,7 @@ export function CompanyWorkforcePanel({
               <Text style={styles.rowTitle}>{position.title}</Text>
               <Text style={styles.rowBadge}>unassigned</Text>
               <Pressable
+                accessibilityRole="button"
                 style={styles.reviewAction}
                 onPress={() => setChangingPositionId(position.position_id)}
               >

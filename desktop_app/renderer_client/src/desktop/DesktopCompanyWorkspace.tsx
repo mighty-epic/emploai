@@ -235,6 +235,7 @@ export function DesktopCompanyWorkspace({
         horizontal
         accessibilityRole="tablist"
         showsHorizontalScrollIndicator={false}
+        style={styles.navScroller}
         contentContainerStyle={styles.nav}
       >
         {nav.map((item) => {
@@ -435,7 +436,7 @@ function ManagerOverview({
         </View>
       ) : null}
       {rootOwned && onboardingStatus === 'not_started' ? (
-        <Pressable style={styles.onboardingPrompt} onPress={onOpenCompany}>
+        <Pressable accessibilityRole="button" style={styles.onboardingPrompt} onPress={onOpenCompany}>
           <View style={styles.onboardingCopy}>
             <Text style={styles.onboardingEyebrow}>OPTIONAL COMPANY SETUP</Text>
             <Text style={styles.onboardingTitle}>Give the CEO durable company direction</Text>
@@ -517,7 +518,7 @@ function Metric({ label, value, accent, onPress }: { label: string; value: numbe
     </>
   );
   return onPress ? (
-    <Pressable style={({ hovered }: any) => [styles.metric, hovered ? styles.metricHovered : null]} onPress={onPress}>
+    <Pressable accessibilityRole="button" style={({ hovered }: any) => [styles.metric, hovered ? styles.metricHovered : null]} onPress={onPress}>
       {content}
     </Pressable>
   ) : <View style={styles.metric}>{content}</View>;
@@ -540,7 +541,7 @@ function SectionHeader({ eyebrow, title, action, onPress }: { eyebrow: string; t
         <Text style={styles.sectionTitle}>{title}</Text>
       </View>
       {action && onPress ? (
-        <Pressable style={styles.textAction} onPress={onPress}>
+        <Pressable accessibilityRole="button" style={styles.textAction} onPress={onPress}>
           <Text style={styles.textActionLabel}>{action} →</Text>
         </Pressable>
       ) : null}
@@ -636,16 +637,22 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.8,
   },
+  navScroller: {
+    flexGrow: 0,
+    flexShrink: 0,
+  },
   nav: {
     minWidth: '100%',
     paddingHorizontal: 14,
     paddingBottom: 11,
     flexDirection: 'row',
+    alignItems: 'flex-start',
     gap: 3,
     borderBottomWidth: 1,
     borderBottomColor: '#162535',
   },
   navItem: {
+    alignSelf: 'flex-start',
     paddingHorizontal: 9,
     paddingVertical: 7,
     borderRadius: 7,

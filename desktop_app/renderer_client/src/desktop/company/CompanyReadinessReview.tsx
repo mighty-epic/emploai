@@ -109,7 +109,7 @@ export function CompanyReadinessReview({
             Contract v{contract.version} · observed evidence, not a general intelligence claim
           </Text>
         </View>
-        <Pressable style={styles.close} onPress={onClose}>
+        <Pressable accessibilityRole="button" style={styles.close} onPress={onClose}>
           <Text style={styles.closeText}>Close</Text>
         </Pressable>
       </View>
@@ -198,6 +198,8 @@ export function CompanyReadinessReview({
           Result: <Text style={projectedStatus === 'ready' ? styles.ready : projectedStatus === 'limited ready' ? styles.limited : styles.blocked}>{projectedStatus}</Text>
         </Text>
         <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ disabled: saving }}
           disabled={saving}
           style={[styles.save, saving ? styles.disabled : null]}
           onPress={() => void submit()}

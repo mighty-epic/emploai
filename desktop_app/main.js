@@ -8,6 +8,7 @@ const { mergeBootstrapCache } = require('./bootstrap_cache');
 const { createRemoteControlServices } = require('./remote_control_services');
 const { createFleetYggdrasilServices } = require('./fleet_yggdrasil_services');
 const { createGitUpdateServices, gitUpdateSafetyState } = require('./git_update_services');
+const { createRuntimeStatusProbe } = require('./runtime_status_probe');
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -74,6 +75,11 @@ let gitAutoUpdateInFlight = false;
 let gitUpdateInstallPromise = null;
 let gitUpdateService = null;
 let fleetHostStartupTimer = null;
+const probeCachedRuntimeStatus = createRuntimeStatusProbe({
+  net,
+  getRuntimeStatusCache: () => runtimeStatusCache,
+  getBootstrapCache: () => bootstrapCache,
+});
 
 function desktopShellPidPath() {
   return path.join(resolveRuntimeHome(), 'desktop_shell.pid.json');
@@ -201,6 +207,14 @@ function stopPairedFleetHostStartupTimer() {
     clearTimeout(fleetHostStartupTimer);
     fleetHostStartupTimer = null;
   }
+}
+
+function syncPairedFleetHostStartup(payload) {
+  if (payload?.runtimeStatus?.ok && payload?.setupState?.remoteControlConfigured) {
+    schedulePairedFleetHostStart();
+    return;
+  }
+  stopPairedFleetHostStartupTimer();
 }
 
 
@@ -565,9 +579,7 @@ async function bootstrapRuntime(options = {}) {
   const payload = await runBackendJson(args, { timeoutMs: backendBootstrapTimeoutMs });
   logAuthDebug('bootstrap', payload);
   updateBootstrapCaches(payload);
-  if (payload?.runtimeStatus?.ok) {
-    schedulePairedFleetHostStart();
-  }
+  syncPairedFleetHostStartup(payload);
   emitRuntimeEvent({
     type: 'bootstrap_ready',
     payload,
@@ -609,9 +621,7 @@ async function startLocalRuntime(options = {}) {
   }
   const payload = await runBackendJson(args);
   updateBootstrapCaches(payload);
-  if (payload?.runtimeStatus?.ok) {
-    schedulePairedFleetHostStart();
-  }
+  syncPairedFleetHostStartup(payload);
   emitRuntimeEvent({
     type: 'runtime_started',
     payload,
@@ -643,7 +653,7 @@ async function getRuntimeStatus() {
     return runtimeStatusPromise;
   }
   runtimeStatusPromise = (async () => {
-  const status = await runBackendJson(['status']);
+  const status = await probeCachedRuntimeStatus() || await runBackendJson(['status']);
   runtimeStatusCache = status;
   emitRuntimeEvent({ type: 'runtime_status', payload: status });
   return status;
@@ -2353,6 +2363,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('emploai:fleet:snapshot', async () => remoteControlServices().fleetSnapshot());
   ipcMain.handle('emploai:fleet:delegate-to-computer', async (_event, payload) => remoteControlServices().fleetDelegateToComputer(payload || {}));
   ipcMain.handle('emploai:fleet:create-worker-on-computer', async (_event, payload) => remoteControlServices().fleetCreateWorkerOnComputer(payload || {}));
+  ipcMain.handle('emploai:fleet:delete-worker-on-computer', async (_event, payload) => remoteControlServices().fleetDeleteWorkerOnComputer(payload || {}));
   ipcMain.handle('emploai:fleet:set-manager-tool-packs-on-computer', async (_event, payload) => remoteControlServices().fleetSetManagerToolPacksOnComputer(payload || {}));
   ipcMain.handle('emploai:fleet:computer-host-status', async (_event, payload) => remoteControlServices().fleetComputerHostStatus(payload || {}));
   ipcMain.handle('emploai:fleet:start-computer-runtime', async (_event, payload) => remoteControlServices().fleetStartComputerRuntime(payload || {}));

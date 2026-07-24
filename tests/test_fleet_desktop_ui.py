@@ -157,6 +157,52 @@ def test_fleet_activity_summaries_auto_open_and_collapse_without_stretched_cards
     assert "drawerColumns:" not in machines
 
 
+def test_company_navigation_does_not_stretch_over_computer_management():
+    workspace = (
+        ROOT
+        / "desktop_app"
+        / "renderer_client"
+        / "src"
+        / "desktop"
+        / "DesktopCompanyWorkspace.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert "style={styles.navScroller}" in workspace
+    assert "navScroller:" in workspace
+    assert "flexGrow: 0" in workspace
+    assert "alignItems: 'flex-start'" in workspace
+    assert "alignSelf: 'flex-start'" in workspace
+
+
+def test_fleet_typography_is_readable_and_view_menu_exposes_zoom_controls():
+    fleet_type = (
+        ROOT
+        / "desktop_app"
+        / "renderer_client"
+        / "src"
+        / "desktop"
+        / "desktopFleetUi.ts"
+    ).read_text(encoding="utf-8")
+    shell = (
+        ROOT
+        / "desktop_app"
+        / "renderer_client"
+        / "src"
+        / "desktop"
+        / "DesktopAppShellView.tsx"
+    ).read_text(encoding="utf-8")
+    main = (ROOT / "desktop_app" / "main.js").read_text(encoding="utf-8")
+
+    assert "micro: 11" in fleet_type
+    assert "meta: 12" in fleet_type
+    assert "body: 13" in fleet_type
+    assert "control: 14" in fleet_type
+    assert "label: 'Zoom In'" in shell
+    assert "label: 'Zoom Out'" in shell
+    assert "label: 'Reset Zoom'" in shell
+    assert "contents.setZoomFactor(next)" in main
+
+
 def test_fleet_identity_snapshots_cannot_roll_selection_back():
     snapshot_policy = (
         ROOT

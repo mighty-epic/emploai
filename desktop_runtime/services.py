@@ -775,6 +775,10 @@ def _managed_remote_control_worker_pids(home: Path) -> list[int]:
             continue
         if not _is_desktop_runtime_worker_process(pid, "run-remote-control-worker"):
             continue
+        command_line = _process_command_line(pid).replace("/", "\\")
+        expected_home = str(Path(home).resolve()).replace("/", "\\")
+        if os.path.normcase(expected_home) not in os.path.normcase(command_line):
+            continue
         pids.add(pid)
 
     return sorted(pids)

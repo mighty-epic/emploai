@@ -84,7 +84,7 @@ export function CompanyKnowledgePanel({
           <Text style={styles.eyebrow}>APPROVED COMPANY MEMORY</Text>
           <Text style={styles.title}>Knowledge</Text>
         </View>
-        <Pressable style={styles.action} onPress={() => setEditing((current) => !current)}>
+        <Pressable accessibilityRole="button" style={styles.action} onPress={() => setEditing((current) => !current)}>
           <Text style={styles.actionText}>{editing ? 'Close' : 'Publish'}</Text>
         </Pressable>
       </View>
@@ -133,6 +133,8 @@ export function CompanyKnowledgePanel({
           <View style={styles.footer}>
             <Text style={styles.hint}>A source is required. Unknown or stale material should not be published as fact.</Text>
             <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: saving || !title.trim() || !content.trim() || !source.trim() }}
               disabled={saving || !title.trim() || !content.trim() || !source.trim()}
               style={[styles.save, saving || !title.trim() || !content.trim() || !source.trim() ? styles.disabled : null]}
               onPress={() => void submit()}
@@ -159,6 +161,8 @@ export function CompanyKnowledgePanel({
                 {Number.isFinite(Date.parse(String(item.review_due_at || '')))
                 && Date.parse(String(item.review_due_at)) < Date.now() ? (
                   <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: Boolean(reviewingId) }}
                     disabled={Boolean(reviewingId)}
                     style={styles.reviewAction}
                     onPress={() => void markReviewed(String(item.knowledge_id || item.id))}

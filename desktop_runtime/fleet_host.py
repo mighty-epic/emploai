@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from getpass import getuser
 from contextlib import contextmanager
@@ -221,6 +223,64 @@ def _scheduled_task_registered() -> bool:
         return False
 
 
+def _scheduled_task_action() -> dict[str, str] | None:
+    if os.name != "nt":
+        return None
+    try:
+        result = _run_schtasks("/Query", "/TN", FLEET_HOST_TASK_NAME, "/XML")
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    payload = re.sub(r"^\s*<\?xml[^>]*\?>", "", str(result.stdout or ""), count=1)
+    try:
+        root = ET.fromstring(payload)
+    except (ET.ParseError, ValueError):
+        return None
+    exec_node = next(
+        (node for node in root.iter() if str(node.tag).rsplit("}", 1)[-1] == "Exec"),
+        None,
+    )
+    if exec_node is None:
+        return None
+    values: dict[str, str] = {}
+    for child in exec_node:
+        values[str(child.tag).rsplit("}", 1)[-1]] = str(child.text or "").strip()
+    return {
+        "command": values.get("Command", ""),
+        "arguments": values.get("Arguments", ""),
+        "working_directory": values.get("WorkingDirectory", ""),
+    }
+
+
+def _normalized_windows_path(value: str) -> str:
+    return os.path.normcase(os.path.normpath(str(value or "").strip().strip('"')))
+
+
+def _scheduled_task_matches(home: Path) -> bool:
+    action = _scheduled_task_action()
+    if not action:
+        return False
+    command = _backend_command(home)
+    expected_arguments = subprocess.list2cmdline([str(item) for item in command[1:]])
+    return (
+        _normalized_windows_path(action["command"])
+        == _normalized_windows_path(str(Path(command[0]).resolve()))
+        and action["arguments"].strip() == expected_arguments.strip()
+        and _normalized_windows_path(action["working_directory"])
+        == _normalized_windows_path(str(_backend_working_directory().resolve()))
+    )
+
+
+def _system_registration_allowed() -> bool:
+    """Keep tests and explicitly isolated runs from mutating Windows startup."""
+
+    return not (
+        str(os.environ.get("PYTEST_CURRENT_TEST") or "").strip()
+        or str(os.environ.get("EMPLOAI_DISABLE_SYSTEM_REGISTRATION") or "").strip() == "1"
+    )
+
+
 def _register_scheduled_task(home: Path) -> str | None:
     task_path = fleet_host_task_path(home)
     atomic_write_bytes(task_path, _scheduled_task_text(home).encode("utf-16"))
@@ -300,7 +360,9 @@ def fleet_host_autostart_status(home: Path) -> dict[str, Any]:
         and registered_value
         and os.path.normcase(registered_value) == os.path.normcase(desired)
     )
-    task_registered = _scheduled_task_registered() if supported else False
+    task_exists = _scheduled_task_registered() if supported else False
+    task_registered = _scheduled_task_matches(home) if task_exists else False
+    stale_task_registered = bool(task_exists and not task_registered)
     registered = registry_registered or task_registered
     pid = _host_pid(home)
     if pid:
@@ -319,6 +381,7 @@ def fleet_host_autostart_status(home: Path) -> dict[str, Any]:
         "supported": supported,
         "registered": registered,
         "taskRegistered": task_registered,
+        "staleTaskRegistered": stale_task_registered,
         "registryFallbackRegistered": registry_registered,
         "state": state,
         "detail": detail,
@@ -331,6 +394,19 @@ def ensure_fleet_host_autostart(home: Path) -> dict[str, Any]:
     home = Path(home).resolve()
     if os.name != "nt":
         return fleet_host_autostart_status(home)
+    if not _system_registration_allowed():
+        return {
+            "supported": True,
+            "registered": False,
+            "taskRegistered": False,
+            "staleTaskRegistered": False,
+            "registryFallbackRegistered": False,
+            "state": "registration_skipped",
+            "detail": "System startup registration is disabled for this isolated process.",
+            "processId": None,
+            "launcherPath": str(fleet_host_launcher_path(home)),
+            "registrationSkipped": True,
+        }
 
     launcher = fleet_host_launcher_path(home)
     launcher.parent.mkdir(parents=True, exist_ok=True)
@@ -345,17 +421,19 @@ def ensure_fleet_host_autostart(home: Path) -> dict[str, Any]:
     if current_launcher != desired_launcher:
         atomic_write_text(launcher, desired_launcher)
 
-    import winreg
+    desired_registry = _registry_command(home)
+    if os.path.normcase(_read_autostart_value()) != os.path.normcase(desired_registry):
+        import winreg
 
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, FLEET_HOST_REGISTRY_PATH) as key:
-        winreg.SetValueEx(
-            key,
-            FLEET_HOST_AUTOSTART_VALUE,
-            0,
-            winreg.REG_SZ,
-            _registry_command(home),
-        )
-    task_error = _register_scheduled_task(home)
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, FLEET_HOST_REGISTRY_PATH) as key:
+            winreg.SetValueEx(
+                key,
+                FLEET_HOST_AUTOSTART_VALUE,
+                0,
+                winreg.REG_SZ,
+                desired_registry,
+            )
+    task_error = None if _scheduled_task_matches(home) else _register_scheduled_task(home)
     status = fleet_host_autostart_status(home)
     if task_error:
         status["taskRegistrationError"] = task_error

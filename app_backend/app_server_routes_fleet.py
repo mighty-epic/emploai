@@ -1064,6 +1064,73 @@ def register_fleet_routes(app):
             "note": "The worker exists only on the paired computer and was not copied into this Fleet database.",
         }
 
+    @app.delete("/api/fleet/desktops/{desktop_id}/workers/{identity_id}")
+    async def fleet_delete_worker_on_computer(
+        desktop_id: str,
+        identity_id: str,
+        authorization: Optional[str] = Header(default=None),
+        confirmation_id: Optional[str] = Header(
+            default=None,
+            alias="X-EmploAI-Confirmation-Id",
+        ),
+    ) -> Dict[str, Any]:
+        auth = _require_fleet_manager_auth(authorization)
+        permissions = _paired_computer_permissions_for_action(auth, desktop_id)
+        if not bool((permissions.get("permissions") or {}).get("create_workers", False)):
+            raise HTTPException(
+                status_code=403,
+                detail="That computer has not allowed remote worker management",
+            )
+        target = next(
+            (
+                item
+                for item in list(
+                    dict(permissions.get("capabilities") or {}).get("targets")
+                    or []
+                )
+                if str(item.get("target_kind") or "").strip().lower()
+                == "worker"
+                and str(item.get("identity_id") or "").strip() == identity_id
+            ),
+            None,
+        )
+        if not target:
+            raise HTTPException(
+                status_code=404,
+                detail="That worker is not published by the connected computer",
+            )
+        if bool(target.get("protected")) or bool(target.get("is_default")):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The protected default worker cannot be deleted. "
+                    "Remove its Company membership instead."
+                ),
+            )
+        _consume_approved_confirmation(
+            user_id=int(auth["user_id"]),
+            confirmation_id=confirmation_id,
+            action_kind="fleet_remote_worker_delete",
+            executed_by_surface=str(auth.get("actor_kind") or "app"),
+            metadata={"desktop_id": desktop_id, "identity_id": identity_id},
+        )
+        result = await _request_paired_computer_command(
+            auth,
+            desktop_id=desktop_id,
+            command_name="fleet_delete_local_worker",
+            payload={
+                "identity_id": identity_id,
+                "company_id": _active_company_id_for_auth(auth),
+                "parent_confirmation_id": confirmation_id,
+            },
+        )
+        return {
+            "ok": True,
+            "desktop_id": desktop_id,
+            "identity_id": identity_id,
+            "result": result,
+        }
+
     @app.put("/api/fleet/desktops/{desktop_id}/manager/tool-packs")
     async def fleet_set_connected_manager_tool_packs(
         desktop_id: str,

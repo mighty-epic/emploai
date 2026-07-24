@@ -123,7 +123,7 @@ export function CompanyWorkPanel({
           <Text style={styles.eyebrow}>OUTCOMES AND EXECUTION</Text>
           <Text style={styles.title}>Work</Text>
         </View>
-        <Pressable style={styles.primaryAction} onPress={() => setEditing((value) => !value)}>
+        <Pressable accessibilityRole="button" style={styles.primaryAction} onPress={() => setEditing((value) => !value)}>
           <Text style={styles.primaryActionText}>{editing ? 'Close' : 'New objective'}</Text>
         </Pressable>
       </View>
@@ -171,6 +171,8 @@ export function CompanyWorkPanel({
           <View style={styles.footer}>
             <Text style={styles.hint}>Owner: {owner?.display_name || 'local manager'}</Text>
             <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: saving || !outcome.trim() || !successCriteria.trim() }}
               disabled={saving || !outcome.trim() || !successCriteria.trim()}
               style={[styles.saveAction, saving || !outcome.trim() || !successCriteria.trim() ? styles.disabled : null]}
               onPress={() => void submit()}
@@ -274,6 +276,8 @@ export function CompanyWorkPanel({
                     <View style={styles.assignmentFooter}>
                       <Text style={styles.hint}>The route, objective, task, and resulting report stay linked.</Text>
                       <Pressable
+                        accessibilityRole="button"
+                        accessibilityState={{ disabled: routing || !assigneeIdentityId || !assignmentPrompt.trim() }}
                         disabled={routing || !assigneeIdentityId || !assignmentPrompt.trim()}
                         style={[
                           styles.saveAction,
@@ -329,7 +333,7 @@ export function CompanyWorkPanel({
 
 function SmallAction({ label, disabled, onPress }: { label: string; disabled: boolean; onPress: () => void }) {
   return (
-    <Pressable disabled={disabled} style={[styles.smallAction, disabled ? styles.disabled : null]} onPress={onPress}>
+    <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} style={[styles.smallAction, disabled ? styles.disabled : null]} onPress={onPress}>
       <Text style={styles.smallActionText}>{label}</Text>
     </Pressable>
   );

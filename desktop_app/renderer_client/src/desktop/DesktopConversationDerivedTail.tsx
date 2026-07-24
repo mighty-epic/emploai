@@ -1452,6 +1452,9 @@ useEffect(() => {
 
       <DesktopFleetWorkspace
         snapshot={fleetSnapshot}
+        apiBaseUrl={scope.apiBaseUrl}
+        token={scope.token}
+        confirmAction={scope.confirmAction}
         snapshotError={fleetError}
         snapshotRefreshing={fleetLoading}
         onSnapshotRetry={() => void scope.refreshFleetSnapshot?.()}

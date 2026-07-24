@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import time
 
 import pytest
 
 from app_backend.fleet_identity_creation import validate_local_worker_creation
+from app_backend.fleet_identity_profiles import default_worker_metadata
 from app_backend.remote_control_store import RemoteControlPlaneStore
 
 
@@ -126,6 +128,97 @@ def test_startup_reconciles_exactly_one_manager_and_default_worker(tmp_path):
     refreshed = store.get_fleet_snapshot(user_id=0, desktop_id=first["desktop_id"])
     refreshed_default = next(worker for worker in refreshed["workers"] if worker["is_default"])
     assert refreshed_default["status"] == "idle"
+
+
+def test_startup_removes_idle_system_default_worker_duplicates(tmp_path):
+    store = RemoteControlPlaneStore(root_path=tmp_path)
+    desktop = store.ensure_standalone_manager_desktop(
+        user_id=0,
+        display_name="Manager PC",
+        device_platform="desktop",
+        device_key="manager-key",
+    )
+    duplicate = store.create_local_worker(
+        user_id=0,
+        desktop_id=desktop["desktop_id"],
+        display_name="Default Worker",
+        metadata={"created_by": "desktop_user_request"},
+    )
+    duplicate_metadata = default_worker_metadata(duplicate["metadata"])
+    store._conn.execute(
+        "UPDATE fleet_workers SET metadata = ? WHERE worker_id = ?",
+        (json.dumps(duplicate_metadata), duplicate["worker_id"]),
+    )
+    store._conn.execute(
+        "UPDATE fleet_instances SET metadata = ? WHERE worker_id = ?",
+        (json.dumps(duplicate_metadata), duplicate["worker_id"]),
+    )
+    store._conn.commit()
+
+    store.ensure_standalone_manager_desktop(
+        user_id=0,
+        display_name="Manager PC",
+        device_platform="desktop",
+        device_key="manager-key",
+    )
+    workers = store.get_fleet_snapshot(
+        user_id=0,
+        desktop_id=desktop["desktop_id"],
+    )["workers"]
+
+    assert len(workers) == 1
+    assert workers[0]["is_default"] is True
+    assert workers[0]["protected"] is True
+
+
+def test_startup_preserves_duplicate_history_as_hidden_removable_worker(tmp_path):
+    store = RemoteControlPlaneStore(root_path=tmp_path)
+    desktop = store.ensure_standalone_manager_desktop(
+        user_id=0,
+        display_name="Manager PC",
+        device_platform="desktop",
+        device_key="manager-key",
+    )
+    duplicate = store.create_local_worker(
+        user_id=0,
+        desktop_id=desktop["desktop_id"],
+        display_name="Default Worker",
+        metadata={"created_by": "desktop_user_request"},
+    )
+    duplicate_metadata = default_worker_metadata(duplicate["metadata"])
+    store._conn.execute(
+        "UPDATE fleet_workers SET metadata = ? WHERE worker_id = ?",
+        (json.dumps(duplicate_metadata), duplicate["worker_id"]),
+    )
+    store._conn.execute(
+        "UPDATE fleet_instances SET metadata = ? WHERE worker_id = ?",
+        (json.dumps(duplicate_metadata), duplicate["worker_id"]),
+    )
+    store._conn.commit()
+    store.assign_worker_task(
+        user_id=0,
+        worker_id=duplicate["worker_id"],
+        prompt="Preserve this history.",
+    )
+
+    store.ensure_standalone_manager_desktop(
+        user_id=0,
+        display_name="Manager PC",
+        device_platform="desktop",
+        device_key="manager-key",
+    )
+    workers = store.get_fleet_snapshot(
+        user_id=0,
+        desktop_id=desktop["desktop_id"],
+    )["workers"]
+    recovered = next(
+        worker for worker in workers if worker["worker_id"] == duplicate["worker_id"]
+    )
+
+    assert recovered["is_default"] is False
+    assert recovered["protected"] is False
+    assert recovered["published_upstream"] is False
+    assert recovered["metadata"]["created_by"] == "recovered_default_worker"
 
 
 def test_manager_optional_tool_packs_persist_across_startup_reconciliation(tmp_path):

@@ -8,7 +8,9 @@ from desktop_runtime.fleet_host import (
     _backend_command,
     _launcher_text,
     _process_exists,
+    _scheduled_task_matches,
     _scheduled_task_text,
+    ensure_fleet_host_autostart,
     fleet_host_process_lock,
 )
 
@@ -56,6 +58,36 @@ def test_fleet_host_task_uses_windows_resolved_account(monkeypatch, tmp_path: Pa
 
     assert "<UserId>VPS\\Administrator</UserId>" in task
     assert "WORKGROUP\\Administrator" not in task
+
+
+def test_fleet_host_task_match_rejects_a_registration_for_another_home(monkeypatch, tmp_path: Path):
+    import desktop_runtime.fleet_host as fleet_host
+
+    class Result:
+        returncode = 0
+        stdout = fleet_host._scheduled_task_text(tmp_path / "old-home")
+
+    monkeypatch.setattr(fleet_host, "_run_schtasks", lambda *_args: Result())
+
+    assert _scheduled_task_matches(tmp_path / "old-home") is True
+    assert _scheduled_task_matches(tmp_path / "current-home") is False
+
+
+def test_fleet_host_registration_is_side_effect_free_during_tests(monkeypatch, tmp_path: Path):
+    import desktop_runtime.fleet_host as fleet_host
+
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "isolated-test")
+    monkeypatch.setattr(
+        fleet_host,
+        "_register_scheduled_task",
+        lambda _home: (_ for _ in ()).throw(AssertionError("must not register")),
+    )
+
+    status = ensure_fleet_host_autostart(tmp_path)
+
+    if os.name == "nt":
+        assert status["state"] == "registration_skipped"
+        assert status["registrationSkipped"] is True
 
 
 def test_fleet_host_process_lock_allows_only_one_owner(tmp_path: Path):

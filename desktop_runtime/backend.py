@@ -256,7 +256,7 @@ def _port_accepts_connections(url: str, *, timeout_seconds: float = 0.25) -> boo
         return False
 
 
-def _healthcheck(url: str, timeout_seconds: float = 0.75) -> Optional[dict[str, Any]]:
+def _healthcheck(url: str, timeout_seconds: float = 2.0) -> Optional[dict[str, Any]]:
     if not _port_accepts_connections(url, timeout_seconds=min(timeout_seconds, 0.25)):
         return None
 

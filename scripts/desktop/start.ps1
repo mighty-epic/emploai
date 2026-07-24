@@ -75,6 +75,86 @@ function Test-NodeModules {
     return Test-Path (Join-Path $PackageDir "node_modules")
 }
 
+function Start-DesktopShell {
+    $ElectronExecutable = if ($IsWindows -or $env:OS -eq "Windows_NT") {
+        Join-Path $DesktopAppDir "node_modules\electron\dist\electron.exe"
+    } else {
+        Join-Path $DesktopAppDir "node_modules\electron\dist\electron"
+    }
+    if (-not (Test-Path -LiteralPath $ElectronExecutable)) {
+        throw "Electron is not installed. Run npm run setup first."
+    }
+
+    $RuntimeHome = if ("$env:EMPLOAI_HOME".Trim()) {
+        "$env:EMPLOAI_HOME".Trim()
+    } elseif ("$env:LOCALAPPDATA".Trim()) {
+        Join-Path $env:LOCALAPPDATA "EmploAI"
+    } else {
+        Join-Path $HOME ".emploai"
+    }
+    $DesktopPidPath = Join-Path $RuntimeHome "desktop_shell.pid.json"
+    if (Test-Path -LiteralPath $DesktopPidPath) {
+        try {
+            $RecordedPid = [int]((Get-Content -Raw -LiteralPath $DesktopPidPath | ConvertFrom-Json).pid)
+            $RecordedProcess = Get-Process -Id $RecordedPid -ErrorAction SilentlyContinue
+            if (
+                $null -ne $RecordedProcess `
+                -and $RecordedProcess.Path `
+                -and [System.StringComparer]::OrdinalIgnoreCase.Equals(
+                    [System.IO.Path]::GetFullPath($RecordedProcess.Path),
+                    [System.IO.Path]::GetFullPath($ElectronExecutable)
+                )
+            ) {
+                Write-Step "Desktop shell is already running (PID $RecordedPid)"
+                return
+            }
+        } catch {
+            # A stale advisory PID record must not block a clean launch.
+        }
+    }
+
+    $LogDirectory = Join-Path $RuntimeHome "logs"
+    New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
+    $StandardOutputLog = Join-Path $LogDirectory "desktop_shell_stdout.log"
+    $StandardErrorLog = Join-Path $LogDirectory "desktop_shell_stderr.log"
+    $process = Start-Process `
+        -FilePath $ElectronExecutable `
+        -ArgumentList "." `
+        -WorkingDirectory $DesktopAppDir `
+        -RedirectStandardOutput $StandardOutputLog `
+        -RedirectStandardError $StandardErrorLog `
+        -PassThru
+
+    $Deadline = [DateTime]::UtcNow.AddSeconds(12)
+    while ([DateTime]::UtcNow -lt $Deadline) {
+        $process.Refresh()
+        if ($process.HasExited) {
+            break
+        }
+        if (Test-Path -LiteralPath $DesktopPidPath) {
+            try {
+                $LivePid = [int]((Get-Content -Raw -LiteralPath $DesktopPidPath | ConvertFrom-Json).pid)
+                if ($LivePid -eq $process.Id) {
+                    Write-Step "Desktop shell started (PID $($process.Id))"
+                    return
+                }
+            } catch {
+                # Electron is still starting; retry until the bounded deadline.
+            }
+        }
+        Start-Sleep -Milliseconds 250
+    }
+
+    $FailureDetail = ""
+    if (Test-Path -LiteralPath $StandardErrorLog) {
+        $FailureDetail = (Get-Content -LiteralPath $StandardErrorLog -Tail 20) -join " "
+    }
+    if ($FailureDetail) {
+        throw "The EmploAI desktop process did not become ready: $FailureDetail"
+    }
+    throw "The EmploAI desktop process did not become ready. See $StandardErrorLog."
+}
+
 function Get-PythonRuntime {
     $configured = "$env:EMPLOAI_DESKTOP_PYTHON".Trim()
     if ($configured) {
@@ -236,6 +316,5 @@ if ($skipFleet) {
     }
 }
 
-Invoke-Checked "Launching EmploAI desktop" {
-    Invoke-NpmInDirectory $DesktopAppDir @("run", "start:electron")
-}
+Write-Step "Launching EmploAI desktop"
+Start-DesktopShell

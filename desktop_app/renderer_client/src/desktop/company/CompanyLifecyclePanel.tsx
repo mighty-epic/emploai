@@ -267,6 +267,7 @@ export function CompanyLifecyclePanel({
           </Text>
         </View>
         <Pressable
+          accessibilityRole="button"
           style={styles.secondaryAction}
           onPress={() => {
             setBackupOpen((value) => !value);
@@ -302,6 +303,8 @@ export function CompanyLifecyclePanel({
             <Text style={styles.error}>The passphrases do not match.</Text>
           ) : null}
           <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !backupReady || Boolean(busy) }}
             disabled={!backupReady || Boolean(busy)}
             style={[styles.primaryAction, !backupReady || busy ? styles.disabled : null]}
             onPress={() => void exportBackup()}
@@ -331,7 +334,7 @@ export function CompanyLifecyclePanel({
           </Text>
         </View>
         {migrationState !== 'completed' ? (
-          <Pressable style={styles.secondaryAction} onPress={() => void openMigration()}>
+          <Pressable accessibilityRole="button" style={styles.secondaryAction} onPress={() => void openMigration()}>
             <Text style={styles.secondaryActionText}>{migrationOpen ? 'Close' : 'Review'}</Text>
           </Pressable>
         ) : (
@@ -362,6 +365,8 @@ export function CompanyLifecyclePanel({
               ))}
               <Text style={styles.meta}>{migrationPreview.recovery_note}</Text>
               <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: !verifiedBackupId || Boolean(busy) }}
                 disabled={!verifiedBackupId || Boolean(busy)}
                 style={[styles.primaryAction, !verifiedBackupId || busy ? styles.disabled : null]}
                 onPress={() => void finishMigration()}
@@ -387,7 +392,7 @@ export function CompanyLifecyclePanel({
             Root-only. Review active work and memberships before permanent removal.
           </Text>
         </View>
-        <Pressable style={styles.dangerAction} onPress={() => void openDeletion()}>
+        <Pressable accessibilityRole="button" style={styles.dangerAction} onPress={() => void openDeletion()}>
           <Text style={styles.dangerActionText}>{deletionOpen ? 'Close' : 'Review deletion'}</Text>
         </Pressable>
       </View>
@@ -441,6 +446,10 @@ export function CompanyLifecyclePanel({
                 onChangeText={setDeletePhrase}
               />
               <Pressable
+                accessibilityRole="button"
+                accessibilityState={{
+                  disabled: deletePhrase !== deletionPreview.confirmation_text || Boolean(busy),
+                }}
                 disabled={
                   deletePhrase !== deletionPreview.confirmation_text
                   || Boolean(busy)

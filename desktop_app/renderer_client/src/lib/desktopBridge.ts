@@ -854,6 +854,7 @@ type DesktopBridge = {
     snapshot: () => Promise<DesktopFleetSnapshot>;
     delegateToComputer: (payload: { desktopId?: string; desktop_id?: string; prompt: string; targetKind?: string; target_kind?: string; targetSelector?: string | null; target_selector?: string | null; metadata?: Record<string, unknown> }) => Promise<DesktopFleetDelegation>;
     createWorkerOnComputer: (payload: { desktopId?: string; desktop_id?: string; displayName?: string; display_name?: string }) => Promise<Record<string, unknown>>;
+    deleteWorkerOnComputer: (payload: { desktopId?: string; desktop_id?: string; identityId?: string; identity_id?: string; confirmationId?: string | null; confirmation_id?: string | null }) => Promise<Record<string, unknown>>;
     setManagerToolPacksOnComputer: (payload: { desktopId?: string; desktop_id?: string; enabledToolPacks?: string[]; enabled_tool_packs?: string[] }) => Promise<Record<string, unknown>>;
     computerHostStatus: (payload: { desktopId?: string; desktop_id?: string }) => Promise<DesktopFleetHostStatus>;
     startComputerRuntime: (payload: { desktopId?: string; desktop_id?: string }) => Promise<DesktopFleetHostStatus>;
@@ -1141,6 +1142,20 @@ export async function createDesktopFleetWorkerOnComputer(desktopId: string, disp
   const bridge = getDesktopBridge();
   if (!bridge?.fleet?.createWorkerOnComputer) return null;
   return bridge.fleet.createWorkerOnComputer({ desktopId, displayName });
+}
+
+export async function deleteDesktopFleetWorkerOnComputer(
+  desktopId: string,
+  identityId: string,
+  confirmationId: string,
+) {
+  const bridge = getDesktopBridge();
+  if (!bridge?.fleet?.deleteWorkerOnComputer) return null;
+  return bridge.fleet.deleteWorkerOnComputer({
+    desktopId,
+    identityId,
+    confirmationId,
+  });
 }
 
 export async function setDesktopFleetManagerToolPacksOnComputer(desktopId: string, enabledToolPacks: string[]) {

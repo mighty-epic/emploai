@@ -7,6 +7,7 @@ import {
   type DesktopFleetSnapshot,
   type DesktopFleetYggdrasilStatus,
 } from '@/lib/desktopBridge';
+import type { LocalConfirm } from '@/lib/sharedConfirmations';
 import { userFacingError } from '../../lib/diagnostics';
 import { DESKTOP_UI as UI } from './desktopUiTokens';
 import { DesktopFleetActivityPanel } from './DesktopFleetActivityPanel';
@@ -39,6 +40,9 @@ export function DesktopFleetWorkspace({
   onSnapshotRetry,
   onChanged,
   localComputerContent,
+  apiBaseUrl,
+  token,
+  confirmAction,
 }: {
   snapshot: DesktopFleetSnapshot | null | undefined;
   snapshotError?: string | null;
@@ -46,6 +50,9 @@ export function DesktopFleetWorkspace({
   onSnapshotRetry?: () => void;
   onChanged?: () => void;
   localComputerContent?: ReactNode;
+  apiBaseUrl: string;
+  token: string;
+  confirmAction: LocalConfirm;
 }) {
   const { width } = useWindowDimensions();
   const [status, setStatus] = useState<DesktopFleetYggdrasilStatus | null | undefined>(undefined);
@@ -162,6 +169,9 @@ export function DesktopFleetWorkspace({
         />
         <DesktopFleetMachinesPanel
           snapshot={snapshot}
+          apiBaseUrl={apiBaseUrl}
+          token={token}
+          confirmAction={confirmAction}
           onChanged={changed}
           onConnectRequested={() => setConnectOpen(true)}
           onOpenComputerSettings={setSettingsDesktopId}
@@ -231,7 +241,7 @@ export function DesktopFleetWorkspace({
               changed();
             }}
           />
-          <DesktopFleetMachinesPanel snapshot={snapshot} onChanged={changed} onConnectRequested={() => setConnectOpen(true)} onOpenComputerSettings={setSettingsDesktopId} />
+          <DesktopFleetMachinesPanel snapshot={snapshot} apiBaseUrl={apiBaseUrl} token={token} confirmAction={confirmAction} onChanged={changed} onConnectRequested={() => setConnectOpen(true)} onOpenComputerSettings={setSettingsDesktopId} />
           {localComputerContent}
         </>
       ) : null}
@@ -261,7 +271,7 @@ export function DesktopFleetWorkspace({
             </View>
             <View style={styles.intermediaryPane}>
               <View style={styles.paneLabel}><Text style={styles.paneLabelText}>↓ MANAGING COMPUTERS BELOW</Text></View>
-              <DesktopFleetMachinesPanel snapshot={snapshot} onChanged={changed} onConnectRequested={() => setConnectOpen(true)} onOpenComputerSettings={setSettingsDesktopId} compact />
+              <DesktopFleetMachinesPanel snapshot={snapshot} apiBaseUrl={apiBaseUrl} token={token} confirmAction={confirmAction} onChanged={changed} onConnectRequested={() => setConnectOpen(true)} onOpenComputerSettings={setSettingsDesktopId} compact />
               {localComputerContent}
             </View>
           </View>

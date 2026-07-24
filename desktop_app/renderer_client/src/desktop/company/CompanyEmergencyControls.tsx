@@ -95,7 +95,7 @@ export function CompanyEmergencyControls({
         <Text style={companyPaused ? styles.paused : styles.active}>
           {companyPaused ? 'PAUSED' : 'ACTIVE'}
         </Text>
-        <Pressable style={styles.secondaryAction} onPress={() => setOpen((value) => !value)}>
+        <Pressable accessibilityRole="button" style={styles.secondaryAction} onPress={() => setOpen((value) => !value)}>
           <Text style={styles.secondaryActionText}>{open ? 'Close' : 'Manage'}</Text>
         </Pressable>
       </View>
@@ -166,6 +166,8 @@ function ControlRow({
         <Text style={styles.meta}>{meta}</Text>
       </View>
       <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ disabled: busy }}
         disabled={busy}
         style={[paused ? styles.resumeAction : styles.pauseAction, busy ? styles.disabled : null]}
         onPress={onChange}

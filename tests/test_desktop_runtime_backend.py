@@ -620,6 +620,10 @@ def test_ensure_remote_control_worker_cleans_duplicate_local_workers(monkeypatch
     monkeypatch.setattr(desktop_backend, "_write_remote_control_status_record", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(desktop_backend, "_clear_remote_control_status_record", lambda _home: None)
     monkeypatch.setattr(desktop_backend, "_launch_detached_remote_control_worker", lambda home: launched.append(home))
+    monkeypatch.setattr(
+        "desktop_runtime.fleet_host.ensure_fleet_host_autostart",
+        lambda _home: {"state": "registered"},
+    )
 
     desktop_backend._ensure_remote_control_worker(
         tmp_path,
@@ -735,6 +739,36 @@ def test_windows_process_scan_is_created_without_a_console(monkeypatch):
 
     assert runtime_services._process_ids_for_command_markers("run-remote-control-worker") == set()
     assert captured["creationflags"] == 0x08000000
+
+
+def test_remote_control_process_scan_is_scoped_to_the_requested_home(monkeypatch, tmp_path: Path):
+    import desktop_runtime.services as runtime_services
+
+    expected_home = tmp_path / "current"
+    other_home = tmp_path / "other"
+    monkeypatch.setattr(
+        runtime_services,
+        "_process_ids_for_command_markers",
+        lambda *_markers: {101, 202},
+    )
+    monkeypatch.setattr(runtime_services, "_read_remote_control_pid_record", lambda _home: None)
+    monkeypatch.setattr(runtime_services, "_process_exists", lambda _pid: True)
+    monkeypatch.setattr(
+        runtime_services,
+        "_is_desktop_runtime_worker_process",
+        lambda _pid, _command: True,
+    )
+    monkeypatch.setattr(
+        runtime_services,
+        "_process_command_line",
+        lambda pid: (
+            f'python -m desktop_runtime.backend run-remote-control-worker --home "{expected_home}"'
+            if pid == 101
+            else f'python -m desktop_runtime.backend run-remote-control-worker --home "{other_home}"'
+        ),
+    )
+
+    assert runtime_services._managed_remote_control_worker_pids(expected_home) == [101]
 
 
 def test_windows_port_scan_is_created_without_a_console(monkeypatch):

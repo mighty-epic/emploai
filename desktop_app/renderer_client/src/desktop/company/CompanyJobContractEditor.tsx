@@ -86,7 +86,7 @@ export function CompanyJobContractEditor({
             Contract v{contract.version} · changing the contract resets readiness until it is reviewed again
           </Text>
         </View>
-        <Pressable style={styles.close} onPress={onClose}>
+        <Pressable accessibilityRole="button" style={styles.close} onPress={onClose}>
           <Text style={styles.closeText}>Close</Text>
         </Pressable>
       </View>
@@ -148,6 +148,8 @@ export function CompanyJobContractEditor({
           The identity and its private memory stay in this Company. This changes the job contract, not the employee’s Company membership.
         </Text>
         <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ disabled: saving || !mission.trim() }}
           disabled={saving || !mission.trim()}
           style={[styles.save, saving || !mission.trim() ? styles.disabled : null]}
           onPress={() => void save()}

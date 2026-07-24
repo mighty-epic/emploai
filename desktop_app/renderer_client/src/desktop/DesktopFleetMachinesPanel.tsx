@@ -5,11 +5,16 @@ import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import {
   createDesktopFleetWorkerOnComputer,
   decideDesktopFleetUpstreamRequest,
+  deleteDesktopFleetWorkerOnComputer,
   delegateDesktopFleetComputer,
   type DesktopFleetConnectionPermissions,
   type DesktopFleetRemoteTarget,
   type DesktopFleetSnapshot,
 } from '@/lib/desktopBridge';
+import {
+  createApprovedConfirmation,
+  type LocalConfirm,
+} from '@/lib/sharedConfirmations';
 import { userFacingError } from '../../lib/diagnostics';
 import { remoteRuntimesFromFleetSnapshot } from './desktopRemoteRuntimes';
 import { DesktopFleetInfoButton } from './DesktopFleetInfoButton';
@@ -41,6 +46,9 @@ export function DesktopFleetMachinesPanel({
   onChanged,
   onConnectRequested,
   onOpenComputerSettings,
+  apiBaseUrl,
+  token,
+  confirmAction,
   showConnectAction = true,
   compact = false,
 }: {
@@ -48,6 +56,9 @@ export function DesktopFleetMachinesPanel({
   onChanged?: () => void;
   onConnectRequested?: () => void;
   onOpenComputerSettings?: (desktopId: string) => void;
+  apiBaseUrl: string;
+  token: string;
+  confirmAction: LocalConfirm;
   showConnectAction?: boolean;
   compact?: boolean;
 }) {
@@ -298,6 +309,13 @@ export function DesktopFleetMachinesPanel({
                       {targets.map((item) => {
                         const key = String(item.identity_id || item.target_selector || item.display_name);
                         const selected = target === item;
+                        const canDelete = (
+                          item.target_kind === 'worker'
+                          && !item.is_default
+                          && !item.protected
+                          && Boolean(item.identity_id)
+                          && Boolean(permissions.create_workers)
+                        );
                         return (
                           <Pressable
                             key={key}
@@ -310,7 +328,60 @@ export function DesktopFleetMachinesPanel({
                               <Text style={styles.targetName}>{item.display_name}</Text>
                               <Text style={styles.targetMeta}>{item.role === 'manager' ? 'Manager route' : item.is_default ? 'Default worker' : 'Worker'} · {item.status || 'ready'}</Text>
                             </View>
-                            <Text style={styles.targetCheck}>{selected ? '●' : '○'}</Text>
+                            <View style={styles.targetActions}>
+                              {item.target_kind === 'worker' && (item.is_default || item.protected) ? (
+                                <Text style={styles.protectedLabel}>PROTECTED</Text>
+                              ) : null}
+                              {canDelete ? (
+                                <Pressable
+                                  accessibilityRole="button"
+                                  accessibilityLabel={`Delete ${item.display_name} from ${selectedMachine.name}`}
+                                  disabled={busy}
+                                  onPress={(event) => {
+                                    event.stopPropagation();
+                                    void (async () => {
+                                      const confirmationId = await createApprovedConfirmation(
+                                        apiBaseUrl,
+                                        token,
+                                        confirmAction,
+                                        {
+                                          action_kind: 'fleet_remote_worker_delete',
+                                          title: `Delete ${item.display_name}?`,
+                                          message: `This removes the worker and stops its active work on ${selectedMachine.name}. The protected default worker cannot be removed.`,
+                                          risk_tier: 'danger',
+                                          origin_surface: 'company_computers',
+                                          payload: {
+                                            desktop_id: selectedMachine.id,
+                                            identity_id: item.identity_id,
+                                          },
+                                        },
+                                        {
+                                          confirmLabel: 'Delete worker',
+                                          tone: 'danger',
+                                          decidedBySurface: 'company_computers',
+                                        },
+                                      );
+                                      if (!confirmationId || !item.identity_id) return;
+                                      await run(
+                                        `delete:${item.identity_id}`,
+                                        () => deleteDesktopFleetWorkerOnComputer(
+                                          selectedMachine.id,
+                                          item.identity_id!,
+                                          confirmationId,
+                                        ),
+                                        `${item.display_name} deleted from ${selectedMachine.name}.`,
+                                      );
+                                    })();
+                                  }}
+                                  style={[styles.deleteButton, busy ? styles.disabled : null]}
+                                >
+                                  <Text style={styles.deleteButtonText}>
+                                    {busyId === `delete:${item.identity_id}` ? 'Deleting…' : 'Delete'}
+                                  </Text>
+                                </Pressable>
+                              ) : null}
+                              <Text style={styles.targetCheck}>{selected ? '●' : '○'}</Text>
+                            </View>
                           </Pressable>
                         );
                       })}
@@ -475,9 +546,13 @@ const styles = StyleSheet.create({
   targetRow: { minHeight: 52, paddingHorizontal: 10, paddingVertical: 8, borderWidth: 0, borderRadius: UI.radius.control, flexDirection: 'row', alignItems: 'center', gap: 10 },
   targetRowSelected: { backgroundColor: UI.color.accentSoft },
   targetCopy: { flex: 1 },
+  targetActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   targetName: { color: UI.color.text, fontSize: TYPE.control, fontWeight: '800' },
   targetMeta: { marginTop: 3, color: UI.color.textSubtle, fontSize: TYPE.meta },
   targetCheck: { color: UI.color.accentStrong, fontSize: TYPE.control },
+  protectedLabel: { color: UI.color.textSubtle, fontFamily: UI.type.mono, fontSize: TYPE.micro, fontWeight: '800' },
+  deleteButton: { minHeight: 32, paddingHorizontal: 9, borderRadius: UI.radius.control, backgroundColor: UI.color.dangerSoft, alignItems: 'center', justifyContent: 'center' },
+  deleteButtonText: { color: UI.color.danger, fontSize: TYPE.meta, fontWeight: '800' },
   inputLabel: { color: UI.color.textMuted, fontSize: TYPE.body, fontWeight: '700' },
   input: { minHeight: 48, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, borderColor: UI.color.borderStrong, borderRadius: UI.radius.control, backgroundColor: UI.color.canvas, color: UI.color.text, fontSize: TYPE.control },
   promptInput: { minHeight: 112, textAlignVertical: 'top' },

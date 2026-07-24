@@ -268,6 +268,6 @@ def test_fleet_ui_keeps_forms_clean_and_help_out_of_the_primary_scan_path():
     assert "dismissOutside" in info
     assert "event.key === 'Escape'" in info
     assert "zIndex: 20" in machines
-    assert "body: 12" in scale
+    assert "body: 13" in scale
     assert "usage_limit_reached" in worker_state
     assert "Provider error:" not in worker_state

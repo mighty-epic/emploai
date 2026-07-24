@@ -287,6 +287,22 @@ function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, get
     });
   }
 
+  async function fleetDeleteWorkerOnComputer(payload = {}) {
+    const desktopId = String(payload.desktop_id || payload.desktopId || '').trim();
+    const identityId = String(payload.identity_id || payload.identityId || '').trim();
+    if (!desktopId || !identityId) throw new Error('desktop_id and identity_id are required');
+    const confirmationId = payload.confirmation_id || payload.confirmationId || null;
+    return fleetApi(
+      `/api/fleet/desktops/${encodeURIComponent(desktopId)}/workers/${encodeURIComponent(identityId)}`,
+      {
+        method: 'DELETE',
+        headers: confirmationId
+          ? { 'X-EmploAI-Confirmation-Id': confirmationId }
+          : {},
+      },
+    );
+  }
+
   async function fleetSetManagerToolPacksOnComputer(payload = {}) {
     const desktopId = String(payload.desktop_id || payload.desktopId || '').trim();
     const enabledToolPacks = payload.enabled_tool_packs || payload.enabledToolPacks || [];
@@ -766,6 +782,7 @@ function createRemoteControlServices({ net, safeStorage, resolveRuntimeHome, get
     fleetSnapshot,
     fleetDelegateToComputer,
     fleetCreateWorkerOnComputer,
+    fleetDeleteWorkerOnComputer,
     fleetSetManagerToolPacksOnComputer,
     fleetComputerHostStatus,
     fleetStartComputerRuntime,

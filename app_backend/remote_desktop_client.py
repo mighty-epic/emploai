@@ -644,6 +644,98 @@ async def _handle_command(
                 "detail": "The worker was created locally on the paired computer.",
             }
 
+        if command_name == "fleet_delete_local_worker":
+            if not permissions.get("create_workers", False):
+                raise PermissionError(
+                    "Managing workers from the paired manager is not allowed on this computer"
+                )
+            identity_id = str(payload.get("identity_id") or "").strip()
+            company_id = str(payload.get("company_id") or "").strip() or None
+            if not identity_id:
+                raise ValueError("identity_id is required")
+            local_fleet = await _request_json(
+                client,
+                method="GET",
+                url=f"{local_api_base_url}/api/fleet/snapshot",
+                token=local_token,
+                company_id=company_id,
+            )
+            identity = next(
+                (
+                    item
+                    for item in list(local_fleet.get("identities") or [])
+                    if isinstance(item, dict)
+                    and str(item.get("role") or "").strip().lower() == "worker"
+                    and str(item.get("identity_id") or "").strip() == identity_id
+                ),
+                None,
+            )
+            if not identity:
+                raise KeyError("The local worker is unavailable")
+            if bool(identity.get("protected")) or bool(identity.get("is_default")):
+                raise PermissionError(
+                    "The protected default worker cannot be deleted"
+                )
+            worker_id = str(identity.get("worker_id") or "").strip()
+            if not worker_id:
+                raise RuntimeError("The local worker record is incomplete")
+
+            confirmation = await _request_json(
+                client,
+                method="POST",
+                url=f"{local_api_base_url}/api/app/confirmations",
+                token=local_token,
+                company_id=company_id,
+                json_body={
+                    "action_kind": "fleet_worker_delete",
+                    "title": f"Remove {identity.get('display_name') or 'worker'}",
+                    "message": (
+                        "Approved by the directly paired manager after an "
+                        "explicit user confirmation."
+                    ),
+                    "risk_tier": "danger",
+                    "origin_surface": "paired_manager",
+                    "payload": {
+                        "worker_id": worker_id,
+                        "parent_confirmation_id": str(
+                            payload.get("parent_confirmation_id") or ""
+                        ).strip()
+                        or None,
+                    },
+                },
+            )
+            approved = await _request_json(
+                client,
+                method="POST",
+                url=(
+                    f"{local_api_base_url}/api/app/confirmations/"
+                    f"{quote_plus(str(confirmation['confirmation_id']))}/approve"
+                ),
+                token=local_token,
+                company_id=company_id,
+                json_body={"decided_by_surface": "paired_manager"},
+            )
+            headers = {
+                "Authorization": f"Bearer {local_token}",
+                "X-EmploAI-Confirmation-Id": str(
+                    approved.get("confirmation_id") or ""
+                ),
+            }
+            if company_id:
+                headers["X-EmploAI-Company-Id"] = company_id
+            response = await client.delete(
+                f"{local_api_base_url}/api/fleet/workers/{quote_plus(worker_id)}",
+                headers=headers,
+            )
+            response.raise_for_status()
+            return {
+                "deleted": True,
+                "display_name": str(
+                    identity.get("display_name") or "Worker"
+                ),
+                "detail": "The worker was removed on the paired computer.",
+            }
+
         if command_name == "fleet_delegate":
             delegation_id = str(payload.get("delegation_id") or "").strip()
             prompt = str(payload.get("prompt") or "").strip()

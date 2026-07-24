@@ -60,6 +60,19 @@ def test_setup_and_start_scripts_use_the_same_python_override_env_var():
     assert "Invoke-PythonRuntime" in setup_script
 
 
+def test_start_script_detaches_electron_without_a_persistent_npm_wrapper():
+    start_script = _read("scripts/desktop/start.ps1")
+
+    assert "function Start-DesktopShell" in start_script
+    assert "node_modules\\electron\\dist\\electron.exe" in start_script
+    assert "Start-Process" in start_script
+    assert '-ArgumentList "."' in start_script
+    assert "desktop_shell.pid.json" in start_script
+    assert "Desktop shell is already running" in start_script
+    assert "desktop_shell_stderr.log" in start_script
+    assert 'Invoke-NpmInDirectory $DesktopAppDir @("run", "start:electron")' not in start_script
+
+
 def test_powershell_desktop_launch_scripts_parse_when_powershell_is_available():
     powershell = shutil.which("powershell") or shutil.which("pwsh")
     if not powershell:

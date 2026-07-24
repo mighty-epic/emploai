@@ -561,13 +561,36 @@ def _start_updated_app(home: Path, root: Path) -> dict[str, Any]:
     return start_desktop_from_fleet_host()
 
 
+def _stop_managed_fleet_hosts(home: Path, old_host_pid: int) -> set[int]:
+    """Stop every Fleet host generation for this runtime home."""
+
+    from desktop_runtime import backend as desktop_backend
+
+    pids = set(desktop_backend._managed_remote_control_worker_pids(home))
+    if old_host_pid > 0 and _process_exists(old_host_pid):
+        pids.add(old_host_pid)
+    desktop_backend._stop_remote_control_worker(home, scan_processes=True)
+    if old_host_pid > 0 and _process_exists(old_host_pid):
+        _terminate_single_process(old_host_pid)
+    deadline = time.monotonic() + 10
+    while any(_process_exists(pid) for pid in pids) and time.monotonic() < deadline:
+        time.sleep(0.2)
+    return pids
+
+
 def _restart_host(home: Path, root: Path, old_host_pid: int) -> tuple[bool, int | None]:
     from desktop_runtime.fleet_host import FLEET_HOST_TASK_NAME
 
-    _terminate_single_process(old_host_pid)
-    deadline = time.monotonic() + 10
-    while old_host_pid > 0 and _process_exists(old_host_pid) and time.monotonic() < deadline:
-        time.sleep(0.2)
+    previous_record: dict[str, Any] = {}
+    record_path = Path(home) / "desktop_remote_control.pid.json"
+    try:
+        payload = json.loads(record_path.read_text(encoding="utf-8"))
+        previous_record = dict(payload) if isinstance(payload, dict) else {}
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
+    stopped_pids = _stop_managed_fleet_hosts(home, old_host_pid)
+    if any(_process_exists(pid) for pid in stopped_pids):
+        return False, None
     _run_logged(
         [str(Path(sys.executable).resolve()), "-m", "desktop_runtime.backend", "fleet-host-install"],
         cwd=root,
@@ -584,14 +607,21 @@ def _restart_host(home: Path, root: Path, old_host_pid: int) -> tuple[bool, int 
             label="Restarting the persistent Fleet host",
         )
     deadline = time.monotonic() + HOST_RESTART_TIMEOUT_SECONDS
-    record_path = Path(home) / "desktop_remote_control.pid.json"
     while time.monotonic() < deadline:
         try:
             payload = json.loads(record_path.read_text(encoding="utf-8"))
             new_pid = int(payload.get("pid") or 0) if isinstance(payload, dict) else 0
+            new_started_at = str(payload.get("startedAt") or "") if isinstance(payload, dict) else ""
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             new_pid = 0
-        if new_pid and new_pid != old_host_pid and _process_exists(new_pid):
+            new_started_at = ""
+        is_new_generation = bool(
+            new_started_at
+            and new_started_at != str(previous_record.get("startedAt") or "")
+        )
+        if new_pid and _process_exists(new_pid) and (
+            new_pid not in stopped_pids or is_new_generation
+        ):
             return True, new_pid
         time.sleep(0.5)
     return False, None
@@ -612,6 +642,9 @@ def run_fleet_update(home: Path, root: Path, *, job_id: str, expected_commit: st
     changed_files: list[str] = []
     checkout_updated = False
     app_restarted = False
+    host_restart_attempted = False
+    host_restarted = False
+    new_host_pid: int | None = None
     rollback_succeeded = False
     restored_local_changes = False
     try:
@@ -653,6 +686,16 @@ def run_fleet_update(home: Path, root: Path, *, job_id: str, expected_commit: st
             raise RuntimeError("The updated backend or desktop app did not become ready")
 
         current_version = _target_version(root, current_commit)
+        host_restart_attempted = True
+        host_restarted, new_host_pid = _restart_host(
+            home,
+            root,
+            int(job.get("host_pid") or 0),
+        )
+        if not host_restarted:
+            raise RuntimeError(
+                "The updated app started, but its persistent Fleet host did not reload cleanly"
+            )
         _update_job(
             home,
             job_id,
@@ -663,12 +706,12 @@ def run_fleet_update(home: Path, root: Path, *, job_id: str, expected_commit: st
             current_version=current_version,
             completed_at=_now(),
             app_restarted=True,
-            host_restart_pending=True,
+            host_restart_pending=False,
+            host_restarted=True,
+            new_host_pid=new_host_pid,
             updater_pid=updater_pid,
         )
         _record_current_check(home, root, job_id, current_commit)
-        host_restarted, new_host_pid = _restart_host(home, root, int(job.get("host_pid") or 0))
-        _update_job(home, job_id, host_restart_pending=not host_restarted, host_restarted=host_restarted, new_host_pid=new_host_pid)
         return fleet_update_status(home, root)
     except Exception as exc:
         recovery_errors: list[str] = []
@@ -692,6 +735,21 @@ def run_fleet_update(home: Path, root: Path, *, job_id: str, expected_commit: st
                 restored_local_changes = _restore_stash(home, root, backup)
             except Exception as restore_error:
                 recovery_errors.append(_safe_error(restore_error, "Local-change restore failed"))
+        if host_restart_attempted:
+            try:
+                recovered_host, recovered_host_pid = _restart_host(
+                    home,
+                    root,
+                    int(new_host_pid or job.get("host_pid") or 0),
+                )
+                host_restarted = bool(recovered_host)
+                new_host_pid = recovered_host_pid
+                if not recovered_host:
+                    recovery_errors.append("Persistent Fleet host recovery did not become ready")
+            except Exception as host_recovery_error:
+                recovery_errors.append(
+                    _safe_error(host_recovery_error, "Persistent Fleet host recovery failed")
+                )
         try:
             app_status = _start_updated_app(home, root)
             app_restarted = bool((app_status.get("runtime") or {}).get("ready") and (app_status.get("desktop") or {}).get("running"))
@@ -714,6 +772,9 @@ def run_fleet_update(home: Path, root: Path, *, job_id: str, expected_commit: st
             rollback_succeeded=rollback_succeeded,
             restored_local_changes=restored_local_changes,
             app_restarted=app_restarted,
+            host_restart_pending=bool(host_restart_attempted and not host_restarted),
+            host_restarted=host_restarted,
+            new_host_pid=new_host_pid,
             recovery_errors=recovery_errors,
             updater_pid=updater_pid,
         )

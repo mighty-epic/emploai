@@ -183,7 +183,7 @@ export function CompanyOperatingRecordsPanel({
           <Text style={styles.eyebrow}>OPERATING RECORDS</Text>
           <Text style={styles.title}>Plans, playbooks, and handoffs</Text>
         </View>
-        <Pressable style={styles.newAction} onPress={() => setCreating((current) => !current)}>
+        <Pressable accessibilityRole="button" style={styles.newAction} onPress={() => setCreating((current) => !current)}>
           <Text style={styles.newActionText}>{creating ? 'Close' : 'New'}</Text>
         </Pressable>
       </View>
@@ -259,6 +259,8 @@ export function CompanyOperatingRecordsPanel({
                   <Text style={styles.label}>AUTOMATION · OPTIONAL UNTIL ACTIVATION</Text>
                   <View style={styles.choiceWrap}>
                     <Pressable
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected: !automationId }}
                       style={[styles.choice, !automationId ? styles.choiceSelected : null]}
                       onPress={() => setAutomationId(null)}
                     >
@@ -308,6 +310,8 @@ export function CompanyOperatingRecordsPanel({
                   <Text style={styles.label}>OBJECTIVE · OPTIONAL</Text>
                   <View style={styles.choiceWrap}>
                     <Pressable
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected: !objectiveId }}
                       style={[styles.choice, !objectiveId ? styles.choiceSelected : null]}
                       onPress={() => setObjectiveId(null)}
                     >
@@ -316,6 +320,8 @@ export function CompanyOperatingRecordsPanel({
                     {objectives.map((objective) => (
                       <Pressable
                         key={objective.objective_id}
+                        accessibilityRole="radio"
+                        accessibilityState={{ selected: objectiveId === objective.objective_id }}
                         style={[styles.choice, objectiveId === objective.objective_id ? styles.choiceSelected : null]}
                         onPress={() => setObjectiveId(objective.objective_id)}
                       >
@@ -391,6 +397,8 @@ export function CompanyOperatingRecordsPanel({
                   : 'Initiatives coordinate objectives; they do not replace them.'}
             </Text>
             <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: saving || !canSave }}
               disabled={saving || !canSave}
               style={[styles.save, saving || !canSave ? styles.disabled : null]}
               onPress={() => void submit()}
@@ -556,7 +564,7 @@ function RecordRow({
         <Text style={styles.rowMeta} numberOfLines={2}>{meta}</Text>
       </View>
       {action && onAction ? (
-        <Pressable style={styles.rowAction} onPress={() => void onAction()}>
+        <Pressable accessibilityRole="button" style={styles.rowAction} onPress={() => void onAction()}>
           <Text style={styles.rowActionText}>{action}</Text>
         </Pressable>
       ) : null}

@@ -87,7 +87,7 @@ export function CompanyCharterPanel({
             <Text style={styles.eyebrow}>DURABLE DIRECTION</Text>
             <Text style={styles.title}>Company charter</Text>
           </View>
-          <Pressable style={styles.primaryAction} onPress={() => setEditing(true)}>
+          <Pressable accessibilityRole="button" style={styles.primaryAction} onPress={() => setEditing(true)}>
             <Text style={styles.primaryActionText}>{complete ? 'Edit setup' : 'Begin setup'}</Text>
           </Pressable>
         </View>
@@ -124,7 +124,7 @@ export function CompanyCharterPanel({
           <Text style={styles.title}>{STEPS[step - 1]}</Text>
           <Text style={styles.stepText}>Step {step} of 9 · saved locally to this company</Text>
         </View>
-        <Pressable style={styles.closeAction} onPress={() => setEditing(false)}>
+        <Pressable accessibilityRole="button" style={styles.closeAction} onPress={() => setEditing(false)}>
           <Text style={styles.closeActionText}>Close</Text>
         </Pressable>
       </View>
@@ -132,6 +132,7 @@ export function CompanyCharterPanel({
         {STEPS.map((label, index) => (
           <Pressable
             key={label}
+            accessibilityRole="button"
             accessibilityLabel={`Step ${index + 1}: ${label}`}
             style={[styles.progressStep, index + 1 <= step ? styles.progressStepActive : null]}
             onPress={() => setStep(index + 1)}
@@ -154,6 +155,8 @@ export function CompanyCharterPanel({
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <View style={styles.footer}>
         <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ disabled: saving || step === 1 }}
           disabled={saving || step === 1}
           style={[styles.secondaryAction, step === 1 ? styles.disabled : null]}
           onPress={() => setStep((value) => Math.max(1, value - 1))}
@@ -162,6 +165,8 @@ export function CompanyCharterPanel({
         </Pressable>
         <Text style={styles.footerHint}>Unknown facts may stay blank. EmploAI will not invent them.</Text>
         <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ disabled: saving }}
           disabled={saving}
           style={[styles.saveAction, saving ? styles.disabled : null]}
           onPress={() => void saveStep(Math.min(9, step + 1), step === 9)}
