@@ -59,3 +59,31 @@ def test_older_child_requires_update_for_automatic_worker_route():
     with pytest.raises(FleetRouteResolutionError) as error:
         resolve_manager_delegation_route(_snapshot(schema_version=2), computer="Windows VPS")
     assert error.value.code == "child_update_required"
+
+
+def test_unknown_explicit_computer_never_falls_back_to_local_worker():
+    with pytest.raises(FleetRouteResolutionError) as error:
+        resolve_manager_delegation_route(_snapshot(), computer="Missing VPS")
+    assert error.value.code == "computer_not_found"
+
+
+def test_requested_child_manager_never_falls_through_to_worker():
+    snapshot = _snapshot()
+    snapshot["connection_permissions"][0]["capabilities"]["targets"] = [
+        snapshot["connection_permissions"][0]["capabilities"]["targets"][1]
+    ]
+
+    with pytest.raises(FleetRouteResolutionError) as error:
+        resolve_manager_delegation_route(snapshot, computer="Windows VPS", target_role="manager")
+    assert error.value.code == "manager_missing"
+
+
+def test_explicit_identity_must_match_requested_role():
+    with pytest.raises(FleetRouteResolutionError) as error:
+        resolve_manager_delegation_route(
+            _snapshot(),
+            computer="Windows VPS",
+            identity="child-manager",
+            target_role="worker",
+        )
+    assert error.value.code == "target_role_mismatch"

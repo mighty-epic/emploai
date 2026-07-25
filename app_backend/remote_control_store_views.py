@@ -618,8 +618,7 @@ class RemoteControlStoreViewMixin:
         return [
             identity
             for identity in identities
-            if str(identity.get("role") or "") != "manager"
-            or str(identity.get("desktop_id") or "").strip() == clean_desktop_id
+            if str(identity.get("desktop_id") or "").strip() == clean_desktop_id
         ]
 
     def _scope_fleet_instances_to_desktop(
@@ -633,8 +632,21 @@ class RemoteControlStoreViewMixin:
         return [
             instance
             for instance in instances
-            if str(instance.get("role") or "") != "manager"
-            or str(instance.get("desktop_id") or "").strip() == clean_desktop_id
+            if str(instance.get("desktop_id") or "").strip() == clean_desktop_id
+        ]
+
+    def _scope_fleet_workers_to_desktop(
+        self,
+        workers: List[Dict[str, Any]],
+        desktop_id: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        clean_desktop_id = str(desktop_id or "").strip()
+        if not clean_desktop_id:
+            return list(workers)
+        return [
+            worker
+            for worker in workers
+            if str(worker.get("machine_desktop_id") or "").strip() == clean_desktop_id
         ]
 
     def _resolve_fleet_identity_locked(self, user_id: int, selector: str) -> Optional[Dict[str, Any]]:

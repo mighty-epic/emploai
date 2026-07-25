@@ -195,6 +195,8 @@ This gives every surface better control over chats without making the system fra
 
 The current top-level Fleet destination becomes `Company`. The underlying infrastructure remains available on Company's `Computers` page; this is a navigation change, not removal of Fleet capabilities.
 
+> The whole-company operating model and decision-complete Fleet information architecture, layouts, flows, terminology, state models, accessibility requirements, and edge-case behavior are defined in [emploai_company_operating_system_and_fleet_ux_spec.md](emploai_company_operating_system_and_fleet_ux_spec.md). That document treats Fleet as an expansion of the current implementation and supersedes the UX guidance in this section where the two differ.
+
 `Computers` exists on every desktop because every computer has a manager. Its controls are role-aware:
 
 - A selected manager can inspect the local node, pair computers, refresh connection state, configure permitted child settings, inspect published identities, and route work through direct children.

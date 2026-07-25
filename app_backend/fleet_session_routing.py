@@ -136,8 +136,20 @@ def reconcile_local_identity_session_profiles(
                 continue
         identity = next(
             (item for item in identities if session_belongs_to_fleet_identity(session, item)),
-            manager,
+            None,
         )
+        if identity is None:
+            # Untagged sessions predate Fleet identities and belong to the
+            # local manager. A session already bound to another identity must
+            # not be silently promoted when its identity is outside this
+            # desktop-scoped snapshot or has since been removed.
+            has_existing_binding = any(
+                str(_field(session, field) or "").strip()
+                for field in ("fleet_identity_id", "fleet_identity_role", "fleet_worker_id")
+            )
+            if has_existing_binding:
+                continue
+            identity = manager
         if not identity:
             continue
         role = str(identity.get("role") or "").strip().lower()

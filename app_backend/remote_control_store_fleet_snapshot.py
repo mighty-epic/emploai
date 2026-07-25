@@ -90,14 +90,18 @@ class RemoteControlStoreFleetSnapshotMixin:
                     selected_by_identity.setdefault(active_identity_id, current_session_id)
                 fleet_state["active_identity_id"] = active_identity_id
                 fleet_state["selected_chat_by_identity"] = selected_by_identity
-            workers = [item for item in all_workers if str(item.get("worker_id") or "") not in hidden_connection_worker_ids]
+            workers = self._scope_fleet_workers_to_desktop(
+                [item for item in all_workers if str(item.get("worker_id") or "") not in hidden_connection_worker_ids],
+                scoped_desktop_id,
+            )
+            visible_worker_ids = {str(item.get("worker_id") or "") for item in workers}
             tasks = [
                 self._task_view(row)
                 for row in self._conn.execute(
                     "SELECT * FROM fleet_tasks WHERE user_id = ? ORDER BY queue_position ASC, created_at ASC",
                     (int(user_id),),
                 ).fetchall()
-                if str(row["worker_id"] or "") not in hidden_connection_worker_ids
+                if str(row["worker_id"] or "") in visible_worker_ids
             ]
             reports = [
                 self._report_view(row)
@@ -105,7 +109,7 @@ class RemoteControlStoreFleetSnapshotMixin:
                     "SELECT * FROM fleet_reports WHERE user_id = ? ORDER BY created_at DESC LIMIT 200",
                     (int(user_id),),
                 ).fetchall()
-                if str(row["worker_id"] or "") not in hidden_connection_worker_ids
+                if str(row["worker_id"] or "") in visible_worker_ids
             ]
             visible_identity_ids = {str(item.get("identity_id") or "") for item in identities}
             selected_chat_by_identity = {
@@ -155,7 +159,7 @@ class RemoteControlStoreFleetSnapshotMixin:
                                 "SELECT worker_id FROM fleet_workers WHERE user_id = ? AND group_id = ? ORDER BY display_name ASC",
                                 (int(user_id), row["group_id"]),
                             ).fetchall()
-                            if str(item["worker_id"] or "") not in hidden_connection_worker_ids
+                            if str(item["worker_id"] or "") in visible_worker_ids
                         ],
                     }
                     for row in self._conn.execute(

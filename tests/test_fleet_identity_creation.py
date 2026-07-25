@@ -424,6 +424,10 @@ def test_computers_keep_independent_active_identity_selections(tmp_path):
     )
     first_snapshot = store.get_fleet_snapshot(user_id=0, desktop_id=first["desktop_id"])
     second_snapshot = store.get_fleet_snapshot(user_id=0, desktop_id=second["desktop_id"])
+    assert {identity["desktop_id"] for identity in first_snapshot["identities"]} == {first["desktop_id"]}
+    assert {identity["desktop_id"] for identity in second_snapshot["identities"]} == {second["desktop_id"]}
+    assert {worker["machine_desktop_id"] for worker in first_snapshot["workers"]} == {first["desktop_id"]}
+    assert {worker["machine_desktop_id"] for worker in second_snapshot["workers"]} == {second["desktop_id"]}
     first_worker = next(identity for identity in first_snapshot["identities"] if identity["role"] == "worker")
     second_manager = next(identity for identity in second_snapshot["identities"] if identity["role"] == "manager")
 

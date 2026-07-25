@@ -204,3 +204,23 @@ def test_legacy_local_sessions_are_migrated_to_role_locked_profiles_idempotently
 
     assert reconcile_local_identity_session_profiles(bridge=bridge, snapshot=snapshot) == 0
     assert bridge.session_manager.saved == ["manager-chat", "worker-chat"]
+
+
+def test_reconciliation_does_not_promote_a_session_bound_to_another_desktop():
+    foreign_worker_session = SimpleNamespace(
+        id="foreign-worker-chat",
+        fleet_identity_id="foreign-worker-identity",
+        fleet_identity_role="worker",
+        fleet_worker_id="foreign-worker",
+        fleet_task_mode="direct",
+        enabled_tool_packs=[PACK_WEB_RESEARCH],
+    )
+    bridge = _Bridge([foreign_worker_session])
+
+    assert reconcile_local_identity_session_profiles(
+        bridge=bridge,
+        snapshot={"identities": [MANAGER]},
+    ) == 0
+    assert foreign_worker_session.fleet_identity_id == "foreign-worker-identity"
+    assert foreign_worker_session.enabled_tool_packs == [PACK_WEB_RESEARCH]
+    assert bridge.session_manager.saved == []

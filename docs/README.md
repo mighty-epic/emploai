@@ -10,6 +10,7 @@ EmploAI is currently a local-first desktop app. The desktop UI and local runtime
 - [local_artifacts.md](local_artifacts.md) - ignored runtime folders, caches, and generated local state
 - [product/main_vision.md](product/main_vision.md) - fleet-scale product north star
 - [product/fleet_system_details.md](product/fleet_system_details.md) - practical Fleet behavior spec
+- [product/emploai_company_operating_system_and_fleet_ux_spec.md](product/emploai_company_operating_system_and_fleet_ux_spec.md) - whole-company operating model, specialized AI jobs, company UX, governance, and expansion of the current Fleet experience
 - [yggdrasil_fleet_transport.md](yggdrasil_fleet_transport.md) - direct paired-computer Fleet connections without an EmploAI cloud backend
 - [android_yggdrasil_mobile_pairing.md](android_yggdrasil_mobile_pairing.md) - future Android mobile pairing without EmploAI cloud
 - [hermes_local_first_features.md](hermes_local_first_features.md) - Hermes features worth carrying into EmploAI

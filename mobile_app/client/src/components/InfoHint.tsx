@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import type { CrossPlatformPressableState } from '../lib/pressableState';
+
 type InfoHintProps = {
   label?: string;
   placement?: 'bottom' | 'top';
@@ -19,7 +21,7 @@ export function InfoHint({ label = 'More information', placement = 'bottom', tex
         onHoverIn={() => setVisible(true)}
         onHoverOut={() => setVisible(false)}
         onPress={() => setVisible((current) => !current)}
-        style={({ pressed, hovered }) => [
+        style={({ pressed, hovered }: CrossPlatformPressableState) => [
           styles.button,
           hovered || visible ? styles.buttonActive : null,
           pressed ? styles.buttonPressed : null,

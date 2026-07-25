@@ -53,7 +53,9 @@ def resolve_manager_delegation_route(
 
     computer_state = _find_child_computer(snapshot, computer) if computer else None
     if clean_scope == "auto":
-        clean_scope = "child" if computer_state or _identity_matches_child(snapshot, identity) else "local"
+        # An explicit computer selector must never degrade into a local route
+        # merely because the selector was stale or misspelled.
+        clean_scope = "child" if computer or computer_state or _identity_matches_child(snapshot, identity) else "local"
     if clean_scope == "local":
         return _resolve_local(snapshot, identity=identity, target_role=clean_role)
     return _resolve_child(snapshot, computer_state=computer_state, computer=computer, identity=identity, target_role=clean_role)
@@ -112,6 +114,11 @@ def _resolve_child(
         raise FleetRouteResolutionError("That identity is not published by the selected child computer.")
     if not selected and target_role == "manager":
         selected = next((item for item in targets if str(item.get("role") or item.get("target_kind") or "") == "manager"), None)
+        if not selected:
+            raise FleetRouteResolutionError(
+                "The child computer has no published manager identity.",
+                code="manager_missing",
+            )
     if not selected:
         if int(capabilities.get("schema_version") or 0) < 3:
             raise FleetRouteResolutionError(
@@ -128,6 +135,11 @@ def _resolve_child(
     if not selected:
         raise FleetRouteResolutionError("The child computer has no published default worker.", code="default_worker_missing")
     role = str(selected.get("role") or selected.get("target_kind") or "worker").strip().lower()
+    if target_role != "auto" and role != target_role:
+        raise FleetRouteResolutionError(
+            f"The selected identity is a {role}, not a {target_role}.",
+            code="target_role_mismatch",
+        )
     computer_id = str(state.get("desktop_id") or "").strip()
     return ResolvedFleetRoute(
         scope="child",
