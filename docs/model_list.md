@@ -49,7 +49,6 @@ This document tracks all models supported by the Unified Agent and their configu
 | `meta/llama-4-maverick-17b-128e-instruct` | NVIDIA NIM | `meta/llama-4-maverick-17b-128e-instruct` | 128k | No |
 | `minimaxai/minimax-m3` | NVIDIA NIM | `minimaxai/minimax-m3` | 128k | No |
 | `mistralai/ministral-14b-instruct-2512` | NVIDIA NIM | `mistralai/ministral-14b-instruct-2512` | 128k | No |
-| `mistralai/mistral-large-3-675b-instruct-2512` | NVIDIA NIM | `mistralai/mistral-large-3-675b-instruct-2512` | 128k | No |
 | `mistralai/mistral-medium-3.5-128b` | NVIDIA NIM | `mistralai/mistral-medium-3.5-128b` | 128k | No |
 | `mistralai/mistral-small-4-119b-2603` | NVIDIA NIM | `mistralai/mistral-small-4-119b-2603` | 128k | No |
 | `nvidia/nemotron-nano-12b-v2-vl` | NVIDIA NIM | `nvidia/nemotron-nano-12b-v2-vl` | 128k | No |

@@ -763,7 +763,7 @@ NVIDIA_EXCLUDED_MODEL_IDS = frozenset(
 NVIDIA_VERIFIED_CHAT_COMPLETION_MODEL_IDS = frozenset(
     {
         # Verified against NVIDIA's OpenAI-compatible streaming chat completions
-        # endpoint, image input payloads, and the app's tool loop on 2026-06-29.
+        # endpoint, image input payloads, and the app's tool loop on 2026-07-25.
         # NVIDIA's public /v1/models catalog includes model IDs that are
         # unavailable to normal accounts, time out before yielding content,
         # reject tools, ignore tool calls, reject image input, or stream only
@@ -774,7 +774,6 @@ NVIDIA_VERIFIED_CHAT_COMPLETION_MODEL_IDS = frozenset(
         "meta/llama-4-maverick-17b-128e-instruct",
         "minimaxai/minimax-m3",
         "mistralai/ministral-14b-instruct-2512",
-        "mistralai/mistral-large-3-675b-instruct-2512",
         "mistralai/mistral-medium-3.5-128b",
         "mistralai/mistral-small-4-119b-2603",
         "nvidia/nemotron-nano-12b-v2-vl",

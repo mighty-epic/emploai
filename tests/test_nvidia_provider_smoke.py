@@ -34,6 +34,13 @@ def test_verify_nvidia_provider_rejects_unregistered_model(monkeypatch):
     assert verify_nvidia_provider.main(["--skip-chat", "--model", "nvidia/not-in-menu"]) == 1
 
 
-@pytest.mark.skipif(not os.getenv("NVIDIA_API_KEY"), reason="NVIDIA_API_KEY is required for the live NVIDIA smoke")
+@pytest.mark.skipif(
+    os.getenv("EMPLOAI_RUN_LIVE_NVIDIA_SMOKE") != "1"
+    or not os.getenv("NVIDIA_API_KEY"),
+    reason=(
+        "Set EMPLOAI_RUN_LIVE_NVIDIA_SMOKE=1 with NVIDIA_API_KEY "
+        "to run the live NVIDIA smoke"
+    ),
+)
 def test_live_nvidia_chat_smoke_with_configured_key():
     assert verify_nvidia_provider.main(["--require-key", "--model", NVIDIA_DEFAULT_MODEL]) == 0

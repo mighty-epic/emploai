@@ -100,7 +100,6 @@ def test_current_nvidia_models_are_registered_for_nim_provider():
         "meta/llama-4-maverick-17b-128e-instruct",
         "minimaxai/minimax-m3",
         "mistralai/ministral-14b-instruct-2512",
-        "mistralai/mistral-large-3-675b-instruct-2512",
         "mistralai/mistral-medium-3.5-128b",
         "mistralai/mistral-small-4-119b-2603",
         "nvidia/nemotron-nano-12b-v2-vl",
