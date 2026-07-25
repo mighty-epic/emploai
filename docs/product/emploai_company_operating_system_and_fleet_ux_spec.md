@@ -54,7 +54,7 @@ This section is the shortest authoritative handoff for an engineer or agent ente
 7. A worker computer may create and own one unrelated local root company unless it already owns one or a device-owner installation policy deliberately disables company creation.
 8. An identity belongs permanently to one company and has one home computer at a time. The identity's job may change inside that company; the identity itself never transfers to another company or belongs to two companies.
 9. Computers provide execution capacity and local trust boundaries. Identities delegate work. Fleet topology is transport/control routing and must never be treated as the employee organization chart.
-10. Every company starts immediately with two separate identities: a CEO/manager, which is also the user's default assistant, and a minimally permitted general worker. Every additional computer membership in that company likewise reconciles one protected local manager and one protected default worker for that membership. All of these identities are company-bound and have their own chats, settings, job contract, and long-term memory.
+10. Every company starts immediately with two separate identities: a protected CEO/manager, which is also the user's default assistant, and a minimally permitted, deletable general worker. Every additional computer membership in that company likewise reconciles one protected local manager and one initially present but deletable default worker for that membership. All of these identities are company-bound and have their own chats, settings, job contract, and long-term memory. Only managers are protected.
 11. Business onboarding is optional and suggested rather than blocking. A company may remain a personal, business-less assistant context indefinitely. When onboarding begins, its first choice is only **I already have a business** or **Help me create a new business**.
 12. Onboarding has three separate scopes: device setup, optional company/business onboarding, and identity-specific employee onboarding. Workspace setup contains project facts, not employee identity or job authority.
 13. Managers and the CEO may create and delegate work within their authority. Workers wake for manager assignments or enabled scheduled jobs, complete the assigned scope, and do not independently create company initiatives.
@@ -238,7 +238,7 @@ Rules:
 - membership in one company never reveals that computer's other companies or memberships;
 - “child computer” always means a distinct remote computer connected through Yggdrasil, never another identity or company on the same machine.
 
-Every company membership reconciles exactly one protected local manager and one protected default worker for that membership. Joining Company A therefore creates Company A-bound local identities even when the same physical computer already has separate manager and worker identities for its own Company C. The identity selector and every dispatch surface show identities from the active company only. The membership manager owns that membership's local workers, enforces local capability boundaries, and coordinates its direct child memberships; on the root membership, the protected manager is the company's CEO manager by default.
+Every company membership reconciles exactly one protected local manager and initially creates one deletable default worker for that membership. Joining Company A therefore creates Company A-bound local identities even when the same physical computer already has separate manager and worker identities for its own Company C. The identity selector and every dispatch surface show identities from the active company only. The membership manager owns that membership's local workers, enforces local capability boundaries, and coordinates its direct child memberships; on the root membership, the protected manager is the company's CEO manager by default. Deleting a default worker persists that operator decision and does not cause startup to recreate it silently.
 
 For example:
 
@@ -1674,7 +1674,7 @@ Pairing enrolls one computer membership in the selected company. It does not exp
 A physical computer can host isolated company partitions. Within one selected company membership it can expose:
 
 - its protected local membership manager;
-- its protected default worker;
+- its default worker, when one exists;
 - zero or more additional local agents;
 - a connection to at most one upstream computer for that company;
 - zero or more direct child computers.
@@ -1777,7 +1777,7 @@ The phrase **company identity** is ambiguous and must not be used in implementat
 | Connected hub | A worker membership with both an upstream and one or more children in that company | Does not gain company-root or employee-manager authority |
 | Standalone | Legacy/current Fleet state with no saved upstream or child relationship; after company migration, usually a root-owned company with no connected computers | Must not imply absence of other company memberships on the device |
 | Membership manager | The protected local manager identity for one company membership | Coordinates that membership's workers and direct child memberships; not a global identity or physical-computer role |
-| Default worker | The protected general execution identity for one company membership | Not the computer itself and never shared across company memberships |
+| Default worker | The initial, deletable general execution identity for one company membership | Not the computer itself, not protected, and never shared across company memberships |
 | Yggdrasil | The direct private network transport used by Fleet connections | Provides reachability, not company authorization or organization structure |
 
 Unless a paragraph explicitly describes the legacy implementation, unqualified **parent**, **child**, **root**, **worker**, **leaf**, **hub**, and **standalone** language in the Fleet sections means the relationship state of this computer's membership in the active company, never a global role for the physical device.
@@ -2155,7 +2155,7 @@ Next actions:
 - Optionally onboard additional specialized employees on that computer.
 - Return to Overview.
 
-The protected membership manager and default worker exist immediately after the company membership is created. Additional employee setup is optional for the computer connection, but an additional employee may not receive assignments until its own onboarding is complete.
+The protected membership manager and an initially present, deletable default worker exist immediately after the company membership is created. Additional employee setup is optional for the computer connection, but an additional employee may not receive assignments until its own onboarding is complete.
 
 ## Flow B: Join an existing company Fleet
 
@@ -2186,7 +2186,7 @@ If the code cannot safely identify the company, intended upstream membership, an
 The user names this computer for Company A and reviews that company's initial permissions:
 
 - Send coordination work to the protected Company A membership manager.
-- Assign execution work to the protected default worker and individually exposed Company A identities on this computer.
+- Assign execution work to the default worker, when present, and individually exposed Company A identities on this computer.
 - Create additional local employees.
 
 Recommended defaults:
@@ -2205,7 +2205,7 @@ Progress states:
 1. Preparing private network.
 2. Validating single-use code.
 3. Saving direct relationship.
-4. Reconciling the protected Company A membership manager and default worker.
+4. Reconciling the protected Company A membership manager and initial deletable default worker.
 5. Starting the durable connection.
 6. Publishing approved capability summary.
 
@@ -2624,7 +2624,7 @@ A response must update both the parent and hosting computer. If acknowledgement 
 The initial direct-connection permissions are:
 
 - Send coordination work to this membership's protected local manager.
-- Assign execution work to its protected default worker and individually exposed local employees.
+- Assign execution work to its default worker, when present, and individually exposed local employees.
 - Propose or create additional local employees under the configured policy.
 
 Future permissions may cover specific agent classes, runbooks, workspaces, or temporary capabilities, but should follow the same ownership model.

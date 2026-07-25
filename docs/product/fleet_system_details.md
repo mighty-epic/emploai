@@ -35,9 +35,9 @@ The fleet contains:
 - `Lock`: a runtime claim over a scarce resource such as a workspace writer, browser profile, or interactive desktop.
 - `Audit event`: a durable record of important fleet actions.
 
-Every computer has exactly one active manager and at least one protected default worker. A computer may have one parent, may have many direct children, and may be both a child and a parent. There is no global server that owns or flattens the hierarchy.
+Every computer has exactly one protected active manager and begins with one deletable default worker. A computer may have one parent, may have many direct children, and may be both a child and a parent. There is no global server that owns or flattens the hierarchy.
 
-Manager and worker authority is structural rather than a startup toggle. The local manager cannot be deleted or converted into a worker. The default worker cannot be deleted or converted into a manager, although it can be renamed, reset, configured, and hidden from its parent. Additional workers remain removable and configurable.
+Manager and worker authority is structural rather than a startup toggle. The local manager cannot be deleted or converted into a worker. Default and additional workers are removable and configurable; no worker can be converted into a manager.
 
 ## Why There Is No Cloud Login Or Account
 
@@ -80,7 +80,7 @@ A worker is an execution unit.
 
 A worker can be:
 
-- The protected default worker on its manager's computer.
+- The default worker on its manager's computer, when one exists.
 - An additional specialized worker on that same computer.
 - A worker published upward from a directly paired child computer.
 
@@ -102,7 +102,7 @@ Computer
 └─ Direct child computers
 ```
 
-The manager is the default Chat identity. The default worker is created once, marked protected, and given the standard execution profile. Repeated startup or reconnect must never duplicate either identity and must not start model inference merely to establish the baseline.
+The manager is the default Chat identity and the only protected identity. The default worker is created initially, remains deletable, and receives the standard execution profile. An explicit deletion is persisted and startup must not silently recreate it; creating another worker may establish a new default. Repeated startup or reconnect must never duplicate identities and must not start model inference merely to establish the baseline.
 
 Chat and Jarvis select local identities only. Company is the operating surface; its `Computers` page owns local hierarchy management and remote child computers. Pairing the computer to a parent publishes its visible local manager and workers upward but does not replace or demote its local manager.
 
@@ -154,7 +154,7 @@ Worker names are sequential and editable:
 - Manager can rename workers.
 - Optional descriptive prefixes may come from a worker profile or company department without changing the worker's stable identity.
 
-The source computer owns each worker identity. Its local manager can rename, reset, delete, classify, and group additional workers. A parent can act only through the permissions granted by the child and can never delete the child's protected manager or default worker.
+The source computer owns each worker identity. Its local operator can rename, reset, delete, classify, and group any worker, including the default worker. A parent can act only through the permissions granted by the child and can never delete the child's protected manager.
 
 Deleting or resetting a worker should revoke its fleet identity and optionally wipe local worker state: sessions, task queue, local tokens, cached grants, and worker-specific data.
 
@@ -434,7 +434,7 @@ Audit logs should avoid raw secret values and should be useful for manager revie
 
 The core V1 acceptance scenario:
 
-1. EmploAI starts without a login and reconciles exactly one local manager and one protected default worker.
+1. EmploAI starts without a login and reconciles one protected local manager and an initial deletable default worker.
 2. The local manager delegates ordinary actionable work to its default worker.
 3. The manager creates a short-lived computer pairing code.
 4. A second computer or VPS starts with its own manager and default worker, then pairs beneath the first computer using that code.

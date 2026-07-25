@@ -33,7 +33,7 @@ EmploAI already contains the foundation for this direction:
 
 - The desktop runtime owns local execution: tools, files, browser control, screen vision, OCR, shell commands, and app control.
 - The Fleet runtime provides computer identity, direct pairing, presence, task routing, permissions, reports, and persistent host recovery over Yggdrasil.
-- Every installation reconciles one local manager and one protected default worker before pairing.
+- Every installation reconciles one protected local manager and one deletable default worker before pairing.
 - Chat, Jarvis, Company/Fleet, automations, workspaces, and structured task reports provide the main operating surfaces.
 - Mobile and Telegram can remain optional command surfaces attached to a chosen local installation without becoming identity authorities.
 
@@ -81,7 +81,7 @@ The root manager may be presented as the company's `CEO manager`: the top agenti
 
 ### Worker
 
-A worker is an execution identity owned by its source computer's manager. The protected default worker guarantees that every manager can delegate ordinary action without setup. Additional workers may specialize by behavior, tools, connectors, workspace, or optional department.
+A worker is a deletable execution identity owned by its source computer's manager. The initial default worker lets a manager delegate ordinary action without setup, but the operator may delete or replace it. Additional workers may specialize by behavior, tools, connectors, workspace, or optional department. Only manager identities are protected.
 
 Workers execute tasks, report milestones, raise blockers, and return structured reports. They do not create departments, grant themselves tools, assign other workers, or control managers.
 

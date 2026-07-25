@@ -38,7 +38,7 @@ def _setup(tmp_path):
             "display_name": "Default Worker",
             "role": "worker",
             "status": "active",
-            "protected": True,
+            "protected": False,
             "is_default": True,
         },
     )

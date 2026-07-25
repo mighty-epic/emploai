@@ -28,7 +28,7 @@ def _company_store(path):
     )
 
 
-def test_each_company_membership_gets_a_distinct_protected_identity_pair(tmp_path):
+def test_each_company_membership_gets_a_protected_manager_and_default_worker(tmp_path):
     store = RemoteControlPlaneStore(root_path=tmp_path)
     desktop = _desktop(store)
     desktop_id = desktop["desktop_id"]
@@ -64,8 +64,10 @@ def test_each_company_membership_gets_a_distinct_protected_identity_pair(tmp_pat
     assert company_b["manager_identity"]["metadata"]["company_id"] == "company-b"
     assert company_a["default_worker_identity"]["is_default"] is True
     assert company_b["default_worker_identity"]["is_default"] is True
-    assert company_a["default_worker_identity"]["protected"] is True
-    assert company_b["default_worker_identity"]["protected"] is True
+    assert company_a["manager_identity"]["protected"] is True
+    assert company_b["manager_identity"]["protected"] is True
+    assert company_a["default_worker_identity"]["protected"] is False
+    assert company_b["default_worker_identity"]["protected"] is False
     assert repeated_company_a["manager_identity"]["identity_id"] == company_a["manager_identity"]["identity_id"]
     assert (
         repeated_company_a["default_worker_identity"]["identity_id"]
@@ -73,11 +75,54 @@ def test_each_company_membership_gets_a_distinct_protected_identity_pair(tmp_pat
     )
 
     # Reopening the device shell must not recreate a global pair or demote a
-    # different company's protected default worker.
+    # different company's default worker.
     _desktop(store)
     raw = store.get_fleet_snapshot(user_id=0, desktop_id=desktop_id)
     assert len([item for item in raw["identities"] if item["role"] == "manager"]) == 2
     assert len([item for item in raw["identities"] if item["role"] == "worker" and item["is_default"]]) == 2
+
+
+def test_deleted_company_default_worker_stays_deleted(tmp_path):
+    store = RemoteControlPlaneStore(root_path=tmp_path)
+    desktop = _desktop(store)
+    pair = store.ensure_company_membership_identities(
+        user_id=0,
+        desktop_id=desktop["desktop_id"],
+        company_id="company-a",
+        company_name="Owner PC",
+        membership_role="root_controller",
+        adopt_unscoped=True,
+    )
+
+    deleted = store.delete_worker(
+        user_id=0,
+        worker_id=pair["default_worker_identity"]["worker_id"],
+    )
+    store.ensure_standalone_manager_desktop(
+        user_id=0,
+        display_name="Owner PC",
+        device_platform="desktop-electron",
+        device_key="local-app:test-device",
+    )
+    repeated = store.ensure_company_membership_identities(
+        user_id=0,
+        desktop_id=desktop["desktop_id"],
+        company_id="company-a",
+        company_name="Owner PC",
+        membership_role="root_controller",
+        adopt_unscoped=True,
+    )
+
+    assert deleted["deleted"] is True
+    assert repeated["manager_identity"]["protected"] is True
+    assert repeated["default_worker_identity"] is None
+    scoped = store.get_fleet_snapshot(
+        user_id=0,
+        desktop_id=desktop["desktop_id"],
+        company_id="company-a",
+        company_computer_ids=[desktop["desktop_id"]],
+    )
+    assert [item for item in scoped["identities"] if item["role"] == "worker"] == []
 
 
 def test_company_snapshot_never_exposes_another_company_identity_or_task(tmp_path):

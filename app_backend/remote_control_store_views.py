@@ -193,8 +193,8 @@ class RemoteControlStoreViewMixin:
         status = str(row["status"] or "idle")
         metadata = _json_loads(row["metadata"], {})
         last_seen_at = row["last_seen_at"]
-        protected_idle_default = bool(metadata.get("is_default")) and status == "idle"
-        if not protected_idle_default and status not in {"working", "blocked", "needs_review"} and last_seen_at:
+        baseline_idle_default = bool(metadata.get("is_default")) and status == "idle"
+        if not baseline_idle_default and status not in {"working", "blocked", "needs_review"} and last_seen_at:
             age_seconds = max(0.0, time.time() - float(last_seen_at))
             if age_seconds >= FLEET_OFFLINE_SECONDS:
                 status = "offline"

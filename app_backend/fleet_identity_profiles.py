@@ -56,7 +56,7 @@ def default_worker_metadata(existing: Optional[Dict[str, Any]] = None) -> Dict[s
         {
             "created_by": "system_identity_reconciler",
             "is_default": True,
-            "protected": True,
+            "protected": False,
             "tool_profile": DEFAULT_WORKER_TOOL_PROFILE,
             "enabled_tool_packs": list(DEFAULT_WORKER_TOOL_PACKS),
             "capability_tags": list(DEFAULT_WORKER_CAPABILITY_TAGS),
@@ -69,7 +69,7 @@ def default_worker_metadata(existing: Optional[Dict[str, Any]] = None) -> Dict[s
 def additional_worker_metadata(existing: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     metadata = dict(existing or {})
     metadata["is_default"] = False
-    metadata["protected"] = bool(metadata.get("protected", False))
+    metadata["protected"] = False
     metadata.setdefault("tool_profile", "custom_execution")
     packs = normalize_enabled_tool_packs(metadata.get("enabled_tool_packs") or DEFAULT_WORKER_TOOL_PACKS)
     metadata["enabled_tool_packs"] = [pack for pack in packs if pack != PACK_MANAGER_CORE]

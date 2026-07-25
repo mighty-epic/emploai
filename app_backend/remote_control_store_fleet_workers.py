@@ -16,6 +16,88 @@ REMOTE_PAIRING_TTL_SECONDS = 60 * 10
 FLEET_ENROLLMENT_TTL_SECONDS = 60 * 30
 
 class RemoteControlStoreFleetWorkerMixin:
+    def _manager_identity_for_worker_scope_locked(
+        self,
+        *,
+        user_id: int,
+        desktop_id: str,
+        company_id: str,
+    ):
+        rows = self._conn.execute(
+            """
+            SELECT * FROM fleet_instances
+            WHERE user_id = ?
+              AND role = 'manager'
+              AND desktop_id = ?
+              AND reset_at IS NULL
+            ORDER BY created_at ASC
+            """,
+            (int(user_id), str(desktop_id or "").strip()),
+        ).fetchall()
+        clean_company_id = str(company_id or "").strip()
+        scoped_manager = next(
+            (
+                row
+                for row in rows
+                if str(
+                    _json_loads(row["metadata"], {}).get("company_id") or ""
+                ).strip()
+                == clean_company_id
+            ),
+            None,
+        )
+        if scoped_manager or clean_company_id:
+            return scoped_manager
+        # The device shell may reuse the first company-bound manager after
+        # migration instead of retaining a separate unscoped manager.
+        return rows[0] if rows else None
+
+    def _default_worker_suppressed_locked(
+        self,
+        *,
+        user_id: int,
+        desktop_id: str,
+        company_id: str,
+    ) -> bool:
+        manager = self._manager_identity_for_worker_scope_locked(
+            user_id=int(user_id),
+            desktop_id=desktop_id,
+            company_id=company_id,
+        )
+        return bool(
+            manager
+            and _json_loads(manager["metadata"], {}).get(
+                "default_worker_deleted_by_user"
+            )
+        )
+
+    def _set_default_worker_suppressed_locked(
+        self,
+        *,
+        user_id: int,
+        desktop_id: str,
+        company_id: str,
+        suppressed: bool,
+    ) -> None:
+        manager = self._manager_identity_for_worker_scope_locked(
+            user_id=int(user_id),
+            desktop_id=desktop_id,
+            company_id=company_id,
+        )
+        if not manager:
+            return
+        metadata = _json_loads(manager["metadata"], {})
+        if suppressed:
+            metadata["default_worker_deleted_by_user"] = True
+            metadata["default_worker_deleted_at"] = time.time()
+        else:
+            metadata.pop("default_worker_deleted_by_user", None)
+            metadata.pop("default_worker_deleted_at", None)
+        self._conn.execute(
+            "UPDATE fleet_instances SET metadata = ?, updated_at = ? WHERE instance_id = ?",
+            (_json_dumps(metadata), time.time(), manager["instance_id"]),
+        )
+
     def set_manager_identity_tool_packs(
         self,
         *,
@@ -114,8 +196,8 @@ class RemoteControlStoreFleetWorkerMixin:
         company_id: Optional[str] = None,
         membership_role: Optional[str] = None,
         adopt_unscoped: bool = False,
-    ) -> Dict[str, Any]:
-        """Reconcile the protected execution identity owned by one computer.
+    ) -> Optional[Dict[str, Any]]:
+        """Reconcile the default execution identity owned by one computer.
 
         This internal migration path intentionally does not use the user-request
         worker creation validator. Public worker creation remains explicit-only.
@@ -155,6 +237,14 @@ class RemoteControlStoreFleetWorkerMixin:
             row_metadata = _json_loads(row["metadata"], {})
             if bool(row_metadata.get("is_default")):
                 continue
+            # Protection belongs to managers, never execution identities.
+            # Reconcile legacy ordinary workers as well as default workers.
+            if bool(row_metadata.get("protected")):
+                row_metadata["protected"] = False
+                self._conn.execute(
+                    "UPDATE fleet_workers SET metadata = ?, updated_at = ? WHERE worker_id = ?",
+                    (_json_dumps(row_metadata), now, row["worker_id"]),
+                )
             # Older worker creation stored the profile only on fleet_workers.
             # Copy an existing configured profile to its identity without
             # inventing a replacement for legacy custom session profiles.
@@ -163,6 +253,10 @@ class RemoteControlStoreFleetWorkerMixin:
                     "UPDATE fleet_instances SET metadata = ?, updated_at = ? WHERE instance_id = ?",
                     (_json_dumps(row_metadata), now, row["instance_id"]),
                 )
+        # If an explicitly created worker is available after the former default
+        # was deleted, promote it instead of manufacturing another identity.
+        if not defaults and rows:
+            defaults = [rows[0]]
         if defaults:
             worker = defaults[0]
             metadata = default_worker_metadata(_json_loads(worker["metadata"], {}))
@@ -176,6 +270,12 @@ class RemoteControlStoreFleetWorkerMixin:
             self._conn.execute(
                 "UPDATE fleet_instances SET status = 'active', reset_at = NULL, metadata = ?, updated_at = ? WHERE instance_id = ?",
                 (_json_dumps(metadata), now, worker["instance_id"]),
+            )
+            self._set_default_worker_suppressed_locked(
+                user_id=int(user_id),
+                desktop_id=desktop_id,
+                company_id=clean_company_id,
+                suppressed=False,
             )
             for duplicate in defaults[1:]:
                 duplicate_metadata = _json_loads(duplicate["metadata"], {})
@@ -244,6 +344,13 @@ class RemoteControlStoreFleetWorkerMixin:
                 self._conn.execute("SELECT * FROM fleet_workers WHERE worker_id = ?", (worker["worker_id"],)).fetchone()
             )
 
+        if self._default_worker_suppressed_locked(
+            user_id=int(user_id),
+            desktop_id=desktop_id,
+            company_id=clean_company_id,
+        ):
+            return None
+
         worker_id = f"wrk_{secrets.token_hex(8)}"
         instance_id = f"win_{secrets.token_hex(8)}"
         name = str(display_name or DEFAULT_WORKER_DISPLAY_NAME).strip()[:MAX_DISPLAY_NAME_CHARS] or DEFAULT_WORKER_DISPLAY_NAME
@@ -277,7 +384,7 @@ class RemoteControlStoreFleetWorkerMixin:
             actor_id=desktop_id,
             target_kind="worker",
             target_id=worker_id,
-            metadata={"is_default": True, "protected": True, "company_id": clean_company_id or None},
+            metadata={"is_default": True, "protected": False, "company_id": clean_company_id or None},
         )
         return self._worker_view(
             self._conn.execute("SELECT * FROM fleet_workers WHERE worker_id = ?", (worker_id,)).fetchone()
@@ -787,10 +894,16 @@ class RemoteControlStoreFleetWorkerMixin:
             ).fetchone()
             if not worker:
                 raise KeyError("Unknown worker")
-            if bool(_json_loads(worker["metadata"], {}).get("protected")):
-                raise PermissionError("The protected default worker cannot be deleted")
+            worker_metadata = _json_loads(worker["metadata"], {})
             now = time.time()
             machine_desktop_id = str(worker["machine_desktop_id"] or "").strip()
+            if bool(worker_metadata.get("is_default")):
+                self._set_default_worker_suppressed_locked(
+                    user_id=int(user_id),
+                    desktop_id=machine_desktop_id,
+                    company_id=str(worker_metadata.get("company_id") or ""),
+                    suppressed=True,
+                )
             related_tasks = [
                 self._task_view(row)
                 for row in self._conn.execute(

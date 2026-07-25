@@ -356,7 +356,7 @@ def test_remote_worker_creation_is_local_only_and_never_returns_an_identity(monk
     assert "private-worker-id" not in json.dumps(result)
 
 
-def test_remote_worker_delete_rejects_protected_and_removes_an_ordinary_worker(
+def test_remote_worker_delete_removes_a_default_worker(
     monkeypatch,
     tmp_path: Path,
 ):
@@ -382,12 +382,12 @@ def test_remote_worker_delete_rejects_protected_and_removes_an_ordinary_worker(
             return {
                 "identities": [
                     {
-                        "identity_id": "worker-ordinary",
-                        "worker_id": "wrk-ordinary",
-                        "display_name": "Build worker",
+                        "identity_id": "worker-default",
+                        "worker_id": "wrk-default",
+                        "display_name": "Default Worker",
                         "role": "worker",
                         "protected": False,
-                        "is_default": False,
+                        "is_default": True,
                     }
                 ]
             }
@@ -421,7 +421,7 @@ def test_remote_worker_delete_rejects_protected_and_removes_an_ordinary_worker(
         remote_desktop_client._handle_command(
             command_name="fleet_delete_local_worker",
             payload={
-                "identity_id": "worker-ordinary",
+                "identity_id": "worker-default",
                 "company_id": "company-one",
                 "parent_confirmation_id": "confirmation-parent",
             },
@@ -433,9 +433,9 @@ def test_remote_worker_delete_rejects_protected_and_removes_an_ordinary_worker(
     )
 
     assert result["deleted"] is True
-    assert result["display_name"] == "Build worker"
+    assert result["display_name"] == "Default Worker"
     assert requests[0][-1] == "company-one"
-    assert deleted[0][0].endswith("/api/fleet/workers/wrk-ordinary")
+    assert deleted[0][0].endswith("/api/fleet/workers/wrk-default")
     assert (
         deleted[0][1]["headers"]["X-EmploAI-Confirmation-Id"]
         == "confirmation-child"

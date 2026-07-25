@@ -672,10 +672,8 @@ async def _handle_command(
             )
             if not identity:
                 raise KeyError("The local worker is unavailable")
-            if bool(identity.get("protected")) or bool(identity.get("is_default")):
-                raise PermissionError(
-                    "The protected default worker cannot be deleted"
-                )
+            if bool(identity.get("protected")):
+                raise PermissionError("Protected identities cannot be deleted")
             worker_id = str(identity.get("worker_id") or "").strip()
             if not worker_id:
                 raise RuntimeError("The local worker record is incomplete")

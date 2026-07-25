@@ -140,6 +140,7 @@ def resolve_local_company_runtime(
             computer_id=computer_id,
             manager_identity=scoped_pair["manager_identity"],
             default_worker_identity=scoped_pair["default_worker_identity"],
+            clear_missing_default_worker=True,
         )
         if (
             str((scoped_company.get("migration") or {}).get("state") or "")

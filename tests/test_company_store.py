@@ -49,8 +49,8 @@ def _worker():
         "role": "worker",
         "status": "active",
         "is_default": True,
-        "protected": True,
-        "metadata": {"is_default": True, "protected": True},
+        "protected": False,
+        "metadata": {"is_default": True, "protected": False},
     }
 
 
@@ -76,7 +76,10 @@ def test_default_company_is_idempotent_and_reconciles_protected_identities(tmp_p
     assert second["memberships"][0]["manager_identity_id"] == "mgr_local"
     assert second["memberships"][0]["default_worker_identity_id"] == "wrk_default"
     assert {item["company_role"] for item in second["employees"]} == {"CEO", "General worker"}
-    assert all(item["protected"] for item in second["employees"])
+    protection_by_role = {
+        item["system_role"]: item["protected"] for item in second["employees"]
+    }
+    assert protection_by_role == {"manager": True, "worker": False}
     assert len(store.list_companies(computer_id="computer-a")) == 1
 
 
@@ -355,6 +358,34 @@ def test_root_directory_syncs_only_published_child_identities(tmp_path):
         "child-manager",
         "child-worker",
     }
+    protection_by_role = {
+        item["system_role"]: item["protected"] for item in child_employees
+    }
+    assert protection_by_role == {"manager": True, "worker": False}
+
+    cleared = store.sync_published_membership_identities(
+        company_id=company["company_id"],
+        child_computer_id="child-computer",
+        membership_id=membership_id,
+        identities=[
+            {
+                "identity_id": "child-manager",
+                "display_name": "Child Manager",
+                "role": "manager",
+                "status": "active",
+                "protected": True,
+            }
+        ],
+    )
+    refreshed = store.get_company(company["company_id"])
+    former_worker = next(
+        item
+        for item in refreshed["employees"]
+        if item["identity_id"] == "child-worker"
+    )
+    assert cleared["default_worker_identity_id"] is None
+    assert former_worker["status"] == "unavailable"
+    assert former_worker["published_upstream"] is False
 
 
 def test_published_identity_sync_is_idempotent_and_retires_hidden_targets(

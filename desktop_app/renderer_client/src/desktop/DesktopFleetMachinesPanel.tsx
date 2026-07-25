@@ -311,7 +311,6 @@ export function DesktopFleetMachinesPanel({
                         const selected = target === item;
                         const canDelete = (
                           item.target_kind === 'worker'
-                          && !item.is_default
                           && !item.protected
                           && Boolean(item.identity_id)
                           && Boolean(permissions.create_workers)
@@ -329,7 +328,7 @@ export function DesktopFleetMachinesPanel({
                               <Text style={styles.targetMeta}>{item.role === 'manager' ? 'Manager route' : item.is_default ? 'Default worker' : 'Worker'} · {item.status || 'ready'}</Text>
                             </View>
                             <View style={styles.targetActions}>
-                              {item.target_kind === 'worker' && (item.is_default || item.protected) ? (
+                              {item.target_kind === 'worker' && item.protected ? (
                                 <Text style={styles.protectedLabel}>PROTECTED</Text>
                               ) : null}
                               {canDelete ? (
@@ -347,7 +346,7 @@ export function DesktopFleetMachinesPanel({
                                         {
                                           action_kind: 'fleet_remote_worker_delete',
                                           title: `Delete ${item.display_name}?`,
-                                          message: `This removes the worker and stops its active work on ${selectedMachine.name}. The protected default worker cannot be removed.`,
+                                          message: `This removes the worker and stops its active work on ${selectedMachine.name}. Only manager identities are protected.`,
                                           risk_tier: 'danger',
                                           origin_surface: 'company_computers',
                                           payload: {

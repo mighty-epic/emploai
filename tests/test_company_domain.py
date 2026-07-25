@@ -37,7 +37,7 @@ def _setup(tmp_path):
             "display_name": "Default Worker",
             "role": "worker",
             "status": "active",
-            "metadata": {"protected": True, "is_default": True},
+            "metadata": {"protected": False, "is_default": True},
         },
     )
     return store, company, CompanyDomainService(store=store, catalog=JobCatalog())

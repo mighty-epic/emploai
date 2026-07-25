@@ -90,6 +90,7 @@ def create_app_companies_router(deps: AppCompaniesRouterDeps) -> APIRouter:
             computer_id=str(local["computer_id"]),
             manager_identity=local["manager_identity"],
             default_worker_identity=local["default_worker_identity"],
+            clear_missing_default_worker=True,
         )
         return local
 
@@ -136,6 +137,7 @@ def create_app_companies_router(deps: AppCompaniesRouterDeps) -> APIRouter:
                 computer_name=local["computer_name"],
                 manager_identity=local["manager_identity"],
                 default_worker_identity=local["default_worker_identity"],
+                clear_missing_default_worker=True,
             )
             if payload.get("active_company"):
                 local = bind_company_identities(local, payload["active_company"])
@@ -144,6 +146,7 @@ def create_app_companies_router(deps: AppCompaniesRouterDeps) -> APIRouter:
                     computer_name=local["computer_name"],
                     manager_identity=local["manager_identity"],
                     default_worker_identity=local["default_worker_identity"],
+                    clear_missing_default_worker=True,
                 )
         except CompanyStoreError as exc:
             raise translate_store_error(exc) from exc
@@ -196,6 +199,7 @@ def create_app_companies_router(deps: AppCompaniesRouterDeps) -> APIRouter:
                 computer_name=local["computer_name"],
                 manager_identity=local["manager_identity"],
                 default_worker_identity=local["default_worker_identity"],
+                clear_missing_default_worker=True,
             )
         except CompanyStoreError as exc:
             raise translate_store_error(exc) from exc

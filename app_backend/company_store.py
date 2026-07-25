@@ -369,6 +369,7 @@ class CompanyStore:
         computer_name: str,
         manager_identity: Optional[Mapping[str, Any]] = None,
         default_worker_identity: Optional[Mapping[str, Any]] = None,
+        clear_missing_default_worker: bool = False,
     ) -> Dict[str, Any]:
         clean_computer_id = str(computer_id or "").strip()
         if not clean_computer_id:
@@ -401,6 +402,7 @@ class CompanyStore:
                 computer_id=clean_computer_id,
                 manager_identity=manager_identity,
                 default_worker_identity=default_worker_identity,
+                clear_missing_default_worker=clear_missing_default_worker,
             )
             selected = str(registry.get("selected_by_computer", {}).get(clean_computer_id) or "").strip()
             if not selected or selected not in dict(registry.get("companies") or {}):
@@ -415,6 +417,7 @@ class CompanyStore:
         computer_id: str,
         manager_identity: Optional[Mapping[str, Any]],
         default_worker_identity: Optional[Mapping[str, Any]],
+        clear_missing_default_worker: bool = False,
     ) -> Dict[str, Any]:
         payload = dict(company)
         company_id = str(payload.get("company_id") or "")
@@ -460,7 +463,7 @@ class CompanyStore:
                 "display_name": _clean_label(identity.get("display_name"), company_role, 160),
                 "system_role": system_role,
                 "company_role": company_role,
-                "protected": True,
+                "protected": bool(system_role == "manager"),
                 "is_default": bool(system_role == "worker" or metadata.get("is_default")),
                 "home_membership_id": str(membership["membership_id"]),
                 "status": str(identity.get("status") or "active"),
@@ -478,6 +481,21 @@ class CompanyStore:
         root_role = str(membership.get("membership_role") or "") == "root_controller"
         upsert(manager_identity, system_role="manager", company_role="CEO" if root_role else "Membership manager")
         upsert(default_worker_identity, system_role="worker", company_role="General worker")
+        if default_worker_identity is None and clear_missing_default_worker:
+            previous_worker_id = str(
+                membership.get("default_worker_identity_id") or ""
+            ).strip()
+            if previous_worker_id:
+                membership["default_worker_identity_id"] = None
+                membership["updated_at"] = _utc_now()
+                current = employees_by_identity.get(previous_worker_id)
+                if (
+                    current
+                    and str(current.get("system_role") or "") == "worker"
+                    and bool(current.get("is_default"))
+                ):
+                    employees_by_identity.pop(previous_worker_id, None)
+                changed = True
         if not changed:
             return payload
         payload["memberships"] = memberships
@@ -492,6 +510,7 @@ class CompanyStore:
         computer_id: str,
         manager_identity: Optional[Mapping[str, Any]] = None,
         default_worker_identity: Optional[Mapping[str, Any]] = None,
+        clear_missing_default_worker: bool = False,
     ) -> Dict[str, Any]:
         with self._lock:
             registry = self._load_registry_locked()
@@ -508,6 +527,7 @@ class CompanyStore:
                 computer_id=str(computer_id),
                 manager_identity=manager_identity,
                 default_worker_identity=default_worker_identity,
+                clear_missing_default_worker=clear_missing_default_worker,
             )
 
     def _company_signing_key_locked(
@@ -1007,6 +1027,7 @@ class CompanyStore:
             }
             now = _utc_now()
             published_ids: list[str] = []
+            published_default_worker_id: Optional[str] = None
             changed = False
             for identity in identities:
                 identity_id = str(identity.get("identity_id") or "").strip()
@@ -1036,7 +1057,7 @@ class CompanyStore:
                             else "General worker"
                         )
                     ),
-                    "protected": bool(identity.get("protected")),
+                    "protected": bool(role == "manager"),
                     "is_default": bool(identity.get("is_default")),
                     "home_membership_id": str(
                         membership.get("membership_id") or ""
@@ -1061,6 +1082,8 @@ class CompanyStore:
                 if key and membership.get(key) != identity_id:
                     membership[key] = identity_id
                     changed = True
+                if role == "worker" and bool(identity.get("is_default")):
+                    published_default_worker_id = identity_id
 
             previous_published_ids = {
                 str(item or "").strip()
@@ -1070,6 +1093,16 @@ class CompanyStore:
                 if str(item or "").strip()
             }
             current_published_ids = set(published_ids)
+            previous_default_worker_id = str(
+                membership.get("default_worker_identity_id") or ""
+            ).strip()
+            if (
+                not published_default_worker_id
+                and previous_default_worker_id
+                and previous_default_worker_id in previous_published_ids
+            ):
+                membership["default_worker_identity_id"] = None
+                changed = True
             for stale_identity_id in (
                 previous_published_ids - current_published_ids
             ):
@@ -1270,7 +1303,7 @@ class CompanyStore:
                 "mappings": {
                     "unscoped_local_records": "active company partition",
                     "local_manager": "protected CEO/manager identity",
-                    "default_worker": "protected default employee identity",
+                    "default_worker": "initial deletable default employee identity",
                     "fleet_relationships": "company-scoped computer memberships",
                 },
                 "warnings": warnings,
@@ -1551,6 +1584,7 @@ class CompanyStore:
         computer_name: str,
         manager_identity: Optional[Mapping[str, Any]] = None,
         default_worker_identity: Optional[Mapping[str, Any]] = None,
+        clear_missing_default_worker: bool = False,
     ) -> Dict[str, Any]:
         selected_before = self.active_company_id(computer_id=computer_id)
         selected_is_root = True
@@ -1565,6 +1599,9 @@ class CompanyStore:
             computer_name=computer_name,
             manager_identity=manager_identity if selected_is_root else None,
             default_worker_identity=default_worker_identity if selected_is_root else None,
+            clear_missing_default_worker=(
+                clear_missing_default_worker and selected_is_root
+            ),
         )
         with self._lock:
             companies = self.list_companies(computer_id=computer_id)

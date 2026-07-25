@@ -20,7 +20,7 @@ class RemoteControlStoreIdentityMixin:
         membership_role: str = "worker_node",
         adopt_unscoped: bool = False,
     ) -> Dict[str, Any]:
-        """Reconcile the protected manager/default-worker pair for one membership."""
+        """Reconcile the manager and optional default worker for one membership."""
 
         clean_company_id = str(company_id or "").strip()
         if not clean_company_id:
@@ -43,10 +43,14 @@ class RemoteControlStoreIdentityMixin:
                 membership_role=membership_role,
                 adopt_unscoped=adopt_unscoped,
             )
-            worker_identity_row = self._conn.execute(
-                "SELECT * FROM fleet_instances WHERE instance_id = ?",
-                (worker["instance_id"],),
-            ).fetchone()
+            worker_identity_row = (
+                self._conn.execute(
+                    "SELECT * FROM fleet_instances WHERE instance_id = ?",
+                    (worker["instance_id"],),
+                ).fetchone()
+                if worker
+                else None
+            )
             self._conn.commit()
             self._secure_db_files()
             return {
@@ -56,7 +60,11 @@ class RemoteControlStoreIdentityMixin:
                         (manager["instance_id"],),
                     ).fetchone()
                 ),
-                "default_worker_identity": self._identity_view(worker_identity_row),
+                "default_worker_identity": (
+                    self._identity_view(worker_identity_row)
+                    if worker_identity_row
+                    else None
+                ),
             }
 
     def ensure_standalone_manager_desktop(

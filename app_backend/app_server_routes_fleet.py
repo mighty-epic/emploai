@@ -1099,13 +1099,10 @@ def register_fleet_routes(app):
                 status_code=404,
                 detail="That worker is not published by the connected computer",
             )
-        if bool(target.get("protected")) or bool(target.get("is_default")):
+        if bool(target.get("protected")):
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "The protected default worker cannot be deleted. "
-                    "Remove its Company membership instead."
-                ),
+                detail="Protected identities cannot be deleted.",
             )
         _consume_approved_confirmation(
             user_id=int(auth["user_id"]),

@@ -7,11 +7,13 @@ READY_JOB_CONTRACT_STATES = frozenset({"ready", "limited_ready"})
 
 
 def is_baseline_company_employee(employee: Mapping[str, Any]) -> bool:
-    """Protected membership managers and default workers work immediately."""
+    """Membership managers and default workers work immediately."""
 
     role = str(employee.get("system_role") or "").strip().lower()
-    return bool(employee.get("protected")) and (
-        role == "manager" or bool(employee.get("is_default"))
+    return (
+        role == "manager" and bool(employee.get("protected"))
+    ) or (
+        role == "worker" and bool(employee.get("is_default"))
     )
 
 

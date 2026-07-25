@@ -87,7 +87,7 @@ def test_deleting_local_worker_does_not_revoke_manager_desktop(tmp_path):
     assert snapshot["manager"]["status"] != "offline"
     assert len(snapshot["workers"]) == 1
     assert snapshot["workers"][0]["is_default"] is True
-    assert snapshot["workers"][0]["protected"] is True
+    assert snapshot["workers"][0]["protected"] is False
 
 
 def test_startup_reconciles_exactly_one_manager_and_default_worker(tmp_path):
@@ -110,7 +110,7 @@ def test_startup_reconciles_exactly_one_manager_and_default_worker(tmp_path):
     assert len([identity for identity in snapshot["identities"] if identity["role"] == "manager"]) == 1
     defaults = [worker for worker in snapshot["workers"] if worker["is_default"]]
     assert len(defaults) == 1
-    assert defaults[0]["protected"] is True
+    assert defaults[0]["protected"] is False
     assert defaults[0]["tool_profile"] == "default_execution"
     assert defaults[0]["enabled_tool_packs"] == [
         "interactive_desktop",
@@ -168,7 +168,7 @@ def test_startup_removes_idle_system_default_worker_duplicates(tmp_path):
 
     assert len(workers) == 1
     assert workers[0]["is_default"] is True
-    assert workers[0]["protected"] is True
+    assert workers[0]["protected"] is False
 
 
 def test_startup_preserves_duplicate_history_as_hidden_removable_worker(tmp_path):
@@ -274,7 +274,7 @@ def test_manager_core_cannot_be_removed_from_manager_profile(tmp_path):
     assert updated["enabled_tool_packs"] == ["manager_core"]
 
 
-def test_protected_default_worker_can_be_renamed_but_not_deleted(tmp_path):
+def test_default_worker_can_be_renamed_and_deleted_without_recreation(tmp_path):
     store = RemoteControlPlaneStore(root_path=tmp_path)
     manager = store.ensure_standalone_manager_desktop(
         user_id=0,
@@ -290,8 +290,29 @@ def test_protected_default_worker_can_be_renamed_but_not_deleted(tmp_path):
 
     renamed = store.rename_worker(user_id=0, worker_id=default_worker["worker_id"], display_name="My Worker")
     assert renamed["display_name"] == "My Worker"
-    with pytest.raises(PermissionError, match="protected default worker"):
-        store.delete_worker(user_id=0, worker_id=default_worker["worker_id"])
+    deleted = store.delete_worker(
+        user_id=0,
+        worker_id=default_worker["worker_id"],
+    )
+    assert deleted["deleted"] is True
+
+    store.ensure_standalone_manager_desktop(
+        user_id=0,
+        display_name="Manager PC",
+        device_platform="desktop",
+        device_key="manager-key",
+    )
+    snapshot = store.get_fleet_snapshot(
+        user_id=0,
+        desktop_id=manager["desktop_id"],
+    )
+
+    assert snapshot["workers"] == []
+    managers = [
+        item for item in snapshot["identities"] if item["role"] == "manager"
+    ]
+    assert len(managers) == 1
+    assert managers[0]["protected"] is True
 
 
 def test_additional_worker_identity_carries_its_execution_profile(tmp_path):
