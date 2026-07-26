@@ -27,7 +27,15 @@ class SyncSubscription:
     callback: SyncCallback
     loop: asyncio.AbstractEventLoop
     cursor: str = ""
-    poll_task: Optional[asyncio.Task[None]] = field(default=None, repr=False)
+    poll_key: Optional[tuple[int, int]] = field(default=None, repr=False)
+
+
+@dataclass
+class SyncPoller:
+    user_id: int
+    loop: asyncio.AbstractEventLoop
+    tokens: set[str] = field(default_factory=set)
+    task: Optional[asyncio.Task[None]] = field(default=None, repr=False)
 
 
 class ChannelSyncHub:
@@ -40,6 +48,7 @@ class ChannelSyncHub:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._subscriptions: Dict[str, SyncSubscription] = {}
+        self._pollers: Dict[tuple[int, int], SyncPoller] = {}
 
     def _event_root(self) -> Path:
         configured = str(os.getenv("EMPLOAI_CHANNEL_SYNC_DIR", "") or "").strip()
@@ -57,14 +66,19 @@ class ChannelSyncHub:
 
     def _latest_cursor(self, user_id: int) -> str:
         try:
-            files = sorted(
-                path.name
-                for path in self._user_event_dir(user_id).glob("*.json")
-                if path.is_file()
-            )
+            files = self._list_event_files(user_id)
         except OSError:
             return ""
-        return files[-1] if files else ""
+        return files[-1].name if files else ""
+
+    def _list_event_files(self, user_id: int) -> list[Path]:
+        event_dir = self._user_event_dir(user_id)
+        with os.scandir(event_dir) as entries:
+            return sorted(
+                event_dir / entry.name
+                for entry in entries
+                if entry.name.endswith(".json") and entry.is_file()
+            )
 
     def _write_event_file(self, *, user_id: int, event: Dict[str, Any]) -> str:
         event_dir = self._user_event_dir(user_id)
@@ -79,7 +93,12 @@ class ChannelSyncHub:
 
     def _prune_event_files(self, event_dir: Path) -> None:
         try:
-            files = sorted(path for path in event_dir.glob("*.json") if path.is_file())
+            with os.scandir(event_dir) as entries:
+                files = sorted(
+                    event_dir / entry.name
+                    for entry in entries
+                    if entry.name.endswith(".json") and entry.is_file()
+                )
         except OSError:
             return
         if len(files) <= self._MAX_EVENT_FILES:
@@ -90,53 +109,90 @@ class ChannelSyncHub:
             except OSError:
                 continue
 
-    async def _poll_subscription(self, token: str) -> None:
+    async def _poll_group(self, key: tuple[int, int]) -> None:
         with self._lock:
-            subscription = self._subscriptions.get(token)
-        if not subscription:
+            poller = self._pollers.get(key)
+            subscriptions = [
+                subscription
+                for token in (poller.tokens if poller else ())
+                if (subscription := self._subscriptions.get(token)) is not None
+            ]
+        if not poller or not subscriptions:
             return
 
         try:
-            files = sorted(
-                path for path in self._user_event_dir(subscription.user_id).glob("*.json") if path.is_file()
-            )
+            files = await asyncio.to_thread(self._list_event_files, poller.user_id)
         except OSError:
             return
 
+        deliveries: Dict[str, list[Dict[str, Any]]] = {
+            subscription.token: [] for subscription in subscriptions
+        }
         for path in files:
             name = path.name
-            if subscription.cursor and name <= subscription.cursor:
+            pending = [
+                subscription
+                for subscription in subscriptions
+                if not subscription.cursor or name > subscription.cursor
+            ]
+            if not pending:
                 continue
             try:
-                event = json.loads(path.read_text(encoding="utf-8"))
+                event = json.loads(await asyncio.to_thread(path.read_text, encoding="utf-8"))
             except Exception:
+                for subscription in pending:
+                    subscription.cursor = name
+                continue
+            for subscription in pending:
                 subscription.cursor = name
-                continue
-            subscription.cursor = name
-            try:
-                await subscription.callback(event)
-            except Exception:
-                logger.exception(
-                    "Channel sync file delivery failed for user=%s channel=%s",
-                    subscription.user_id,
-                    subscription.channel,
-                )
+                deliveries[subscription.token].append(event)
 
-    async def _poll_subscription_loop(self, token: str) -> None:
+        async def deliver(subscription: SyncSubscription) -> None:
+            for event in deliveries[subscription.token]:
+                with self._lock:
+                    if subscription.token not in self._subscriptions:
+                        return
+                try:
+                    await subscription.callback(event)
+                except Exception:
+                    logger.exception(
+                        "Channel sync file delivery failed for user=%s channel=%s",
+                        subscription.user_id,
+                        subscription.channel,
+                    )
+
+        await asyncio.gather(
+            *(
+                deliver(subscription)
+                for subscription in subscriptions
+                if deliveries[subscription.token]
+            )
+        )
+
+    async def _poll_group_loop(self, key: tuple[int, int]) -> None:
         try:
             while True:
                 await asyncio.sleep(self._POLL_INTERVAL_SECONDS)
-                await self._poll_subscription(token)
+                await self._poll_group(key)
         except asyncio.CancelledError:
             return
 
     async def _ensure_poll_task(self, token: str) -> None:
         with self._lock:
             subscription = self._subscriptions.get(token)
-            if not subscription or subscription.poll_task is not None:
+            if not subscription:
                 return
-            subscription.poll_task = asyncio.create_task(self._poll_subscription_loop(token))
-            subscription.poll_task.add_done_callback(self._log_task_exception)
+            key = (subscription.user_id, id(subscription.loop))
+            subscription.poll_key = key
+            poller = self._pollers.get(key)
+            if poller is None:
+                poller = SyncPoller(user_id=subscription.user_id, loop=subscription.loop)
+                self._pollers[key] = poller
+            poller.tokens.add(token)
+            if poller.task is not None:
+                return
+            poller.task = asyncio.create_task(self._poll_group_loop(key))
+            poller.task.add_done_callback(self._log_task_exception)
 
     def subscribe(
         self,
@@ -173,17 +229,24 @@ class ChannelSyncHub:
             return
         with self._lock:
             subscription = self._subscriptions.pop(token, None)
-        if not subscription or not subscription.poll_task or subscription.loop.is_closed():
+            poller = self._pollers.get(subscription.poll_key) if subscription else None
+            if poller:
+                poller.tokens.discard(token)
+                if poller.tokens:
+                    poller = None
+                else:
+                    self._pollers.pop(subscription.poll_key, None)
+        if not subscription or not poller or not poller.task or subscription.loop.is_closed():
             return
         try:
             current_loop = asyncio.get_running_loop()
         except RuntimeError:
             current_loop = None
         if current_loop is subscription.loop:
-            subscription.poll_task.cancel()
+            poller.task.cancel()
             return
         try:
-            subscription.loop.call_soon_threadsafe(subscription.poll_task.cancel)
+            subscription.loop.call_soon_threadsafe(poller.task.cancel)
         except RuntimeError:
             return
 
@@ -266,6 +329,8 @@ class ChannelSyncHub:
     def _log_task_exception(task: asyncio.Task[None]) -> None:
         try:
             task.result()
+        except asyncio.CancelledError:
+            return
         except Exception:
             logger.exception("Channel sync task failed")
 

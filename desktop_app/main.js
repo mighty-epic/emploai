@@ -9,6 +9,7 @@ const { createRemoteControlServices } = require('./remote_control_services');
 const { createFleetYggdrasilServices } = require('./fleet_yggdrasil_services');
 const { createGitUpdateServices, gitUpdateSafetyState } = require('./git_update_services');
 const { createRuntimeStatusProbe } = require('./runtime_status_probe');
+const { createRuntimeRecoverySupervisor } = require('./runtime_recovery');
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -75,6 +76,7 @@ let gitAutoUpdateInFlight = false;
 let gitUpdateInstallPromise = null;
 let gitUpdateService = null;
 let fleetHostStartupTimer = null;
+let runtimeRecoverySupervisor = null;
 const probeCachedRuntimeStatus = createRuntimeStatusProbe({
   net,
   getRuntimeStatusCache: () => runtimeStatusCache,
@@ -674,6 +676,33 @@ async function getFreshRuntimeStatus() {
   }
 }
 
+function runtimeRecoveryServices() {
+  if (!runtimeRecoverySupervisor) {
+    runtimeRecoverySupervisor = createRuntimeRecoverySupervisor({
+      getRuntimeStatus,
+      startRuntime: () => startLocalRuntime(),
+      canRecover: () => Boolean(
+        bootstrapCache
+        && !bootstrapCache?.setupState?.required
+        && !quitAfterManagedShutdown
+        && !shutdownForQuitPromise
+      ),
+      onStateChange: (state) => {
+        if (state?.state === 'recovery_failed') {
+          console.warn('Automatic local runtime recovery failed:', state.detail || state.status?.detail || 'unknown error');
+        }
+        if (['recovering', 'recovered', 'recovery_failed'].includes(state?.state)) {
+          emitRuntimeEvent({
+            type: `runtime_${state.state}`,
+            payload: state,
+          });
+        }
+      },
+    });
+  }
+  return runtimeRecoverySupervisor;
+}
+
 async function saveSetup(payload) {
   const safePayload = {
     ...(payload || {}),
@@ -1089,6 +1118,7 @@ function relaunchDesktopApp() {
   // The normal quit path deliberately asks the renderer how to handle active
   // work. An updater relaunch has already coordinated that decision, so it
   // must bypass the close prompt or the old process can remain open forever.
+  runtimeRecoveryServices().stop();
   quitAfterManagedShutdown = true;
   setTimeout(() => app.exit(0), 250);
 }
@@ -2114,6 +2144,7 @@ async function requestManagedExit(mode = 'default') {
   const choice = String(mode || 'default').trim().toLowerCase();
   rendererExitPromptPending = false;
   if (choice === 'cancel') return { ok: true, exiting: false };
+  runtimeRecoveryServices().stop();
   if (choice === 'force') {
     quitAfterManagedShutdown = true;
     app.exit(0);
@@ -2352,8 +2383,14 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('emploai:get-runtime-status', async () => getRuntimeStatus());
 
-  ipcMain.handle('emploai:runtime:start', async (_event, payload) => startLocalRuntime(payload || {}));
-  ipcMain.handle('emploai:runtime:stop', async () => stopLocalRuntime());
+  ipcMain.handle('emploai:runtime:start', async (_event, payload) => {
+    runtimeRecoveryServices().resume();
+    return startLocalRuntime(payload || {});
+  });
+  ipcMain.handle('emploai:runtime:stop', async () => {
+    runtimeRecoveryServices().suspend();
+    return stopLocalRuntime();
+  });
   ipcMain.handle('emploai:setup:save', async (_event, payload) => saveSetup(payload || {}));
   ipcMain.handle('emploai:setup:validate-field', async (_event, payload) => validateSetupField(payload?.field, payload?.value));
   ipcMain.handle('emploai:codex-auth:status', async () => getCodexAuthStatus());
@@ -2433,6 +2470,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('emploai:window:sleep-hide', async () => hideMainWindowForSleepMode());
 
   await createWindow();
+  runtimeRecoveryServices().start();
   scheduleGitAutoUpdateChecks();
 
   app.on('activate', async () => {
@@ -2448,6 +2486,7 @@ app.on('before-quit', (event) => {
   stopGitAutoUpdateChecks();
   stopPairedFleetHostStartupTimer();
   if (quitAfterManagedShutdown) {
+    runtimeRecoveryServices().stop();
     return;
   }
   event.preventDefault();
@@ -2464,5 +2503,6 @@ app.on('window-all-closed', () => {
 });
 
 app.on('will-quit', () => {
+  runtimeRecoveryServices().stop();
   clearDesktopShellPidRecord();
 });
