@@ -2163,6 +2163,7 @@ async function requestManagedExit(mode = 'default') {
       shutdownResult = await shutdownManagedProcessesForQuit();
       if (shutdownResult?.stopped === false) {
         shutdownForQuitPromise = null;
+        runtimeRecoveryServices().start();
         return { ok: false, exiting: false, detail: shutdownResult.error || 'The local runtime did not stop.' };
       }
     }
@@ -2171,6 +2172,7 @@ async function requestManagedExit(mode = 'default') {
     return { ok: true, exiting: true, shutdown: shutdownResult || null };
   } catch (error) {
     shutdownForQuitPromise = null;
+    runtimeRecoveryServices().start();
     return { ok: false, exiting: false, detail: String(error?.message || error || 'The local runtime did not stop.') };
   }
 }

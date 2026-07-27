@@ -81,3 +81,18 @@ process.stdout.write(JSON.stringify({ starts, suspended: suspended.state, resume
     )
 
     assert result == {"starts": 1, "suspended": "suspended", "resumed": "recovered"}
+
+
+def test_aborted_managed_exit_restarts_runtime_recovery() -> None:
+    main = (ROOT / "desktop_app" / "main.js").read_text(encoding="utf-8")
+    exit_handler = main.split(
+        "async function requestManagedExit(mode = 'default') {",
+        1,
+    )[1].split("async function loadRenderer(window) {", 1)[0]
+
+    assert exit_handler.count("runtimeRecoveryServices().start();") == 2
+    assert (
+        "if (shutdownResult?.stopped === false) {"
+        in exit_handler
+    )
+    assert "} catch (error) {" in exit_handler
