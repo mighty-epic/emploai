@@ -18,6 +18,15 @@ def _source_root() -> Path:
     return Path(bundle_root()).resolve()
 
 
+def _source_revision() -> str:
+    from desktop_runtime.config import current_source_revision
+
+    return current_source_revision(_source_root())
+
+
+_HOST_SOURCE_REVISION = _source_revision()
+
+
 def _release_version() -> str:
     from desktop_runtime.config import current_release_version
 
@@ -95,6 +104,7 @@ def _update_view() -> dict[str, Any]:
 
 
 def fleet_host_status() -> dict[str, Any]:
+    checkout_revision = _source_revision()
     return {
         "protocol_version": FLEET_HOST_PROTOCOL_VERSION,
         "app_version": _release_version(),
@@ -102,6 +112,12 @@ def fleet_host_status() -> dict[str, Any]:
             "state": "running",
             "process_id": os.getpid(),
             "uptime_seconds": max(0, int(time.time() - _HOST_STARTED_AT)),
+            "source_revision": _HOST_SOURCE_REVISION or None,
+            "checkout_revision": checkout_revision or None,
+            "source_current": bool(
+                not (_HOST_SOURCE_REVISION and checkout_revision)
+                or _HOST_SOURCE_REVISION == checkout_revision
+            ),
             "detail": "The persistent Yggdrasil host is available independently of the app runtime.",
         },
         "runtime": _runtime_view(),

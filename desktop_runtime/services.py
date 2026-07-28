@@ -307,12 +307,21 @@ def _ensure_remote_control_worker(
 
     record = _read_remote_control_pid_record(home) or {}
     status_record = _read_remote_control_status_record(home) or {}
+    expected_source_revision = current_source_revision(bundle_root())
+    recorded_source_revision = str(record.get("sourceRevision") or "").strip().lower()
+    if (
+        record
+        and expected_source_revision
+        and recorded_source_revision != expected_source_revision
+    ):
+        _stop_remote_control_worker(home)
+        record = {}
     record_fingerprint = str(
         record.get("configFingerprint")
         or status_record.get("configFingerprint")
         or ""
     ).strip()
-    if config_fingerprint and record_fingerprint != config_fingerprint:
+    if config_fingerprint and record and record_fingerprint != config_fingerprint:
         _stop_remote_control_worker(home)
 
     record = _read_remote_control_pid_record(home) or {}
@@ -858,6 +867,13 @@ def _attached_runtime_requires_restart(
             expected_release = current_release_version(root or bundle_root())
             record_release = str(record.get("releaseVersion") or "").strip()
             if record_release and record_release != expected_release:
+                return True
+            expected_source_revision = current_source_revision(root or bundle_root())
+            record_source_revision = str(record.get("sourceRevision") or "").strip().lower()
+            if (
+                expected_source_revision
+                and record_source_revision != expected_source_revision
+            ):
                 return True
             record_executable = str(record.get("executable") or "").strip()
             current_executable = str(Path(sys.executable).resolve())

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from desktop_runtime import fleet_update
+from desktop_runtime.config import current_source_revision
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -84,6 +85,7 @@ def test_source_update_check_reports_exact_fast_forward_and_dirty_backup(tmp_pat
     assert status["target_version"] == "1.1.0"
     assert status["dirty"] is True
     assert status["local_changes_will_be_preserved"] is True
+    assert current_source_revision(child) == previous
 
 
 def test_start_fleet_update_requires_the_checked_exact_commit(monkeypatch, tmp_path: Path):
@@ -125,7 +127,11 @@ def test_remote_update_preserves_changes_updates_restarts_and_reloads_host(monke
         "_start_updated_app",
         lambda *_args: {"runtime": {"ready": True}, "desktop": {"running": True}},
     )
-    monkeypatch.setattr(fleet_update, "_restart_host", lambda *_args: (True, 9876))
+    monkeypatch.setattr(
+        fleet_update,
+        "_restart_host",
+        lambda *_args, **_kwargs: (True, 9876),
+    )
 
     result = fleet_update.run_fleet_update(home, child, job_id=job_id, expected_commit=target)
 
@@ -165,7 +171,7 @@ def test_remote_update_never_reports_completed_when_host_generation_did_not_relo
     monkeypatch.setattr(
         fleet_update,
         "_restart_host",
-        lambda *_args: next(restart_results),
+        lambda *_args, **_kwargs: next(restart_results),
     )
 
     result = fleet_update.run_fleet_update(
@@ -223,6 +229,44 @@ def test_restart_host_stops_every_previous_generation_before_starting_one(
     assert new_pid == 333
     assert calls[0] == ("stop", 111)
     assert any("fleet-host-install" in call for call in calls if isinstance(call, tuple))
+
+
+def test_restart_host_requires_the_expected_source_generation(monkeypatch, tmp_path: Path):
+    home = tmp_path / "runtime"
+    root = tmp_path / "checkout"
+    home.mkdir()
+    root.mkdir()
+    live_pids = {333}
+    record_path = home / "desktop_remote_control.pid.json"
+
+    monkeypatch.setattr(fleet_update, "_stop_managed_fleet_hosts", lambda *_args: set())
+    monkeypatch.setattr(fleet_update, "_process_exists", lambda pid: pid in live_pids)
+    monkeypatch.setattr(fleet_update.time, "sleep", lambda _seconds: None)
+
+    def run_logged(command, **_kwargs):
+        if "schtasks.exe" in command:
+            record_path.write_text(
+                json.dumps(
+                    {
+                        "pid": 333,
+                        "startedAt": "2026-01-01T00:01:00+00:00",
+                        "sourceRevision": "old-revision",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(fleet_update, "_run_logged", run_logged)
+
+    restarted, new_pid = fleet_update._restart_host(
+        home,
+        root,
+        111,
+        expected_revision="new-revision",
+    )
+
+    assert restarted is False
+    assert new_pid is None
 
 
 def test_failed_remote_update_rolls_back_and_restores_local_changes(monkeypatch, tmp_path: Path):

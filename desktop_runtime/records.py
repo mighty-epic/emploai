@@ -158,6 +158,7 @@ def _write_pid_record(home: Path, *, mode: str, host: str, port: int) -> None:
                 "port": port,
                 "startedAt": datetime.now(timezone.utc).isoformat(),
                 "releaseVersion": current_release_version(root),
+                "sourceRevision": current_source_revision(root),
                 "executable": str(Path(sys.executable).resolve()),
             },
             indent=2,
@@ -180,9 +181,11 @@ def _write_telegram_pid_record(home: Path, *, config_fingerprint: str | None = N
 
 
 def _write_remote_control_pid_record(home: Path, *, config_fingerprint: str | None = None) -> None:
+    root = bundle_root()
     payload: dict[str, Any] = {
         "pid": os.getpid(),
         "startedAt": datetime.now(timezone.utc).isoformat(),
+        "sourceRevision": current_source_revision(root),
     }
     if config_fingerprint:
         payload["configFingerprint"] = config_fingerprint

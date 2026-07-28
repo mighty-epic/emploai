@@ -578,7 +578,13 @@ def _stop_managed_fleet_hosts(home: Path, old_host_pid: int) -> set[int]:
     return pids
 
 
-def _restart_host(home: Path, root: Path, old_host_pid: int) -> tuple[bool, int | None]:
+def _restart_host(
+    home: Path,
+    root: Path,
+    old_host_pid: int,
+    *,
+    expected_revision: str | None = None,
+) -> tuple[bool, int | None]:
     from desktop_runtime.fleet_host import FLEET_HOST_TASK_NAME
 
     previous_record: dict[str, Any] = {}
@@ -612,16 +618,26 @@ def _restart_host(home: Path, root: Path, old_host_pid: int) -> tuple[bool, int 
             payload = json.loads(record_path.read_text(encoding="utf-8"))
             new_pid = int(payload.get("pid") or 0) if isinstance(payload, dict) else 0
             new_started_at = str(payload.get("startedAt") or "") if isinstance(payload, dict) else ""
+            new_source_revision = (
+                str(payload.get("sourceRevision") or "").strip().lower()
+                if isinstance(payload, dict)
+                else ""
+            )
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             new_pid = 0
             new_started_at = ""
+            new_source_revision = ""
         is_new_generation = bool(
             new_started_at
             and new_started_at != str(previous_record.get("startedAt") or "")
         )
+        revision_matches = bool(
+            not expected_revision
+            or new_source_revision == str(expected_revision).strip().lower()
+        )
         if new_pid and _process_exists(new_pid) and (
             new_pid not in stopped_pids or is_new_generation
-        ):
+        ) and revision_matches:
             return True, new_pid
         time.sleep(0.5)
     return False, None
@@ -691,6 +707,7 @@ def run_fleet_update(home: Path, root: Path, *, job_id: str, expected_commit: st
             home,
             root,
             int(job.get("host_pid") or 0),
+            expected_revision=current_commit,
         )
         if not host_restarted:
             raise RuntimeError(

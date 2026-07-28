@@ -898,6 +898,66 @@ def current_release_version(source_root: Path) -> str:
     return str(payload.get("version") or "0.0.0-beta.0")
 
 
+def current_source_revision(source_root: Path) -> str:
+    """Read the checked-out Git revision without launching a helper process."""
+
+    marker = Path(source_root).resolve() / ".git"
+    if marker.is_dir():
+        git_dir = marker
+    elif marker.is_file():
+        try:
+            pointer = marker.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+        if not pointer.lower().startswith("gitdir:"):
+            return ""
+        git_dir = Path(pointer.split(":", 1)[1].strip())
+        if not git_dir.is_absolute():
+            git_dir = (marker.parent / git_dir).resolve()
+    else:
+        return ""
+
+    common_dir = git_dir
+    common_marker = git_dir / "commondir"
+    if common_marker.is_file():
+        try:
+            common_dir = (git_dir / common_marker.read_text(encoding="utf-8").strip()).resolve()
+        except OSError:
+            common_dir = git_dir
+    try:
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    if re.fullmatch(r"[0-9a-f]{40}", head, re.IGNORECASE):
+        return head.lower()
+    if not head.startswith("ref:"):
+        return ""
+    ref_name = head.split(":", 1)[1].strip()
+    for base in (git_dir, common_dir):
+        try:
+            revision = (base / ref_name).read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if re.fullmatch(r"[0-9a-f]{40}", revision, re.IGNORECASE):
+            return revision.lower()
+    for base in dict.fromkeys((git_dir, common_dir)):
+        try:
+            packed_refs = (base / "packed-refs").read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in packed_refs.splitlines():
+            if not line or line.startswith(("#", "^")):
+                continue
+            revision, _, packed_ref = line.partition(" ")
+            if packed_ref.strip() == ref_name and re.fullmatch(
+                r"[0-9a-f]{40}",
+                revision,
+                re.IGNORECASE,
+            ):
+                return revision.lower()
+    return ""
+
+
 def _release_state_path(home: Path) -> Path:
     return home / RELEASE_STATE_FILENAME
 

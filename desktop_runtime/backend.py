@@ -34,6 +34,7 @@ from desktop_runtime.config import (
     configured_planner_models,
     configured_provider_labels,
     current_release_version,
+    current_source_revision,
     ensure_runtime_files,
     env_path,
     apply_installer_voice_pack_preferences,

@@ -250,10 +250,12 @@ def test_attached_runtime_restarts_when_live_bind_differs_from_config(monkeypatc
             "host": "127.0.0.1",
             "port": 8787,
             "releaseVersion": "test-release",
+            "sourceRevision": "test-source",
             "executable": str(Path(sys.executable).resolve()),
         },
     )
     monkeypatch.setattr(desktop_backend, "current_release_version", lambda _root: "test-release")
+    monkeypatch.setattr(desktop_backend, "current_source_revision", lambda _root: "test-source")
 
     assert desktop_backend._attached_runtime_requires_restart(
         status,
@@ -632,6 +634,47 @@ def test_ensure_remote_control_worker_cleans_duplicate_local_workers(monkeypatch
     )
 
     assert terminated == [303, 404]
+    assert launched == [tmp_path]
+
+
+def test_ensure_remote_control_worker_restarts_an_outdated_source_generation(
+    monkeypatch,
+    tmp_path: Path,
+):
+    stopped: list[Path] = []
+    launched: list[Path] = []
+    records = iter(
+        (
+            {"pid": 303, "sourceRevision": "old-revision"},
+            None,
+            None,
+        )
+    )
+
+    monkeypatch.setattr(
+        desktop_backend,
+        "_read_remote_control_pid_record",
+        lambda _home: next(records, None),
+    )
+    monkeypatch.setattr(desktop_backend, "current_source_revision", lambda _root: "new-revision")
+    monkeypatch.setattr(desktop_backend, "_stop_remote_control_worker", lambda home: stopped.append(home))
+    monkeypatch.setattr(desktop_backend, "_managed_remote_control_worker_pids", lambda _home: [])
+    monkeypatch.setattr(desktop_backend, "_read_remote_control_status_record", lambda _home: None)
+    monkeypatch.setattr(desktop_backend, "_write_remote_control_status_record", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(desktop_backend, "_launch_detached_remote_control_worker", lambda home: launched.append(home))
+    monkeypatch.setattr(desktop_backend.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        "desktop_runtime.fleet_host.ensure_fleet_host_autostart",
+        lambda _home: {"state": "registered"},
+    )
+
+    desktop_backend._ensure_remote_control_worker(
+        tmp_path,
+        configured=True,
+        config_fingerprint="remote:account",
+    )
+
+    assert stopped == [tmp_path]
     assert launched == [tmp_path]
 
 
