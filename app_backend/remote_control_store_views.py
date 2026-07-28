@@ -182,7 +182,7 @@ class RemoteControlStoreViewMixin:
             "worker_id": row["worker_id"],
             "status": row["status"] or "active",
             "metadata": metadata,
-            **identity_public_metadata(metadata),
+            **identity_public_metadata(metadata, role=role),
             "created_at": _utc_iso(row["created_at"]),
             "updated_at": _utc_iso(row["updated_at"]),
         }
@@ -212,7 +212,7 @@ class RemoteControlStoreViewMixin:
             "group_id": row["group_id"],
             "active_task_id": row["active_task_id"],
             "metadata": metadata,
-            **identity_public_metadata(metadata),
+            **identity_public_metadata(metadata, role="worker"),
             "queue_policy": normalize_queue_policy(metadata.get("queue_policy")),
             "created_at": _utc_iso(row["created_at"]),
             "updated_at": _utc_iso(row["updated_at"]),

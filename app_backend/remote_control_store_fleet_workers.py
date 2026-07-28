@@ -16,6 +16,53 @@ REMOTE_PAIRING_TTL_SECONDS = 60 * 10
 FLEET_ENROLLMENT_TTL_SECONDS = 60 * 30
 
 class RemoteControlStoreFleetWorkerMixin:
+    def _reconcile_worker_protection_locked(
+        self,
+        *,
+        user_id: int,
+        desktop_id: Optional[str] = None,
+    ) -> int:
+        """Remove the legacy protected flag from execution identities."""
+
+        clean_desktop_id = str(desktop_id or "").strip()
+        now = time.time()
+        changed = 0
+        worker_query = "SELECT worker_id, metadata FROM fleet_workers WHERE user_id = ?"
+        worker_params: list[Any] = [int(user_id)]
+        if clean_desktop_id:
+            worker_query += " AND machine_desktop_id = ?"
+            worker_params.append(clean_desktop_id)
+        for row in self._conn.execute(worker_query, tuple(worker_params)).fetchall():
+            metadata = _json_loads(row["metadata"], {})
+            if not bool(metadata.get("protected")):
+                continue
+            metadata["protected"] = False
+            self._conn.execute(
+                "UPDATE fleet_workers SET metadata = ?, updated_at = ? WHERE worker_id = ?",
+                (_json_dumps(metadata), now, row["worker_id"]),
+            )
+            changed += 1
+
+        identity_query = (
+            "SELECT instance_id, metadata FROM fleet_instances "
+            "WHERE user_id = ? AND role = 'worker'"
+        )
+        identity_params: list[Any] = [int(user_id)]
+        if clean_desktop_id:
+            identity_query += " AND desktop_id = ?"
+            identity_params.append(clean_desktop_id)
+        for row in self._conn.execute(identity_query, tuple(identity_params)).fetchall():
+            metadata = _json_loads(row["metadata"], {})
+            if not bool(metadata.get("protected")):
+                continue
+            metadata["protected"] = False
+            self._conn.execute(
+                "UPDATE fleet_instances SET metadata = ?, updated_at = ? WHERE instance_id = ?",
+                (_json_dumps(metadata), now, row["instance_id"]),
+            )
+            changed += 1
+        return changed
+
     def _manager_identity_for_worker_scope_locked(
         self,
         *,

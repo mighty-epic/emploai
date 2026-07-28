@@ -52,7 +52,7 @@ def test_capability_directory_only_publishes_allowed_targets():
         ],
         "identities": [
             {"identity_id": "manager-1", "display_name": "Main", "role": "manager", "tool_profile": "manager_core", "enabled_tool_packs": ["manager_core", "web_research"]},
-            {"identity_id": "worker-1", "display_name": "Research", "role": "worker", "is_default": True, "protected": False, "tool_profile": "default_execution", "capability_tags": ["workspace"]},
+            {"identity_id": "worker-1", "display_name": "Research", "role": "worker", "is_default": True, "protected": True, "tool_profile": "default_execution", "capability_tags": ["workspace"]},
             {"identity_id": "worker-hidden", "display_name": "Private", "role": "worker", "published_upstream": False},
         ],
     }

@@ -81,3 +81,27 @@ def test_ready_runtime_poll_uses_loopback_health_without_repeated_python_helpers
     assert "const refreshedStatus = await loadDesktopRuntimeStatus();" in shell
     assert "bootstrap.deviceId || 'local-device'" in shell
     assert "const refreshKey = `${bootstrap.apiBaseUrl}|${bootstrap.accessToken}" not in shell
+
+
+def test_healthy_runtime_clears_the_exact_backend_health_warning():
+    shell = (
+        ROOT / "desktop_app" / "renderer_client" / "src" / "desktop" / "DesktopAppShell.tsx"
+    ).read_text(encoding="utf-8")
+    runtime_status_handler = shell.split(
+        "if (event.type === 'runtime_status' && payload) {",
+        1,
+    )[1].split(
+        "if (\n        event.type === 'bootstrap_ready'",
+        1,
+    )[0]
+
+    assert "normalized.includes('the local emploai backend is not responding')" in shell
+    assert "if (nextStatus.ok) {" in runtime_status_handler
+    assert (
+        "setError((current) => (isRuntimeConnectivityMessage(current) ? null : current));"
+        in runtime_status_handler
+    )
+    assert (
+        "setStartupErrorDetail((current) => (isRuntimeConnectivityMessage(current) ? null : current));"
+        in runtime_status_handler
+    )

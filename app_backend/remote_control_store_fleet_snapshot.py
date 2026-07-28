@@ -38,6 +38,11 @@ class RemoteControlStoreFleetSnapshotMixin:
                     ).fetchone()
                     if desktop:
                         scoped_desktop_id = current_desktop_id
+            if self._reconcile_worker_protection_locked(
+                user_id=int(user_id),
+                desktop_id=scoped_desktop_id,
+            ):
+                self._conn.commit()
             all_workers = [
                 self._worker_view(row)
                 for row in self._conn.execute(

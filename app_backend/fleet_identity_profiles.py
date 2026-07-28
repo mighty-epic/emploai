@@ -99,11 +99,21 @@ def role_locked_tool_packs(
     return normalize_enabled_tool_packs(list(requested or []))
 
 
-def identity_public_metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def identity_public_metadata(
+    metadata: Optional[Dict[str, Any]],
+    *,
+    role: Optional[str] = None,
+) -> Dict[str, Any]:
     value = dict(metadata or {})
+    clean_role = str(role or "").strip().lower()
+    protected = bool(value.get("protected"))
+    if clean_role == "manager":
+        protected = True
+    elif clean_role == "worker":
+        protected = False
     return {
         "is_default": bool(value.get("is_default")),
-        "protected": bool(value.get("protected")),
+        "protected": protected,
         "tool_profile": str(value.get("tool_profile") or "").strip() or None,
         "enabled_tool_packs": normalize_enabled_tool_packs(value.get("enabled_tool_packs") or []),
         "capability_tags": [str(item) for item in list(value.get("capability_tags") or []) if str(item).strip()],

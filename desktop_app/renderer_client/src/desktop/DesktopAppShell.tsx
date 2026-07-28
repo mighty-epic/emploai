@@ -257,6 +257,7 @@ function isRuntimeConnectivityMessage(message: string | null | undefined) {
   return (
     normalized.includes('failed to fetch') ||
     normalized.includes('networkerror') ||
+    normalized.includes('the local emploai backend is not responding') ||
     normalized.includes('no compatible local runtime responded on the configured desktop host/port') ||
     normalized.includes('local runtime did not become ready') ||
     normalized.includes('desktop runtime did not become ready') ||
@@ -1415,6 +1416,11 @@ export function DesktopAppShell() {
           return;
         }
         setRuntimeStatusWithRef(nextStatus);
+        if (nextStatus.ok) {
+          setError((current) => (isRuntimeConnectivityMessage(current) ? null : current));
+          setStartupErrorDetail((current) => (isRuntimeConnectivityMessage(current) ? null : current));
+          setNotice((current) => (current && isStartupTimeoutMessage(current) ? null : current));
+        }
         const failureDetail = runtimeFailureDetail(nextStatus);
         if (
           failureDetail &&

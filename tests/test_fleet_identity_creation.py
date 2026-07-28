@@ -6,7 +6,7 @@ import time
 import pytest
 
 from app_backend.fleet_identity_creation import validate_local_worker_creation
-from app_backend.fleet_identity_profiles import default_worker_metadata
+from app_backend.fleet_identity_profiles import default_worker_metadata, identity_public_metadata
 from app_backend.remote_control_store import RemoteControlPlaneStore
 
 
@@ -128,6 +128,59 @@ def test_startup_reconciles_exactly_one_manager_and_default_worker(tmp_path):
     refreshed = store.get_fleet_snapshot(user_id=0, desktop_id=first["desktop_id"])
     refreshed_default = next(worker for worker in refreshed["workers"] if worker["is_default"])
     assert refreshed_default["status"] == "idle"
+
+
+def test_snapshot_migrates_legacy_protected_worker_records(tmp_path):
+    store = RemoteControlPlaneStore(root_path=tmp_path)
+    desktop = store.ensure_standalone_manager_desktop(
+        user_id=0,
+        display_name="Manager PC",
+        device_platform="desktop",
+        device_key="manager-key",
+    )
+    store.create_local_worker(
+        user_id=0,
+        desktop_id=desktop["desktop_id"],
+        display_name="Legacy worker",
+        metadata={"created_by": "desktop_user_request"},
+    )
+    for table in ("fleet_workers", "fleet_instances"):
+        rows = store._conn.execute(
+            f"SELECT rowid, metadata FROM {table} WHERE user_id = 0"
+        ).fetchall()
+        for row in rows:
+            metadata = json.loads(row["metadata"])
+            metadata["protected"] = True
+            store._conn.execute(
+                f"UPDATE {table} SET metadata = ? WHERE rowid = ?",
+                (json.dumps(metadata), row["rowid"]),
+            )
+    store._conn.commit()
+
+    snapshot = store.get_fleet_snapshot(user_id=0, desktop_id=desktop["desktop_id"])
+
+    assert all(worker["protected"] is False for worker in snapshot["workers"])
+    assert all(
+        identity["protected"] is False
+        for identity in snapshot["identities"]
+        if identity["role"] == "worker"
+    )
+    assert next(
+        identity["protected"]
+        for identity in snapshot["identities"]
+        if identity["role"] == "manager"
+    ) is True
+    for table in ("fleet_workers", "fleet_instances"):
+        rows = store._conn.execute(
+            f"SELECT metadata FROM {table} WHERE user_id = 0"
+            + (" AND role = 'worker'" if table == "fleet_instances" else "")
+        ).fetchall()
+        assert all(json.loads(row["metadata"])["protected"] is False for row in rows)
+
+
+def test_public_identity_protection_is_role_authoritative():
+    assert identity_public_metadata({"protected": False}, role="manager")["protected"] is True
+    assert identity_public_metadata({"protected": True}, role="worker")["protected"] is False
 
 
 def test_startup_removes_idle_system_default_worker_duplicates(tmp_path):
